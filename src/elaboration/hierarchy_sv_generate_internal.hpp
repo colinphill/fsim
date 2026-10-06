@@ -4,6 +4,7 @@
 #include "fsim/semantic/compiled_design_specialization.hpp"
 #include "fsim/semantic/systemverilog_hir.hpp"
 
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -16,7 +17,9 @@ struct Occurrence {
     // compiled design alive while consuming the result.
     const semantic::sv::GenerateRegion* region { };
     std::string path;
-    semantic::SpecializedHirUnit specialization;
+    // Shared: occurrences of identical instance templates reuse one
+    // specialization (see HierarchyBuilder::cached_generate_occurrences).
+    std::shared_ptr<const semantic::SpecializedHirUnit> specialization;
 };
 
 struct Diagnostic {

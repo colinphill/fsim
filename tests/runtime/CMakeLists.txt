@@ -1272,6 +1272,18 @@ endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/runtime_native_frontier_logic9_sync_tests.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/runtime_a2_role_journal_tests.cmake")
 add_executable(
+  fsim_runtime_kernel_word_ops_tests
+  runtime_kernel_word_ops_tests.cpp)
+target_link_libraries(
+  fsim_runtime_kernel_word_ops_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_kernel_word_ops_tests)
+add_test(
+  NAME fsim.runtime.kernel_word_ops
+  COMMAND fsim_runtime_kernel_word_ops_tests)
+set_tests_properties(
+  fsim.runtime.kernel_word_ops
+  PROPERTIES LABELS "fast;runtime;static-kernel;linux;windows")
+add_executable(
   fsim_runtime_region_graph_read_range_tests
   runtime_region_graph_read_range_tests.cpp)
 target_link_libraries(

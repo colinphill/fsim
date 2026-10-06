@@ -24,6 +24,7 @@
 namespace fsim::runtime::simir {
 class ProcessProgramView;
 struct ProcessInstanceProgram;
+struct StaticKernelRuntimeSpec;
 struct ProcessProgramTemplate;
 }
 
@@ -768,6 +769,22 @@ struct ConeFusionPlan {
     std::size_t internal_nets { };
 };
 
+/// Engine v4 static kernel plan (docs/simulation-engine-v4-plan.md). The
+/// runtime specification is opaque to callers; the counts are diagnostics.
+struct StaticKernelPlan {
+    bool disabled { };
+    const char* disabled_reason { "" };
+    runtime::simir::ProcessId host { };
+    /// The stub the scheduler runs for the host: [WaitSensitivity, Jump 0].
+    runtime::simir::Process host_program;
+    std::shared_ptr<runtime::simir::StaticKernelRuntimeSpec> spec;
+    std::size_t members { };
+    std::size_t owned_signals { };
+    std::size_t boundary_inputs { };
+    std::size_t boundary_outputs { };
+    std::size_t owned_containers { };
+};
+
 class ElaboratedDesign final {
 public:
     ElaboratedDesign() = default;
@@ -870,6 +887,14 @@ public:
     /// Plan A2 combinational cone fusion. Callers opt in only when no
     /// observer outside SimIR processes can inspect hidden internal nets.
     [[nodiscard]] ConeFusionPlan plan_cone_fusion() const;
+    /// Create an interpreter whose statically schedulable processes run in
+    /// the engine v4 static kernel.
+    [[nodiscard]] std::unique_ptr<runtime::simir::Interpreter>
+    create_interpreter(runtime::SchedulerOptions options,
+        std::uint64_t seed, const StaticKernelPlan& plan) &&;
+    /// Plan the static kernel. Callers opt in only when no observer outside
+    /// SimIR processes can inspect kernel-owned state.
+    [[nodiscard]] StaticKernelPlan plan_static_kernel() const;
 
     [[nodiscard]] ElaboratedDesignState state() const &;
     /// Transfer the complete portable state out of a design that has reached

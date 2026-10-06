@@ -16,6 +16,7 @@
 #include <span>
 #include <string>
 #include <tuple>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 #include <vector>
@@ -1156,6 +1157,8 @@ private:
         std::shared_ptr<const ProcessProgramTemplate> common;
         ProcessInstanceProgram instance;
         std::vector<SystemVerilogTemplateSignalRole> signal_roles;
+        /// overlay_class of the specialization it was lowered in.
+        std::uint32_t overlay_class { no_overlay_class };
     };
 
     struct SystemVerilogProcessTemplate {
@@ -1169,6 +1172,8 @@ private:
         std::vector<SystemVerilogTemplateSignalRole> signal_roles;
         std::uint32_t callable_invocation_before { };
         std::uint32_t callable_invocation_after { };
+        /// overlay_class of the specialization it was lowered in.
+        std::uint32_t overlay_class { no_overlay_class };
     };
 
     struct ProcessOperationGroupingKey {
@@ -1286,6 +1291,11 @@ private:
         const SystemVerilogPackedFallbackResolver& packed_fallback_resolver,
         std::vector<SystemVerilogHirMaterialization>&
             generated_materializations);
+
+    [[nodiscard]] hierarchy_sv_generate_detail::CollectionResult
+    collect_generate_occurrences(const semantic::sv::Unit& unit,
+        const std::string& path,
+        const semantic::SpecializedHirUnit& specialized);
 
     bool lower_compiled_systemverilog_processes(
         const semantic::sv::Unit& unit,
@@ -1521,6 +1531,10 @@ private:
 
     std::map<ProcessOperationGroupingKey, std::vector<ProcessId>>
         process_operation_representatives_;
+    // The representative an instance of each template last shared with;
+    // tried first (instances of one template almost always share with it).
+    std::unordered_map<const runtime::simir::ProcessProgramTemplate*, ProcessId>
+        representative_of_template_;
     OperationList::Storage operation_scratch_;
     std::vector<ConcurrentProcessTemplate> concurrent_process_templates_;
     bool lowering_census_enabled_ { };
@@ -1573,6 +1587,21 @@ private:
     std::map<SystemVerilogProcessTemplateKey,
         std::vector<SystemVerilogProcessTemplate>>
         systemverilog_process_templates_;
+    // Generate occurrences of one unit under one template-equivalent overlay,
+    // with paths relative to the instance (collect_generate_occurrences).
+    struct GenerateOccurrenceTemplate {
+        std::uint32_t overlay_class { };
+        std::vector<hierarchy_sv_generate_detail::Occurrence> occurrences;
+    };
+    // Template-equivalence classes of overlays
+    // (same_systemverilog_template_overlay); overlay_class gives a
+    // specialization's class, or no_overlay_class when it matches nothing.
+    static constexpr std::uint32_t no_overlay_class = 0xffffffffU;
+    std::vector<semantic::SpecializedHirOverlay> overlay_classes_;
+    [[nodiscard]] std::uint32_t overlay_class(
+        const semantic::SpecializedHirUnit& specialized);
+    std::map<semantic::UnitId, std::vector<GenerateOccurrenceTemplate>>
+        generate_occurrence_templates_;
     std::size_t systemverilog_concurrent_template_misses_ { };
     std::size_t systemverilog_concurrent_template_hits_ { };
     std::size_t systemverilog_concurrent_template_rejections_ { };

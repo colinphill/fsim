@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "fsim/runtime/systemverilog_string.hpp"
+#include "fsim/support/teardown.hpp"
 #include "simir_internal.hpp"
 
 #include <algorithm>
@@ -1746,6 +1747,18 @@ Interpreter::~Interpreter()
     }
     impl_->report_process_profile();
     impl_->report_update_profile();
+    // The kernel reports its diagnostic profile from its destructor.
+    if (support::exit_without_teardown()
+        && std::getenv("FSIM_PROFILE_KERNEL") == nullptr) {
+        // Freeing the design state only delays exit. HDL files are the one
+        // destructor side effect, so flush them first.
+        for (auto& [handle, file] : impl_->files) {
+            if (file.stream) {
+                file.stream->flush();
+            }
+        }
+        support::release_at_exit(std::move(impl_));
+    }
 }
 Interpreter::Interpreter(Interpreter&&) noexcept = default;
 Interpreter& Interpreter::operator=(Interpreter&&) noexcept = default;

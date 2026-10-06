@@ -143,16 +143,16 @@ CollectionResult collect_occurrences(
                     + std::to_string(value) + "]";
                 const auto occurrence_path
                     = generated_path(current_path, local_path);
-                result.occurrences.push_back({ &generate, occurrence_path, occurrence_specialization });
+                auto shared = std::make_shared<const semantic::SpecializedHirUnit>(
+                    std::move(occurrence_specialization));
+                result.occurrences.push_back({ &generate, occurrence_path, shared });
                 for (const auto& nested : generate.nested) {
-                    if (!self(self, nested, occurrence_path,
-                            occurrence_specialization)) {
+                    if (!self(self, nested, occurrence_path, *shared)) {
                         return false;
                     }
                 }
-                const auto next = occurrence_specialization
-                                      .evaluate_integral_expression(
-                                          *generate.iteration);
+                const auto next = shared->evaluate_integral_expression(
+                    *generate.iteration);
                 if (!next) {
                     fail(
                         "FSIM-ELAB-GEN-005",
@@ -307,7 +307,9 @@ CollectionResult collect_occurrences(
             // name. alternative_label names the sibling else branch and is
             // only used while selecting that nested region.
             nested_parent = generated_path(current_path, generate.label);
-            result.occurrences.push_back({ &generate, nested_parent, parent_specialization });
+            result.occurrences.push_back({ &generate, nested_parent,
+                std::make_shared<const semantic::SpecializedHirUnit>(
+                    parent_specialization) });
         }
         for (const auto& nested : generate.nested) {
             const bool same_alternative
@@ -351,7 +353,7 @@ ValidationResult validate_generated_constant(
         };
     };
 
-    const auto declaration = occurrence.specialization.find_declaration(
+    const auto declaration = occurrence.specialization->find_declaration(
         declaration_id);
     if (!declaration || declaration->systemverilog == nullptr) {
         return fail(
@@ -372,7 +374,7 @@ ValidationResult validate_generated_constant(
     const auto description = "generated parameter '" + record.name + "'";
     if (hierarchy_sv_parameters_detail::
             compiled_systemverilog_string_declaration(record)) {
-        if (occurrence.specialization.evaluate_string_declaration(
+        if (occurrence.specialization->evaluate_string_declaration(
                 declaration_id)) {
             return { };
         }
@@ -387,7 +389,7 @@ ValidationResult validate_generated_constant(
         const auto width
             = hierarchy_sv_type_layout_detail::
                 systemverilog_declaration_width(
-                    occurrence.specialization, record);
+                    *occurrence.specialization, record);
         if (!width
             || *width
                 > static_cast<std::size_t>(
@@ -408,11 +410,11 @@ ValidationResult validate_generated_constant(
                           record.type->target.spelling)
                   != frontend::SystemVerilogScalarKind::None)
         || hir_systemverilog_scalar_expression_applicable(
-            occurrence.specialization, *record.initializer);
+            *occurrence.specialization, *record.initializer);
     std::string error;
     if (scalar_applicable) {
         if (evaluate_hir_systemverilog_scalar_declaration(
-                occurrence.specialization, declaration_id, error)) {
+                *occurrence.specialization, declaration_id, error)) {
             return { };
         }
         return fail(
@@ -422,7 +424,7 @@ ValidationResult validate_generated_constant(
     }
 
     auto constant = evaluate_hir_systemverilog_constant(
-        occurrence.specialization, *record.initializer, error);
+        *occurrence.specialization, *record.initializer, error);
     if (!constant) {
         return fail(
             "FSIM-ELAB-GEN-011",
@@ -433,7 +435,7 @@ ValidationResult validate_generated_constant(
         && hir_systemverilog_explicit_integral_type(*record.type)
         && !convert_hir_systemverilog_constant(
             std::move(*constant), *record.type, error,
-            &occurrence.specialization)) {
+            occurrence.specialization.get())) {
         return fail(
             "FSIM-ELAB-GEN-012",
             description + " cannot be converted: " + error,

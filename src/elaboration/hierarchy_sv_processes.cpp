@@ -298,7 +298,7 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
         generated_lowerer.set_hir_container_declaration_bindings(
             &materialization.container_declaration_bindings);
         generated_lowerer.set_specialized_hir_unit(
-            &occurrence.specialization);
+            occurrence.specialization.get());
         generated_lowerer.set_hir_code_coverage_context(
             coverage_, unit.kind == semantic::sv::UnitKind::module
                 && source_language == frontend::Language::SystemVerilog2017);
@@ -314,7 +314,7 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
         }
         for (const auto statement_id : generated_concurrent_statements) {
             const auto statement = occurrence.specialization
-                                       .find_statement(statement_id);
+                                       ->find_statement(statement_id);
             const auto statement_source = statement
                     && statement->systemverilog != nullptr
                 ? statement->systemverilog->source
@@ -330,7 +330,7 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             const auto replayed_before = lowering_census_enabled_
                 ? systemverilog_concurrent_templates_replayed_ : 0U;
             auto lowered = lower_cached_systemverilog_concurrent_statement(
-                unit, occurrence.specialization, generated_lowerer,
+                unit, *occurrence.specialization, generated_lowerer,
                 statement_id, source_language,
                 declaration_bindings->second, occurrence.path,
                 concurrent_order++, program_owner);
@@ -372,7 +372,7 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
         }
         for (const auto process_id : occurrence.region->processes) {
             const auto process
-                = occurrence.specialization.find_process(process_id);
+                = occurrence.specialization->find_process(process_id);
             const auto process_source = process
                     && process->systemverilog != nullptr
                 ? process->systemverilog->source
@@ -397,7 +397,7 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
                     != generated_signal_declarations.end()) {
                 replay = replay_systemverilog_process_template(
                     unit,
-                    occurrence.specialization,
+                    *occurrence.specialization,
                     *process->systemverilog,
                     generated_lowerer,
                     declaration_bindings->second,
@@ -474,7 +474,7 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
                 remembered_template
                     = remember_systemverilog_process_template(
                         unit,
-                        occurrence.specialization,
+                        *occurrence.specialization,
                         *process->systemverilog,
                         generated_lowerer,
                         declaration_bindings->second,

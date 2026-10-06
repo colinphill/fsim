@@ -260,7 +260,7 @@ HierarchyBuilder::collect_compiled_systemverilog_instance_materializations(
         for (const auto instance : occurrence.region->instances) {
             append_instance(
                 instance,
-                occurrence.specialization,
+                *occurrence.specialization,
                 materialization.signals,
                 materialization.read_only_signals,
                 materialization.string_objects,

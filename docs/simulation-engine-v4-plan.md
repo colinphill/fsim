@@ -163,9 +163,9 @@ collapsed.
   is kept (§9, D2).
 - **Races.** Orderings the standard leaves undefined, such as testbench
   blocking writes at the clock edge, need not match any particular simulator.
-  v4 uses one documented deterministic order. Corpus testbenches that depend on
-  such an order are refactored to be race-free, so parity is judged only on
-  defined behavior (§9, D4).
+  v4 uses one documented deterministic order. The corpus runs race-free,
+  deterministic testbenches, so parity is judged only on defined behavior
+  (§9, D4).
 
 ### 3.3 Activity gating and partitioning
 
@@ -314,7 +314,11 @@ mode of working: one owner plus coding agents.
 - **Differential harness.** Build the interpreter-versus-v4 harness, keyed by
   time step plus observable delta.
 - **Benchmark corpus.** The corpus goes beyond the two throughput cases:
-  - `ldpc_codex`, `rs-vhdl`, `rs_codex`;
+  - the ten existing campaign cases, run through their deterministic fixture
+    generators (`scripts/perf_throughput_fixture.py`,
+    `perf_codec_fixture.py`, `perf_codex_fixture.py` and
+    `perf_codex_throughput_fixture.py`), never the raw `$urandom` testbenches;
+  - `ldpc_codex`;
   - several open-source RTL cores (CPU, crypto, and an SoC slice) with
     license-reviewed testbenches;
   - one UVM-style testbench.
@@ -417,9 +421,21 @@ mode of working: one owner plus coding agents.
 - **D3. Adopted as proposed.** By default named nets are readable on demand.
   Value-change and write access are compiled in only when requested by trace
   selection, VPI/VHPI, Tcl, force/deposit or coverage options.
-- **D4. Adopted.** Undefined races do not need to match any simulator. The
-  corpus testbenches are refactored to avoid race conditions; transcript parity
-  is then required against every oracle.
+- **D4. Adopted.** Undefined races do not need to match any simulator, and
+  testbenches are refactored to avoid them; transcript parity is then required
+  against every oracle.
+  - For the existing campaign cases this refactoring is already done. Their
+    deterministic fixture generators produce race-free testbenches:
+    - stimulus is driven on the negative edge;
+    - signals are sampled at the positive edge;
+    - a testbench-defined xorshift32 replaces `$urandom`.
+  - **Check on 2026-10-06.** The fixtures from
+    `build/performance-campaign/matrix-closure-20260928/round-2` were run on the
+    checkpoint build. Both throughput cases reproduced all 13 Vivado result
+    lines exactly (`THRU` and `STIM_SUMMARY`).
+  - **Superseded concern.** The apparent Vivado mismatch came from comparing
+    runs of the raw `$urandom` testbenches against fixture-based Vivado
+    results. It was not a parity defect.
 - **D5. Adopted.** Whole-design admission, with fallback to the current engine
   during migration.
 - **D6. Adopted.** "Industry-leading" means:

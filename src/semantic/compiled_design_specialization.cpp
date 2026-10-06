@@ -10755,6 +10755,7 @@ bool SpecializedHirUnit::select_generate(
 
 bool SpecializedHirUnit::replace(sv::Declaration replacement)
 {
+    client_cache_.reset();
     if (specialization_.language == Language::vhdl) {
         return false;
     }
@@ -10770,6 +10771,7 @@ bool SpecializedHirUnit::replace(sv::Declaration replacement)
 
 bool SpecializedHirUnit::replace(vhdl::Declaration replacement)
 {
+    client_cache_.reset();
     if (specialization_.language != Language::vhdl) {
         return false;
     }
@@ -10785,6 +10787,7 @@ bool SpecializedHirUnit::replace(vhdl::Declaration replacement)
 
 bool SpecializedHirUnit::replace(sv::TypeDefinition replacement)
 {
+    client_cache_.reset();
     if (specialization_.language == Language::vhdl) {
         return false;
     }
@@ -10799,6 +10802,7 @@ bool SpecializedHirUnit::replace(sv::TypeDefinition replacement)
 
 bool SpecializedHirUnit::replace(vhdl::TypeDefinition replacement)
 {
+    client_cache_.reset();
     if (specialization_.language != Language::vhdl) {
         return false;
     }
@@ -10812,6 +10816,7 @@ bool SpecializedHirUnit::replace(vhdl::TypeDefinition replacement)
 
 bool SpecializedHirUnit::replace(sv::Expression replacement)
 {
+    client_cache_.reset();
     if (specialization_.language == Language::vhdl) {
         return false;
     }
@@ -10827,6 +10832,7 @@ bool SpecializedHirUnit::replace(sv::Expression replacement)
 
 bool SpecializedHirUnit::replace(vhdl::Expression replacement)
 {
+    client_cache_.reset();
     if (specialization_.language != Language::vhdl) {
         return false;
     }
@@ -10842,6 +10848,7 @@ bool SpecializedHirUnit::replace(vhdl::Expression replacement)
 
 bool SpecializedHirUnit::replace(sv::Statement replacement)
 {
+    client_cache_.reset();
     if (specialization_.language == Language::vhdl) {
         return false;
     }
@@ -10857,6 +10864,7 @@ bool SpecializedHirUnit::replace(sv::Statement replacement)
 
 bool SpecializedHirUnit::replace(vhdl::Statement replacement)
 {
+    client_cache_.reset();
     if (specialization_.language != Language::vhdl) {
         return false;
     }
@@ -10872,6 +10880,7 @@ bool SpecializedHirUnit::replace(vhdl::Statement replacement)
 
 bool SpecializedHirUnit::replace(sv::Process replacement)
 {
+    client_cache_.reset();
     if (specialization_.language == Language::vhdl) {
         return false;
     }
@@ -10887,6 +10896,7 @@ bool SpecializedHirUnit::replace(sv::Process replacement)
 
 bool SpecializedHirUnit::replace(vhdl::Process replacement)
 {
+    client_cache_.reset();
     if (specialization_.language != Language::vhdl) {
         return false;
     }
@@ -10901,6 +10911,7 @@ bool SpecializedHirUnit::replace(vhdl::Process replacement)
 
 bool SpecializedHirUnit::replace(sv::Instance replacement)
 {
+    client_cache_.reset();
     if (specialization_.language == Language::vhdl) {
         return false;
     }
@@ -10916,6 +10927,7 @@ bool SpecializedHirUnit::replace(sv::Instance replacement)
 
 bool SpecializedHirUnit::replace(vhdl::Instance replacement)
 {
+    client_cache_.reset();
     if (specialization_.language != Language::vhdl) {
         return false;
     }

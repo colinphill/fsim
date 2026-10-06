@@ -247,6 +247,14 @@ using SpecializedHirVhdlConstantValue =
 /// semantic identities.
 class SpecializedHirUnit {
 public:
+    /// Derived data a client caches for this exact specialization (for
+    /// example elaboration's constant memo). Copies share it; replace()
+    /// detaches it. It is not part of the specialization's value.
+    [[nodiscard]] std::shared_ptr<void>& client_cache() const noexcept
+    {
+        return client_cache_;
+    }
+
     [[nodiscard]] const CompiledDesign& design() const noexcept;
     [[nodiscard]] const SpecializedHirOverlay& specialization() const noexcept;
     [[nodiscard]] UnitId unit() const noexcept;
@@ -481,6 +489,7 @@ private:
     const CompiledDesign* design_ { };
     std::shared_ptr<detail::VhdlInitializerMemoContext>
         initializer_memo_context_;
+    mutable std::shared_ptr<void> client_cache_;
     // True only when construction received ValidatedCompiledDesign's proof
     // that the immutable design's non-owning indexes are current.
     bool validated_lookup_indexes_ { };

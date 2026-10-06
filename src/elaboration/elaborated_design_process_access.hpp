@@ -10,6 +10,10 @@
 #include <unordered_map>
 #include <vector>
 
+namespace fsim::runtime::simir {
+class RegionGraph;
+}
+
 namespace fsim::elaboration::detail {
 
 struct RuntimeProcessProgramRow {
@@ -21,6 +25,11 @@ struct RuntimeProcessProgramTable {
     std::vector<std::shared_ptr<const runtime::simir::ProcessProgramTemplate>>
         templates;
     std::vector<RuntimeProcessProgramRow> rows;
+    /// Derived data, not part of the table's value: the design region graph
+    /// last built over these rows and the signal-layout key it was built
+    /// with (ElaboratedDesignProcessAccess::region_graph).
+    mutable std::shared_ptr<const runtime::simir::RegionGraph> region_graph;
+    mutable std::uint64_t region_graph_key { };
 };
 
 /// Mutable fresh-elaboration sink. It splits each incoming full process once
@@ -88,6 +97,13 @@ public:
 
     [[nodiscard]] static bool row_backed(
         const ElaboratedDesign& design) noexcept;
+
+    /// The region graph over every process with complete accesses, as the
+    /// driver inventory and the static-kernel planner use it. A row-backed
+    /// design caches it on its row table, keyed by the signal and container
+    /// layout, so a loaded design builds it once.
+    [[nodiscard]] static std::shared_ptr<const runtime::simir::RegionGraph>
+    region_graph(const ElaboratedDesign& design);
 };
 
 } // namespace fsim::elaboration::detail

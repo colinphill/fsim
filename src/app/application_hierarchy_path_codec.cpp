@@ -4,6 +4,8 @@
 #include "fsim/support/sha256.hpp"
 
 #include <algorithm>
+#include <cstring>
+#include <iterator>
 #include <limits>
 #include <new>
 #include <ranges>
@@ -22,12 +24,12 @@ constexpr std::uint32_t kInvalidId
     const std::string_view left,
     const std::string_view right) noexcept
 {
+    // memcmp orders bytes as unsigned char.
     const auto common = std::min(left.size(), right.size());
-    for (std::size_t index = 0; index < common; ++index) {
-        const auto a = static_cast<unsigned char>(left[index]);
-        const auto b = static_cast<unsigned char>(right[index]);
-        if (a != b) {
-            return a < b;
+    if (common != 0U) {
+        if (const auto order = std::memcmp(left.data(), right.data(), common);
+            order != 0) {
+            return order < 0;
         }
     }
     return left.size() < right.size();
@@ -151,20 +153,43 @@ void append_u32(std::string& bytes, const std::uint32_t value)
             || (second != nullptr && second->size() >= kInvalidId)) {
             return { std::nullopt, Error::path_count_limit };
         }
-        std::vector<std::string_view> paths;
-        const auto collect = [&](const semantic::HierarchyPathTable& table) {
+        // Sorted, duplicate-free spellings of one table. Canonical tables
+        // are already in order, and tables extending one keep a sorted
+        // prefix, so only the remainder is sorted before a merge.
+        const auto sorted_unique = [](const semantic::HierarchyPathTable& table) {
+            std::vector<std::string_view> views;
+            views.reserve(table.size());
             for (std::size_t index = 0; index < table.size(); ++index) {
-                const auto id = semantic::HierarchyPathId::from_index(
-                    static_cast<std::uint32_t>(index));
-                paths.push_back(table.view(id));
+                views.push_back(table.view(semantic::HierarchyPathId::from_index(
+                    static_cast<std::uint32_t>(index))));
             }
+            std::size_t prefix = views.empty() ? 0U : 1U;
+            while (prefix < views.size()
+                && unsigned_byte_less(views[prefix - 1U], views[prefix])) {
+                ++prefix;
+            }
+            if (prefix == views.size()) {
+                return views;
+            }
+            const auto middle = views.begin()
+                + static_cast<std::ptrdiff_t>(prefix);
+            std::sort(middle, views.end(), unsigned_byte_less);
+            std::inplace_merge(views.begin(), middle, views.end(),
+                unsigned_byte_less);
+            views.erase(std::unique(views.begin(), views.end()), views.end());
+            return views;
         };
-        collect(first);
+        auto paths = sorted_unique(first);
         if (second != nullptr) {
-            collect(*second);
+            const auto more = sorted_unique(*second);
+            std::vector<std::string_view> merged;
+            merged.reserve(paths.size() + more.size());
+            std::ranges::merge(paths, more, std::back_inserter(merged),
+                unsigned_byte_less);
+            merged.erase(std::unique(merged.begin(), merged.end()),
+                merged.end());
+            paths = std::move(merged);
         }
-        std::ranges::sort(paths, unsigned_byte_less);
-        paths.erase(std::unique(paths.begin(), paths.end()), paths.end());
         if (paths.size() > limits.maximum_paths
             || paths.size() >= kInvalidId) {
             return { std::nullopt, Error::path_count_limit };

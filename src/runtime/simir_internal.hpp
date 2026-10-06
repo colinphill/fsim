@@ -3930,6 +3930,13 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<std::uint8_t> fusion_dormant_process;
     bool fused_cone_materializing { };
     void materialize_fused_cone(std::size_t cone);
+    // Engine v4 static kernel (simir_static_kernel.cpp). Owned signals live
+    // in kernel storage and are published on observation.
+    class StaticKernel;
+    std::shared_ptr<StaticKernel> static_kernel;
+    std::vector<std::uint8_t> static_kernel_owned_signal;
+    bool static_kernel_materializing { };
+    void materialize_static_kernel_signal(SignalId signal);
     std::vector<CommitSignalProfileRow> commit_signal_profile_rows;
     std::uint64_t update_profile_commits { };
     std::uint64_t update_profile_updates { };

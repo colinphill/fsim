@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_builder_internal.hpp"
+#include "specialization_cache.hpp"
 #include "lowerer_internal.hpp"
 #include "../diagnostic/thread_cpu_clock.hpp"
 
@@ -187,6 +188,25 @@ bool same_systemverilog_template_overlay(
         }
     }
     return true;
+}
+
+// A specialization without replacement records is a pure function of its
+// overlay, so its generate occurrences are too.
+bool overlay_determines_specialization(
+    const semantic::SpecializedHirUnit& specialized)
+{
+    return specialized.systemverilog_declarations().empty()
+        && specialized.vhdl_declarations().empty()
+        && specialized.systemverilog_types().empty()
+        && specialized.vhdl_types().empty()
+        && specialized.systemverilog_expressions().empty()
+        && specialized.vhdl_expressions().empty()
+        && specialized.systemverilog_statements().empty()
+        && specialized.vhdl_statements().empty()
+        && specialized.systemverilog_processes().empty()
+        && specialized.vhdl_processes().empty()
+        && specialized.systemverilog_instances().empty()
+        && specialized.vhdl_instances().empty();
 }
 
 bool same_systemverilog_process_source(
@@ -502,6 +522,70 @@ bool remap_systemverilog_template_process(
 {
     return remap_systemverilog_template_process<Process>(
         process, signal_remap, from_hierarchy, to_hierarchy, signal_info);
+}
+
+std::uint32_t HierarchyBuilder::overlay_class(
+    const semantic::SpecializedHirUnit& specialized)
+{
+    auto& cache = specialization_cache(specialized);
+    if (cache.overlay_class != SpecializationCache::unassigned) {
+        return cache.overlay_class;
+    }
+    const auto& overlay = specialized.specialization();
+    // An overlay with an incomplete actual matches nothing, itself included.
+    if (!same_systemverilog_template_overlay(overlay, overlay)) {
+        cache.overlay_class = no_overlay_class;
+        return no_overlay_class;
+    }
+    for (std::uint32_t index = 0U; index < overlay_classes_.size(); ++index) {
+        if (same_systemverilog_template_overlay(overlay_classes_[index], overlay)) {
+            cache.overlay_class = index;
+            return index;
+        }
+    }
+    cache.overlay_class = static_cast<std::uint32_t>(overlay_classes_.size());
+    overlay_classes_.push_back(overlay);
+    return cache.overlay_class;
+}
+
+hierarchy_sv_generate_detail::CollectionResult
+HierarchyBuilder::collect_generate_occurrences(const semantic::sv::Unit& unit,
+    const std::string& path,
+    const semantic::SpecializedHirUnit& specialized)
+{
+    if (unit.generates.empty()
+        || !overlay_determines_specialization(specialized)) {
+        return hierarchy_sv_generate_detail::collect_occurrences(
+            unit, path, specialized);
+    }
+    const auto relocate = [&](std::vector<
+                                  hierarchy_sv_generate_detail::Occurrence>
+                                  occurrences) {
+        for (auto& occurrence : occurrences) {
+            if (occurrence.path.empty()) {
+                occurrence.path = path;
+            } else if (!path.empty()) {
+                occurrence.path = path + "." + occurrence.path;
+            }
+        }
+        return occurrences;
+    };
+    const auto overlay = overlay_class(specialized);
+    auto& templates = generate_occurrence_templates_[unit.id];
+    for (const auto& cached : templates) {
+        if (overlay != no_overlay_class && cached.overlay_class == overlay) {
+            return { relocate(cached.occurrences), std::nullopt };
+        }
+    }
+    auto collected = hierarchy_sv_generate_detail::collect_occurrences(
+        unit, {}, specialized);
+    if (collected.diagnostic) {
+        return hierarchy_sv_generate_detail::collect_occurrences(
+            unit, path, specialized);
+    }
+    templates.push_back({ overlay, collected.occurrences });
+    collected.occurrences = relocate(std::move(collected.occurrences));
+    return collected;
 }
 
 std::optional<HierarchyBuilder::VhdlProcessOccurrence>
@@ -968,9 +1052,9 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
     bool matching_overlay { };
     if (cached_templates
         != systemverilog_concurrent_process_templates_.end()) {
+        const auto overlay = overlay_class(specialized);
         for (const auto& cached : cached_templates->second) {
-            if (!same_systemverilog_template_overlay(
-                    cached.overlay, specialized.specialization())
+            if (overlay == no_overlay_class || cached.overlay_class != overlay
                 || cached.language_standard != unit.standard
                 || cached.compatibility_profile
                     != unit.compatibility_profile) {
@@ -1206,6 +1290,8 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
             unit.compatibility_profile, std::string { path },
             common, instance, std::move(signal_roles)
         });
+    systemverilog_concurrent_process_templates_[key].back().overlay_class
+        = overlay_class(specialized);
     return SystemVerilogConcurrentProcessOccurrence {
         std::move(common), std::move(instance)
     };
@@ -1388,9 +1474,9 @@ HierarchyBuilder::replay_systemverilog_process_template(
     bool matching_overlay { };
     const auto callable_invocation_before
         = lowerer.next_hir_callable_invocation_identity();
+    const auto overlay = overlay_class(specialized);
     for (const auto& cached : found->second) {
-        if (!same_systemverilog_template_overlay(
-                cached.overlay, specialized.specialization())) {
+        if (overlay == no_overlay_class || cached.overlay_class != overlay) {
             continue;
         }
         matching_overlay = true;
@@ -1553,10 +1639,11 @@ bool HierarchyBuilder::remember_systemverilog_process_template(
         std::move(generated_identity)
     };
     auto& templates = systemverilog_process_templates_[key];
-    if (std::ranges::any_of(templates, [&](const auto& cached) {
-            return same_systemverilog_template_overlay(
-                       cached.overlay, specialized.specialization());
-        })) {
+    const auto overlay = overlay_class(specialized);
+    if (overlay != no_overlay_class
+        && std::ranges::any_of(templates, [&](const auto& cached) {
+               return cached.overlay_class == overlay;
+           })) {
         return false;
     }
     auto common = design_.intern_process_template(
@@ -1574,6 +1661,7 @@ bool HierarchyBuilder::remember_systemverilog_process_template(
         callable_invocation_before,
         callable_invocation_after,
     });
+    templates.back().overlay_class = overlay;
     record_lowering_census(generated_occurrence
             ? systemverilog_generated_process_templates_lowered_
             : systemverilog_ordinary_process_templates_lowered_);
@@ -1688,16 +1776,29 @@ void HierarchyBuilder::canonicalize_process_operations(
         [&](const ProcessId representative) {
             return representative >= design_.process_count();
         });
+    const auto share = [&](const ProcessId representative) {
+        return process_program_detail::share_operations(
+            design_.process_view(representative), *common, instance,
+            design_.signals_, &operation_scratch_);
+    };
+    const auto remembered = representative_of_template_.find(common.get());
+    if (remembered != representative_of_template_.end()
+        && remembered->second < design_.process_count()
+        && share(remembered->second)) {
+        return;
+    }
     for (const auto representative : representatives) {
-        const auto representative_process
-            = design_.process_view(representative);
-        if (process_program_detail::share_operations(
-                representative_process, *common, instance,
-                design_.signals_, &operation_scratch_)) {
+        if (remembered != representative_of_template_.end()
+            && representative == remembered->second) {
+            continue;
+        }
+        if (share(representative)) {
+            representative_of_template_[common.get()] = representative;
             return;
         }
     }
     representatives.push_back(instance.id);
+    representative_of_template_[common.get()] = instance.id;
 }
 
 HierarchyBuilder::HierarchyBuilder(

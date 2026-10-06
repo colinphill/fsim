@@ -16,6 +16,7 @@
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
+#include "fsim/support/teardown.hpp"
 #include "fsim/systemc/scv_artifact.hpp"
 #include "fsim/version.hpp"
 
@@ -1630,6 +1631,10 @@ int elaborate_built_workspace(
         || !publish_design_artifact(config, std::move(*built),
             *invocation.artifact_output, diagnostics)) {
         return 1;
+    }
+    if (support::exit_without_teardown()) {
+        support::release_at_exit(
+            std::make_unique<BuiltProject>(std::move(*built)));
     }
     output << "elaborated " << root_count
            << " root(s) into "

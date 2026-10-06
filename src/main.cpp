@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/app/application.hpp"
 #include "fsim/cli/driver.hpp"
+#include "fsim/support/teardown.hpp"
 
 #if defined(_WIN32)
 #  if !defined(NOMINMAX)
@@ -53,6 +54,7 @@ int wmain(const int argc, wchar_t** wide_argv) {
     for (const auto& argument : storage) {
       argv.push_back(argument.c_str());
     }
+    fsim::support::enable_exit_without_teardown();
     return fsim::cli::run(
         argc, argv.data(), fsim::app::make_stdio_cli_services());
   } catch (...) {
@@ -61,6 +63,7 @@ int wmain(const int argc, wchar_t** wide_argv) {
 }
 #else
 int main(const int argc, char** argv) {
+  fsim::support::enable_exit_without_teardown();
   return fsim::cli::run(argc, argv, fsim::app::make_stdio_cli_services());
 }
 #endif

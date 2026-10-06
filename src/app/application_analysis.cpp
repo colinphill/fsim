@@ -3,6 +3,13 @@
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
+#include <functional>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <unordered_map>
+#include <utility>
+
 namespace fsim::app::application_detail {
 
 std::atomic_bool interrupt_requested{};
@@ -307,24 +314,84 @@ frontend::StandardRevision frontend_standard_revision(
     return frontend::StandardRevision::SystemVerilog2017;
 }
 
+namespace {
+
+// Source paths are compared many times while projecting compiled designs,
+// and each uncached comparison costs several filesystem calls. Path identity
+// cannot change within one command, so canonical spellings are resolved once
+// per path and equivalence once per pair.
+class SourcePathIdentityCache {
+public:
+    [[nodiscard]] bool same(const std::filesystem::path& left,
+        const std::string& left_key, const std::filesystem::path& right,
+        const std::string& right_key)
+    {
+        const std::scoped_lock lock { mutex_ };
+        const auto pair = left_key < right_key
+            ? std::pair { left_key, right_key }
+            : std::pair { right_key, left_key };
+        if (const auto found = equivalent_.find(pair);
+            found != equivalent_.end()) {
+            return found->second;
+        }
+        std::error_code equivalent_error;
+        bool result = support::native_fs::equivalent(left, right, equivalent_error)
+            && !equivalent_error;
+        if (!result) {
+            const auto& left_canonical = canonical(left, left_key);
+            const auto& right_canonical = canonical(right, right_key);
+            result = left_canonical && right_canonical
+                && *left_canonical == *right_canonical;
+        }
+        equivalent_.emplace(pair, result);
+        return result;
+    }
+
+private:
+    struct PairHash {
+        std::size_t operator()(
+            const std::pair<std::string, std::string>& value) const noexcept
+        {
+            const auto first = std::hash<std::string> { }(value.first);
+            return first ^ (std::hash<std::string> { }(value.second) + 0x9e3779b9U
+                + (first << 6U) + (first >> 2U));
+        }
+    };
+
+    [[nodiscard]] const std::optional<std::string>& canonical(
+        const std::filesystem::path& path, const std::string& key)
+    {
+        if (const auto found = canonical_.find(key); found != canonical_.end()) {
+            return found->second;
+        }
+        std::error_code error;
+        const auto resolved = support::native_fs::weakly_canonical(path, error);
+        std::optional<std::string> value;
+        if (!error) {
+            value = source_path_key(resolved);
+        }
+        return canonical_.emplace(key, std::move(value)).first->second;
+    }
+
+    std::mutex mutex_;
+    std::unordered_map<std::string, std::optional<std::string>> canonical_;
+    std::unordered_map<std::pair<std::string, std::string>, bool, PairHash>
+        equivalent_;
+};
+
+} // namespace
+
 bool same_source_path(
     const std::filesystem::path& left,
     const std::filesystem::path& right)
 {
-    if (source_path_key(left) == source_path_key(right)) {
+    const auto left_key = source_path_key(left);
+    const auto right_key = source_path_key(right);
+    if (left_key == right_key) {
         return true;
     }
-    std::error_code equivalent_error;
-    if (support::native_fs::equivalent(left, right, equivalent_error)
-        && !equivalent_error) {
-        return true;
-    }
-    std::error_code left_error;
-    std::error_code right_error;
-    const auto canonical_left = support::native_fs::weakly_canonical(left, left_error);
-    const auto canonical_right = support::native_fs::weakly_canonical(right, right_error);
-    return !left_error && !right_error
-        && source_path_key(canonical_left) == source_path_key(canonical_right);
+    static SourcePathIdentityCache cache;
+    return cache.same(left, left_key, right, right_key);
 }
 
 std::string source_path_key(const std::filesystem::path& path)

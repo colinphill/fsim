@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_sv_constant_evaluator.hpp"
+#include "specialization_cache.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 
 #include <boost/multiprecision/cpp_int.hpp>
 
 #include <algorithm>
+#include <unordered_map>
 #include <bit>
 #include <charconv>
 #include <cctype>
@@ -119,6 +121,20 @@ template <typename Integer>
 
 [[nodiscard]] bool known(const PackedLogic4& value) noexcept
 {
+    if (!value.is_logic9()) {
+        // Logic4 planes: an X or Z bit has its bval bit set.
+        const auto bval = value.bval_words();
+        const auto width = value.width();
+        for (std::size_t word = 0U; word < bval.size(); ++word) {
+            const auto bits = width - 64U * word;
+            const auto mask = bits >= 64U ? ~std::uint64_t { 0 }
+                                          : (std::uint64_t { 1 } << bits) - 1U;
+            if ((bval[word] & mask) != 0U) {
+                return false;
+            }
+        }
+        return true;
+    }
     for (std::size_t bit = 0U; bit < value.width(); ++bit) {
         const auto state = runtime::to_logic4(value.get_logic9(bit));
         if (state == Logic4::x || state == Logic4::z) {
@@ -178,6 +194,20 @@ template <typename Integer>
 [[nodiscard]] cpp_int unsigned_integer(const Value& value)
 {
     cpp_int result { };
+    if (!value.packed.is_logic9() && value.width == value.packed.width()) {
+        // The '1' bits: aval set, bval clear.
+        const auto aval = value.packed.aval_words();
+        const auto bval = value.packed.bval_words();
+        for (auto word = aval.size(); word-- > 0U;) {
+            const auto bits = value.width - 64U * word;
+            const auto mask = bits >= 64U ? ~std::uint64_t { 0 }
+                                          : (std::uint64_t { 1 } << bits) - 1U;
+            const auto b = word < bval.size() ? bval[word] : 0U;
+            result <<= 64U;
+            result += aval[word] & ~b & mask;
+        }
+        return result;
+    }
     for (auto bit = value.width; bit-- > 0U;) {
         result <<= 1U;
         if (one(value.packed, bit)) {
@@ -3661,8 +3691,18 @@ evaluate_hir_systemverilog_constant(
     std::string& error)
 {
     error.clear();
-    return HirConstantEvaluator { specialization, error }.evaluate(
+    // Evaluation depends only on the specialization and the expression;
+    // instances sharing a specialization evaluate each expression once.
+    auto& results = specialization_cache(specialization).constants;
+    if (const auto found = results.find(expression.value());
+        found != results.end()) {
+        error = found->second.second;
+        return found->second.first;
+    }
+    auto value = HirConstantEvaluator { specialization, error }.evaluate(
         expression);
+    results.emplace(expression.value(), std::pair { value, error });
+    return value;
 }
 
 bool hir_systemverilog_scalar_expression_applicable(

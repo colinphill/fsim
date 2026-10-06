@@ -519,6 +519,7 @@ add_library(
   src/support/allocation_hooks.cpp
   src/support/environment.cpp
   src/support/sha256.cpp
+  src/support/teardown.cpp
 )
 add_library(fsim::base ALIAS fsim_base)
 fsim_configure_subsystem_library(fsim_base)
@@ -806,6 +807,11 @@ add_library(
     src/runtime/simir_execution.cpp
     src/runtime/simir_execution_part2.cpp
     src/runtime/simir_fused_cone.cpp
+    src/runtime/simir_static_kernel.cpp
+    src/runtime/simir_static_kernel_analysis.cpp
+    src/runtime/simir_static_kernel_compiled.cpp
+    src/runtime/simir_static_kernel_execute.cpp
+    src/runtime/simir_static_kernel_native_units.cpp
     src/runtime/simir_fused_static_graph.cpp
     src/runtime/simir_execution_context.cpp
     src/runtime/simir_execution_boundaries.cpp
@@ -867,6 +873,7 @@ endif()
       src/elaboration/coverage_points.cpp
       src/elaboration/elaborated_design.cpp
       src/elaboration/elaborated_design_cone_fusion.cpp
+      src/elaboration/elaborated_design_static_kernel.cpp
       src/elaboration/elaborate.cpp
       src/frontend/verilog_coverage_points.cpp
       src/frontend/verilog_coverage_conditions.cpp
@@ -1194,6 +1201,7 @@ if(FSIM_WITH_LLVM)
     src/compiler/llvm/logic9_word_lowering.cpp
       src/compiler/llvm_jit_value_lowering.cpp
       src/compiler/llvm_jit_wide_bitwise_lowering.cpp
+      src/compiler/static_kernel_codegen.cpp
   )
   add_library(fsim::compiler ALIAS fsim_compiler)
   fsim_configure_subsystem_library(fsim_compiler)

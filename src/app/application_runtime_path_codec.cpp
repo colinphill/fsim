@@ -185,6 +185,17 @@ bool visit_runtime_paths(
         }
         for (std::size_t index = 0;
             index < process.operations.size(); ++index) {
+            // Only coverage and debug operations carry paths; test the kind
+            // on the stored operation before expanding instance fields.
+            if (const auto& stored = std::as_const(process.operations)[index];
+                !runtime::simir::operation_holds<
+                    runtime::simir::CoverageControl>(stored)
+                && !runtime::simir::operation_holds<
+                    runtime::simir::CoverageAccess>(stored)
+                && !runtime::simir::operation_holds<
+                    runtime::simir::DebugPoint>(stored)) {
+                continue;
+            }
             auto operation = process.operations.expanded(index);
             bool has_path { };
             bool changed { };

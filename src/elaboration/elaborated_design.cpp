@@ -4,6 +4,7 @@
 #include "../runtime/simir_a4_signal_state.hpp"
 #include "../runtime/simir_region_graph_bindings.hpp"
 #include "../runtime/simir_region_graph_program_access.hpp"
+#include "../runtime/simir_static_kernel.hpp"
 
 #include <algorithm>
 #include <exception>
@@ -169,6 +170,15 @@ void ElaboratedDesign::freeze_hierarchy_paths()
         add(process.name());
         for (std::size_t index = 0;
             index < process.operations().size(); ++index) {
+            if (const auto& stored = process.operations()[index];
+                !runtime::simir::operation_holds<
+                    runtime::simir::CoverageControl>(stored)
+                && !runtime::simir::operation_holds<
+                    runtime::simir::CoverageAccess>(stored)
+                && !runtime::simir::operation_holds<
+                    runtime::simir::DebugPoint>(stored)) {
+                continue;
+            }
             const auto operation = process.operations().expanded(index);
             if (const auto* const control
                 = runtime::simir::operation_get_if<
@@ -707,6 +717,42 @@ ElaboratedDesign::create_interpreter(
     return interpreter;
 }
 
+std::unique_ptr<runtime::simir::Interpreter>
+ElaboratedDesign::create_interpreter(
+    const runtime::SchedulerOptions options,
+    const std::uint64_t seed,
+    const StaticKernelPlan& plan) &&
+{
+    if (plan.disabled || !plan.spec || plan.spec->members.empty()) {
+        throw std::invalid_argument("static kernel plan is empty");
+    }
+    // Reuse the fused-cone substitution: the host runs its stub program and
+    // every other member is dormant.
+    ConeFusionPlan substitution;
+    ConeFusionPlanCone host;
+    host.sink = plan.host;
+    host.fused = plan.host_program;
+    substitution.cones.push_back(std::move(host));
+    for (const auto& member : plan.spec->members) {
+        if (member.process != plan.host) {
+            substitution.dormant.push_back(member.process);
+        }
+    }
+    std::ranges::sort(substitution.dormant);
+    auto interpreter = std::make_unique<runtime::simir::Interpreter>(options, seed);
+    interpreter->reserve_process_capacity(process_count());
+    populate_interpreter(interpreter.get(), false,
+        process_rows_ ? nullptr : &processes_, &substitution);
+    process_rows_.reset();
+    auto spec = *plan.spec;
+    spec.host = plan.host;
+    spec.host_original = std::move(fused_sink_originals_.at(0));
+    fused_sink_originals_.clear();
+    runtime::simir::InterpreterProgramAccess::install_static_kernel(
+        *interpreter, std::move(spec));
+    return interpreter;
+}
+
 void ElaboratedDesign::populate_interpreter(
     runtime::simir::Interpreter* const interpreter,
     const bool validation_only,
@@ -897,41 +943,8 @@ void ElaboratedDesign::populate_interpreter(
 runtime::simir::SignalDriverInventory
 ElaboratedDesign::compute_signal_driver_inventory() const
 {
-    using namespace runtime::simir;
-    std::vector<ProcessProgramView> programs;
-    programs.reserve(process_count());
-    for (std::size_t index = 0U; index < process_count(); ++index) {
-        programs.push_back(
-            ::fsim::elaboration::detail::ElaboratedDesignProcessAccess::
-                process_view(*this, index));
-    }
-
-    std::vector<RegionSignalDescriptor> descriptors;
-    descriptors.reserve(signals_.size());
-    for (const auto& signal : signals_) {
-        if (signal.initial_value.width()
-            > std::numeric_limits<std::uint32_t>::max()) {
-            throw std::length_error {
-                "elaborated signal width exceeds the RegionGraph limit"
-            };
-        }
-        descriptors.push_back({
-            static_cast<std::uint32_t>(signal.initial_value.width()),
-            signal.resolution, signal.value_kind,
-            signal.implicit_driver.has_value(), false,
-            signal.event_variable, RegionObservation::none });
-    }
-    std::vector<std::uint8_t> access_complete(programs.size(), 1U);
-    auto graph_bindings
-        = ::fsim::runtime::simir::detail::build_region_graph_container_bindings(
-        signals_, container_objects_, container_signal_aliases_,
-        container_element_signal_aliases_,
-        container_aggregate_signal_aliases_);
-    const auto graph
-        = runtime::simir::region_graph_detail::RegionGraphProgramBuilder::build(
-        programs, descriptors, false, graph_bindings.containers, access_complete,
-        graph_bindings.alias_families);
-    return SignalDriverLayout::inventory(graph);
+    return runtime::simir::SignalDriverLayout::inventory(
+        *detail::ElaboratedDesignProcessAccess::region_graph(*this));
 }
 
 void ElaboratedDesign::finalize_signal_driver_inventory()
@@ -1674,6 +1687,88 @@ bool detail::ElaboratedDesignProcessAccess::row_backed(
 {
     return static_cast<bool>(design.process_builder_)
         || static_cast<bool>(design.process_rows_);
+}
+
+std::shared_ptr<const runtime::simir::RegionGraph>
+detail::ElaboratedDesignProcessAccess::region_graph(
+    const ElaboratedDesign& design)
+{
+    using namespace runtime::simir;
+    // Everything besides the rows that the graph depends on.
+    std::uint64_t key = 0xcbf29ce484222325ULL;
+    const auto mix = [&](const std::uint64_t value) {
+        for (unsigned shift = 0U; shift < 64U; shift += 8U) {
+            key ^= (value >> shift) & 0xffU;
+            key *= 0x100000001b3ULL;
+        }
+    };
+    std::vector<RegionSignalDescriptor> descriptors;
+    descriptors.reserve(design.signals_.size());
+    for (const auto& signal : design.signals_) {
+        if (signal.initial_value.width()
+            > std::numeric_limits<std::uint32_t>::max()) {
+            throw std::length_error {
+                "elaborated signal width exceeds the RegionGraph limit"
+            };
+        }
+        descriptors.push_back({
+            static_cast<std::uint32_t>(signal.initial_value.width()),
+            signal.resolution, signal.value_kind,
+            signal.implicit_driver.has_value(), false,
+            signal.event_variable, RegionObservation::none });
+        mix(signal.initial_value.width());
+        mix(static_cast<std::uint64_t>(signal.resolution));
+        mix(static_cast<std::uint64_t>(signal.value_kind));
+        mix(signal.implicit_driver.has_value() ? 1U : 0U);
+        mix(signal.event_variable ? 1U : 0U);
+    }
+    mix(design.container_objects_.size());
+    for (const auto& object : design.container_objects_) {
+        mix(object.initial_value.elements.size());
+        mix(object.initial_value.type.element_width);
+    }
+    mix(design.container_signal_aliases_.size());
+    for (const auto& alias : design.container_signal_aliases_) {
+        mix(alias.object);
+        mix(alias.signal);
+    }
+    mix(design.container_element_signal_aliases_.size());
+    for (const auto& alias : design.container_element_signal_aliases_) {
+        mix(alias.object);
+        mix(alias.signal);
+        mix(alias.ordinal);
+    }
+    mix(design.container_aggregate_signal_aliases_.size());
+    for (const auto& alias : design.container_aggregate_signal_aliases_) {
+        mix(alias.object);
+        mix(alias.signal);
+    }
+    const auto& rows = design.process_rows_;
+    if (rows && rows->region_graph && rows->region_graph_key == key) {
+        return rows->region_graph;
+    }
+
+    std::vector<ProcessProgramView> programs;
+    programs.reserve(process_count(design));
+    for (std::size_t index = 0U; index < process_count(design); ++index) {
+        programs.push_back(process_view(design, index));
+    }
+    std::vector<std::uint8_t> access_complete(programs.size(), 1U);
+    auto graph_bindings
+        = ::fsim::runtime::simir::detail::build_region_graph_container_bindings(
+        design.signals_, design.container_objects_,
+        design.container_signal_aliases_,
+        design.container_element_signal_aliases_,
+        design.container_aggregate_signal_aliases_);
+    auto graph = std::make_shared<const RegionGraph>(
+        region_graph_detail::RegionGraphProgramBuilder::build(
+            programs, descriptors, false, graph_bindings.containers,
+            access_complete, graph_bindings.alias_families));
+    if (rows && !design.process_builder_) {
+        rows->region_graph = graph;
+        rows->region_graph_key = key;
+    }
+    return graph;
 }
 
 } // namespace fsim::elaboration

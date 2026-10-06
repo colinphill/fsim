@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_simulation_internal.hpp"
+#include "../runtime/simir_static_kernel.hpp"
+#if defined(FSIM_HAS_LLVM)
+#include "fsim/compiler/static_kernel_codegen.hpp"
+#endif
+
+#include <limits>
 
 namespace fsim::app {
 
@@ -9,6 +15,53 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
     BuiltProject& built, const std::uint64_t max_deltas)
 {
     const runtime::SchedulerOptions options { max_deltas, 32 };
+    // Engine v4 static kernel (docs/simulation-engine-v4-plan.md); opt-in
+    // while Phase 1 is in progress. It has the same observability limits as
+    // cone fusion.
+    if (built.cone_fusion && std::getenv("FSIM_STATIC_KERNEL") != nullptr
+        && std::string_view { std::getenv("FSIM_STATIC_KERNEL") } == "1") {
+        const auto plan = built.design.plan_static_kernel();
+        if (std::getenv("FSIM_PROFILE_PHASES") != nullptr) {
+            std::cerr << "fsim-profile: static-kernel disabled=" << plan.disabled
+                      << " reason=" << plan.disabled_reason
+                      << " members=" << plan.members
+                      << " owned_signals=" << plan.owned_signals
+                      << " outputs=" << plan.boundary_outputs
+                      << " inputs=" << plan.boundary_inputs
+                      << " containers=" << plan.owned_containers
+                      << '\n';
+        }
+        if (!plan.disabled) {
+            // Partition combinational members by module instance.
+            const auto& design_ir = built.design_ir;
+            std::vector<std::uint32_t> instance_of;
+            for (const auto& occurrence : design_ir.processes()) {
+                const auto specialization = occurrence.specialization.value();
+                if (specialization >= design_ir.specializations().size()) {
+                    continue;
+                }
+                if (occurrence.runtime_index >= instance_of.size()) {
+                    instance_of.resize(occurrence.runtime_index + 1U,
+                        std::numeric_limits<std::uint32_t>::max());
+                }
+                instance_of[occurrence.runtime_index] = static_cast<std::uint32_t>(
+                    design_ir.specializations()[specialization].instance.value());
+            }
+            for (auto& member : plan.spec->members) {
+                if (member.process < instance_of.size()) {
+                    member.partition = instance_of[member.process];
+                }
+            }
+#if defined(FSIM_HAS_LLVM)
+            if (const char* native = std::getenv("FSIM_STATIC_KERNEL_NATIVE");
+                native == nullptr || std::string_view { native } != "0") {
+                plan.spec->codegen = compiler::make_static_kernel_codegen();
+            }
+#endif
+            return std::move(built.design).create_interpreter(
+                options, built.seed, plan);
+        }
+    }
     if (built.cone_fusion
         && std::getenv("FSIM_DISABLE_CONE_FUSION") == nullptr) {
         const auto plan = built.design.plan_cone_fusion();

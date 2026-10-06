@@ -1,0 +1,1592 @@
+// SPDX-License-Identifier: Apache-2.0
+//
+// Compiled narrow tier of the engine v4 static kernel. A member whose SimIR
+// registers have statically inferable widths of at most 64 bits, and whose
+// signal and memory accesses are narrow, is translated one-to-one into a
+// compact register-machine program over aval/bval word pairs. Operation
+// semantics are the exact word functions in simir_kernel_word_ops.hpp, fuzzed
+// against the reference value functions. Everything else stays on the
+// generic evaluator.
+//
+// This unit translates members to KIR (compile_members, compile); the
+// analyses, native units and execution live in the sibling
+// simir_static_kernel_*.cpp units.
+#include "simir_static_kernel_compiled_internal.hpp"
+
+#include <cxxabi.h>
+#include <iostream>
+#include <limits>
+#include <map>
+#include <queue>
+#include <typeinfo>
+#include <unordered_map>
+
+namespace fsim::runtime::simir {
+
+using namespace static_kernel_detail;
+using namespace static_kernel_compiled_detail;
+namespace kw = kernel_word;
+
+void Interpreter::Impl::StaticKernel::compile_members()
+{
+    std::map<std::string, std::size_t> failures;
+    const char* dump = std::getenv("FSIM_KERNEL_DUMP");
+    std::size_t dumped = 0U;
+    // Diagnostics: compile only members whose name contains
+    // FSIM_KERNEL_COMPILE_ONLY, or skip those containing
+    // FSIM_KERNEL_COMPILE_SKIP.
+    const char* only = std::getenv("FSIM_KERNEL_COMPILE_ONLY");
+    const char* skip = std::getenv("FSIM_KERNEL_COMPILE_SKIP");
+    for (std::uint32_t index = 0U; index < members_.size(); ++index) {
+        if (only != nullptr || skip != nullptr) {
+            const auto name
+                = impl_.processes.program_view(members_[index].process).name();
+            if ((only != nullptr && name.find(only) == std::string::npos)
+                || (skip != nullptr && name.find(skip) != std::string::npos)) {
+                continue;
+            }
+        }
+        try {
+            members_[index].compiled = compile(index);
+            if (members_[index].compiled) {
+                // compile() admits frames only when they are no-ops.
+                members_[index].frames_elided = vhdl_;
+                // Generic instructions read memories through the static
+                // container-register bindings.
+                for (std::size_t reg = 0U;
+                     reg < members_[index].compiled->containers.size()
+                     && reg < members_[index].container_registers.size(); ++reg) {
+                    members_[index].container_registers[reg]
+                        = members_[index].compiled->containers[reg];
+                }
+                ++compiled_members_;
+                if (dump != nullptr && dumped < 6U
+                    && index < profile_names_.size()
+                    && profile_names_[index].find(dump) != std::string::npos) {
+                    ++dumped;
+                    std::cerr << "fsim-kernel-dump: " << profile_names_[index]
+                              << " kind=" << static_cast<int>(members_[index].kind)
+                              << '\n';
+                    for (const auto& inst : members_[index].compiled->code) {
+                        std::cerr << "  op=" << static_cast<int>(inst.op)
+                                  << " sub=" << static_cast<int>(inst.sub)
+                                  << " d=" << inst.d << " x=" << inst.x
+                                  << " y=" << inst.y << " z=" << inst.z
+                                  << " off=" << inst.offset << " w=" << inst.width
+                                  << " imm=" << inst.imm_a << '/' << inst.imm_b
+                                  << '\n';
+                    }
+                }
+            }
+        } catch (const CompileFailure& failure) {
+            if (failures[failure.reason]++ == 0U && profile_
+                && index < profile_names_.size()) {
+                std::size_t widest = 0U;
+                for (const auto& operation : members_[index].operations) {
+                    visit_operation([&](const auto& op) {
+                        using T = std::decay_t<decltype(op)>;
+                        if constexpr (std::is_same_v<T, LoadConstant>) {
+                            widest = std::max(widest, op.value.width());
+                        } else if constexpr (std::is_same_v<T, Concatenate>
+                            || std::is_same_v<T, Extract>) {
+                            widest = std::max<std::size_t>(widest, op.width);
+                        }
+                    }, operation);
+                }
+                std::cerr << "fsim-kernel: not compiled example reason="
+                          << failure.reason << " member="
+                          << profile_names_[index] << " widest=" << widest
+                          << " ops=" << members_[index].operations.size()
+                          << ' ' << compile_failure_detail_ << '\n';
+                for (std::size_t pc = 0U; pc < members_[index].operations.size(); ++pc) {
+                    std::cerr << "    " << pc << ": variant="
+                              << members_[index].operations[pc].storage.index();
+                    visit_operation([&](const auto& op) {
+                        if constexpr (requires { op.destination; }) {
+                            if constexpr (std::is_integral_v<
+                                              std::decay_t<decltype(op.destination)>>) {
+                                std::cerr << " dst=" << op.destination;
+                            }
+                        }
+                        int status = 0;
+                        char* name = abi::__cxa_demangle(
+                            typeid(op).name(), nullptr, nullptr, &status);
+                        std::cerr << ' ' << (name != nullptr ? name : "?");
+                        std::free(name);
+                        if constexpr (requires { op.source; }) {
+                            if constexpr (std::is_integral_v<
+                                              std::decay_t<decltype(op.source)>>) {
+                                std::cerr << " src=" << op.source;
+                            }
+                        }
+                    }, members_[index].operations[pc]);
+                    std::cerr << '\n';
+                }
+            }
+        }
+    }
+    if (profile_) {
+        std::cerr << "fsim-kernel: wide members=" << wide_members_
+                  << " wide_ops=" << wide_member_ops_
+                  << " total_ops=" << wide_member_total_ops_ << '\n';
+        for (const auto& [reason, count] : failures) {
+            std::cerr << "fsim-kernel: not compiled reason=" << reason
+                      << " count=" << count << '\n';
+        }
+    }
+}
+
+std::optional<Interpreter::Impl::StaticKernel::CompiledBody>
+Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
+{
+    const auto& member = members_[member_index];
+    // A VHDL member compiles its whole operation stream (subprogram bodies
+    // may follow the loop): it enters after its wait and leaves when it
+    // reaches the wait (or the halt of a process without sensitivity).
+    const auto begin = vhdl_ ? 0U : member.body_begin;
+    const auto end = vhdl_ ? static_cast<std::uint32_t>(member.operations.size())
+                           : member.body_end;
+    const auto stop = member.body_end;
+    const auto register_count = member.registers.size();
+    const auto reject = [](const char* reason) -> CompileFailure {
+        return CompileFailure { reason };
+    };
+    const auto kind_of = [&](const RegisterId reg) {
+        return reg < member.register_kinds.size() ? member.register_kinds[reg]
+                                                  : ValueKind::logic4;
+    };
+    if (vhdl_) {
+        // Automatic frames compile to nothing when each callable owns its
+        // registers (native_isolated) and no call chain recurses.
+        std::vector<std::vector<std::uint32_t>> callees(end);
+        std::vector<std::uint8_t> is_function(end, 0U);
+        bool frames = false;
+        for (std::uint32_t pc = 0U; pc < end; ++pc) {
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, CallableFramePush>) {
+                    frames = true;
+                    if (!op.native_isolated) {
+                        throw reject("frame_not_isolated");
+                    }
+                } else if constexpr (std::is_same_v<T, Call>) {
+                    if (op.target >= end || op.return_target >= end) {
+                        throw reject("call_target");
+                    }
+                    is_function[op.target] = 1U;
+                }
+            }, member.operations[pc]);
+        }
+        if (frames) {
+            // Callees reachable from each function entry, following control
+            // flow up to its returns.
+            for (std::uint32_t entry = 0U; entry < end; ++entry) {
+                if (is_function[entry] == 0U) {
+                    continue;
+                }
+                std::vector<std::uint8_t> seen(end, 0U);
+                std::vector<std::uint32_t> work { entry };
+                while (!work.empty()) {
+                    const auto pc = work.back();
+                    work.pop_back();
+                    if (pc >= end || seen[pc] != 0U) {
+                        continue;
+                    }
+                    seen[pc] = 1U;
+                    visit_operation([&](const auto& op) {
+                        using T = std::decay_t<decltype(op)>;
+                        if constexpr (std::is_same_v<T, Jump>) {
+                            work.push_back(op.target);
+                        } else if constexpr (std::is_same_v<T, Branch>) {
+                            work.push_back(op.when_true);
+                            work.push_back(op.when_false);
+                        } else if constexpr (std::is_same_v<T, Call>) {
+                            callees[entry].push_back(op.target);
+                            work.push_back(op.return_target);
+                        } else if constexpr (std::is_same_v<T, Return>
+                            || std::is_same_v<T, WaitSensitivity>
+                            || std::is_same_v<T, Halt>) {
+                        } else {
+                            work.push_back(pc + 1U);
+                        }
+                    }, member.operations[pc]);
+                }
+            }
+            std::vector<std::uint8_t> state(end, 0U);
+            const auto cyclic = [&](const auto& self, const std::uint32_t node)
+                -> bool {
+                if (state[node] == 1U) {
+                    return true;
+                }
+                if (state[node] == 2U) {
+                    return false;
+                }
+                state[node] = 1U;
+                for (const auto callee : callees[node]) {
+                    if (self(self, callee)) {
+                        return true;
+                    }
+                }
+                state[node] = 2U;
+                return false;
+            };
+            for (std::uint32_t entry = 0U; entry < end; ++entry) {
+                if (is_function[entry] != 0U && cyclic(cyclic, entry)) {
+                    throw reject("recursive_call");
+                }
+            }
+        }
+    }
+    if (!member.container_registers.empty()
+        && member.container_registers.size() > 64U) {
+        throw reject("container_registers");
+    }
+
+    // 0. VHDL: operations the compiled entry never reaches (the process
+    // prologue runs only in the first, reference-evaluated run) and constant
+    // loads no later read can see are left out; they would otherwise give
+    // registers conflicting widths.
+    std::vector<std::uint8_t> skip(end, 0U);
+    std::vector<std::uint64_t> live_at_entry;
+    if (vhdl_) {
+        prune_operations(member_index, skip, live_at_entry);
+    }
+
+    // 1. Flow-insensitive register widths.
+    constexpr auto polymorphic = std::numeric_limits<std::uint32_t>::max();
+    std::vector<std::uint32_t> width(register_count, 0U);
+    const auto signal_width = [&](const SignalId signal) -> std::uint32_t {
+        if (const auto slot = slot_of_signal_[signal]; slot != no_slot) {
+            return slots_[slot].width;
+        }
+        if (const auto family = family_of_signal_[signal]; family != no_slot) {
+            return families_[family].width;
+        }
+        return static_cast<std::uint32_t>(
+            impl_.get_signal(signal).initial_value.width());
+    };
+    std::vector<std::uint32_t> container_of_register(
+        member.container_registers.size(), no_container);
+    bool changed = true;
+    std::uint32_t defining = 0U;
+    for (std::size_t pass = 0U; changed; ++pass) {
+        if (pass > 64U) {
+            throw reject("width_fixpoint");
+        }
+        changed = false;
+        const auto define = [&](const RegisterId reg, const std::uint32_t value) {
+            if (reg >= register_count) {
+                throw reject("register_range");
+            }
+            if (value == 0U || width[reg] == polymorphic) {
+                return;
+            }
+            if (width[reg] == 0U) {
+                width[reg] = value;
+                changed = true;
+            } else if (width[reg] != value) {
+                // A register holding values of several widths (a shared
+                // subprogram result, for example) is kept as a reference
+                // value; every instruction touching it runs generically.
+                if (!vhdl_) {
+                    throw reject("width_conflict");
+                }
+                if (profile_ && value != polymorphic) {
+                    std::string name = impl_.processes.program_view(member.process).name();
+                    std::erase_if(name, [](const char c) {
+                        return std::isdigit(static_cast<unsigned char>(c)) != 0;
+                    });
+                    ++profile_generic_ops_["polymorphic " + name + " r"
+                        + std::to_string(reg) + " " + std::to_string(width[reg])
+                        + "/" + std::to_string(value) + " at "
+                        + std::to_string(defining)];
+                }
+                width[reg] = polymorphic;
+                changed = true;
+            }
+        };
+        const auto of = [&](const RegisterId reg) -> std::uint32_t {
+            if (reg >= register_count) {
+                throw reject("register_range");
+            }
+            return width[reg];
+        };
+        for (std::uint32_t pc = begin; pc < end; ++pc) {
+            if (skip[pc] != 0U) {
+                continue;
+            }
+            defining = pc;
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, LoadConstant>) {
+                    define(op.destination,
+                        static_cast<std::uint32_t>(op.value.width()));
+                } else if constexpr (std::is_same_v<T, CopyRegister>
+                    || std::is_same_v<T, UnaryNot>
+                    || std::is_same_v<T, ConvertToTwoState>) {
+                    define(op.destination, of(op.source));
+                } else if constexpr (std::is_same_v<T, ReadSignal>) {
+                    define(op.destination, signal_width(op.signal));
+                } else if constexpr (std::is_same_v<T, Binary>) {
+                    define(op.destination,
+                        comparison(op.operation) ? 1U : of(op.lhs));
+                } else if constexpr (std::is_same_v<T, Reduction>
+                    || std::is_same_v<T, LogicalNot>
+                    || std::is_same_v<T, LogicalBinary>
+                    || std::is_same_v<T, DynamicExtract>) {
+                    define(op.destination, 1U);
+                } else if constexpr (std::is_same_v<T, Shift>) {
+                    define(op.destination, of(op.value));
+                } else if constexpr (std::is_same_v<T, Extract>
+                    || std::is_same_v<T, DynamicPartSelect>
+                    || std::is_same_v<T, Concatenate>) {
+                    define(op.destination, op.width);
+                } else if constexpr (std::is_same_v<T, Insert>
+                    || std::is_same_v<T, DynamicInsert>
+                    || std::is_same_v<T, DynamicPartInsert>) {
+                    define(op.destination, of(op.target));
+                } else if constexpr (std::is_same_v<T, ConditionalSelect>) {
+                    define(op.destination, of(op.when_true));
+                    define(op.destination, of(op.when_false));
+                } else if constexpr (std::is_same_v<T, IntegerBinary>) {
+                    define(op.destination, of(op.lhs));
+                } else if constexpr (std::is_same_v<T, IntegerUnary>) {
+                    define(op.destination, of(op.source));
+                } else if constexpr (std::is_same_v<T, Call>) {
+                    if (op.stack.capacity != 0U) {
+                        define(op.stack.pointer, 32U);
+                        for (std::uint32_t entry = 0U; entry < op.stack.capacity;
+                             ++entry) {
+                            define(op.stack.entries + entry, 32U);
+                        }
+                    }
+                } else if constexpr (std::is_same_v<T, ReadContainerObject>) {
+                    if (op.destination >= container_of_register.size()
+                        || op.object >= container_of_object_.size()
+                        || container_of_object_[op.object] == no_container) {
+                        throw reject("container_binding");
+                    }
+                    auto& bound = container_of_register[op.destination];
+                    const auto container = container_of_object_[op.object];
+                    if (bound != no_container && bound != container) {
+                        throw reject("container_rebinding");
+                    }
+                    bound = container;
+                } else if constexpr (std::is_same_v<T, ContainerRead>) {
+                    if (op.source >= container_of_register.size()
+                        || container_of_register[op.source] == no_container) {
+                        return;
+                    }
+                    define(op.destination, static_cast<std::uint32_t>(
+                        containers_[container_of_register[op.source]]
+                            .type.element_width));
+                }
+            }, member.operations[pc]);
+        }
+    }
+
+    if (const char* dump = std::getenv("FSIM_KERNEL_WIDTHS")) {
+        const auto name = impl_.processes.program_view(member.process).name();
+        if (name.find(dump) != std::string::npos) {
+            std::cerr << "fsim-kernel-widths: " << name;
+            for (std::size_t reg = 0U; reg < register_count; ++reg) {
+                std::cerr << ' ' << reg << ':'
+                          << (width[reg] == polymorphic ? std::string { "P" }
+                                                       : std::to_string(width[reg]));
+            }
+            std::cerr << '\n';
+        }
+    }
+    if (profile_) {
+        std::size_t wide_ops = 0U;
+        std::size_t total_ops = 0U;
+        for (std::uint32_t pc = begin; pc < end; ++pc) {
+            bool wide = false;
+            visit_operation([&](const auto& op) {
+                if constexpr (requires { op.destination; }) {
+                    if constexpr (std::is_integral_v<
+                                      std::decay_t<decltype(op.destination)>>) {
+                        wide = op.destination < register_count
+                            && width[op.destination] > 64U;
+                    }
+                }
+            }, member.operations[pc]);
+            wide_ops += wide ? 1U : 0U;
+            ++total_ops;
+        }
+        if (wide_ops != 0U) {
+            ++wide_members_;
+            wide_member_ops_ += wide_ops;
+            wide_member_total_ops_ += total_ops;
+        }
+    }
+    // 2. Translate.
+    CompiledBody body;
+    // VHDL calls on the runtime-owned stack use a synthetic fixed stack in
+    // the register file: a pointer and call_stack_depth entries.
+    if (vhdl_ && std::ranges::any_of(member.operations, [](const Operation& op) {
+            const auto* call = operation_get_if<Call>(&op);
+            return call != nullptr && call->stack.capacity == 0U;
+        })) {
+        body.call_stack_base = static_cast<std::uint32_t>(width.size());
+        width.resize(width.size() + 1U + call_stack_depth, 32U);
+    }
+    body.registers.assign(width.size(), { });
+    body.register_widths = width;
+    body.containers = container_of_register;
+    std::uint32_t translating = 0U;
+    const auto narrow = [&](const RegisterId reg) -> std::uint32_t {
+        if (reg >= register_count || width[reg] == 0U || width[reg] > 64U) {
+            if (profile_) {
+                compile_failure_detail_ = "reg=" + std::to_string(reg) + " width="
+                    + std::to_string(reg < register_count ? width[reg] : 0U)
+                    + " op_index=" + std::to_string(
+                        member.operations[translating].storage.index())
+                    + " pc=" + std::to_string(translating);
+            }
+            throw reject("register_width");
+        }
+        return reg;
+    };
+    const auto w = [&](const RegisterId reg) { return width[narrow(reg)]; };
+    const auto map_target = [&](const InstructionIndex target) -> std::uint32_t {
+        if (vhdl_ && target == stop) {
+            return end - begin;
+        }
+        return target >= begin && target < end ? target - begin : end - begin;
+    };
+    const auto owned_narrow_slot = [&](const SignalId signal)
+        -> std::optional<std::uint32_t> {
+        if (signal >= slot_of_signal_.size()) {
+            throw reject("signal_range");
+        }
+        if (family_of_signal_[signal] != no_slot) {
+            throw reject("proxy_access");
+        }
+        auto slot = slot_of_signal_[signal];
+        if (slot == no_slot && mirror_of_signal_[signal] != no_slot
+            && slots_[mirror_of_signal_[signal]].planes == 2U) {
+            // A mirrored host signal reads like a slot.
+            slot = mirror_of_signal_[signal];
+        }
+        if (slot == no_slot) {
+            return std::nullopt;
+        }
+        if (slots_[slot].words != 1U) {
+            throw reject("wide_slot");
+        }
+        return slot;
+    };
+    const auto owned_slot = [&](const SignalId signal)
+        -> std::optional<std::uint32_t> {
+        if (signal >= slot_of_signal_.size()) {
+            throw reject("signal_range");
+        }
+        if (family_of_signal_[signal] != no_slot) {
+            throw reject("proxy_access");
+        }
+        const auto slot = slot_of_signal_[signal];
+        if (slot == no_slot) {
+            return std::nullopt;
+        }
+        return slot;
+    };
+    body.code.reserve(end - begin);
+    std::vector<RegisterId> operand_reads;
+    std::optional<RegisterId> operand_write;
+    bool has_wide = false;
+    // A wide owned slot read whose register only feeds narrow selections,
+    // in a member that never writes the slot, is read in place.
+    std::vector<std::uint32_t> field_slot(register_count, no_slot);
+    {
+        std::vector<std::uint32_t> definitions(register_count, 0U);
+        std::vector<std::uint8_t> other_use(register_count, 0U);
+        std::vector<std::uint8_t> written_slot(slots_.size(), 0U);
+        // A written slot may still be read in place when no write to it,
+        // no backward jump and no call lies between the read and its last
+        // selection (straight-line read-before-write, as in RAM models).
+        std::vector<std::uint32_t> definition_pc(register_count, 0U);
+        std::vector<std::uint32_t> last_use(register_count, 0U);
+        std::vector<std::pair<std::uint32_t, std::uint32_t>> slot_writes;
+        std::vector<std::uint32_t> barriers;
+        for (std::uint32_t pc = begin; pc < end; ++pc) {
+            if (skip[pc] != 0U) {
+                continue;
+            }
+            const auto& operation = member.operations[pc];
+            operation_registers(operation, operand_reads, operand_write);
+            if (operand_write && *operand_write < register_count) {
+                ++definitions[*operand_write];
+                definition_pc[*operand_write] = pc;
+            }
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, Jump>) {
+                    if (op.target <= pc) {
+                        barriers.push_back(pc);
+                    }
+                } else if constexpr (std::is_same_v<T, Branch>) {
+                    if (op.when_true <= pc || op.when_false <= pc) {
+                        barriers.push_back(pc);
+                    }
+                } else if constexpr (std::is_same_v<T, Call>
+                    || std::is_same_v<T, Return> || std::is_same_v<T, Halt>
+                    || std::is_same_v<T, WaitSensitivity>) {
+                    barriers.push_back(pc);
+                } else if constexpr (std::is_same_v<T, Extract>
+                    || std::is_same_v<T, DynamicPartSelect>
+                    || std::is_same_v<T, DynamicExtract>) {
+                    if (op.source < register_count) {
+                        last_use[op.source] = std::max(last_use[op.source], pc);
+                    }
+                }
+            }, operation);
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, ReadSignal>) {
+                    auto slot = op.signal < slot_of_signal_.size()
+                        ? slot_of_signal_[op.signal] : no_slot;
+                    if (slot == no_slot && op.signal < mirror_of_signal_.size()) {
+                        slot = mirror_of_signal_[op.signal];
+                    }
+                    if (slot != no_slot && slots_[slot].words != 1U
+                        && op.destination < register_count) {
+                        field_slot[op.destination] = slot;
+                    }
+                } else if constexpr (std::is_same_v<T, Extract>
+                    || std::is_same_v<T, DynamicPartSelect>
+                    || std::is_same_v<T, DynamicExtract>) {
+                    for (const auto reg : operand_reads) {
+                        if (reg != op.source && reg < register_count) {
+                            other_use[reg] = 1U;
+                        }
+                    }
+                    if constexpr (requires { op.width; }) {
+                        if (op.width > 64U && op.source < register_count) {
+                            other_use[op.source] = 1U;
+                        }
+                    }
+                    return;
+                }
+                if constexpr (requires { op.signal; }) {
+                    // VHDL signal assignments are deferred to the end of the
+                    // round, so only immediate (shared-variable) writes can
+                    // change a slot under an in-place read.
+                    constexpr bool immediate = std::is_same_v<T, WriteBlocking>
+                        || std::is_same_v<T, WriteBlockingSlice>
+                        || std::is_same_v<T, WriteBlockingDynamicSlice>
+                        || std::is_same_v<T, WriteBlockingDynamicPartSlice>;
+                    if constexpr (std::is_same_v<std::decay_t<decltype(op.signal)>,
+                                      SignalId>
+                        && !std::is_same_v<T, ReadSignal>) {
+                        if (op.signal < slot_of_signal_.size()
+                            && slot_of_signal_[op.signal] != no_slot
+                            && (!vhdl_ || immediate)) {
+                            written_slot[slot_of_signal_[op.signal]] = 1U;
+                            slot_writes.emplace_back(slot_of_signal_[op.signal], pc);
+                        }
+                    }
+                }
+                for (const auto reg : operand_reads) {
+                    if (reg < register_count) {
+                        other_use[reg] = 1U;
+                    }
+                }
+            }, operation);
+        }
+        const auto unwritten_between = [&](const std::uint32_t reg) {
+            const auto from = definition_pc[reg];
+            const auto to = last_use[reg];
+            if (to <= from) {
+                return false;
+            }
+            return std::ranges::none_of(slot_writes, [&](const auto& write) {
+                       return write.first == field_slot[reg] && write.second > from
+                           && write.second < to;
+                   })
+                && std::ranges::none_of(barriers, [&](const std::uint32_t pc) {
+                       return pc >= from && pc <= to;
+                   });
+        };
+        for (std::uint32_t reg = 0U; reg < register_count; ++reg) {
+            if (field_slot[reg] != no_slot
+                && (definitions[reg] != 1U || other_use[reg] != 0U
+                    || (written_slot[field_slot[reg]] != 0U
+                        && !unwritten_between(reg)))) {
+                field_slot[reg] = no_slot;
+            }
+        }
+    }
+    // Wide moves (SystemVerilog): ReadSignal of a wide slot whose register
+    // only feeds an optional DynamicPartSelect and then one write of a wide
+    // slot, in straight-line code that does not write the source, run as
+    // one word-level copy (KOp::wide_move).
+    std::vector<std::uint8_t> fused_away(end - begin, 0U);
+    std::vector<std::optional<KInst>> fused_move(end - begin);
+    if (!vhdl_) {
+        std::vector<std::uint32_t> defs(register_count, 0U);
+        std::vector<std::uint32_t> uses(register_count, 0U);
+        std::vector<std::uint32_t> use_pc(register_count, 0U);
+        for (std::uint32_t pc = begin; pc < end; ++pc) {
+            if (skip[pc] != 0U) {
+                continue;
+            }
+            operation_registers(member.operations[pc], operand_reads,
+                operand_write);
+            if (operand_write && *operand_write < register_count) {
+                ++defs[*operand_write];
+            }
+            for (const auto reg : operand_reads) {
+                if (reg < register_count) {
+                    ++uses[reg];
+                    use_pc[reg] = pc;
+                }
+            }
+        }
+        const auto wide_slot = [&](const SignalId signal) -> std::uint32_t {
+            if (signal >= slot_of_signal_.size()
+                || family_of_signal_[signal] != no_slot
+                || slot_of_signal_[signal] == no_slot) {
+                return no_slot;
+            }
+            const auto slot = slot_of_signal_[signal];
+            return slots_[slot].words > 1U && slots_[slot].planes == 2U
+                ? slot : no_slot;
+        };
+        const auto single_use = [&](const RegisterId reg) {
+            return reg < register_count && defs[reg] == 1U && uses[reg] == 1U
+                && width[reg] > 64U && width[reg] != polymorphic;
+        };
+        // No control flow in (from, to) and no write there to `signal`.
+        const auto straight = [&](const std::uint32_t from, const std::uint32_t to,
+                                  const SignalId signal) {
+            for (auto pc = from + 1U; pc < to; ++pc) {
+                bool ok = true;
+                visit_operation([&](const auto& op) {
+                    using T = std::decay_t<decltype(op)>;
+                    if constexpr (std::is_same_v<T, Branch> || std::is_same_v<T, Jump>
+                        || std::is_same_v<T, Call> || std::is_same_v<T, Return>
+                        || std::is_same_v<T, Halt>
+                        || std::is_same_v<T, WaitSensitivity>) {
+                        ok = false;
+                    } else if constexpr (requires { op.signal; }) {
+                        if constexpr (std::is_same_v<std::decay_t<decltype(op.signal)>,
+                                          SignalId>
+                            && !std::is_same_v<T, ReadSignal>) {
+                            ok = op.signal != signal;
+                        }
+                    }
+                }, member.operations[pc]);
+                if (!ok) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        for (std::uint32_t read_pc = begin; read_pc < end; ++read_pc) {
+            if (skip[read_pc] != 0U) {
+                continue;
+            }
+            const auto* read = operation_get_if<ReadSignal>(
+                &member.operations[read_pc]);
+            if (read == nullptr || read->kind != SignalReadKind::current
+                || read->ticks != 1U || read->clock || read->gate
+                || !single_use(read->destination)) {
+                continue;
+            }
+            const auto source = wide_slot(read->signal);
+            if (source == no_slot
+                || slots_[source].width != width[read->destination]) {
+                continue;
+            }
+            KInst move;
+            move.op = KOp::wide_move;
+            move.x = source;
+            auto value = read->destination;
+            auto write_pc = use_pc[value];
+            std::uint32_t select_pc = no_slot;
+            std::optional<DynamicPartIndex> selection;
+            if (const auto* select = operation_get_if<DynamicPartSelect>(
+                    &member.operations[write_pc])) {
+                if (select->source != value || !single_use(select->destination)
+                    || select->width != width[select->destination]
+                    || select->base >= register_count
+                    || width[select->base] != 32U) {
+                    continue;
+                }
+                select_pc = write_pc;
+                move.sub = 1U;
+                move.y = select->base;
+                move.flags = static_cast<std::uint8_t>(
+                    (select->increasing ? flag_increasing : 0U)
+                    | (select->source_descending ? flag_descending : 0U)
+                    | (select->two_state ? flag_two_state : 0U));
+                selection.emplace();
+                selection->left = select->left;
+                selection->right = select->right;
+                selection->base_offset = select->base_offset;
+                selection->width = select->width;
+                selection->increasing = select->increasing;
+                selection->source_descending = select->source_descending;
+                value = select->destination;
+                write_pc = use_pc[value];
+            }
+            if (write_pc <= read_pc || write_pc >= end || skip[write_pc] != 0U) {
+                continue;
+            }
+            bool matched = false;
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                constexpr bool whole = std::is_same_v<T, WriteUpdate>
+                    || std::is_same_v<T, WriteBlocking>;
+                constexpr bool slice = std::is_same_v<T, WriteUpdateSlice>
+                    || std::is_same_v<T, WriteBlockingSlice>;
+                if constexpr (whole || slice) {
+                    if (op.source != value) {
+                        return;
+                    }
+                    const auto target = wide_slot(op.signal);
+                    if (target == no_slot) {
+                        return;
+                    }
+                    std::uint32_t offset = 0U;
+                    if constexpr (slice) {
+                        offset = op.offset;
+                    }
+                    if (offset > slots_[target].width
+                        || width[value] > slots_[target].width - offset
+                        || (whole && width[value] != slots_[target].width)) {
+                        return;
+                    }
+                    bool deferred = false;
+                    if constexpr (std::is_same_v<T, WriteUpdate>
+                        || std::is_same_v<T, WriteUpdateSlice>) {
+                        if (op.domain == SignalUpdateDomain::generic) {
+                            return;
+                        }
+                        deferred = op.domain == SignalUpdateDomain::systemverilog_nba;
+                    }
+                    move.d = target;
+                    move.offset = offset;
+                    move.width = width[value];
+                    move.flags = static_cast<std::uint8_t>(
+                        move.flags | (deferred ? flag_nba : 0U));
+                    matched = true;
+                }
+            }, member.operations[write_pc]);
+            if (!matched || !straight(read_pc, write_pc, read->signal)) {
+                continue;
+            }
+            if (select_pc != no_slot) {
+                // The base must still hold its value at the write.
+                bool base_kept = true;
+                for (auto pc = select_pc + 1U; pc < write_pc; ++pc) {
+                    operation_registers(member.operations[pc], operand_reads,
+                        operand_write);
+                    base_kept = base_kept
+                        && (!operand_write || *operand_write != move.y);
+                }
+                if (!base_kept) {
+                    continue;
+                }
+                fused_away[select_pc - begin] = 1U;
+                move.aux = static_cast<std::uint32_t>(body.parts.size());
+                body.parts.push_back(*selection);
+            }
+            fused_away[read_pc - begin] = 1U;
+            fused_move[write_pc - begin] = move;
+        }
+    }
+    for (std::uint32_t pc = begin; pc < end; ++pc) {
+        translating = pc;
+        KInst inst;
+        if (skip[pc] != 0U || fused_away[pc - begin] != 0U) {
+            body.code.push_back(inst);
+            continue;
+        }
+        if (fused_move[pc - begin]) {
+            body.code.push_back(*fused_move[pc - begin]);
+            continue;
+        }
+        // Operations on values wider than 64 bits, wide or proxy slots, and
+        // dynamic host writes run through the reference value functions.
+        {
+            const auto& operation = member.operations[pc];
+            operation_registers(operation, operand_reads, operand_write);
+            bool generic = false;
+            // Narrow selections may read a wide register directly.
+            std::optional<RegisterId> wide_source;
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                if constexpr (std::is_same_v<T, Extract>
+                    || std::is_same_v<T, DynamicPartSelect>
+                    || std::is_same_v<T, DynamicExtract>) {
+                    if (op.source < register_count && width[op.source] > 64U
+                        && width[op.source] != polymorphic
+                        && field_slot[op.source] == no_slot
+                        && op.destination < register_count
+                        && width[op.destination] <= 64U) {
+                        wide_source = op.source;
+                    }
+                }
+            }, operation);
+            const auto check = [&](const RegisterId reg) {
+                if (reg >= register_count || width[reg] == 0U) {
+                    throw reject("register_width");
+                }
+                generic = generic
+                    || (width[reg] > 64U && field_slot[reg] == no_slot
+                        && (!wide_source || reg != *wide_source));
+            };
+            // Control flow never runs generically (the bridge does not
+            // transfer control); a wide condition is read in place.
+            const bool control = operation_holds<Branch>(operation);
+            for (const auto reg : operand_reads) {
+                check(reg);
+            }
+            if (operand_write) {
+                check(*operand_write);
+            }
+            if (control) {
+                generic = false;
+            }
+            const auto wide_signal = [&](const SignalId signal) {
+                if (signal >= slot_of_signal_.size()) {
+                    throw reject("signal_range");
+                }
+                if (family_of_signal_[signal] != no_slot) {
+                    return true;
+                }
+                const auto slot = slot_of_signal_[signal];
+                return slot != no_slot ? slots_[slot].words != 1U
+                                       : signal_width(signal) > 64U;
+            };
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                const auto proxy = [&](const SignalId signal) {
+                    return family_of_signal_[signal] != no_slot;
+                };
+                if constexpr (std::is_same_v<T, ReadSignal>) {
+                    if (op.destination < register_count
+                        && field_slot[op.destination] != no_slot) {
+                        return;
+                    }
+                    generic = generic || wide_signal(op.signal);
+                } else if constexpr (std::is_same_v<T, WriteBlocking>
+                    || std::is_same_v<T, WriteUpdate>
+                    || std::is_same_v<T, WriteProjected>) {
+                    if (op.signal >= slot_of_signal_.size()) {
+                        throw reject("signal_range");
+                    }
+                    generic = generic || (owned(op.signal) && wide_signal(op.signal));
+                } else if constexpr (std::is_same_v<T, WriteBlockingSlice>
+                    || std::is_same_v<T, WriteUpdateSlice>
+                    || std::is_same_v<T, WriteProjectedSlice>) {
+                    // Narrow slices of wide owned slots are field stores.
+                    if (op.signal >= slot_of_signal_.size()) {
+                        throw reject("signal_range");
+                    }
+                    generic = generic || (owned(op.signal) && proxy(op.signal));
+                } else if constexpr (std::is_same_v<T, WriteBlockingDynamicSlice>
+                    || std::is_same_v<T, WriteUpdateDynamicSlice>
+                    || std::is_same_v<T, WriteProjectedDynamicSlice>
+                    || std::is_same_v<T, WriteBlockingDynamicPartSlice>
+                    || std::is_same_v<T, WriteUpdateDynamicPartSlice>) {
+                    if (op.signal >= slot_of_signal_.size()) {
+                        throw reject("signal_range");
+                    }
+                    generic = generic || !owned(op.signal) || proxy(op.signal);
+                    // VHDL part-select assignments are rare; the reference
+                    // evaluator stages them.
+                    generic = generic
+                        || (vhdl_
+                            && (std::is_same_v<T, WriteBlockingDynamicPartSlice>
+                                || std::is_same_v<T, WriteUpdateDynamicPartSlice>));
+                } else if constexpr (std::is_same_v<T, ContainerRead>) {
+                    generic = generic || op.string_index;
+                }
+            }, operation);
+            if (generic) {
+                inst.op = KOp::generic;
+                inst.x = pc;
+                inst.y = 0U;
+                has_wide = true;
+                body.code.push_back(inst);
+                continue;
+            }
+        }
+        bool handled = false;
+        if (vhdl_) {
+            visit_operation([&](const auto& op) {
+                using T = std::decay_t<decltype(op)>;
+                handled = true;
+                if constexpr (std::is_same_v<T, WaitSensitivity>
+                    || std::is_same_v<T, Halt>) {
+                    if (pc != stop) {
+                        throw reject("vhdl_suspension");
+                    }
+                    inst.op = KOp::jump;
+                    inst.d = end - begin;
+                } else if constexpr (std::is_same_v<T, LoadConstant>) {
+                    if (kind_of(op.destination) != ValueKind::logic9
+                        || !op.value.is_logic9()) {
+                        handled = false;
+                        return;
+                    }
+                    if (op.value.width() == 0U || op.value.width() > 64U) {
+                        throw reject("wide_constant");
+                    }
+                    inst.d = narrow(op.destination);
+                    if (const auto word = exact_uword(op.value)) {
+                        inst.op = KOp::constant;
+                        inst.imm_a = word->value.a;
+                        inst.imm_b = word->value.b;
+                        inst.offset = static_cast<std::uint32_t>(word->unknown);
+                        inst.aux = static_cast<std::uint32_t>(word->unknown >> 32U);
+                    } else {
+                        inst.op = KOp::deopt;
+                    }
+                } else if constexpr (std::is_same_v<T, ReadSignal>) {
+                    if (op.destination < register_count
+                        && field_slot[op.destination] != no_slot) {
+                        // Read in place by its narrow selections.
+                        inst.op = KOp::nop;
+                        return;
+                    }
+                    auto slot = owned_slot(op.signal);
+                    if (!slot && mirror_of_signal_[op.signal] != no_slot) {
+                        slot = mirror_of_signal_[op.signal];
+                    }
+                    if (slot && slots_[*slot].planes == 4U) {
+                        if (slots_[*slot].words != 1U) {
+                            throw reject("wide_logic9_slot");
+                        }
+                        inst.op = KOp::load_slot9;
+                        inst.d = narrow(op.destination);
+                        inst.x = *slot;
+                        inst.width = slots_[*slot].width;
+                        // sub 1: a Logic4 destination coerces Logic9 codes.
+                        inst.sub = kind_of(op.destination) == ValueKind::logic9
+                            ? 0U : 1U;
+                    } else if (!slot) {
+                        if (signal_width(op.signal) > 64U) {
+                            throw reject("wide_host_read");
+                        }
+                        inst.op = KOp::load_host;
+                        inst.d = narrow(op.destination);
+                        inst.x = op.signal;
+                        // sub 1: a Logic9 destination keeps exact codes.
+                        inst.sub = kind_of(op.destination) == ValueKind::logic9
+                            ? 1U : 0U;
+                    } else {
+                        handled = false;
+                    }
+                } else if constexpr (std::is_same_v<T, WriteBlocking>
+                    || std::is_same_v<T, WriteBlockingSlice>
+                    || std::is_same_v<T, WriteUpdate>
+                    || std::is_same_v<T, WriteUpdateSlice>
+                    || std::is_same_v<T, WriteProjected>
+                    || std::is_same_v<T, WriteProjectedSlice>) {
+                    constexpr bool blocking = std::is_same_v<T, WriteBlocking>
+                        || std::is_same_v<T, WriteBlockingSlice>;
+                    constexpr bool slice = std::is_same_v<T, WriteBlockingSlice>
+                        || std::is_same_v<T, WriteUpdateSlice>
+                        || std::is_same_v<T, WriteProjectedSlice>;
+                    std::uint32_t offset = 0U;
+                    if constexpr (slice) {
+                        offset = op.offset;
+                    }
+                    const auto value_width = w(op.source);
+                    inst.x = op.source;
+                    inst.offset = offset;
+                    inst.width = value_width;
+                    if (const auto slot = owned_slot(op.signal)) {
+                        if (offset > slots_[*slot].width
+                            || value_width > slots_[*slot].width - offset
+                            || (!slice && value_width != slots_[*slot].width)) {
+                            throw reject("write_width");
+                        }
+                        inst.op = KOp::store_vhdl;
+                        inst.d = *slot;
+                        inst.flags = blocking ? flag_blocking : 0U;
+                    } else {
+                        SignalUpdateDomain domain = SignalUpdateDomain::generic;
+                        if constexpr (std::is_same_v<T, WriteUpdate>
+                            || std::is_same_v<T, WriteUpdateSlice>) {
+                            domain = op.domain;
+                        }
+                        inst.op = KOp::store_host;
+                        inst.d = op.signal;
+                        inst.sub = static_cast<std::uint8_t>(domain);
+                        inst.flags = static_cast<std::uint8_t>(
+                            (blocking ? flag_blocking : 0U)
+                            | (slice ? flag_linear : 0U));
+                    }
+                } else if constexpr (std::is_same_v<T, WriteBlockingDynamicSlice>
+                    || std::is_same_v<T, WriteUpdateDynamicSlice>
+                    || std::is_same_v<T, WriteProjectedDynamicSlice>) {
+                    const auto slot = owned_slot(op.signal);
+                    if (!slot || w(op.selection.index) != 32U) {
+                        throw reject("dynamic_write");
+                    }
+                    inst.op = KOp::store_vhdl;
+                    inst.sub = 1U;
+                    inst.d = *slot;
+                    inst.x = op.source;
+                    inst.y = op.selection.index;
+                    inst.width = w(op.source);
+                    inst.aux = static_cast<std::uint32_t>(body.indices.size());
+                    body.indices.push_back(op.selection);
+                    inst.flags = std::is_same_v<T, WriteBlockingDynamicSlice>
+                        ? flag_blocking : 0U;
+                } else if constexpr (std::is_same_v<T, IntegerBinary>) {
+                    if (w(op.lhs) != w(op.rhs)) {
+                        throw reject("integer_widths");
+                    }
+                    inst.op = KOp::integer_binary;
+                    inst.sub = static_cast<std::uint8_t>(op.operation);
+                    inst.d = narrow(op.destination);
+                    inst.x = narrow(op.lhs);
+                    inst.y = narrow(op.rhs);
+                    inst.width = w(op.lhs);
+                } else if constexpr (std::is_same_v<T, IntegerUnary>) {
+                    inst.op = KOp::integer_unary;
+                    inst.sub = static_cast<std::uint8_t>(op.operation);
+                    inst.d = narrow(op.destination);
+                    inst.x = narrow(op.source);
+                    inst.width = w(op.source);
+                } else if constexpr (std::is_same_v<T, IntegerCheck>) {
+                    inst.op = KOp::integer_check;
+                    inst.x = narrow(op.source);
+                    inst.width = w(op.source);
+                    inst.imm_a = static_cast<std::uint64_t>(op.lower);
+                    inst.imm_b = static_cast<std::uint64_t>(op.upper);
+                } else if constexpr (std::is_same_v<T, Call>) {
+                    inst.op = KOp::call;
+                    inst.d = map_target(op.target);
+                    if (op.stack.capacity == 0U) {
+                        // The synthetic stack; overflow deoptimizes.
+                        inst.x = body.call_stack_base;
+                        inst.y = body.call_stack_base + 1U;
+                        inst.z = call_stack_depth;
+                        inst.flags = flag_linear;
+                    } else {
+                        inst.x = narrow(op.stack.pointer);
+                        inst.y = op.stack.entries;
+                        inst.z = op.stack.capacity;
+                    }
+                    inst.imm_a = op.return_target;
+                    body.return_targets.push_back(op.return_target);
+                } else if constexpr (std::is_same_v<T, Return>) {
+                    inst.op = KOp::ret;
+                    if (op.stack.capacity == 0U) {
+                        inst.x = body.call_stack_base;
+                        inst.y = body.call_stack_base + 1U;
+                        inst.z = call_stack_depth;
+                        inst.flags = flag_linear;
+                    } else {
+                        inst.x = narrow(op.stack.pointer);
+                        inst.y = op.stack.entries;
+                        inst.z = op.stack.capacity;
+                    }
+                } else if constexpr (std::is_same_v<T, CallableFramePush>
+                    || std::is_same_v<T, CallableFramePop>) {
+                    // Isolated and nonrecursive (checked above).
+                    inst.op = KOp::nop;
+                } else if constexpr (std::is_same_v<T, Assert>) {
+                    inst.op = KOp::assert_check;
+                    inst.x = narrow(op.condition);
+                } else {
+                    handled = false;
+                }
+            }, member.operations[pc]);
+        }
+        if (handled) {
+            body.code.push_back(inst);
+            continue;
+        }
+        visit_operation([&](const auto& op) {
+            using T = std::decay_t<decltype(op)>;
+            if constexpr (std::is_same_v<T, DebugPoint>) {
+                inst.op = KOp::nop;
+            } else if constexpr (std::is_same_v<T, LoadConstant>) {
+                const auto value
+                    = Impl::coerce_value_kind(op.value, ValueKind::logic4);
+                if (value.width() > 64U || value.width() == 0U) {
+                    throw reject("wide_constant");
+                }
+                inst.op = KOp::constant;
+                inst.d = narrow(op.destination);
+                const auto aval = value.aval_words();
+                const auto bval = value.bval_words();
+                inst.imm_a = aval.empty() ? 0U : aval[0];
+                inst.imm_b = bval.empty() ? 0U : bval[0];
+            } else if constexpr (std::is_same_v<T, CopyRegister>) {
+                inst.op = KOp::copy;
+                inst.d = narrow(op.destination);
+                inst.x = narrow(op.source);
+            } else if constexpr (std::is_same_v<T, ReadSignal>) {
+                if (op.destination < register_count
+                    && field_slot[op.destination] != no_slot) {
+                    inst.op = KOp::nop;
+                    return;
+                }
+                inst.d = narrow(op.destination);
+                if (const auto slot = owned_narrow_slot(op.signal)) {
+                    inst.op = KOp::load_slot;
+                    inst.x = slots_[*slot].offset;
+                } else {
+                    if (signal_width(op.signal) > 64U) {
+                        throw reject("wide_host_read");
+                    }
+                    inst.op = KOp::load_host;
+                    inst.x = op.signal;
+                }
+            } else if constexpr (std::is_same_v<T, Binary>) {
+                if (op.operation == BinaryOperator::vhdl_match_equal) {
+                    throw reject("vhdl_match");
+                }
+                if (w(op.lhs) != w(op.rhs)) {
+                    throw reject("binary_widths");
+                }
+                inst.op = KOp::binary;
+                inst.sub = static_cast<std::uint8_t>(op.operation);
+                inst.d = narrow(op.destination);
+                inst.x = op.lhs;
+                inst.y = op.rhs;
+                inst.width = w(op.lhs);
+            } else if constexpr (std::is_same_v<T, Reduction>) {
+                inst.op = KOp::reduce;
+                inst.sub = static_cast<std::uint8_t>(op.operation);
+                inst.d = narrow(op.destination);
+                inst.x = narrow(op.source);
+                inst.width = w(op.source);
+            } else if constexpr (std::is_same_v<T, UnaryNot>) {
+                inst.op = KOp::unary_not;
+                inst.d = narrow(op.destination);
+                inst.x = narrow(op.source);
+                inst.width = w(op.source);
+            } else if constexpr (std::is_same_v<T, LogicalNot>) {
+                inst.op = KOp::logical_not;
+                inst.d = narrow(op.destination);
+                inst.x = narrow(op.source);
+            } else if constexpr (std::is_same_v<T, LogicalBinary>) {
+                inst.op = KOp::logical_binary;
+                inst.sub = static_cast<std::uint8_t>(op.operation);
+                inst.d = narrow(op.destination);
+                inst.x = narrow(op.lhs);
+                inst.y = narrow(op.rhs);
+            } else if constexpr (std::is_same_v<T, Shift>) {
+                inst.op = KOp::shift;
+                inst.sub = static_cast<std::uint8_t>(op.operation);
+                inst.d = narrow(op.destination);
+                inst.x = narrow(op.value);
+                inst.y = narrow(op.amount);
+                inst.width = w(op.value);
+                inst.offset = w(op.amount);
+                inst.flags = op.signed_amount ? flag_signed : 0U;
+            } else if constexpr (std::is_same_v<T, Extract>) {
+                if (op.source < register_count && field_slot[op.source] != no_slot) {
+                    const auto slot = field_slot[op.source];
+                    if (op.width == 0U || op.width > 64U
+                        || op.offset > slots_[slot].width
+                        || op.width > slots_[slot].width - op.offset) {
+                        throw reject("extract_range");
+                    }
+                    if (slots_[slot].planes == 4U) {
+                        // The read register's kind decides exact or coerced.
+                        inst.op = KOp::load_field9;
+                        inst.sub = kind_of(op.source) == ValueKind::logic9 ? 0U : 1U;
+                        inst.d = narrow(op.destination);
+                        inst.x = slot;
+                        inst.offset = op.offset;
+                        inst.width = op.width;
+                        inst.imm_a = slots_[slot].words;
+                        return;
+                    }
+                    inst.op = KOp::load_field;
+                    inst.d = narrow(op.destination);
+                    inst.x = slot;
+                    inst.offset = op.offset;
+                    inst.width = op.width;
+                    inst.imm_a = slots_[slot].words;
+                    return;
+                }
+                if (op.source < register_count && width[op.source] > 64U) {
+                    if (op.width == 0U || op.width > 64U
+                        || op.offset > width[op.source]
+                        || op.width > width[op.source] - op.offset) {
+                        throw reject("extract_range");
+                    }
+                    inst.op = KOp::extract;
+                    inst.sub = 2U;
+                    inst.d = narrow(op.destination);
+                    inst.x = op.source;
+                    inst.offset = op.offset;
+                    inst.width = op.width;
+                    return;
+                }
+                if (op.width == 0U || op.offset > w(op.source)
+                    || op.width > w(op.source) - op.offset) {
+                    throw reject("extract_range");
+                }
+                inst.op = KOp::extract;
+                inst.d = narrow(op.destination);
+                inst.x = narrow(op.source);
+                inst.offset = op.offset;
+                inst.width = op.width;
+            } else if constexpr (std::is_same_v<T, Insert>) {
+                if (op.offset > w(op.target)
+                    || w(op.source) > w(op.target) - op.offset) {
+                    throw reject("insert_range");
+                }
+                inst.op = KOp::insert;
+                inst.d = narrow(op.destination);
+                inst.x = narrow(op.target);
+                inst.y = narrow(op.source);
+                inst.offset = op.offset;
+                inst.width = w(op.source);
+            } else if constexpr (std::is_same_v<T, Concatenate>) {
+                std::uint32_t total = 0U;
+                inst.aux = static_cast<std::uint32_t>(body.concat.size());
+                for (const auto operand : op.operands) {
+                    total += w(operand);
+                    body.concat.push_back({ operand, w(operand) });
+                }
+                if (total != op.width || op.operands.empty()) {
+                    throw reject("concat_width");
+                }
+                inst.op = KOp::concat;
+                inst.d = narrow(op.destination);
+                inst.x = static_cast<std::uint32_t>(op.operands.size());
+                inst.width = op.width;
+            } else if constexpr (std::is_same_v<T, ConditionalSelect>) {
+                if (w(op.condition) != 1U || w(op.when_true) != w(op.when_false)) {
+                    throw reject("conditional_widths");
+                }
+                inst.op = KOp::conditional;
+                inst.d = narrow(op.destination);
+                inst.x = op.condition;
+                inst.y = op.when_true;
+                inst.z = op.when_false;
+                inst.width = w(op.when_true);
+            } else if constexpr (std::is_same_v<T, ConvertToTwoState>) {
+                inst.op = KOp::two_state;
+                inst.d = narrow(op.destination);
+                inst.x = narrow(op.source);
+            } else if constexpr (std::is_same_v<T, DynamicExtract>) {
+                if (w(op.selection.index) != 32U) {
+                    throw reject("dynamic_index_width");
+                }
+                inst.op = KOp::dynamic_extract;
+                inst.d = narrow(op.destination);
+                inst.y = op.selection.index;
+                if (op.source < register_count && field_slot[op.source] != no_slot) {
+                    inst.sub = 1U;
+                    inst.x = field_slot[op.source];
+                    inst.width = slots_[field_slot[op.source]].width;
+                    // Logic9 slot read into a Logic4 register: coerce.
+                    inst.imm_b = slots_[inst.x].planes == 4U
+                            && kind_of(op.source) != ValueKind::logic9
+                        ? 1U : 0U;
+                } else if (op.source < register_count && width[op.source] > 64U) {
+                    inst.sub = 2U;
+                    inst.x = op.source;
+                    inst.width = width[op.source];
+                } else {
+                    inst.x = narrow(op.source);
+                    inst.width = w(op.source);
+                }
+                inst.aux = static_cast<std::uint32_t>(body.indices.size());
+                inst.flags = op.selection.strict ? flag_strict : 0U;
+                body.indices.push_back(op.selection);
+            } else if constexpr (std::is_same_v<T, DynamicPartSelect>) {
+                if (w(op.base) != 32U || op.width == 0U || op.width > 64U) {
+                    throw reject("part_select");
+                }
+                inst.op = KOp::dynamic_part_select;
+                inst.d = narrow(op.destination);
+                inst.y = op.base;
+                if (op.source < register_count && field_slot[op.source] != no_slot) {
+                    inst.sub = 1U;
+                    inst.x = field_slot[op.source];
+                    inst.offset = slots_[field_slot[op.source]].width;
+                    inst.imm_b = slots_[inst.x].planes == 4U
+                            && kind_of(op.source) != ValueKind::logic9
+                        ? 1U : 0U;
+                    // The slot's plane count, for generated code.
+                    inst.z = slots_[inst.x].planes;
+                } else if (op.source < register_count && width[op.source] > 64U) {
+                    inst.sub = 2U;
+                    inst.x = op.source;
+                    inst.offset = width[op.source];
+                } else {
+                    inst.x = narrow(op.source);
+                    inst.offset = w(op.source);
+                }
+                inst.width = op.width;
+                inst.aux = static_cast<std::uint32_t>(body.parts.size());
+                inst.flags = static_cast<std::uint8_t>(
+                    (op.increasing ? flag_increasing : 0U)
+                    | (op.source_descending ? flag_descending : 0U)
+                    | (op.two_state ? flag_two_state : 0U));
+                inst.imm_a = op.base_offset;
+                DynamicPartIndex part;
+                part.left = op.left;
+                part.right = op.right;
+                part.base_offset = op.base_offset;
+                part.width = op.width;
+                part.increasing = op.increasing;
+                part.source_descending = op.source_descending;
+                body.parts.push_back(part);
+            } else if constexpr (std::is_same_v<T, DynamicInsert>) {
+                if (w(op.selection.index) != 32U) {
+                    throw reject("dynamic_index_width");
+                }
+                inst.op = KOp::dynamic_insert;
+                inst.d = narrow(op.destination);
+                inst.x = narrow(op.target);
+                inst.y = narrow(op.source);
+                inst.z = op.selection.index;
+                inst.width = w(op.target);
+                inst.offset = w(op.source);
+                inst.aux = static_cast<std::uint32_t>(body.indices.size());
+                inst.flags = op.selection.strict ? flag_strict : 0U;
+                body.indices.push_back(op.selection);
+            } else if constexpr (std::is_same_v<T, DynamicPartInsert>) {
+                if (w(op.selection.base) != 32U || op.selection.width == 0U
+                    || w(op.source) != op.selection.width) {
+                    throw reject("part_insert");
+                }
+                inst.op = KOp::dynamic_part_insert;
+                inst.d = narrow(op.destination);
+                inst.x = narrow(op.target);
+                inst.y = narrow(op.source);
+                inst.z = op.selection.base;
+                inst.width = w(op.target);
+                inst.aux = static_cast<std::uint32_t>(body.parts.size());
+                body.parts.push_back(op.selection);
+            } else if constexpr (std::is_same_v<T, Jump>) {
+                inst.op = KOp::jump;
+                inst.d = map_target(op.target);
+            } else if constexpr (std::is_same_v<T, Branch>) {
+                inst.op = KOp::branch;
+                if (op.condition < register_count && width[op.condition] > 64U) {
+                    // sub 2: the condition is a wide or polymorphic register.
+                    inst.sub = 2U;
+                } else if (w(op.condition) != 1U) {
+                    throw reject("branch_width");
+                }
+                inst.x = op.condition;
+                inst.y = map_target(op.when_true);
+                inst.z = map_target(op.when_false);
+                inst.flags = op.unknown_policy == UnknownBranchPolicy::when_false
+                    ? flag_linear : 0U;
+            } else if constexpr (std::is_same_v<T, WriteBlocking>
+                || std::is_same_v<T, WriteBlockingSlice>
+                || std::is_same_v<T, WriteUpdate>
+                || std::is_same_v<T, WriteUpdateSlice>) {
+                constexpr bool blocking = std::is_same_v<T, WriteBlocking>
+                    || std::is_same_v<T, WriteBlockingSlice>;
+                constexpr bool slice = std::is_same_v<T, WriteBlockingSlice>
+                    || std::is_same_v<T, WriteUpdateSlice>;
+                SignalUpdateDomain domain = SignalUpdateDomain::systemverilog_active;
+                if constexpr (!blocking) {
+                    domain = op.domain;
+                }
+                std::uint32_t offset = 0U;
+                if constexpr (slice) {
+                    offset = op.offset;
+                }
+                const auto value_width = w(op.source);
+                inst.x = op.source;
+                inst.offset = offset;
+                inst.width = value_width;
+                if (const auto slot = owned_slot(op.signal)) {
+                    // Sub 1: a narrow slice of a wide slot; imm_a is the
+                    // slot's word count.
+                    inst.sub = slots_[*slot].words != 1U ? 1U : 0U;
+                    inst.imm_a = slots_[*slot].words;
+                    if (offset > slots_[*slot].width
+                        || value_width > slots_[*slot].width - offset
+                        || (!slice && value_width != slots_[*slot].width)) {
+                        throw reject("write_width");
+                    }
+                    inst.d = *slot;
+                    inst.op = !blocking
+                            && domain == SignalUpdateDomain::systemverilog_nba
+                        ? KOp::store_slot_nba : KOp::store_slot;
+                    inst.flags = slice ? flag_linear : 0U;
+                } else {
+                    inst.op = KOp::store_host;
+                    inst.d = op.signal;
+                    inst.sub = static_cast<std::uint8_t>(domain);
+                    inst.flags = static_cast<std::uint8_t>(
+                        (blocking ? flag_blocking : 0U)
+                        | (slice ? flag_linear : 0U));
+                }
+            } else if constexpr (std::is_same_v<T, WriteBlockingDynamicSlice>
+                || std::is_same_v<T, WriteUpdateDynamicSlice>) {
+                constexpr bool blocking
+                    = std::is_same_v<T, WriteBlockingDynamicSlice>;
+                const auto slot = owned_slot(op.signal);
+                if (!slot || w(op.selection.index) != 32U) {
+                    throw reject("dynamic_write");
+                }
+                inst.op = KOp::store_slot_dynamic;
+                inst.d = *slot;
+                inst.x = op.source;
+                inst.y = op.selection.index;
+                inst.width = w(op.source);
+                inst.aux = static_cast<std::uint32_t>(body.indices.size());
+                body.indices.push_back(op.selection);
+                if constexpr (!blocking) {
+                    inst.flags = op.domain == SignalUpdateDomain::systemverilog_nba
+                        ? flag_nba : 0U;
+                }
+            } else if constexpr (std::is_same_v<T, WriteBlockingDynamicPartSlice>
+                || std::is_same_v<T, WriteUpdateDynamicPartSlice>) {
+                constexpr bool blocking
+                    = std::is_same_v<T, WriteBlockingDynamicPartSlice>;
+                const auto slot = owned_slot(op.signal);
+                if (!slot || w(op.selection.base) != 32U
+                    || w(op.source) != op.selection.width) {
+                    throw reject("dynamic_part_write");
+                }
+                inst.op = KOp::store_slot_part;
+                inst.d = *slot;
+                inst.x = op.source;
+                inst.y = op.selection.base;
+                inst.width = w(op.source);
+                inst.aux = static_cast<std::uint32_t>(body.parts.size());
+                body.parts.push_back(op.selection);
+                if constexpr (!blocking) {
+                    inst.flags = op.domain == SignalUpdateDomain::systemverilog_nba
+                        ? flag_nba : 0U;
+                }
+            } else if constexpr (std::is_same_v<T, ReadContainerObject>) {
+                inst.op = KOp::nop;
+            } else if constexpr (std::is_same_v<T, ContainerRead>) {
+                if (op.source >= container_of_register.size()
+                    || container_of_register[op.source] == no_container
+                    || op.string_index) {
+                    throw reject("container_read");
+                }
+                const auto container = container_of_register[op.source];
+                if (containers_[container].type.element_width > 64U
+                    || containers_[container].type.associative
+                    || !containers_[container].type.fixed) {
+                    throw reject("container_shape");
+                }
+                inst.op = KOp::mem_read;
+                inst.d = narrow(op.destination);
+                inst.x = container;
+                inst.y = narrow(op.index);
+                inst.width = w(op.index);
+                inst.flags = op.linear_index ? flag_linear : 0U;
+            } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
+                if (op.object >= container_of_object_.size()
+                    || container_of_object_[op.object] == no_container
+                    || op.transaction_signal) {
+                    throw reject("container_write");
+                }
+                inst.op = KOp::mem_write;
+                inst.d = container_of_object_[op.object];
+                inst.x = narrow(op.source);
+                inst.y = narrow(op.index);
+                inst.width = w(op.source);
+                inst.offset = w(op.index);
+                inst.flags = static_cast<std::uint8_t>(
+                    (op.nonblocking ? flag_nba : 0U)
+                    | (op.linear_index ? flag_linear : 0U)
+                    | (op.signed_index ? flag_signed : 0U));
+                if (op.dynamic_part) {
+                    inst.z = narrow(op.dynamic_part->base);
+                    inst.aux = static_cast<std::uint32_t>(body.parts.size())
+                        + 1U;
+                    body.parts.push_back(*op.dynamic_part);
+                }
+            } else {
+                throw reject("operation");
+            }
+        }, member.operations[pc]);
+        body.code.push_back(inst);
+    }
+    // Every register an instruction reads must have a known narrow width.
+    for (const auto& inst : body.code) {
+        const auto check = [&](const std::uint32_t reg) { (void)narrow(reg); };
+        switch (inst.op) {
+        case KOp::binary:
+            check(inst.x);
+            check(inst.y);
+            break;
+        case KOp::conditional:
+            check(inst.x);
+            check(inst.y);
+            check(inst.z);
+            break;
+        case KOp::dynamic_extract:
+        case KOp::dynamic_part_select:
+            check(inst.y);
+            break;
+        case KOp::dynamic_insert:
+        case KOp::dynamic_part_insert:
+            check(inst.z);
+            break;
+        case KOp::branch:
+            if (inst.sub != 2U) {
+                check(inst.x);
+            }
+            break;
+        case KOp::store_slot:
+        case KOp::store_slot_nba:
+        case KOp::store_host:
+            check(inst.x);
+            break;
+        case KOp::store_slot_dynamic:
+        case KOp::store_slot_part:
+            check(inst.x);
+            check(inst.y);
+            break;
+        case KOp::store_vhdl:
+            check(inst.x);
+            if (inst.sub == 1U) {
+                check(inst.y);
+            }
+            break;
+        case KOp::integer_binary:
+            check(inst.x);
+            check(inst.y);
+            break;
+        case KOp::integer_unary:
+        case KOp::integer_check:
+        case KOp::assert_check:
+            check(inst.x);
+            break;
+        case KOp::call:
+        case KOp::ret:
+            if ((inst.flags & flag_linear) == 0U) {
+                check(inst.x);
+            }
+            break;
+        default:
+            break;
+        }
+    }
+    if (vhdl_) {
+        eliminate_dead_constants(body, member_index);
+        track_unknowns(body, member_index);
+        body.entry = member.body_begin;
+        body.live_at_entry = std::move(live_at_entry);
+        std::ranges::sort(body.return_targets);
+        body.return_targets.erase(std::unique(body.return_targets.begin(),
+                                      body.return_targets.end()),
+            body.return_targets.end());
+    }
+    if (has_wide) {
+        body.wide_registers.assign(register_count, PackedLogic4 { });
+    }
+    return body;
+}
+
+} // namespace fsim::runtime::simir

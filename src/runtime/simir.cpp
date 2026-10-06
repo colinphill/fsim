@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <mutex>
+#include <utility>
 
 namespace fsim::runtime::simir {
 
@@ -656,6 +657,10 @@ bool operation_list_detail::ShareAccess::share_impl(
         return inserted || found->second == target;
     };
 
+    // Unshare once, then read through the const view: the mutable
+    // subscript re-checks copy-on-write state on every access.
+    (void)candidate.mutable_storage();
+    const auto& candidate_view = std::as_const(candidate);
     std::vector<OperationList::DebugOverride> debug_overrides;
     std::vector<OperationList::AssertOverride> assert_overrides;
     std::vector<OperationList::ContainerObjectOverride>
@@ -670,7 +675,7 @@ bool operation_list_detail::ShareAccess::share_impl(
             [&](const auto& left) {
                 using Type = std::decay_t<decltype(left)>;
                 const auto* right = operation_get_if<Type>(
-                    &candidate[index]);
+                    &candidate_view[index]);
                 if (right == nullptr) {
                     compatible = false;
                     return;
@@ -727,7 +732,7 @@ bool operation_list_detail::ShareAccess::share_impl(
                             || left.gate != right->gate)) {
                         operation_overrides.push_back(
                             { static_cast<InstructionIndex>(index),
-                                candidate[index] });
+                                candidate_view[index] });
                     }
                 } else if constexpr (
                     std::is_same_v<Type, WriteProjected>) {
@@ -739,7 +744,7 @@ bool operation_list_detail::ShareAccess::share_impl(
                     if (compatible && left.signal != right->signal) {
                         operation_overrides.push_back(
                             { static_cast<InstructionIndex>(index),
-                                candidate[index] });
+                                candidate_view[index] });
                     }
                 } else if constexpr (
                     std::is_same_v<Type, WriteProjectedSlice>) {
@@ -752,7 +757,7 @@ bool operation_list_detail::ShareAccess::share_impl(
                     if (compatible && left.signal != right->signal) {
                         operation_overrides.push_back(
                             { static_cast<InstructionIndex>(index),
-                                candidate[index] });
+                                candidate_view[index] });
                     }
                 } else if constexpr (
                     std::is_same_v<Type, WriteBlocking>
@@ -762,7 +767,7 @@ bool operation_list_detail::ShareAccess::share_impl(
                     if (compatible && left.signal != right->signal) {
                         operation_overrides.push_back(
                             { static_cast<InstructionIndex>(index),
-                                candidate[index] });
+                                candidate_view[index] });
                     }
                 } else if constexpr (
                     std::is_same_v<Type, WriteBlockingSlice>
@@ -773,7 +778,7 @@ bool operation_list_detail::ShareAccess::share_impl(
                     if (compatible && left.signal != right->signal) {
                         operation_overrides.push_back(
                             { static_cast<InstructionIndex>(index),
-                                candidate[index] });
+                                candidate_view[index] });
                     }
                 } else if constexpr (
                     std::is_same_v<Type, WriteUpdateDynamicPartSlice>) {
@@ -783,7 +788,7 @@ bool operation_list_detail::ShareAccess::share_impl(
                     if (compatible && left.signal != right->signal) {
                         operation_overrides.push_back(
                             { static_cast<InstructionIndex>(index),
-                                candidate[index] });
+                                candidate_view[index] });
                     }
                 } else if constexpr (std::is_same_v<Type, LoadConstant>) {
                     compatible = left.destination == right->destination
@@ -1100,8 +1105,11 @@ bool process_program_detail::share_operations(
     const std::span<const Signal> signals,
     OperationList::Storage* const recycled_operations)
 {
+    // A view of the same template object matches it trivially.
+    const bool same_template = &representative.language_standard()
+        == &candidate_common.language_standard;
     if (!representative.valid()
-        || !candidate_common.matches(representative)
+        || (!same_template && !candidate_common.matches(representative))
         || representative.operations().size() != candidate.operations.size()) {
         return false;
     }

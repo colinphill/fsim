@@ -205,6 +205,7 @@ docs/simplification-disposition.md
 docs/simplification-gate-migration.md
 docs/simplification-implementation-plan.md
 docs/simulation-engine-v4-plan.md
+docs/simulation-engine-v4-progress.md
 docs/simulation-performance-architecture.md
 docs/systemc-subset.md
 docs/systemverilog-2023.md
@@ -348,6 +349,7 @@ include/fsim/compiler/llvm_jit.hpp
 include/fsim/compiler/llvm_jit_region_frontier.hpp
 include/fsim/compiler/llvm_jit_region_kernel.hpp
 include/fsim/compiler/object_cache.hpp
+include/fsim/compiler/static_kernel_codegen.hpp
 include/fsim/diagnostic/compiled_hir_compatibility_codes.hpp
 include/fsim/diagnostic/diagnostic.hpp
 include/fsim/elaboration/coverage_branches.hpp
@@ -574,6 +576,7 @@ include/fsim/support/native_filesystem.hpp
 include/fsim/support/path.hpp
 include/fsim/support/rare_vector.hpp
 include/fsim/support/sha256.hpp
+include/fsim/support/teardown.hpp
 include/fsim/systemc.hpp
 include/fsim/systemc/accellera.hpp
 include/fsim/systemc/hierarchy.hpp
@@ -929,6 +932,7 @@ src/compiler/llvm_jit_value_lowering.cpp
 src/compiler/llvm_jit_wide_bitwise_lowering.cpp
 src/compiler/native_cache_schema.hpp
 src/compiler/object_cache.cpp
+src/compiler/static_kernel_codegen.cpp
 src/diagnostic/artifact_identity.cpp
 src/diagnostic/artifact_identity.hpp
 src/diagnostic/compiled_hir_compatibility_codes.cpp
@@ -947,6 +951,7 @@ src/elaboration/elaborate.cpp
 src/elaboration/elaborated_design.cpp
 src/elaboration/elaborated_design_cone_fusion.cpp
 src/elaboration/elaborated_design_process_access.hpp
+src/elaboration/elaborated_design_static_kernel.cpp
 src/elaboration/elaboration_constants.cpp
 src/elaboration/elaboration_targets.cpp
 src/elaboration/elaboration_targets.hpp
@@ -1010,6 +1015,7 @@ src/elaboration/lowerer_hir_vhdl_vital_timing.cpp
 src/elaboration/lowerer_internal.hpp
 src/elaboration/lowerer_sensitivity.cpp
 src/elaboration/scoped_bindings.hpp
+src/elaboration/specialization_cache.hpp
 src/elaboration/systemverilog_template_bindings.hpp
 src/elaboration/vhdl_callable_legality.cpp
 src/elaboration/vhdl_callable_legality.hpp
@@ -1217,6 +1223,7 @@ src/runtime/simir_generic_projected_region.cpp
 src/runtime/simir_internal.hpp
 src/runtime/simir_interpreter.cpp
 src/runtime/simir_interpreter_profiles.cpp
+src/runtime/simir_kernel_word_ops.hpp
 src/runtime/simir_logic.cpp
 src/runtime/simir_module_path.cpp
 src/runtime/simir_native_frontier.cpp
@@ -1257,6 +1264,16 @@ src/runtime/simir_signal_attributes.hpp
 src/runtime/simir_signal_storage.hpp
 src/runtime/simir_slab_page_advice.hpp
 src/runtime/simir_state.cpp
+src/runtime/simir_static_kernel.cpp
+src/runtime/simir_static_kernel.hpp
+src/runtime/simir_static_kernel_analysis.cpp
+src/runtime/simir_static_kernel_compiled.cpp
+src/runtime/simir_static_kernel_compiled_internal.hpp
+src/runtime/simir_static_kernel_execute.cpp
+src/runtime/simir_static_kernel_ir.hpp
+src/runtime/simir_static_kernel_native.hpp
+src/runtime/simir_static_kernel_native_units.cpp
+src/runtime/simir_static_kernel_state.hpp
 src/runtime/simir_storage_census_internal.hpp
 src/runtime/simir_string_methods.cpp
 src/runtime/simir_synchronization.cpp
@@ -1380,6 +1397,7 @@ src/support/allocation_hooks.cpp
 src/support/allocation_hooks.def
 src/support/environment.cpp
 src/support/sha256.cpp
+src/support/teardown.cpp
 src/systemc/accellera_compatibility.cpp
 src/systemc/accellera_runtime.cpp
 src/systemc/context_activation.hpp
@@ -1585,6 +1603,8 @@ tests/app/sdf_vital_target_plan_test.cpp
 tests/app/sdf_vital_timing_checks_test.cpp
 tests/app/simplification_benchmark_driver.cpp
 tests/app/specify_application_test.cpp
+tests/app/static_kernel_test.cpp
+tests/app/static_kernel_vhdl_test.cpp
 tests/app/stochastic_queue_application_test.cpp
 tests/app/structural_signal_remap_application_test.cpp
 tests/app/sv_aggregate_multidimensional_application_test.cpp
@@ -2197,6 +2217,7 @@ tests/runtime/runtime_fused_staging_prefix_failure_tests.cpp
 tests/runtime/runtime_fused_static_cohort_test.cpp
 tests/runtime/runtime_generic_update_allocation_failure_main.cpp
 tests/runtime/runtime_generic_update_region_tests.cpp
+tests/runtime/runtime_kernel_word_ops_tests.cpp
 tests/runtime/runtime_native_frontier_adapter_tests.cpp
 tests/runtime/runtime_native_frontier_boundary_tests.cpp
 tests/runtime/runtime_native_frontier_canonical_values_tests.cpp

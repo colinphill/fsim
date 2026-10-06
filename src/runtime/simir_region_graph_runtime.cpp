@@ -4239,6 +4239,12 @@ void Interpreter::Impl::prepare_signal_observation(const SignalId signal)
         // barrier; publish its current value before any observer reads it.
         materialize_fused_cone(fused_cone_by_signal[signal]);
     }
+    if (!static_kernel_materializing
+        && signal < static_kernel_owned_signal.size()
+        && static_kernel_owned_signal[signal] != 0U) {
+        // Kernel-owned signals are hidden until observed.
+        materialize_static_kernel_signal(signal);
+    }
     completed_callback_observation_generation = 0U;
     if (!region_graph) {
         throw std::logic_error("started interpreter has no observation graph");

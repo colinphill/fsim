@@ -14,6 +14,9 @@
 #include "../runtime/simir_region_graph_program_access.hpp"
 
 #include <algorithm>
+#include <cxxabi.h>
+#include <string>
+#include <typeinfo>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -184,6 +187,82 @@ ConeFusionPlan ElaboratedDesign::plan_cone_fusion() const
         access_complete, graph_bindings.alias_families);
     const auto graph_signals = graph.signals();
     const auto graph_processes = graph.processes();
+    if (std::getenv("FSIM_PROFILE_KERNEL_CENSUS") != nullptr) {
+        // Diagnostic census of process forms for engine v4 classification.
+        const auto type_name = [](const Operation& operation) {
+            return visit_operation([](const auto& value) {
+                int status = 0;
+                char* name = abi::__cxa_demangle(
+                    typeid(value).name(), nullptr, nullptr, &status);
+                std::string result = status == 0 && name != nullptr
+                    ? std::string(name) : std::string(typeid(value).name());
+                std::free(name);
+                const auto colon = result.rfind(':');
+                return colon == std::string::npos
+                    ? result : result.substr(colon + 1U);
+            }, operation);
+        };
+        std::map<std::string, std::pair<std::size_t, std::string>> forms;
+        std::map<std::string, std::map<std::string, std::size_t>> form_ops;
+        for (std::size_t index = 0U; index < process_count; ++index) {
+            const auto& view = views[index];
+            if (!view.valid()) {
+                continue;
+            }
+            const auto& operations = view.operations();
+            std::string signature;
+            std::size_t edges = 0U;
+            for (const auto& sensitivity : view.static_sensitivity()) {
+                edges += sensitivity.edge != EdgeKind::any ? 1U : 0U;
+            }
+            signature += "dom="
+                + std::to_string(static_cast<int>(view.scheduling_domain()));
+            signature += " sens=" + std::to_string(view.static_sensitivity().size())
+                + "/edge" + std::to_string(edges);
+            signature += " init=" + std::to_string(view.initialize() ? 1 : 0);
+            signature += " cont=" + std::to_string(view.container_register_count());
+            signature += " str=" + std::to_string(view.string_register_count());
+            const auto count = operations.size();
+            if (count != 0U) {
+                signature += " first=" + type_name(operations.expanded(0U));
+                signature += " last=" + type_name(operations.expanded(count - 1U));
+                if (count >= 2U) {
+                    signature += " last2="
+                        + type_name(operations.expanded(count - 2U));
+                }
+            }
+            std::size_t waits = 0U;
+            for (std::size_t op = 0U; op < count; ++op) {
+                const auto name = type_name(operations.expanded(op));
+                if (name.starts_with("Wait") || name == "Yield" || name == "Fork") {
+                    ++waits;
+                }
+            }
+            signature += " waits=" + std::to_string(waits);
+            auto& form = forms[signature];
+            if (form.first++ == 0U) {
+                form.second = view.name();
+            }
+            auto& histogram = form_ops[signature];
+            for (std::size_t op = 0U; op < count; ++op) {
+                ++histogram[type_name(operations.expanded(op))];
+            }
+        }
+        std::vector<std::pair<std::size_t, std::string>> ordered;
+        for (const auto& [signature, form] : forms) {
+            ordered.emplace_back(form.first, signature);
+        }
+        std::ranges::sort(ordered, std::greater<> { });
+        for (const auto& [count, signature] : ordered) {
+            std::cerr << "fsim-census: form count=" << count << ' ' << signature
+                      << " example=" << forms[signature].second << '\n';
+            std::cerr << "fsim-census:   ops";
+            for (const auto& [name, uses] : form_ops[signature]) {
+                std::cerr << ' ' << name << '=' << uses;
+            }
+            std::cerr << '\n';
+        }
+    }
     if (std::ranges::any_of(graph_processes,
             &RegionProcessNode::dependencies_unknown)) {
         // Fail closed: an opaque access anywhere can read a hidden net.

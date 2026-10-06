@@ -14,6 +14,7 @@
 namespace fsim::runtime::simir {
 
 class ProcessProgramView;
+struct StaticKernelRuntimeSpec;
 
 /// Immutable register/layout metadata shared by process instances with an
 /// exact match. Process-local identity, sensitivities, operation overrides,
@@ -307,6 +308,10 @@ public:
         const std::vector<ProcessId>& dormant);
     [[nodiscard]] static bool fusion_dormant(
         const Interpreter& interpreter, ProcessId process) noexcept;
+    /// Install the engine v4 static kernel before start. The host must
+    /// already run its stub program; every other member must be dormant.
+    static void install_static_kernel(Interpreter& interpreter,
+        StaticKernelRuntimeSpec spec);
 };
 
 /// Startup-only interner. Operation-body identity narrows likely matches;

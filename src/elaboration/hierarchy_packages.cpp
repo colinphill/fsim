@@ -11390,8 +11390,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
     }
 
     auto generate_collection
-        = hierarchy_sv_generate_detail::collect_occurrences(
-            unit, path, *specialized);
+        = collect_generate_occurrences(unit, path, *specialized);
     if (generate_collection.diagnostic) {
         report(
             std::move(generate_collection.diagnostic->code),
@@ -11416,7 +11415,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
         activate_compiled_systemverilog_defparams(
             occurrence.region->defparams,
             occurrence.path,
-            occurrence.specialization);
+            *occurrence.specialization);
     }
 
     std::vector<semantic::DeclarationId> active_declarations {
@@ -11775,7 +11774,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_generated_scopes(
     generated_materializations.reserve(generate_occurrences.size());
     for (const auto& occurrence : generate_occurrences) {
         auto occurrence_alias_plan = build_systemverilog_alias_plan(
-            occurrence.specialization,
+            *occurrence.specialization,
             occurrence.region->declarations,
             occurrence.region->aliases);
         if (!occurrence_alias_plan) {
@@ -11794,7 +11793,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_generated_scopes(
             }
         }
         SystemVerilogHirMaterialization materialization {
-            &occurrence.specialization,
+            occurrence.specialization.get(),
             occurrence.path,
             SignalMap { &parent->signals },
             StringMap { &parent->string_objects },
@@ -11811,7 +11810,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_generated_scopes(
         for (const auto declaration_id :
             occurrence.region->declarations) {
             const auto declaration = occurrence.specialization
-                                         .find_declaration(
+                                         ->find_declaration(
                                              declaration_id);
             if (!declaration
                 || declaration->systemverilog == nullptr
@@ -11889,7 +11888,7 @@ void HierarchyBuilder::reserve_compiled_systemverilog_interface_occurrences(
     for (const auto& occurrence : generate_occurrences) {
         for (const auto instance : occurrence.region->instances) {
             reserve_interface_occurrence(
-                instance, occurrence.specialization,
+                instance, *occurrence.specialization,
                 occurrence.path, true);
         }
     }
