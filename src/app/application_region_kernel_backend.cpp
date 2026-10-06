@@ -876,9 +876,16 @@ private:
     std::atomic_flag in_use_ = ATOMIC_FLAG_INIT;
 };
 
+} // namespace
+
 class LlvmRegionFrontierBackend final
     : public runtime::simir::RegionFrontierBackend,
-      public runtime::simir::detail::RegionFrontierTrustedEntryCapability {
+      public runtime::simir::detail::RegionFrontierTrustedEntryCapability,
+      public runtime::simir::detail::
+          RegionFrontierCanonicalValuesEntryCapability,
+      public runtime::simir::detail::RegionFrontierMemberSyncEntryCapability,
+      public runtime::simir::detail::
+          RegionFrontierDescriptorShapesEntryCapability {
 public:
     explicit LlvmRegionFrontierBackend(
         std::unique_ptr<compiler::LlvmRegionFrontierExecutor> executor)
@@ -913,6 +920,47 @@ public:
         };
     }
 
+    [[nodiscard]] runtime::simir::detail::
+        RegionFrontierCanonicalValuesEntryView
+    canonical_values_entries() const noexcept override
+    {
+        using compiler::llvm_detail::RegionFrontierPrivateAccess;
+        return {
+            .canonical_values_entry
+                = RegionFrontierPrivateAccess::canonical_values_entry(
+                    *executor_),
+            .alias_and_canonical_values_entry
+                = RegionFrontierPrivateAccess::
+                    alias_and_canonical_values_entry(*executor_),
+            .layout = &executor_->layout(),
+        };
+    }
+
+    [[nodiscard]] runtime::simir::detail::
+        RegionFrontierDescriptorShapesEntryView
+    descriptor_shapes_entry() const noexcept override
+    {
+        using compiler::llvm_detail::RegionFrontierPrivateAccess;
+        return {
+            .entry = RegionFrontierPrivateAccess::
+                descriptor_shapes_entry(*executor_),
+            .layout = &executor_->layout(),
+        };
+    }
+
+    [[nodiscard]] runtime::simir::detail::RegionFrontierMemberSyncEntryView
+    member_sync_entry() const noexcept override
+    {
+        using compiler::llvm_detail::RegionFrontierPrivateAccess;
+        return {
+            .entry = RegionFrontierPrivateAccess::
+                alias_and_canonical_values_entry(*executor_),
+            .layout = &executor_->layout(),
+            .descriptor_shapes_entry = RegionFrontierPrivateAccess::
+                descriptor_shapes_entry(*executor_),
+        };
+    }
+
     [[nodiscard]] RegionFrontierBackendTestingSnapshot
     testing_snapshot() const noexcept
     {
@@ -939,6 +987,8 @@ private:
     // runtime retains this backend for the component frame's full lifetime.
     std::unique_ptr<compiler::LlvmRegionFrontierExecutor> executor_;
 };
+
+namespace {
 
 class LlvmRegionFrontierPreparedBackend final
     : public runtime::simir::RegionFrontierPreparedBackend {

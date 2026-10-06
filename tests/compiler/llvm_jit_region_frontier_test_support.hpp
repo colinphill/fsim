@@ -27,6 +27,19 @@ make_certified_frontier_kernel(
     runtime::simir::ValueKind value_kind
         = runtime::simir::ValueKind::logic4);
 
+/// Repeated packed bodies with distinct instance coordinates and negative
+/// constant/input-alias cases, plus a read-only member without outputs.
+[[nodiscard]] runtime::simir::RegionConeActivationKernel
+make_repeated_member_frontier_kernel();
+
+/// Four-member copy chain whose middle bodies share a shape across widths and
+/// value kinds while retaining separate source and physical bindings.
+[[nodiscard]] runtime::simir::RegionConeActivationKernel
+make_repeated_copy_member_frontier_kernel(
+    std::uint32_t width,
+    runtime::simir::ValueKind value_kind,
+    runtime::simir::SignalUpdateDomain write_domain);
+
 /// Copy an activation kernel while changing only its physical process and
 /// signal identities. Local member, input, and output order stays fixed.
 /// Sentinel owners remain sentinels; unrepresentable remaps are rejected.

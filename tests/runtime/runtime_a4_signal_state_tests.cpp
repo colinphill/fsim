@@ -1378,11 +1378,13 @@ void check_wide_default_admission_and_checked_override()
         const char* wide;
         bool bound;
     };
+    // Certified regions are opt-in; an unset policy keeps checked storage.
     constexpr std::array policies {
-        PolicyCase { nullptr, nullptr, true },
-        PolicyCase { nullptr, "1", true },
-        PolicyCase { nullptr, "0", false },
+        PolicyCase { "1", nullptr, true },
+        PolicyCase { "1", "1", true },
+        PolicyCase { "1", "0", false },
         PolicyCase { "0", nullptr, false },
+        PolicyCase { nullptr, nullptr, false },
     };
     ScopedEnvironment disjoint_disabled {
         "FSIM_ENABLE_A4_WIDE_DISJOINT_OWNER_COMMIT", "0" };
@@ -1445,9 +1447,21 @@ void check_default_narrow_a2_admission_and_checked_override()
     ScopedEnvironment disjoint_disabled {
         "FSIM_ENABLE_A4_WIDE_DISJOINT_OWNER_COMMIT", "0" };
     ScopedEnvironment region_kernel {
-        "FSIM_ENABLE_SV_REGION_KERNEL", nullptr };
+        "FSIM_ENABLE_SV_REGION_KERNEL", "1" };
     ScopedEnvironment profile_disabled {
         "FSIM_PROFILE_SV_WAVES", nullptr };
+    {
+        // Without the explicit opt-in the A4 single-owner route stays off.
+        ScopedEnvironment region_default {
+            "FSIM_ENABLE_SV_REGION_KERNEL", nullptr };
+        WideA4RuntimeCase test { 1U, ValueKind::logic4, "narrow_region_default" };
+        test.drain();
+        const auto& implementation
+            = OwnedDriverDemotionTestAccess::implementation(
+                test.interpreter());
+        require(!implementation.a4_wide_single_owner_commit_enabled,
+            "certified regions and their A4 routes are opt-in by default");
+    }
     for (const auto& policy : policies) {
         ScopedEnvironment wide_policy {
             "FSIM_ENABLE_A4_WIDE_SINGLE_OWNER_COMMIT", policy.wide };

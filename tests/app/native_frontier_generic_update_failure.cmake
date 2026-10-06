@@ -21,4 +21,5 @@ add_test(
 set_tests_properties(
   fsim.application.native-frontier-generic-update-failure
   PROPERTIES LABELS "fast;application;generic;native;frontier;allocation;retry"
+    ENVIRONMENT "FSIM_ENABLE_SV_REGION_KERNEL=1"
     RUN_SERIAL TRUE)

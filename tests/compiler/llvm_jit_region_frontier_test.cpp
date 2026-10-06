@@ -6,6 +6,7 @@
 #include "llvm/region_frontier_codegen_v2.hpp"
 #include "llvm/region_frontier_kernel_plan.hpp"
 #include "llvm_jit_region_frontier_adversarial_test.hpp"
+#include "llvm/region_frontier_initial_slot_validation.hpp"
 #include "llvm_jit_region_frontier_cache_test.hpp"
 #include "llvm_jit_region_frontier_concatenate_test.hpp"
 #include "llvm_jit_region_frontier_capacity_test.hpp"
@@ -433,6 +434,14 @@ void check_compiled_copy(const std::uint32_t width,
             executor->step_entry(),
             fsim::compiler::llvm_detail::RegionFrontierPrivateAccess::trusted_entry(
                 *executor),
+            fsim::compiler::llvm_detail::RegionFrontierPrivateAccess::canonical_values_entry(
+                *executor),
+            fsim::compiler::llvm_detail::
+                RegionFrontierPrivateAccess::alias_and_canonical_values_entry(
+                    *executor),
+            fsim::compiler::llvm_detail::
+                RegionFrontierPrivateAccess::descriptor_shapes_entry(
+                    *executor),
             executor->layout(), 71U);
     }
     if (width == 65U) {
@@ -446,6 +455,49 @@ void check_compiled_copy(const std::uint32_t width,
             executor->step_entry(), executor->layout(), 71U);
         run_region_frontier_round_boundary_tests(kernel,
             executor->step_entry(), executor->layout(), 71U);
+    }
+}
+
+void check_repeated_member_bindings(
+    const fsim::compiler::JitOptimizationLevel optimization)
+{
+    const auto kernel = make_repeated_member_frontier_kernel();
+    const auto executor = make_executor(kernel, optimization,
+        "frontier-repeated-member-bindings");
+    require(executor != nullptr,
+        "the certified repeated-member component has a native executor");
+    run_region_frontier_repeated_binding_tests(kernel, executor->step_entry(),
+        fsim::compiler::llvm_detail::RegionFrontierPrivateAccess::trusted_entry(
+            *executor), executor->layout());
+}
+
+void check_repeated_copy_member_matrix(
+    const fsim::compiler::JitOptimizationLevel optimization)
+{
+    constexpr std::array widths {
+        std::uint32_t { 65U }, std::uint32_t { 129U },
+        std::uint32_t { 256U }, std::uint32_t { 1024U },
+    };
+    for (const auto width : widths) {
+        for (const auto value_kind : { ValueKind::logic4, ValueKind::logic9 }) {
+            const auto domain = value_kind == ValueKind::logic9
+                ? SignalUpdateDomain::generic
+                : SignalUpdateDomain::systemverilog_active;
+            auto kernel = make_repeated_copy_member_frontier_kernel(
+                width, value_kind, domain);
+            const auto identity = std::string { "frontier-repeated-copy-" }
+                + std::to_string(width) + "-"
+                + std::to_string(static_cast<std::uint8_t>(value_kind)) + "-"
+                + std::to_string(static_cast<std::uint8_t>(optimization));
+            auto executor = make_executor(kernel, optimization, identity);
+            require(executor != nullptr,
+                "the wide repeated-copy component has a native executor");
+            run_region_frontier_repeated_copy_member_tests(kernel,
+                executor->step_entry(),
+                fsim::compiler::llvm_detail::RegionFrontierPrivateAccess::trusted_entry(
+                    *executor),
+                executor->layout(), width, value_kind);
+        }
     }
 }
 
@@ -1346,7 +1398,11 @@ make_pending_slot_mapping_jit(
     llvm::orc::LLJITBuilder builder;
     builder.setNumCompileThreads(0U);
     builder.setJITTargetMachineBuilder(std::move(target));
-    return llvm::cantFail(builder.create());
+    auto jit = llvm::cantFail(builder.create());
+    llvm::cantFail(
+        fsim::compiler::llvm_detail::define_initial_slot_validation_helper(
+            *jit));
+    return jit;
 }
 
 void optimize_pending_slot_mapping_module(llvm::Module& module,
@@ -2043,6 +2099,19 @@ void check_compiled_logic9_subset(
             }
             run_region_frontier_staging_tests(kernel, executor->step_entry(),
                 executor->layout(), 71U, std::move(values));
+            run_region_frontier_alias_prevalidated_entry_tests(kernel,
+                executor->step_entry(),
+                fsim::compiler::llvm_detail::RegionFrontierPrivateAccess::trusted_entry(
+                    *executor),
+                fsim::compiler::llvm_detail::RegionFrontierPrivateAccess::canonical_values_entry(
+                    *executor),
+                fsim::compiler::llvm_detail::
+                    RegionFrontierPrivateAccess::alias_and_canonical_values_entry(
+                        *executor),
+                fsim::compiler::llvm_detail::
+                    RegionFrontierPrivateAccess::descriptor_shapes_entry(
+                        *executor),
+                executor->layout(), 71U);
         }
 
         {
@@ -2151,9 +2220,22 @@ void check_compiled_conditional_select(
 
 } // namespace
 
-int main()
+int main(const int argc, char** argv)
 {
     try {
+        const bool repeated_copy_only = argc == 2
+            && std::string_view { argv[1] } == "--repeated-copy-frontier";
+        require(argc == 1 || repeated_copy_only,
+            "the only optional filter is --repeated-copy-frontier");
+        if (repeated_copy_only) {
+            for (const auto optimization : {
+                     fsim::compiler::JitOptimizationLevel::o0,
+                     fsim::compiler::JitOptimizationLevel::o2,
+                 }) {
+                check_repeated_copy_member_matrix(optimization);
+            }
+            return 0;
+        }
         check_generic_ineligible_shapes();
         fsim::compiler::test::run_region_frontier_preparation_tests();
         run_region_frontier_cache_tests();
@@ -2176,6 +2258,8 @@ int main()
                  fsim::compiler::JitOptimizationLevel::o0,
                  fsim::compiler::JitOptimizationLevel::o2,
              }) {
+            check_repeated_member_bindings(optimization);
+            check_repeated_copy_member_matrix(optimization);
             check_generic_frontier_entry(optimization);
             check_generic_permuted_pending_slots(optimization);
             check_generic_logic9_entries(optimization);

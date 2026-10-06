@@ -688,6 +688,8 @@ struct Simulation::Impl {
     bool trusted_builtin_stdout_output { };
 
     ReportHook report_hook;
+    // The installed report_hook only formats text and never observes state.
+    bool trusted_text_report_hook { };
 
     application_detail::HdlVcdState hdl_vcd;
 

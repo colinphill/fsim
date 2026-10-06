@@ -1,17 +1,572 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-> **Cache252 current source checkpoint — 2026-10-04 08:58 UTC.**
+
+> **R36 structural range batch — 2026-10-06 10:02 UTC; local validation passed.**
+> Ordinary current-value reads now carry precise graph ranges when all value uses
+> are proven static Extracts through uniquely defined copy chains. Full, dynamic,
+> debug-visible, sampled/gated, unsupported and ambiguous uses remain whole;
+> explicit sensitivity and alias projection are preserved. WaitFor/WaitOn/WaitOrder
+> conservatively reject narrowing. Certificate grouping connects overlapping
+> writer/reader intervals within the existing scheduling domain/update class;
+> unknown, observed, aliased and resolved ownership retains conservative grouping.
+> This changes dependency inventory and grouping, not runtime operation semantics.
+> Tests include 32 deterministic graphs against an independent pairwise oracle,
+> plus wait effects, alias ranges and shared-body instance signal/Extract overrides.
+> The bounded final census prioritizes existing native dispatch work; that counter
+> covers the retained runtime lifetime, not all historical component work.
+> One reused 12-worker build passed 2,070 steps after three recorded mechanical
+> compile fixes. All 13 affected checks passed, including O0/O2 region execution,
+> native publication, allocation/failure, stop/resume and source packaging.
+> Cache 272, ABI v2 and artifact 73 remain unchanged. No R36 workload capture or
+> performance improvement is established yet; full throughput targets remain open.
+> Evidence: `.local-artifacts/simulation-performance/r36-range-aware-build-gates/qualification.json`
+> (SHA-256 `8998564c5125f8ca272041bf5c1719c2a58543158d070416ad67a1fb47cbbb91`).
+
+> **Qualified r35 structural-evidence checkpoint — 2026-10-06 09:08 UTC capture.**
+> Publication reads one nonpromoting program view and inspects typed writes while
+> preserving operation overrides and signal remaps. A bounded final-destructor
+> census records complete component accesses, ownership and internal outputs.
+> Cache 272 / shared-body v6, ABI v2 / artifact 73 and tier limit 16,384 remain.
+> GPT-6.1-Sol/high owns builds/profiles. Two reused 12-worker builds passed
+> 2,066 and 2,065 steps; 11 behavioral gates and the complete graph selector
+> passed without failures or repairs. Compact/override views and native
+> publication are covered separately; a combined fixture is not established.
+> One capture exited 0 with owned cleanup in 50.202 s, first profile marker at
+> 22.269 s and tick 2,455,000. The actual supervisor selected CPU 1 at 100% idle,
+> checked 0.311 ms before spawn. All 66 source records, 39 dependencies and 315
+> original inputs match afterward. Capture receipts remain immutable; docs refresh
+> separately. All 517 native objects are byte-identical to r34; 49 shared objects
+> retain 287,220 optimized IR instructions and 1,270,957 executable bytes.
+> The final snapshot has 642 candidate components / 19,122 members, 627 prepared
+> program components and 233 frontier runtimes. The 2,048-row bound captures
+> three complete components: 610 (332 members, prepared without frontier),
+> 1082 (134, unprepared), and 400 (6, frontier). Their 472 members, 1,233 accesses
+> and 338 outputs reconcile to 2,046 rows. The dominant 81-member family is
+> unsampled; these findings do not establish its range shape or partition safety.
+> All 2,067,101 trusted entries use descriptor shapes. Both generations retain
+> 2,679 unique SimIR bodies / 352,156 operations / 25,355,232 outer-vector bytes.
+> Arena capacity/used remain 9,224,582 / 9,196,312 bytes. Glibc G2 in-use chunk
+> bookkeeping is 1,159,536,576 bytes; sampled RSS/HWM are 1,265,238,016 /
+> 1,323,950,080 bytes. These scopes establish neither isolated RSS savings nor
+> a Wall speedup. No standalone publication effect or full throughput is claimed.
+> Next: precise read dataflow ranges and range-aware connectivity, subject to
+> semantic review. Prioritize large structural savings; no further capture/build
+> is authorized before the next reviewed batch.
+> Analysis: `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache272-publication-views-range-census-normal-pmu-r35-analysis-receipt.json`.
+> Strict range report: `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache272-publication-views-range-census-r35-analysis.json`.
+
+> **Qualified r34 diagnostic checkpoint — 2026-10-06 08:20 UTC capture.**
+> Region certificates separate readers that share only an input; candidate
+> writer-reader and conflict connections remain. The binder directly initializes
+> the borrowed span array, removing the authenticated 64-byte temporary/copy.
+> Cache 272 / shared-body v6, public ABI v2 / artifact 73 and tier limit 16,384
+> remain unchanged. Build/profile ownership is GPT-6.1-Sol/high. The reused
+> 12-worker default build passed 2,066 steps. All 12 focused checks passed,
+> including the complete graph/wave selector and allocation/failure gates.
+> Two existing fixtures relied on read-only sibling coalescing: real join and
+> dormant-writer connections preserve their forwarding and 65/64 selective-wake
+> behavior; both failures and reviewed repairs are archived. No commit/push.
+> One capture exited 0 with owned cleanup in 49.601 s, first marker at 18.570 s
+> and tick 3,375,000. CPU 9 was 100% idle with no competing lane; the actual
+> supervisor checked immediately before spawn. All 66 source records, 39
+> dependencies and 315 original inputs match afterward. The immutable freeze
+> includes graph, selector, wave and application fixtures; docs refresh separately.
+> Current materialized plans are 233 / 16,485 members, with maximum 82 instead of
+> 2,625; 198 plans have 81 members. Snapshot activation programs are 627.
+> All 2,834,267 trusted entries use descriptor shapes. Full sync visits 4,733,721
+> members in 58,441 passes; selected sync visits 8,987,970 of 248,354,991
+> candidates in 3,066,111 passes. Boundary decisions reconcile at 2,311,754
+> eligible / 58,057 conservative. Retained alias reuse is 2,702,736 / 2,818,151
+> binds; full collectors are 346,053. These denominators have separate scopes.
+> Postwave weighted self: dispatch family 7.08%, eligibility 2.99%, lease
+> acquisition 3.40%, all lease accessors 0.94%, publication family 3.60%.
+> All native bodies/local helpers total 5.71%; adding host pending validation
+> gives 8.20%. Binder plus bulk/legacy/backing/atomic paths is 6.91% self /
+> 9.56% inclusive union, including ordinary copy callees. Operation access is
+> 5.71% self; current caller evidence points to expanded operations and publication.
+> Sampling has 4,432 samples, zero LOST and 1.781 s of recognized throttling;
+> period weighting does not establish unbiased CPU or a Wall speedup.
+> Native objects are 517: 285 overlapping keys remain byte-identical, 232 are
+> new and 16 disappear. Shared objects increase from 19 to 49; optimized LLVM IR
+> grows from 203,205 to 287,220 and helper-inclusive executable bytes from
+> 1,182,188 to 1,270,957. ELF bytes fall from 3,096,680 to 2,242,064; rodata falls
+> from 1,498,536 to 728,248. More wrappers/IR accompany smaller component tables;
+> LLVM accounts for 81.74% of sampled plan-to-first-marker CPU.
+> Both generations retain 2,679 unique SimIR bodies / 352,156 operations /
+> 25,355,232 outer-vector capacity bytes. Frontier arenas use 9,196,312 of
+> 9,224,582 bytes; index backing 2,000 and headers 7,456 are existing-total subsets.
+> Planner release is cumulative 14,641,536 capacity bytes across 233 lifetimes.
+> Glibc G2 in-use chunk bookkeeping is 1,159,537,616 bytes. Actual sampled RSS
+> peaks at 1,265,291,264 bytes; reported HWM is 1,323,925,504, last sample 48.453 s.
+> These measurements do not establish an isolated RSS change. The partial tick
+> is about 0.755% of the historical full-stimulus endpoint; no codeword fraction,
+> extrapolated Wall acceptance or full throughput/external parity is established.
+> Next: use current dispatch, operation access, publication and alias call paths
+> to rank the next bounded source change. No second capture is authorized.
+> Analysis: `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache272-writer-connected-components-normal-pmu-r34-analysis-receipt.json`.
+
+> **Qualified r33 control diagnostic checkpoint — 2026-10-06 07:53 UTC capture.**
+> The synchronous binder borrows all packed value planes through one internal A4
+> getter. Versioned values acquire one backing block; owning, pinned and
+> unversioned values retain their existing accessor paths. Canonical span checks
+> remain. Cache 272 / shared-body v6, public ABI v2 / artifact 73 and tier limit
+> 16,384 stay unchanged. Build/profile ownership remains GPT-6.1-Sol/high.
+> The reused default build passed 2,167 steps with 12 workers; the test-only target
+> rebuild passed 326 steps. All eight focused behavioral gates passed, including
+> exact all-plane offsets/data, fresh post-publication borrow and retained old
+> snapshots for wide Logic4/Logic9, plus narrow unversioned values. There were no
+> failures or repairs. No commit/push.
+> One capture exited 0 with owned cleanup in 49.802 s, first wave at 13.384 s and
+> tick 1,095,000. CPU 9 was 100% idle with no competing lane; the actual supervisor
+> checked 0.314 ms before spawn. All 62 source records, 39 dependencies and 315
+> original inputs match afterward, including the private A4 header and ownership
+> test. Capture/source/tool identities are immutable; documentation hashes are
+> refreshed separately. All 607,715 trusted entries used descriptor shapes.
+> Full sync visited 35,152,704 members in 13,562 passes; selected sync visited
+> 2,128,614 of 1,617,903,072 candidates in 624,191 passes. Boundary decisions
+> reconcile at 548,229 eligible / 13,552 conservative, all container-element aliases.
+> Retained alias reuse is 593,337 / 595,010 binds, with 5,014 full collectors.
+> Postwave weighted self is binder 14.16%, new bulk getter 4.83%, residual backing
+> lookup 0.22%, native body 9.63%, host pending helper 8.34%, dispatch 6.38% and
+> publication 5.75%. Complete getter self is 5.04% / inclusive union 5.44%.
+> Binder plus getters is 19.20% self / 23.24% inclusive union, versus r32's
+> 16.00% / 24.58%. This sampled aggregate does not establish improvement.
+> Inlined atomic acquisition is included in helper self; no standalone atomic leaf
+> samples appear. The complete lease accessor family is 2.89% self / 4.41% union.
+> Fresh disassembly proves one logical versioned acquire. Binder code shrinks
+> from 3,348 to 3,261 bytes but its stack reservation grows by 64 bytes; four loads
+> and four stores copy the returned span array. Samples at those post-call loads
+> may include skid/return latency, so they do not isolate copy cost.
+> Sampling has 4,695 samples, zero LOST and 1.905 s of recognized throttling;
+> period weighting is not a complete correction. All 301 native objects are
+> byte-identical to r32. The 19 shared objects retain 203,205 optimized LLVM IR
+> instructions, 1,182,188 helper-inclusive executable bytes and 3,096,680 ELF bytes.
+> Both generations retain 2,307 unique SimIR bodies / 354,050 ops / 25,491,600
+> outer-vector capacity bytes and unchanged frontier arena/index totals.
+> Glibc G2 in-use chunk bookkeeping is 1,130,842,736 bytes. Sampled actual process
+> RSS peaks at 1,233,707,008 bytes; reported HWM is 1,292,369,920, with the last
+> sample at 48.450 s. These scopes do not establish isolated RSS savings.
+> Existing creation rows show 47 runtimes / 16,626 members; six components of
+> 2,625 or 2,592 members contain 93.74% of them. Per-component signal/internal
+> counts and completed-codeword fraction are not established by this capture.
+> Next: read-only shared-input connectivity and downstream scheduling/sharing
+> safety audit before another bounded change. No paired Wall, extrapolated target
+> acceptance or full throughput/external parity claim is made.
+> Analysis: `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache272-bulk-plane-borrow-normal-pmu-r33-analysis-receipt.json`.
+
+> **Qualified r32 control diagnostic checkpoint — 2026-10-06 07:32 UTC capture.**
+> The binder omits a descriptor validator already entailed by its construction
+> checks. Lease acquisition omits duplicate support/owner checks already entailed
+> by the retained complete packed-slot binding check. All other validation,
+> geometry and lifetime guards remain. Cache 272 / shared-body v6, public ABI v2 /
+> artifact 73 and tier limit 16,384 stay unchanged. Build/profile ownership remains
+> GPT-6.1-Sol/high. The reused default build passed all 2,066 steps with 12 workers;
+> all eight focused behavioral gates passed without repairs, including boundary,
+> A4 ownership/rebase, core simulation, allocation, preparation failure, retained
+> stop/resume and Generic update. The boundary gate took 5.475 s. No commit/push.
+> One capture exited 0 with owned cleanup in 49.601 s, first wave at 13.219 s and
+> tick 1,125,000. CPU 9 was 100% idle with no competing lane; the actual supervisor
+> checked 0.302 ms before spawn. All 62 source records, 39 dependencies and 315
+> original inputs match afterward. Capture/source/tool identities are immutable;
+> documentation refresh hashes are recorded separately.
+> All 629,040 trusted entries used descriptor shapes. Full sync visited 36,391,680
+> members in 14,040 passes; selected sync visited 2,203,110 of 1,674,652,320
+> candidates in 646,085 passes. Boundary decisions reconcile at 567,475 eligible /
+> 14,030 conservative, all container-element aliases. Retained alias reuse is
+> 614,604 / 616,335 binds (99.719%), with 5,188 full collectors, 434 plane misses
+> and 1,292 unconfirmed-count misses. These have a retained-runtime scope.
+> Authenticated host disassembly confirms zero direct binder validator calls and
+> zero duplicate support/owner calls in lease acquisition; the retained packed-slot
+> check still performs its transitive validation. Remaining validator self is
+> 0.124%, sampled only beneath staged issue, versus r31's 4.54% overall self.
+> Current postwave weighted self is binder 9.05%, native body 8.74%, host pending
+> helper 8.01%, backing plane lookup 6.95%, dispatch 6.43% and publication 5.62%.
+> Body plus host helper is 16.75%. The complete lease accessor family is 2.62%
+> self / 4.37% inclusive union; binder inclusive is 24.37%. Inclusive paths overlap.
+> Sampling has 4,695 samples, zero LOST and 1.888 s of recognized throttling;
+> period weighting does not establish unbiased CPU or isolated runtime gains.
+> All 301 native objects are byte-identical to r31. The 19 shared objects retain
+> 203,205 optimized LLVM IR instructions, 1,182,188 helper-inclusive executable
+> bytes and 3,096,680 ELF bytes. Both generations retain 2,307 unique SimIR bodies /
+> 354,050 ops / 25,491,600 outer-vector capacity bytes. Configured frontier arenas
+> remain 7,630,336 capacity / 7,624,552 used bytes; index backing 2,000 bytes and
+> vector headers 1,504 bytes remain subsets of existing totals.
+> Glibc G2 in-use chunk bookkeeping is 1,130,855,232 bytes. Sampled process RSS
+> peaks at 1,233,850,368 bytes; reported HWM is 1,292,488,704, with the last sample
+> at 48.453 s. These are separate accounting scopes, without isolated RSS claims.
+> The next action is read-only proof of a single-snapshot all-plane borrowed getter
+> for the binder's backing lookup cost; implementation and capture are not yet
+> authorized. No paired Wall or full throughput/external parity claim is made.
+> Analysis: `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache272-binder-construction-lease-checks-normal-pmu-r32-analysis-receipt.json`.
+
+> **Qualified r31 control diagnostic checkpoint — 2026-10-06 07:09 UTC capture.**
+> The batch indexes raw activations once per dispatch across the complete offered
+> frontier and lets confirmed alias geometry cover shorter task prefixes.
+> Both workspace budgets include the preallocated SV summary; Generic storage
+> remains empty. Cache 272 / shared-body v6, public ABI v2 / artifact 73 and tier
+> limit 16,384 stay unchanged. Build/profile ownership remains GPT-6.1-Sol/high.
+> The reused default build passed with 12 workers. All six focused gates passed;
+> the final boundary run took 5.440 s and exercises real scheduler duplicates
+> beyond the selected prefix, valid outside-prefix work/reentry and post-seed
+> corrupted-map rejection. Narrow test repairs removed alias-type/unused-capture
+> compilation errors, restored admitted member bodies and moved map corruption
+> into its live callback. All failure evidence and exact assertions are recorded.
+> Alias witnesses retain shorter-prefix success, larger-unconfirmed decline and
+> peer-plane invalidation. Allocation, preparation failure, retained stop/resume,
+> Generic update and manifest checks remain green. No commit/push.
+> One capture exited 0 with owned cleanup in 49.601 s, first wave at 13.270 s and
+> tick 1,055,000. CPU 9 was 100% idle with no competing lane; the actual supervisor
+> checked 0.321 ms before spawn. All 62 source records, 39 dependencies and 315
+> original inputs match afterward. The source/tool receipts are immutable;
+> documentation refresh hashes are separate.
+> All 574,536 trusted entries used descriptor shapes. Full sync visited 33,504,192
+> members in 12,926 passes; selected sync visited 2,023,958 of 1,529,523,648
+> candidates in 590,094 passes. Boundary decisions reconcile at 518,137 eligible /
+> 12,916 conservative, all container-element aliases. Retained alias reuse is
+> 560,246 / 561,831 binds (99.718%), with 4,750 full collectors, 399 plane misses
+> and 1,181 unconfirmed-count misses. These counts have a retained-runtime scope.
+> Postwave weighted self is dispatch 5.74% versus r30's 13.79%; the native body is
+> 9.78%, host pending validation 8.46%, binder 7.92%, backing plane lookup 6.30%
+> and publication 5.63%. Body plus host helper is 18.24%; do not omit moved host
+> work. All three lease accessors total 2.45% self / 4.22% inclusive union; binder
+> inclusive is 25.37%. Fresh authenticated host bands support current read-only
+> pending-loop, binder/backing and dispatch audits before the next bounded change.
+> Sampling has 4,698 samples, zero LOST and 1.841 s of recognized throttling;
+> inclusive paths overlap and period weighting is not a complete sample correction.
+> All 301 native objects are byte-identical to r30. The 19 shared objects retain
+> 203,205 optimized LLVM IR instructions, 1,182,188 helper-inclusive executable
+> bytes and 3,096,680 ELF bytes. Retained SimIR remains 2,307 unique bodies /
+> 354,050 ops / 25,491,600 outer-vector capacity bytes in both generations.
+> The summary increases configured arena capacity by 133,337 bytes to 7,630,336;
+> used bytes increase by 133,008 to 7,624,552. Existing index/header subsets are
+> unchanged. Glibc G2 in-use chunk bookkeeping is 1,130,868,048 bytes; sampled
+> actual process RSS peaks at 1,233,850,368 and reported HWM is 1,292,537,856,
+> with the last sample at 48.451 s. These are separate accounting scopes.
+> No paired Wall, isolated RSS saving or full throughput/parity qualification is
+> claimed. Analysis: `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache272-task-summary-alias-prefix-normal-pmu-r31-analysis-receipt.json`.
+
+> **Qualified r30 control diagnostic checkpoint — 2026-10-06 06:02 UTC capture.** The
+> combined batch adds lease ordinal lookup with caller-owned indices, sorted
+> boundary descriptor lookup with the exact unordered fallback, and removes the
+> redundant retained executor frame layout. The reused default build passed with
+> 12 workers; all 12 focused gates passed, including ordinal identity/lifetime and
+> zero-allocation guards, unordered/duplicate/missing boundary descriptors, manual
+> wide/Logic9 acquisitions, preparation failure and required-read/remap behavior.
+> Cache 272 / shared-body v6, public ABI v2 / artifact 73 and tier limit 16,384
+> remain unchanged. Build/profile ownership remains GPT-6.1-Sol/high; no commit/push.
+> One capture exited 0 with owned cleanup in 49.601 s, first wave at 13.371 s and
+> tick 935,000. CPU 9 was 100% idle with an empty executable lane; the supervisor
+> checked 0.343 ms before spawn. All 62 source records, 39 dependencies and the
+> 315 inputs match afterward. Immutable capture/source/tool identities remain
+> archived; this documentation refresh is recorded separately.
+> All 490,989 trusted entries used descriptor shapes. Full sync visited 28,553,472
+> members in 11,016 passes; selected sync visited 1,734,551 of 1,307,495,520
+> candidates in 504,435 passes. Boundary decisions reconcile at 442,735 eligible /
+> 11,006 conservative, all container-element aliases. Retained alias reuse was
+> 475,145 / 478,284 binds (99.34%), with 9,412 full collectors.
+> Postwave weighted self for the complete lease family (ordinal entry, common
+> role/extent helper and residual general entry) is 1.97%, versus r29's 5.38%; its
+> inclusive union is 3.20%. Publication self is 3.71%, versus 9.39%, with 11.97%
+> inclusive. Fresh disassembly confirms direct ordinal checks and the sorted
+> lookup branch bypassing the retained nested unordered scan. Current ordered
+> publication checks/lookup account for 0.64% of postwave sampled period; no
+> samples fall in the unordered scan. These are diagnostic shares, not path counts.
+> Dispatch now ranks at 13.79% self; binder is 8.17% self / 22.26% inclusive.
+> Two authenticated per-member task-match/count scan cores account for 7.80%
+> postwave; source audits are checking dispatch, binder and alias geometry before
+> choosing the next change. Native body plus host pending helper remains 15.44%.
+> Sampling has 4,696 samples, zero LOST and 1.857 s of recognized throttle intervals;
+> inclusive paths overlap and the weighted ranking does not establish unbiased CPU.
+> All 301 native objects are byte-identical to r29. The 19 bodies retain 203,205
+> optimized LLVM IR instructions, 1,182,188 helper-inclusive executable bytes and
+> 3,096,680 ELF bytes. Retained SimIR remains 2,307 unique bodies / 354,050 ops /
+> 25,491,600 outer-vector capacity bytes in each generation. Index backing is
+> 2,000 bytes inside configured arena capacity; 47 vector headers add 1,504 bytes
+> inside runtime shell totals. Do not add either subset again. Glibc G2 in-use
+> chunk bookkeeping is 1,130,609,696 bytes, 7,999,424 below r29 for this combined
+> batch; it is not payload/RSS accounting or isolated attribution. Sampled actual
+> process RSS/HWM is 1,292,656,640 bytes, with the final sample at 48.451 s.
+> No paired Wall, causal RSS saving or full throughput/parity qualification is
+> claimed. Analysis: `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache272-ordinal-publication-metadata-normal-pmu-r30-analysis-receipt.json`.
+
+> **Qualified r29 control diagnostic checkpoint — 2026-10-06 05:02 UTC capture.** Cache
+> 272 / shared-body v6 moves initial-slot validation into a registered noexcept
+> host helper and reuses the synchronous lease's captured block. The reused default
+> build passed with 12 workers and all ten focused gates passed, including lease
+> release/COW reacquire, builtin sparse parity, O0/O2 dynamic flags/keys/origin/site
+> negatives, wide Logic4/Logic9, allocation, cache and schema. Both declaration and
+> call carry NoUnwind; both compiler no-unwind verifiers remain. Public ABI v2 /
+> artifact 73 and tier limit 16,384 stay unchanged. Build/profile workers always
+> use GPT-6.1-Sol with high reasoning. No commit/push.
+> One bounded capture exited 0 with owned cleanup in 49.601 s and tick 875,000.
+> CPU 9 was 100% idle with no competing executable lane; the same supervisor
+> checked 4.430 ms before spawn. All 55 source records, 39 dependencies and 315
+> inputs match afterward. Capture/source identities are immutable; this checkpoint
+> refresh has separate hashes. All 448,412 trusted entries used descriptor shapes.
+> Full synchronization visited 26,072,928 members in 10,059 passes; selected sync
+> visited 1,581,336 of 1,193,761,152 candidates in 460,556 passes. Boundary decisions
+> reconcile at 404,485 eligible / 10,049 conservative, all container-element aliases.
+> Retained runtime alias reuse is 432,869 / 435,707 binds (99.35%).
+> Current postwave weighted self is dispatch 12.44%, publication 9.39%, v6 body
+> 8.08%, host helper 6.58%, binder 5.82%, lease lookup 5.38% and backing lookup
+> 4.74%. Body plus helper is 14.66%, versus r28 body 14.99%; moving work out of
+> JIT does not establish an isolated runtime improvement. Atomic shared-pointer
+> load has no sampled postwave self/inclusive cost. Binder inclusive is 21.21%,
+> publication 18.85% and lease lookup 7.26%; inclusive paths overlap.
+> Authenticated lease disassembly attributes 2.83% of postwave sampled period to
+> signal-ID binary search, 0.59% to writable-binding linear search, 0.89% to role/
+> plane extent construction and 0.37% to owner-record lookup. Helper site/row
+> lookup and active testing is 2.64%; member-strided origin comparisons are 2.76%.
+> These bands do not establish active/inactive row frequency or search lengths.
+> Exact v6 relocation proves the helper call with 2,592 sites; its captured PMU
+> ancestry lacks a caller. Remaining native samples are diffuse and only selectively
+> mapped. Next work should follow the binder/publication and lookup proof, without
+> removing dynamic guards or starting another capture before review.
+> All 301 native objects authenticate. The 19 shared objects have 1,182,188
+> helper-inclusive executable bytes (11,823 fewer than r28), 203,205 optimized
+> LLVM IR instructions (3,142 fewer), and 3,096,680 ELF bytes (9,896 fewer).
+> Read-only data stays 1,498,536 bytes; relocation bytes rise by 576 to 374,736.
+> The host helper is separately 608 bytes; its startup registrar is 1,634 bytes.
+> Retained SimIR remains 2,307 unique bodies / 354,050 operations / 25,491,600
+> outer-vector capacity bytes in both generations. Cumulative planner release is
+> 14,767,424 bytes across 47 materializations, not simultaneous resident savings.
+> Sampled fsim RSS peaks at 1,275,994,112 bytes; reported HWM is 1,300,185,088.
+> Glibc in-use chunks are 891,694,960 / 1,138,609,120 bytes at generations 1 / 2;
+> these are allocator bookkeeping, not requested payload or RSS. Sampling has
+> 4,689 samples, zero LOST and 1.887 s of recognized throttling. Period weighting
+> does not fully correct missing samples. Instrumented progress and sample shares
+> do not prove paired Wall/throughput gains; canonical parity and full qualification
+> remain open. Receipt:
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache272-pending-helper-lease-capture-normal-pmu-r29-analysis-receipt.json`.
+
+> **Qualified r28 control diagnostic checkpoint — 2026-10-06 04:26 UTC.** Cache 271
+> sealed descriptor-shape admission and in-place binder filling are integrated.
+> The reused incremental build passed all 2,182 steps with 12 workers; all eight
+> focused gates passed, including genuine builtin one-use receipts, sparse/full
+> parity, O0/O2 dynamic pending negatives, repeated wide Logic4/Logic9, allocation,
+> cache and schema coverage. Public ABI v2 / artifact 73 and tier limit 16,384
+> remain unchanged. The new entry skips only signal/pending descriptor-shape
+> scans; dynamic pending flags, keys, origins and site identity remain checked.
+> Binder disassembly confirms its 192-byte aggregate copy is gone.
+> One bounded r28 capture exited 0 with owned cleanup in 49.802 s and reached tick
+> 825,000. All 418,776 trusted entries used the new shape proof. Full synchronization
+> visited 24,007,104 members in 9,262 passes; selected synchronization visited
+> 1,465,215 of 1,114,886,592 candidates in 430,126 passes. Boundary continuation
+> admitted 378,005 and conservatively handled 9,252, all container-element aliases.
+> Retained runtimes reused alias binding 403,436 / 406,071 times (99.35%).
+> Fresh v5 object mapping attributes the retained dynamic initial-slot loop
+> `[0x3000c, 0x302f2)` to 8.40% of postwave sampled period. The hottest body is
+> 14.99%, dispatch 11.76%, atomic shared-pointer load 8.49%, publication 8.08%,
+> binder 5.52% and backing-plane lookup 4.98%. Atomic loads are called by lease
+> plane lookup; memmove self is now 0.03%, sampled in alias-certificate staging.
+> These are current diagnostic rankings, not isolated savings or unbiased CPU.
+> All 19 helper-inclusive shared objects contain 1,194,011 executable bytes
+> (+511 versus r27), 206,347 optimized IR instructions (+19), and 3,106,576 ELF
+> bytes (+504). Read-only data stays 1,498,536 bytes; relocations are 374,160.
+> Retained SimIR stays 2,307 unique bodies / 354,050 operations / 25,491,600 outer
+> vector capacity bytes in both generations. Cumulative planner release is
+> 14,767,424 bytes across 47 materializations; it is not simultaneous RSS savings.
+> Actual fsim sampled RSS peaks at 1,262,751,744 bytes; reported HWM is
+> 1,300,160,512. Glibc in-use chunks are 891,507,664 / 1,138,420,608 bytes at
+> generations 1 / 2, allocator bookkeeping rather than requested payload or RSS.
+> All 50 captured source records, 39 dependencies and 315 inputs match after the
+> run. Capture/source receipts remain immutable; documentation refresh is separate.
+> CPU 9 was 100% idle with an empty executable lane at precheck, but compaction
+> delayed actual launch roughly three minutes and that precheck was not refreshed.
+> Sampling has 4,704 samples, zero LOST, and 1.893 s of recognized throttling.
+> Instrumented tick progress and changed sample shares do not establish paired
+> Wall improvement. Full canonical parity and paired throughput remain open.
+> Build/profile workers always use GPT-6.1-Sol with high reasoning. No commit/push.
+> Next bounded work is source proof for the dynamic pending loop and lease-local
+> backing acquisition reuse, ranked by this same-run evidence; no new build or
+> capture before review. Receipt:
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache271-descriptor-shapes-binder-fill-normal-pmu-r28-analysis-receipt.json`.
+
+> **Qualified r27 control checkpoint — 2026-10-06 03:43 UTC.**
+> Cache 270 compiler compaction, pool COW reuse/reserve, planner storage retirement,
+> builtin sparse synchronization, certified alias-bind reuse and narrow known-effects
+> multiowner slice boundary continuation and shared COW operation overrides are
+> integrated. Public JIT ABI v2 / artifact 73 and Less
+> limit 16,384 are unchanged. Build/profile workers always use GPT-6.1-Sol with high
+> reasoning. No commit/push is authorized. Full canonical parity and paired throughput
+> remain open; profiling is separate from Wall qualification.
+> Historical r18→r19 authenticates all 19 shared-body objects including helpers:
+> executable bytes 3,566,831 → 1,193,500 (66.54% smaller), optimized LLVM IR
+> 455,681 → 206,328 and ELF bytes 4,989,704 → 3,106,072 (37.75% smaller).
+> Read-only data grows 1,156,232 → 1,498,536; relocations 245,424 → 374,184 bytes.
+> Largest old/new structures match by rank and creation counts; r18 lacks exact
+> module identities. Report: `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-r18-r19-shared-body-comparison.md`.
+> Singleton bodies remain direct. Retained region operations remain expanded;
+> outlining alone claims no SimIR reduction. Repeated helpers pass O0/O2 at 8-bit
+> Logic4 and widths 65/129/256/1024 Logic4 checked/trusted plus Generic Logic9
+> checked across all nine states. Internal SystemVerilog Logic9 still falls back.
+> Original generation-1 source views number 85,547, with only 1,425 shared backed
+> bodies / 45,982 operations; 34,455 startup banks remain unmaterialized. Pool COW
+> reuse removes 463 duplicated backend bodies / 15,778,944 vector-capacity bytes;
+> exact reserve removes another 11,101,536 bytes. Both r27 generations retain
+> 2,307 unique bodies / 354,050 operations / 25,491,600 outer-vector bytes, plus
+> 1,529,224 boxed-group bytes and 55,410 common direct nested-vector bytes.
+> Body accounting uses const immutable spans, excluding instance overrides and
+> avoiding detachment/materialization. String buffers, nested element payloads
+> and RareVector wrapper shells are excluded. Planner release is 14,767,424
+> vector-capacity bytes cumulatively across 47 materialized lifetimes, not
+> simultaneous resident savings. These lower bounds do not establish total RSS.
+> The r27 default consumer rebuild passed 2,746 steps with 12 workers; the C++
+> OperationList layout changed, while public JIT ABI/cache/artifact semantics did not.
+> Seven focused gates passed: codec 0.05 s, manifest 2.03 s, steady allocation
+> 1.29 s, preparation failure 0.43 s, generic update 2.74 s, generic failure 0.76 s,
+> and final boundary 4.99 s. Test-only repairs fully qualify private casts, retain the
+> runtime shared_ptr and detach parity snapshots instead of pinning writable planes.
+> Original failure logs are preserved. No production guard was relaxed for fixtures.
+> Checked/O0/O2 witnesses prove exact disjoint A4 owner masks and overlapping slice
+> resolution to ZZZZXXXX without an A4 target slot, including signal/owner/history/
+> transaction/process metadata. An otherwise identical unsealed current writer
+> retains native execution and conservative full sync. Whole multiowner publications,
+> unknown effects and unsupported routes remain conservative. Codec witnesses prove
+> const override sharing, replace/mutable-copy isolation, nested/boxed payload
+> isolation and unchanged artifact bytes. Earlier wide/Logic9 and real timing-hook
+> callback witnesses remain gated; internal SV Logic9 still uses scheduler fallback.
+> Freeze: `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache270-multiowner-slice-override-cow-qualified-candidate-20261006/RECEIPT.capture-original.json`.
+> All 50 source files are archived beside that immutable capture receipt; the 39
+> dependency hashes and 315 original input paths/bytes are authenticated. Documentation
+> refresh records are separate. Historical r24 original raw documentation hashes
+> were unavailable after refresh; reconstructed docs are recovery evidence only.
+> Bounded r27 exited 0 at tick 715000; owned cleanup 49.601 s, CPU 9 initially 100%
+> idle. First wave was 13.369 s. Progress and startup are instrumented and unpaired,
+> so neither proves Wall/throughput improvement. All 301 object paths/bytes match
+> r26 exactly, retaining the 19-object helper-inclusive code/IR/section totals.
+> Boundary decisions reconcile: 303,511 eligible / 7,499 conservative (97.59%
+> eligible). Every remaining first rejection is container_element_alias; writer-count
+> and all new owner/shape/seal rejection buckets are zero on this workload. The
+> first-rejection map derives 69 reasons from the immutable archived header.
+> Full sync is 7,509 passes / 19,463,328 visits: seed 10 / 25,920, boundary-only
+> 7,499 / 19,437,408. Selected sync is 345,760 passes / 1,192,516 visits from
+> 896,209,920 candidates. Overall avoided visits are 97.74%; only 2.13% of passes
+> remain full. These are work counters, not elapsed-time savings. Historical r26
+> rejected all 226,885 measured multiple-owner slices and avoided 11.86% of visits.
+> Retained-only alias reuse is 321,663 / 323,792 attempts (99.34%) across 47 objects;
+> full collectors 6,382, plane misses 230, unconfirmed-count misses 1,894. Retired
+> generations are excluded; do not divide by global entry totals.
+> Postwave weighted self ranking: one shared body 29.33%, dispatch 9.78%, boundary
+> publication 7.06%, atomic shared_ptr load 6.91%, memmove 5.55%, backing plane_words
+> 3.19%, alias sift 2.89%, component eligibility 2.24%, binder 1.54%, sync 0.737%.
+> Inclusive host ranking: dispatch 61.32%, binder 18.13%, publication 17.49%,
+> eligibility 4.61%, sync 0.955%; inclusive groups overlap and must not be summed.
+> Sampled atomic load cost comes through FrontierWriteLease::plane_words; 98.56%
+> of memmove self cost comes through the binder. Current lease lifetime proof and
+> exact native hot-offset mapping are the next bounded source investigations.
+> Sample quality: 4,690 samples, zero LOST, 1.877 s recognized throttle intervals.
+> Period weighting does not fully correct missing samples; rankings are diagnostic.
+> One authenticated fsim PID has 48 RSS samples, sampled peak 1,241,251,840 /
+> reported HWM 1,300,025,344 bytes; last sample 48.452 s. No isolated RSS claim follows.
+> Glibc pre-census G1 arena in-use/free is 891,515,520 / 69,365,120 bytes and mmap
+> extent 64,442,368; G2 is 1,138,423,424 / 25,627,008 and mmap extent 64,450,560.
+> Relative to r26, returned in-use chunk space is lower by 39,593,856 at G1 and
+> 40,145,632 at G2. This batch combines runtime admission and override COW; counters
+> include allocator bookkeeping/fragmentation and are neither requested payload nor
+> causal RSS attribution. Original/cold state, instance sidecars and plane storage
+> outside the existing census remain incompletely accounted. Do not sum generations.
+> Both generations still have 47 runtime arenas, capacity 7,494,670 / used 7,489,544.
+> Artifacts use `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache270-multiowner-slice-override-cow-normal-pmu-r27` with
+> `-receipt.json`, `-sparse-planner-census.json`, `-r26-object-identity.json`,
+> `-shared-body-section-census.json`, `-weighted-self.json`, `-sample-quality.json`,
+> `-hot-symbol-ranking.json` and `-plane-and-memmove-callers.json`. The source-hashed
+> map is `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-r27-boundary-reason-index-map.json`; reason combinations and
+> arena/allocator/metadata generations strictly reconcile from non-truncated stderr.
+> The separately instrumented Heaptrack raw attempt reached G2 at 33.756 s and
+> drained cleanly in 35.091 s, exit 0. Wrapper, compressor and fsim share CPU 9;
+> exact PID/start time was verified before SIGINT. All source/dependency identities
+> match before/after. Raw trace is 191,051,280 bytes; zstd integrity passed in
+> 0.95 s and interpretation in 9.89 s. The bounded whole-trace report did not finish:
+> heaptrack_print hit its 45 s work deadline and cleaned up at 45.027 s, exit -15,
+> with no residual group. Raw/interpreted traces and partial output are preserved.
+> A single approved peak-only retry disabled Massif and other reports, explicitly
+> disabled backtrace merging, and completed in 3.041 s. Whole-capture peak consumers
+> include deferred LLVM executor construction 159.19M, snapshot rebuild 59.55M,
+> process registration 44.96M, distinct operation-override copy stacks 24.88M,
+> 24.88M, 23.57M and 23.29M, and two scheduler queue reserve stacks of 22.02M.
+> These are Heaptrack's rounded display units, not exact byte counts; the table is
+> a stack ranking, not a census of the G2 live set. Instance-override copies were
+> excluded from the earlier immutable-body census. Printed heap peak is 1.17G;
+> reported RSS 1.37G includes Heaptrack overhead. Exact G2 ownership and complete
+> Massif output remain unavailable. No recapture or extended report is authorized.
+> Artifacts use `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache270-heaptrack-g2-r26` with `-receipt.json`,
+> `-qualification.json`, `-allocations-offline-analysis.json`,
+> `-allocations-peak-only-analysis.json` and `-allocations-peak-summary.json`.
+> Already-queued ANY fanout is idempotent under the full-trigger sentinel. Selective
+> static-trigger regions and non-ANY edges are excluded; ranged ANY edges are admitted.
+> Unknown callbacks, timing effects, wide targets and unsealed executors remain
+> conservative. No further production edit or capture before the next bounded review.
+
+
+> **Earlier source checkpoint — 2026-10-05 22:13 UTC.**
+> Resumed by merging upstream `0ba4beb6` → `e4077991` with a fast-forward,
+> then reconfiguring and fully rebuilding the reused Release Clang 22 tree
+> with `--clean-first --parallel 12`; all 3748/3748 build steps passed. Upstream
+> now builds the subsystems and four application components as shared libraries.
+> All 23 tracked local changes and the intended canonical-values test remain;
+> 22 tracked files and all unrelated untracked files are byte-identical to the
+> premerge backup, while the manifest retains both upstream additions and the
+> local test entry. Backup: `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-upstream-merge-backup-20261005-154808`.
+> Boundary and steady-allocation passed 2/2 in 5.49 seconds; compiler frontier,
+> cache, schema and public ABI v1/v2 layouts passed 5/5 in 25.46 seconds.
+> Build log: `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-upstream-full-rebuild-20261005.log`. Qualified control:
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache269-upstream-e4077991-qualified-control-20261005/RECEIPT.json`.
+> The control copies six executables and all fifteen loaded build-tree DSOs,
+> and hashes their full dependency closure. New launcher hash `af678854…`
+> identifies only part of the program; every DSO identity is in the receipt.
+> The permanent worker direction is GPT-6.1-Sol with high reasoning for all
+> build and profile workers. Public JIT ABI v2/artifact 73/native cache 269.
+> Canonical-value private compiler/runtime admission is integrated. Authentic
+> O0/O2 boundary routes pass widths 1/65/129/256/1024 across all nine Logic9
+> boundary states, including ordinary process-JIT observer demotion without
+> extra native entry calls. Hidden internal Logic9 signals retain scheduler
+> fallback at every width. Canonical test source hash `f6610c6d…` is unchanged.
+> The earlier premerge control is
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-canonical-values-cache269-qualified-freeze.json`, binary `0e2d8d9d…`;
+> its boundary gate passed in 4.05 seconds (owned cleanup 4.077).
+> Premerge r17 is inconclusive under user-reported external VM host CPU
+> contention: terminal -15, owned cleanup 55.400871 seconds, no first-wave
+> marker or stdout. Census/plan/first-body markers arrived at 27.017/45.277/
+> 51.160 seconds. Analysis: `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-r16-r17-startup-attribution.json` and
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-r16-r17-artifact-identity.json`; all 315 input paths and bytes match.
+> This establishes no paired Wall claim. Fresh-cache r18 on the merged build
+> used CPU9 sampled 97% idle and exited zero at tick 455000/delta0 after the
+> 49-second SIGINT; owned cleanup completed in 49.801505 seconds. All 39
+> executable/DSO/dependency hashes matched the qualified control before and
+> after capture. Census/plan/body/first-wave markers arrived at 6.448/8.609/
+> 11.171/18.119 seconds. Receipt:
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache269-upstream-normal-pmu-r18-receipt.json`; captured JIT map
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache269-upstream-normal-pmu-r18-jit-maps/perf-10.map` contains
+> 1039 symbols. These are bounded instrumented partial-work observations.
+> R18 calibrated postwave self is private native v4 27.537%, synchronization
+> 14.423%, alias-range collection 8.248%, publication 4.493%, component entry
+> 4.256%, and ProcessTable promotion 3.891%. The qualified fsim DSOs together
+> account for 69.030%; the shared launcher is not the project CPU classifier.
+> All 158796 entries use combined alias/canonical admission; all 955 geometry
+> confirmations succeed, with zero checked, alias-only or canonical-only calls.
+> RAW/MONO drift is 66.273 ppm; the after reading is 0.832 seconds after stop.
+> There are 4705 samples, no lost records, and frequent throttle/unthrottle
+> records (4705/4704, 1.927 seconds of recognized intervals). Period weighting
+> is not a complete correction; rankings do not establish unbiased CPU or Wall.
+> Attribution and quality use the r18 `-attribution.json` and `-sample-quality.json`
+> artifacts. The next bounded action is exact fresh v4 object/disassembly
+> remapping; historical v3 intervals must not be reused.
+> Full canonical original/mixed parity, throughput and ratio qualification,
+> and hosted CI remain open; no new commit or push is authorized by this resume.
+
+> **Cache252 historical source checkpoint — 2026-10-04 08:58 UTC.**
 > The reviewed alias-leaf boundary classifier (`9f71e1c9`, with mechanical
 > compile repair `62050795` to live `simir_region_program.cpp` `81075e51`),
 > SV exact-full-width boundary planner (`72174a09`, candidate `df7eb80c`),
 > and compiler companion (`55f3401a`, candidate `36d2731f`) are integrated.
 > Release fsim/compiler targets built 767/767 and
-> `fsim.llvm.region-frontier` passed (`/tmp/fsim-alias-boundary-compiler-test-r1.log`,
+> `fsim.llvm.region-frontier` passed (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-alias-boundary-compiler-test-r1.log`,
 > SHA-256 `72d63391`). The new graph/app/failure companions have not yet run.
 > A separate fresh-cache canonical O2 startup diagnostic on this source
 > found zero preparation declines, but activation programs fell 422 to 410,
 > backend pool entries 26 to 20, and SV V2 runtimes remained 20/39 with zero
-> native member dispatches (`/tmp/fsim-alias-boundary-startup-route-r1/simulate.stderr`,
+> native member dispatches (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-alias-boundary-startup-route-r1/simulate.stderr`,
 > SHA-256 `0d03c8f5`). The six formerly rejected kernels now disappear before
 > preparation; this is an unresolved admission regression, not V2 route
 > success. The preceding 92/92 coherent gate predates this alias change and
@@ -24,12 +579,12 @@
 > wide-disjoint eligibility context, and the synthetic full-width native
 > route witness are integrated. Release all-target built 2066/2066 and the
 > exact coherent selector passed 92/92 on that semantic source
-> (`/tmp/fsim-host-index-context-coherent92/test.log`, SHA-256 `3c65fd60`).
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-host-index-context-coherent92/test.log`, SHA-256 `3c65fd60`).
 > Later profile-only probes found the six remaining 36-member V2 preparation
 > declines at `prepared-successor-mapping-invalid`. Every first failing edge
 > is an aliased 8-bit internal leaf whose access inventory is complete but
 > whose grouped and prepared successor maps are empty
-> (`/tmp/fsim-frontier-prepare-reason-startup-r3/simulate.stderr`, SHA-256
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-frontier-prepare-reason-startup-r3/simulate.stderr`, SHA-256
 > `eb5d0d19`). Source inspection attributes this to structural alias leaves
 > entering `kernel.internal_signals` while grouped-fanout publication excludes
 > aliased signals. The guard remains intact; this establishes a missing V2
@@ -46,12 +601,12 @@
 > it asserts actual native dispatch and strict parsed `(0,8)` fallback,
 > without claiming a parsed exact-full-width tuple. Release all-target built
 > 2066/2066 and the exact coherent 92-name selector passed 92/92
-> (`/tmp/fsim-host-index-context-coherent92/test.log`, SHA-256 `3c65fd60`).
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-host-index-context-coherent92/test.log`, SHA-256 `3c65fd60`).
 > The profile-only preparation-reason patch (`2c8eb049`) then built and
 > passed an observation smoke test. A separate fresh-cache, 15-second
 > cooperative startup diagnostic found the same six 36-member components
 > declining at `prepared-successor-mapping-invalid`
-> (`/tmp/fsim-frontier-prepare-reason-startup-r1/simulate.stderr`, SHA-256
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-frontier-prepare-reason-startup-r1/simulate.stderr`, SHA-256
 > `41861158`). V2 native dispatch on the canonical workload therefore remains
 > unproven; this diagnostic is not a full-parity or speed result. The earlier
 > owner-slot sample changed from 25.48% to 3.71% self across different
@@ -64,7 +619,7 @@
 > binding index (`2b728049`), and stack-local wide-disjoint eligibility
 > context (`1ff11476`) are integrated. The context source passed a Release
 > fsim build and 14/14 affected A4, native, alias, observation, blocking,
-> and failure gates (`/tmp/fsim-wide-disjoint-context-focused14-test-r1.log`,
+> and failure gates (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-wide-disjoint-context-focused14-test-r1.log`,
 > SHA-256 `653a359d`). The prior 92/92 coherent run predates these changes;
 > the parsed host full-width route companion is still pending.
 > A pre-context ThinLTO host/index executable is frozen at
@@ -72,7 +627,7 @@
 > SHA-256 `c83cd976`, binary `4e5ed7aa`). Its fresh-cache, 60-second
 > cooperative diagnostic still found six 36-member V2 preparation declines,
 > 20 SV runtimes, and zero native V2 member dispatches; A2 forwarding stayed
-> active (`/tmp/fsim-host-fullwidth-owner-slot-quiet-profile-r1/route-summary.json`).
+> active (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-host-fullwidth-owner-slot-quiet-profile-r1/route-summary.json`).
 > The sampled owner-slot self share was 3.71% versus 25.48% in an earlier,
 > different-prefix sample. That supports call-path attribution only, not a
 > throughput gain. The 06:55 checkpoint below is historical. Full canonical
@@ -85,10 +640,10 @@
 > inherited bindings (`registered_match=0`, `forked_match=1`). The post-fix
 > census finds 0 incomplete records among 85,559 processes, complete graph
 > access inventory, 450 structural candidates, and 1,249 candidate internal
-> signals (`/tmp/fsim-fork-access-postfix-census-r1/postfix-summary.json`).
+> signals (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-fork-access-postfix-census-r1/postfix-summary.json`).
 > Current Release all-target build passed 2116/2116 and the exact 92-name
 > coherent selector passed 92/92 in 203.47 seconds
-> (`/tmp/fsim-fork-access-coherent92/test.log`, SHA-256 `a3aea8fd`);
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-fork-access-coherent92/test.log`, SHA-256 `a3aea8fd`);
 > `fsim.application.fork` also passed separately. The ThinLTO executable
 > built successfully (binary SHA-256 `b660c46c`) but is not yet frozen as a
 > timing candidate. In the bounded post-fix run A2 forwarding remained
@@ -103,7 +658,7 @@
 > frontier cache key; strict internal subranges remain rejected. The reviewed
 > compiler positive/equivalence/negative companion passed. The pre-Slot source
 > built all Release targets (2087/2087) and passed the exact coherent 92-name
-> selector (92/92; `/tmp/fsim-scheduling-origin-fullwidth-coherent92/test.log`).
+> selector (92/92; `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-scheduling-origin-fullwidth-coherent92/test.log`).
 > The later Slot-domain accessor cache is the current live runtime source
 > (`simir_internal.hpp` `1100081f`, `simir_state.cpp` `0eaba4ca`): its targeted
 > build passed 1009/1009 and focused semantic selector passed 10/10.
@@ -135,7 +690,7 @@
 > sampled self costs were `ProcessTable::program_view` 7.57%,
 > `queue_static_next_delta` 7.47%, `PackedLogic4` storage initialization
 > 7.11%, and native executor resume 7.06%
-> (`/tmp/fsim-geometric-boundary-quiet-profile-r1/active-20s.caller.txt`).
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-geometric-boundary-quiet-profile-r1/active-20s.caller.txt`).
 > The gated frontier refusals now identify intentionally unsupported
 > internal partial sensitivity (offset 0, width 8), distinct from the
 > external ranged boundary newly admitted. The quiet diagnostic has no
@@ -151,11 +706,11 @@
 > scheduler/order/failure/allocation selector passed 18/18, the independent
 > compiler frontier and queue-growth failure suites passed, and the
 > deduplicated coherent selector passed 91/91 with only the then-failing
-> boundary app witness excluded (`/tmp/fsim-geometric-boundary-coherent91-test-r1.log`,
+> boundary app witness excluded (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-geometric-boundary-coherent91-test-r1.log`,
 > SHA-256 `6f6e910850771518e1d5bfd70a017dfb6061500c5ed528083b20d700185c99cc`).
 > The corrected app witness then passed separately, establishing passing
 > receipts for all 92 distinct selected names on unchanged production
-> (`/tmp/fsim-boundary-range-readiness-r4-app-test-r1.log`). It retains exact
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-boundary-range-readiness-r4-app-test-r1.log`). It retains exact
 > two-member native dispatch, off-slice non-dispatch, four-state and metadata
 > parity. The frontier cache key adds
 > `whole-any+read-only-boundary-ranges-v1`; global cache252, runtime schema71,
@@ -178,7 +733,7 @@
 > value-only recertification clear are integrated. The corrected native
 > invalidation witness passed, the reused all-target build passed 1937/1937,
 > and the exact current-source coherent selector passed 90/90
-> (`/tmp/fsim-observation-cache-alias-slab-recert-coherent90-test-r1.log`,
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-observation-cache-alias-slab-recert-coherent90-test-r1.log`,
 > SHA-256 `901332684f9e19bdc686095726f4b3ab7df317dfb262d37689419fe857b6bef6`).
 > Current runtime pins include `simir_internal.hpp` `d13c8caf`,
 > `simir_region_graph_runtime.cpp` `e0a71034`, and the native-observation
@@ -199,7 +754,7 @@
 
 > **Cache252 recycler coherent gate — 2026-10-04 03:02 UTC.**
 > The exact frozen 90-name selector passed 90/90 on the reviewed recycler and
-> immediate slot-reuse companion source (`/tmp/fsim-readiness-targeted-recycle-coherent90-test-r1.log`,
+> immediate slot-reuse companion source (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-readiness-targeted-recycle-coherent90-test-r1.log`,
 > SHA-256 `4a74f71aa2b2eeb527c3575ea1569bee7359d12ca6eeef4f306e03a9d21d3ded`).
 > The preceding all-target build, focused 20-name scheduler/native selector,
 > and companion runtime suite also pass. The existing ThinLTO candidate freeze
@@ -212,11 +767,11 @@
 > The reviewed scheduler change releases an exhausted readiness ticket at its
 > exact cursor-advancement site while retaining the SV phase-drain sweep. It
 > built across the reused all-target tree (2054/2054;
-> `/tmp/fsim-readiness-targeted-recycle-alltarget-build-r1.log`) and passed the
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-readiness-targeted-recycle-alltarget-build-r1.log`) and passed the
 > exact 20-name scheduler/Generic/SV/native focused selector (20/20;
-> `/tmp/fsim-readiness-targeted-recycle-focused20-test-r1.log`). The approved
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-readiness-targeted-recycle-focused20-test-r1.log`). The approved
 > immediate slot-reuse companion then built and passed its containing
-> `fsim.runtime` suite (`/tmp/fsim-readiness-targeted-recycle-companion-test-r1.log`).
+> `fsim.runtime` suite (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-readiness-targeted-recycle-companion-test-r1.log`).
 > No JIT ABI or cache identity changed. The prior compact-validator 90/90
 > receipt and ThinLTO candidate freeze predate this scheduler source change;
 > the frozen candidate's full canonical preflight remains incomplete after a
@@ -238,7 +793,7 @@
 > incomplete candidate preflight, not a correctness failure or paired Wall
 > result. A 20-second userspace cycle sample during that run localized this
 > interval mainly to observation preparation and readiness-ticket recycling
-> (`/tmp/fsim-compact-candidate-original-active-20s.callgraph.txt`). An
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-compact-candidate-original-active-20s.callgraph.txt`). An
 > opt-in no-task generated-entry screen measured the current validator at
 > about 85 microseconds for 65 members and 321 microseconds for 129 members
 > per call, with no baseline-relative claim; its test source was restored
@@ -248,11 +803,11 @@
 
 > **Cache252 compact-validator coherent gate — 2026-10-04 01:59 UTC.**
 > The compact runtime-pair validator passed the reused Release all-target
-> build (1930/1930; `/tmp/fsim-compact-validator-alltarget-build-r1.log`),
+> build (1930/1930; `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-compact-validator-alltarget-build-r1.log`),
 > the unprofiled 65/129-member Generic O0/O2 fixture (29.05 seconds;
-> `/tmp/fsim-compact-validator-large-unprofiled-test-r1.log`), and the exact
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-compact-validator-large-unprofiled-test-r1.log`), and the exact
 > current-source 90-name coherent selector (90/90, zero failures;
-> `/tmp/fsim-compact-validator-coherent90-test-r1.log`, SHA-256
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-compact-validator-coherent90-test-r1.log`, SHA-256
 > `39d8957151805bc24a21bed4e7216d1cea6d5c27d7ae6fc1f6d19b43a52aa06f`).
 > The strict warmed allocation gate passed separately on the mirror repair
 > before this codegen change, and passed again among the five affected focused
@@ -265,10 +820,10 @@
 > The reviewed compact runtime-pair validator and mechanical unused-overload
 > removal built in the reused Release tree. Five affected LLVM, native,
 > Generic-failure, strict-allocation, and region-route gates passed
-> (`/tmp/fsim-compact-validator-focused-test-r1.log`). The unprofiled
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-compact-validator-focused-test-r1.log`). The unprofiled
 > `fsim.application.native-frontier-v2-first-generic` fixture passed its
 > 65/129-member O0/O2 cases in 29.05 seconds
-> (`/tmp/fsim-compact-validator-large-unprofiled-test-r1.log`). A separate
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-compact-validator-large-unprofiled-test-r1.log`). A separate
 > profiled raw-IR diagnostic reduced the 65-member frontier from 507,260 to
 > 56,350 instructions and recorded 163.6 ms O2 optimization; the 129-member
 > frontier recorded 109,534 instructions and 315.4 ms O2 optimization. The
@@ -284,58 +839,58 @@
 > The reviewed A4 mirror role-source repair and COW-failure companion built
 > cleanly, and strict `fsim.application.native-frontier-steady-allocation`
 > passed its unchanged warmed width 1/65/129 O0/O2 zero-allocation windows
-> (`/tmp/fsim-a4-generic-bridge-route-test-r1.log`). A bounded bridge census
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a4-generic-bridge-route-test-r1.log`). A bounded bridge census
 > showed one actual A2 forwarding-member consumption after its saved SV
 > receipt; the test now credits either successful A2 or V2 native work while
 > retaining exact key and interpreter parity. The reused all-target build
-> passed 2119/2119 (`/tmp/fsim-a4-mirror-alltarget-build-r1.log`), followed by
+> passed 2119/2119 (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a4-mirror-alltarget-build-r1.log`), followed by
 > the exact 90-name coherent regression selector at 90/90 PASS
-> (`/tmp/fsim-cache252-coherent90-run-20261004/results.log`; selection proved
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache252-coherent90-run-20261004/results.log`; selection proved
 > by the pinned name list and CTest index file). The newly added independent
 > range-validation adversarial tests then passed on unchanged codegen via
 > `fsim.llvm.region-frontier`
-> (`/tmp/fsim-frontier-range-validator-baseline-test-r1.log`). A separate
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-frontier-range-validator-baseline-test-r1.log`). A separate
 > 120-second profiling run captured 65-member O2 raw IR and stopped in LLVM
 > InstCombine; it did not reach the 129-member O2 case
-> (`/tmp/fsim-generic129-o2-short-large-diagnostic-r1.log`). The long 129 O2
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-generic129-o2-short-large-diagnostic-r1.log`). The long 129 O2
 > qualification and paired throughput remain outstanding; no timing or
 > hosted-CI claim is made.
 
 > **Cache252 wide-role qualification checkpoint — 2026-10-04 01:05 UTC.**
 > Reviewed A4 owned-snapshot rebinding and its exact wide-slot ownership
 > companion are integrated; `fsim.runtime.a4_wide_slot_ownership` passed
-> (`/tmp/fsim-a4-snapshot-focused-test-r1.log`). The diamond, multioutput,
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a4-snapshot-focused-test-r1.log`). The diamond, multioutput,
 > wide failure/retry, and unequal-depth native-region capture helpers now
 > account for deferred private role rows; the clean
 > `fsim.application.native-region-route` gate passed 1/1
-> (`/tmp/fsim-a4-wide-passive-final-test-r1.log`, source SHA
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a4-wide-passive-final-test-r1.log`, source SHA
 > `594ebd546c8d9a6c047c056fc11c9249c328d54fd2c838257ccf7b5527931155`).
 > Strict steady allocation remains red: width 65 O0 now has zero allocations
 > with value-only rebind, but width 129 O0 window 0 has 45. A fixed-buffer
 > census and first-allocation LLDB stack locate repeated wide
 > `mirror_region_owner` materialization during private-output publication
-> (`/tmp/fsim-steady-width129-sites-test-r1.log`,
-> `/tmp/fsim-steady-width129-first112-lldb-r2.log`). The next bounded action is
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-steady-width129-sites-test-r1.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-steady-width129-first112-lldb-r2.log`). The next bounded action is
 > a reviewed reuse/ownership repair and unchanged strict gate. The previous
 > 86/90 selector predates these source changes; Generic 129-member O2
 > optimization remains incomplete. No coherent green or throughput claim.
 
 > **Cache252 allocation repair checkpoint — 2026-10-04 00:30 UTC.**
 > The reviewed Generic queue and A4 scratch changes built across all targets
-> with -j12 (2881/2881; `/tmp/fsim-a4-generic-alloc-batch-build-r1.log`).
+> with -j12 (2881/2881; `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a4-generic-alloc-batch-build-r1.log`).
 > The exact focused selector passed 10/11, including strict Generic 129-member
 > zero-allocation and five-cut failure gates; #289 reached a later diamond
 > assertion after its original O0/O2 native zero-allocation windows passed
-> (`/tmp/fsim-a4-generic-alloc-focused-r1.log`). The diamond helper read
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a4-generic-alloc-focused-r1.log`). The diamond helper read
 > passive roles while five private rows remained; a public read flushed all
 > five and produced the expected value/parity
-> (`/tmp/fsim-diamond-public-census-test-r1.log`). Strict steady-allocation
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-diamond-public-census-test-r1.log`). Strict steady-allocation
 > #290 passes width 1 but fails the first O0 width-65 window with 1,490
-> allocations (`/tmp/fsim-steady-recert-census-test-r1.log`). Its quiet
+> allocations (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-steady-recert-census-test-r1.log`). Its quiet
 > value-only rebind rejects a retained snapshot on wide_stage0 LAST, then
 > publishes a full generation-6 snapshot
-> (`/tmp/fsim-steady-rebind-guard-test-r2.log`,
-> `/tmp/fsim-steady-a4-binding-test-r1.log`). Temporary probes were restored
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-steady-rebind-guard-test-r2.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-steady-a4-binding-test-r1.log`). Temporary probes were restored
 > byte-exactly and their affected targets rebuilt cleanly. The prior 86/90
 > selector remains historical; Generic 129-member O2 optimization is still
 > incomplete. No coherent green, throughput, timing, or hosted-CI claim is
@@ -345,13 +900,13 @@
 > The clog2 startup-bank assertion was corrected from the measured zero
 > compiled processes/modules/cache entries, retaining its exact O0/O2
 > values and scheduling; `fsim.application.expressions` passed
-> (`/tmp/fsim-clog2-startup-bank-test-r1.log`). The masked-route control now
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-clog2-startup-bank-test-r1.log`). The masked-route control now
 > explicitly tests the legacy route with region admission disabled, while
 > default VHDL projected widths 1/65/129 require accepted native backend
 > completions and metadata parity. A reused -j12 build passed 826/826 and
 > `fsim.application.core_simulation` plus `fsim.application.vhdl_projected`
-> passed (`/tmp/fsim-341-route-split-build-r1.log`,
-> `/tmp/fsim-341-route-split-test-r1.log`). The preceding 86/90 selector is
+> passed (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-341-route-split-build-r1.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-341-route-split-test-r1.log`). The preceding 86/90 selector is
 > historical and has not been rerun on these edits. Strict warmed allocation
 > gates #289 (18 per O0 wave) and #456 (65 queue reserves) remain red; the
 > Generic 129-member O2 optimization gate remains incomplete. No coherent
@@ -359,10 +914,10 @@
 
 > **Cache252 bounded regression checkpoint — 2026-10-03 23:12 UTC.**
 > Current-source consumer relinking passed 2373/2373
-> (`/tmp/fsim-cache252-postfocused-alltarget-build-r1.log`). The reviewed A1
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache252-postfocused-alltarget-build-r1.log`). The reviewed A1
 > physical-net aggregate read witness was integrated and rebuilt; its existing
 > `sv_containers` case passed. The exact 90-name selector ran 86 passes and
-> four failures (`/tmp/fsim-cache252-coherent90-r1.log`): native-region route
+> four failures (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache252-coherent90-r1.log`): native-region route
 > #289 and Generic 129-ticket #456 violate strict warmed zero-allocation
 > checks; core simulation #341 has a masked-route counter premise; expressions
 > #350 expects compiled clog2 processes although O0 reports zero. Bounded
@@ -370,74 +925,74 @@
 > capacity 64, #289 to 18 A4 plane/copy allocations per measured O0 wave,
 > #341 to accepted projected-ticket native commits, and #350 to zero O0
 > compiled modules/processes/cache entries with correct output values
-> (`/tmp/fsim-coherent90-diagnostics-test-r1.log`,
-> `/tmp/fsim-masked-dispatch-diagnostics-test-r2.log`,
-> `/tmp/fsim-generic-queue-capacity-r2.log`,
-> `/tmp/fsim-native-route-alloc-sites-r2.log`). Temporary diagnostics were
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-coherent90-diagnostics-test-r1.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-masked-dispatch-diagnostics-test-r2.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-generic-queue-capacity-r2.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-native-route-alloc-sites-r2.log`). Temporary diagnostics were
 > restored byte-exactly. The Generic 129-member O2 optimization gate remains
 > incomplete after its approved 900-second cutoff. No coherent green,
 > throughput, timing, or hosted-CI claim is made.
 
 > **Cache252 focused checkpoint — 2026-10-03 22:36 UTC.**
 > The clean core prewrite and Generic future-sidecar gates passed
-> (`/tmp/fsim-core-generic-vhdl-companions-focused3-r1.log`). The selected
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-core-generic-vhdl-companions-focused3-r1.log`). The selected
 > VHDL projected-output guard passed the full projected application test,
 > including the foreign-cut and metadata witness
-> (`/tmp/fsim-vhdl-selected-reentry-r4-focused2-r1.log`). The blocking
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-vhdl-selected-reentry-r4-focused2-r1.log`). The blocking
 > immediate, precommit-failure, and later native-reentry tests passed together
 > after the scheduler-key/journal-ordinal fixture correction
-> (`/tmp/fsim-a2-blocking-reentry-r5-focused3-r1.log`). These are focused
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a2-blocking-reentry-r5-focused3-r1.log`). These are focused
 > receipts for certified subsets; unsupported cones and observed effects
 > remain on checked execution. The 90-name bounded coherent selector is
 > staged but unrun pending current-source consumer relinking. The Generic
 > 129-member O2 LLVM optimization gate is incomplete after its approved
 > 900-second cutoff; strict warmed allocation gates remain red at their last
 > measured counts. The J-E audit found no further safe deletion
-> (`/tmp/fsim-a3-a4-je-retirement-audit-addendum-r2-20261003.md`). No
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a3-a4-je-retirement-audit-addendum-r2-20261003.md`). No
 > coherent green, throughput, timing, or hosted-CI claim is made.
 
 > **Cache252 focused checkpoint — 2026-10-03 22:12 UTC.**
 > The clean core prewrite gate and Generic future-sidecar gate passed
-> (`/tmp/fsim-core-generic-vhdl-companions-focused3-r1.log`). The VHDL basic
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-core-generic-vhdl-companions-focused3-r1.log`). The VHDL basic
 > projected ticket and Logic9 gates retain their passing receipts, but the
 > new foreign-cut VHDL witness is red. A bounded trace shows root process 0
 > executes natively, then the retained middle process 1 declines at
 > `valid_outputs`: the whole-kernel scan treats root signal 1's pending update
 > as a collision even though the selected middle output has none
-> (`/tmp/fsim-vhdl-firstdecline-test-r1.log`). Diagnostic source was restored
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-vhdl-firstdecline-test-r1.log`). Diagnostic source was restored
 > byte-exactly; a selected-output guard repair is under review. Blocking
 > positive, precommit failure, and fused staging pass. The blocking reentry
 > probe now accepts both private rows after completion cancellation cleanup,
 > but its two-row safe-point cut is still missed by the current scheduler
-> ordering (`/tmp/fsim-blocking-reentry-postcancel-census-r1.log`,
-> `/tmp/fsim-blocking-reentry-helper-stage-census-r1.log`). A5 artifact and
+> ordering (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-blocking-reentry-postcancel-census-r1.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-blocking-reentry-helper-stage-census-r1.log`). A5 artifact and
 > startup-bank gates passed at their earlier focused integration checkpoint.
 > The Generic 129-member O2
 > gate remains incomplete after the approved 900-second LLVM optimization
 > cutoff, and strict allocation gates remain red at their last measured
 > counts. The J-E retirement audit found no additional safe deletion
-> (`/tmp/fsim-a3-a4-je-retirement-audit-addendum-r2-20261003.md`). The
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a3-a4-je-retirement-audit-addendum-r2-20261003.md`). The
 > 90-name bounded coherent selector is staged but unrun; there is no coherent
 > green, throughput, timing, or hosted-CI claim.
 
 > **Cache252 A2/A3/A5 focused checkpoint — 2026-10-03 21:33 UTC.**
 > VHDL projected cycle-ticket admission passed after the reviewed scheduling
 > precedence repair, and the existing VHDL Logic9 gate passed
-> (`/tmp/fsim-core-r10-vhdl-precedence-focused6-r1.log`,
-> `/tmp/fsim-vhdl-precedence-logic9-r1.log`). Blocking immediate and precommit
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-core-r10-vhdl-precedence-focused6-r1.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-vhdl-precedence-logic9-r1.log`). Blocking immediate and precommit
 > failure, fused staging, and Generic update-failure controls also passed that
 > focused run. Generic future-sidecar R2 built, but its existing interleaving
 > test is red: a root now executes natively before the foreign key, while the
 > old fixture expects checked word staging; its two failure controls passed
-> (`/tmp/fsim-generic-future-sidecar-focused3-r1.log`).
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-generic-future-sidecar-focused3-r1.log`).
 > Core prewrite R9 and the checked-control provider flag built, but the control
 > never advances either root resume counter at the safe point, so its planned
 > boundary update does not queue. The new blocking reentry test reached time 2
 > and observed one private root row followed by journal retirement before the
 > middle row; its required two-row cut was absent. Blocking immediate/failure
-> remained green (`/tmp/fsim-core-prewrite-reentry-focused4-r1.log`,
-> `/tmp/fsim-core-reentry-census-r1.log`,
-> `/tmp/fsim-blocking-reentry-gate-census-r1.log`). Diagnostic source was
+> remained green (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-core-prewrite-reentry-focused4-r1.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-core-reentry-census-r1.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-blocking-reentry-gate-census-r1.log`). Diagnostic source was
 > restored to pinned bytes. The Generic 129-member O2 optimization gate remains
 > incomplete after its approved 900-second cutoff; strict allocation gates
 > remain red at their last measured counts. No coherent green, timing, or CI
@@ -446,15 +1001,15 @@
 > **Cache252 A2/A3/A5 focused checkpoint — 2026-10-03 21:04 UTC.**
 > A5 Bit2-to-Logic4 startup CopyRegister and its runtime companion are
 > integrated. The reused affected-target build passed 1107/1107
-> (`/tmp/fsim-a5-vhdl-core-diagnostic-build-r3.log`); artifact phases and
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a5-vhdl-core-diagnostic-build-r3.log`); artifact phases and
 > constant-driver startup bank passed the exact focused gate
-> (`/tmp/fsim-a5-vhdl-core-focused4-r1.log`). Core runtime remains red in the
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a5-vhdl-core-focused4-r1.log`). Core runtime remains red in the
 > later stale-role witness; its reviewed successor is pending.
 > The blocking-failure role-baseline repair and VHDL cycle-ticket fixture R7
-> built 774/774 (`/tmp/fsim-a2-blocking-r7-vhdl-r7-build-r1.log`).
+> built 774/774 (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a2-blocking-r7-vhdl-r7-build-r1.log`).
 > Blocking positive, the authentic precommit allocation-failure cut, and the
 > shared Generic update-failure control passed 3/4 focused tests
-> (`/tmp/fsim-a2-blocking-r7-vhdl-r7-focused4-r1.log`). VHDL projected still
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a2-blocking-r7-vhdl-r7-focused4-r1.log`). VHDL projected still
 > fails: the standalone VPI-omitted run certifies a three-member component and
 > matches interpreter values and metadata, but physical ticket insertion,
 > elision, and direct-dispatch counters all remain zero. The default VPI-enabled
@@ -471,17 +1026,17 @@
 > **Cache252 A2/A3 diagnostic checkpoint — 2026-10-03 20:02 UTC.**
 > Generic logical components beyond 64, the parsed blocking precommit-failure
 > witness, and the core receipt correction are integrated. The reused six-target
-> build passed 875/875 (`/tmp/fsim-a3-generic-logical-core-blocking-build-r6.log`).
+> build passed 875/875 (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a3-generic-logical-core-blocking-build-r6.log`).
 > Its exact focused run passed 2/6: parsed blocking positive and the scheduler
 > compact-ticket test passed; Generic native consumption, the later core
 > stale-role witness, the blocking failure cut, and strict warmed Generic
 > zero-allocation remained red
-> (`/tmp/fsim-a3-generic-logical-core-blocking-focused6-r1.log`).
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a3-generic-logical-core-blocking-focused6-r1.log`).
 > Bounded diagnostics found that Generic native admission compared its 64-event
 > staging frame with a 65-event layout maximum, so every member fell back to
 > checked execution. The reviewed bound correction (`d58690a7`) and core
 > stale-role test correction (`c7d7c933`) have since built successfully
-> (`/tmp/fsim-a3-generic-framecap-core-r7-build-r1.log`); their focused run is
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a3-generic-framecap-core-r7-build-r1.log`); their focused run is
 > in progress. The blocking fault fixture did not capture its root-only row
 > cut; its repair remains under review. The strict Generic allocation gate is
 > still red; the earlier measured count was 65 allocations from queue growth.
@@ -491,20 +1046,20 @@
 > **Cache252 A2/A3 focused checkpoint — 2026-10-03 19:11 UTC.**
 > The driverless blocking alias, shared absence-aware fixture helper, and
 > exact core receipt assertions are integrated. The reused all-target build
-> passed 2432/2432 (`/tmp/fsim-v252-alias-core-helper-all-build-r1.log`).
+> passed 2432/2432 (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-v252-alias-core-helper-all-build-r1.log`).
 > Focused validation passed 5/7: source manifest, A4 state/wide/rebase, and
 > A2 role journal pass; core runtime and parsed blocking positive remain red
-> (`/tmp/fsim-v252-alias-core-helper-focused7-r1.log`). Core's new
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-v252-alias-core-helper-focused7-r1.log`). Core's new
 > after-foreign receipt flag is false while the authentic child receipt is
 > captured, retired, and checked exactly once. Parsed blocking now certifies
 > and enters forwarding but its first callback sees bank.active=0 before
 > retirement, so publication declines without private rows
-> (`/tmp/fsim-v252-core-blocking-cut-diag-test-r1.log`,
-> `/tmp/fsim-v252-blocking-publish-stage-test-r2.log`). The diagnostic source
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-v252-core-blocking-cut-diag-test-r1.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-v252-blocking-publish-stage-test-r2.log`). The diagnostic source
 > is restored byte-exact; the next qualifying build must recompile it.
 > Generic 65/129 auto-sizing and VHDL Logic9 passed focused gates before this
-> alias batch (`/tmp/fsim-a3-generic-auto-counter-test-r1.log`,
-> `/tmp/fsim-v252-vhdl-ufringe-test-r1.log`). The strict warmed Generic
+> alias batch (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a3-generic-auto-counter-test-r1.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-v252-vhdl-ufringe-test-r1.log`). The strict warmed Generic
 > 129-ticket gate remains red at 65 allocations from one-entry queue growth;
 > older native/steady allocation gates last measured 18/46. No coherent
 > post-alias full-suite, throughput, timing, or hosted-CI result is claimed.
@@ -513,20 +1068,20 @@
 > Single-root DAG, arbitrary-root forest, readiness groups beyond 64 members,
 > quiet value-only A4 rebinding (`72e07e7f`), and the physical grouped-ticket
 > pool (`1ccac4ca`) are integrated. The reused all-target build passed
-> 2865/2865 (`/tmp/fsim-a3-pool-a4-fixture-all-build-r1.log`). The current
+> 2865/2865 (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a3-pool-a4-fixture-all-build-r1.log`). The current
 > focused selector passed 10/12: core runtime including pool coverage, A4
 > state/Logic9/wide/rebase, observation invalidation, owned-driver demotion,
 > A2 applied-prefix, scheduler group failure, and source manifest pass
-> (`/tmp/fsim-a3-pool-a4-fixture-focused12.log`). Only the two strict
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a3-pool-a4-fixture-focused12.log`). Only the two strict
 > allocation gates fail. Before this batch, bounded raw counts found 18 C++
 > allocations in the first O0 native-region window and 46 in the first width-1
-> steady-frontier window (`/tmp/fsim-a4-native-region-alloc-diag-test.log`,
-> `/tmp/fsim-a4-quiet-steady-raw-test.log`); the current focused run did not
+> steady-frontier window (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a4-native-region-alloc-diag-test.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a4-quiet-steady-raw-test.log`); the current focused run did not
 > recount them. The steady fixture now executes its hook-policy control before
 > the allocation loop, and that control passed. A pre-pool diagnostic selector
 > passed 80/83, including random DAG on quiet-rebind source; its VHDL
 > compiled-module-count fixture still awaits the reviewed correction
-> (`/tmp/fsim-a3-a4-quiet-rebind-diagnostic83.log`). The next bounded batch is
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a3-a4-quiet-rebind-diagnostic83.log`). The next bounded batch is
 > the VHDL count correction plus reviewed pool/native companions, followed by
 > their exact gates. Native cache v251, compiled-HIR producer 9, and artifact
 > schema 71 are unchanged. No coherent post-A2 green, throughput, or hosted-CI
@@ -537,15 +1092,15 @@
 > narrow pure-cone admission, single-root fanout, and preallocated wide role
 > seeds are integrated without a native-cache, compiled-HIR, or artifact-schema
 > bump. The reused all-target build passed 1920/1920
-> (`/tmp/fsim-a2-width-fanout-wide-reset-build-r2.log`). Its initial affected
-> selector passed 15/20 (`/tmp/fsim-a2-width-fanout-wide-reset-focused20-r1.log`);
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a2-width-fanout-wide-reset-build-r2.log`). Its initial affected
+> selector passed 15/20 (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a2-width-fanout-wide-reset-focused20-r1.log`);
 > the repaired six-case selector then passed four cases, including fanout and
-> both A4 state/ownership cases (`/tmp/fsim-a2-six-fixture-repair-focused-r1.log`).
+> both A4 state/ownership cases (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a2-six-fixture-repair-focused-r1.log`).
 > The expanded force/deposit app witness passed after capturing the interpreter's
 > actual child scheduler key, and the width 1/64/65/129/256/1024 X/Z and
 > boundary-deposit role-journal witness passed after accounting for resolved-wire
-> startup LAST=Z (`/tmp/fsim-a2-interpreter-width-repair-focused2.log`,
-> `/tmp/fsim-a2-width-z-baseline-test.log`). These are split passing receipts
+> startup LAST=Z (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a2-interpreter-width-repair-focused2.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-a2-width-z-baseline-test.log`). These are split passing receipts
 > for 19 of those 20 names; `fsim.runtime` remains red at its unequal-depth
 > join route assertion. The earlier coherent 78/78 receipt predates A2. No
 > throughput or hosted-CI result is claimed.
@@ -558,8 +1113,8 @@
 > build passed 2114/2114, and the focused A4/consumer selector passed 12/12,
 > including the new fault-sweep witness, existing A4 state and owner tests,
 > native sync/boundary, steady allocation, core runtime, and source-package
-> manifest (`/tmp/fsim-cache251-a4-checked-rebase-full-build-r1.log`,
-> `/tmp/fsim-cache251-a4-checked-rebase-focused-r1.log`).
+> manifest (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache251-a4-checked-rebase-full-build-r1.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache251-a4-checked-rebase-focused-r1.log`).
 > `git diff --check` passed. This is focused qualification; the coherent 78/78
 > receipt below predates this A4 source change. No coherent 79-test, throughput,
 > or hosted-CI result is claimed.
@@ -574,10 +1129,10 @@
 > 3/3 and one coherent selected gate passed 78/78, including source-package
 > manifest, random DAG, steady allocation, SystemC, compiler frontier, and
 > compact-ticket failure witnesses
-> (`/tmp/fsim-cache251-generic-compact-full-build-r1.log`,
-> `/tmp/fsim-cache251-generic-compact-repair6-full-build-r1.log`,
-> `/tmp/fsim-cache251-generic-compact-repair3-r5.log`,
-> `/tmp/fsim-cache251-generic-compact-consolidated78-r1.log`).
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache251-generic-compact-full-build-r1.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache251-generic-compact-repair6-full-build-r1.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache251-generic-compact-repair3-r5.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache251-generic-compact-consolidated78-r1.log`).
 > `git diff --check` passed. Ordinary routes remain for ineligible components;
 > no throughput or hosted-CI result is claimed. The next major A2 dependency
 > remains default whole-cone register dataflow with private materialization.
@@ -589,12 +1144,12 @@
 > artifact schema 71 remain unchanged. The borrowed-process fixture lifetime
 > and SV net-owner setup were corrected without weakening the native gates.
 > The reused-tree all-target build passed 2101/2101
-> (`/tmp/fsim-cache251-parked-effect-full-build-r2.log`); focused Generic and
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache251-parked-effect-full-build-r2.log`); focused Generic and
 > runtime tests passed 6/6, then one coherent selected gate passed 76/76,
 > including the source-package manifest, random DAG, steady allocation,
 > mutation, SystemC, and compiler frontier
-> (`/tmp/fsim-cache251-parked-effect-focused-r1.log`,
-> `/tmp/fsim-cache251-parked-effect-consolidated76-r1.log`).
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache251-parked-effect-focused-r1.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache251-parked-effect-consolidated76-r1.log`).
 > `git diff --check` passed. This is the latest one-shot selected-source
 > receipt; no throughput or hosted-CI result is claimed.
 >
@@ -614,8 +1169,8 @@
 > and VHDL occurrence-sharing changes were integrated. The official
 > source-package manifest contains 2405 ordered files and 29 exclusions;
 > its CTest gate and the reused-tree all-target build passed
-> (`/tmp/fsim-cache251-final-source-manifest-test.log`,
-> `/tmp/fsim-cache251-full-build-r4.log`, 1933/1933).
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache251-final-source-manifest-test.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache251-full-build-r4.log`, 1933/1933).
 >
 > The focused selector first passed 10/12; the two failures were fixture
 > premises, repaired without changing production semantics. Executor metadata
@@ -623,10 +1178,10 @@
 > expect their authentic sentinel layout owner; the region-disabled checked
 > path verifies its queued Update scratch and exact values instead of native
 > packed pending rows. The three affected Generic tests then passed 3/3
-> (`/tmp/fsim-cache251-generic-three-checked-stage-test.log`). The other 60
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache251-generic-three-checked-stage-test.log`). The other 60
 > consolidated cases passed 60/60, including random DAG, steady allocation,
 > mutation, SystemC, and runtime gates
-> (`/tmp/fsim-cache251-consolidated-remaining-r1.log`). Together with the
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache251-consolidated-remaining-r1.log`). Together with the
 > nine unchanged focused passes, these are split current-source receipts for
 > all 72 selected cases, not a one-shot 72/72 run. `git diff --check` passed.
 > No throughput result is claimed; cache246 below remains the latest fully
@@ -636,33 +1191,33 @@
 > cache schema is v250; compiled-HIR producer 9 and artifact schema 71 remain.
 > The official source-package manifest gate passed with 2401 owned files and
 > 29 exclusions. The initial all-target build passed 1870/1870
-> (`/tmp/fsim-cache250-full-build-r4-20261003.log`). Startup Generic frontier
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache250-full-build-r4-20261003.log`). Startup Generic frontier
 > admission and generated zero-mask preflight defects were fixed; the O0/O2
-> positive and compiler gates passed (`/tmp/fsim-cache250-generic-zero-mask-positive-r1.log`,
-> `/tmp/fsim-cache250-generic-zero-mask-compiler-r1.log`). SystemC and restored
+> positive and compiler gates passed (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache250-generic-zero-mask-positive-r1.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache250-generic-zero-mask-compiler-r1.log`). SystemC and restored
 > elaboration gates passed; the scheduler pre-pop repair, 130-task ordering,
 > cold suffix failure, steady allocation, and Generic positive gates passed
 > their focused checks. The separate-input O0/O2 Generic allocation sweep
 > passed with its actual one-task borrowed frontier and ordinary checked
-> suffix (`/tmp/fsim-cache250-one-task-shape-test.log`).
+> suffix (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache250-one-task-shape-test.log`).
 >
 > The host error channel and direct input-plane, forwarding, prepared-output,
 > and direct-ready failure witnesses passed. The separate-input and shared-input
 > O0/O2 Generic allocation sweeps passed, including propagated failures,
 > exact-key retries, and the optional recovered reservation cut
-> (`/tmp/fsim-cache250-backend-companion-runtime-test-r1.log`,
-> `/tmp/fsim-cache250-shared-r5-test.log`). The coherent all-target host build
-> passed 2010/2010 (`/tmp/fsim-cache250-final-host-full-build-r1.log`). The
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache250-backend-companion-runtime-test-r1.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache250-shared-r5-test.log`). The coherent all-target host build
+> passed 2010/2010 (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache250-final-host-full-build-r1.log`). The
 > last one-shot consolidated selector passed 69/71
-> (`/tmp/fsim-cache250-consolidated-r2.log`). Its two test-only stale fallback
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache250-consolidated-r2.log`). Its two test-only stale fallback
 > expectations were repaired and passed separately: Generic runtime #441
 > proved propagated failure, unchanged state, exact-key retry, and native parity
-> (`/tmp/fsim-cache250-final-two-focused-r1.log`); native-region-route #289
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache250-final-two-focused-r1.log`); native-region-route #289
 > proved the full cut sweep and runtime-level same-deadline retries while
 > preserving public Simulation fatal-latch semantics
-> (`/tmp/fsim-cache250-native-route-r3-test.log`). All other direct consumers
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache250-native-route-r3-test.log`). All other direct consumers
 > of the changed allocation interposer plus ordinary Generic runtime passed
-> 19/19 (`/tmp/fsim-cache250-interposer-remaining-19-r1.log`). This is a split
+> 19/19 (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache250-interposer-remaining-19-r1.log`). This is a split
 > current-source qualification, not a one-shot consolidated 71/71 or throughput
 > claim. Cache246 below remains the latest fully passing one-shot 55/55 receipt.
 
@@ -671,16 +1226,16 @@
 > forwarding, SystemC callback witness, and narrow A4 disjoint-owner changes
 > are integrated. Native cache schema is v249, compiled-HIR producer revision
 > is 9, and artifact schema remains 71. The reused Release tree passed its
-> all-target build (`/tmp/fsim-cache249-full-build-r5-20261002.log`,
+> all-target build (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache249-full-build-r5-20261002.log`,
 > 1763/1763). The initial focused selector passed compiled-HIR cache,
 > frontier, and SV containers (3/6); corrected startup-bank and A4 ownership
-> gates then passed individually (`/tmp/fsim-cache249-startup-equal-z-test-20261002.log`,
-> `/tmp/fsim-cache249-a4-stimulus-test.log`). The SystemC executor has no
+> gates then passed individually (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache249-startup-equal-z-test-20261002.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache249-a4-stimulus-test.log`). The SystemC executor has no
 > certified signal-access binding, so its opaque callback boundary remains
 > checked; the test's stop/resume receipt assertion is being corrected to that
 > route. The VHDL cycle gate passed with a
 > homogeneous unresolved native-positive companion and the existing mixed
-> resolved checked-parity route (`/tmp/fsim-cache249-vhdl-native-fixture-test.log`).
+> resolved checked-parity route (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache249-vhdl-native-fixture-test.log`).
 > No cache249 consolidated or throughput
 > claim is recorded. Cache246 below remains the latest fully passing
 > consolidated receipt.
@@ -689,15 +1244,15 @@
 > cache schema v248 contains the frontier V2 codegen/ABI and bounded J-E
 > static-fuser replacement; artifact schema71 and compiled-HIR producer8 are
 > unchanged. The reused build tree passed its full all-target build
-> (`/tmp/fsim-cache248-v2-je-full-build-resume6-20261002.log`), and the
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache248-v2-je-full-build-resume6-20261002.log`), and the
 > official source-package generator and manifest gate passed with 2391 owned
 > files and 29 exclusions. After the initial 6/15 focused result, the exact
 > prior consolidated selector plus new V2 tests, excluding native-region-route,
-> passed 64/65 (`/tmp/fsim-cache248-consolidated-incomplete-65-20261002.log`).
+> passed 64/65 (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache248-consolidated-incomplete-65-20261002.log`).
 > Its sole stale-boundary test failure was an executor-only sampling assumption:
 > the forwarded root reexecuted at fresh native scheduler keys with exact final
 > parity; the repaired `fsim.runtime` focused gate passed
-> (`/tmp/fsim-cache248-final-two-fixture-focused-20261002.log`). J-E cache,
+> (`/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache248-final-two-fixture-focused-20261002.log`). J-E cache,
 > frontier V2, random DAG, steady allocation, mutation, preparation, retained
 > stop/resume, Logic9, adapter, boundary, and manifest gates passed in that
 > selector. Native-region-route remains open at a VHDL cycle fixture assumption
@@ -715,9 +1270,9 @@
 > `build/batch188-release-clang22-final` completed its incremental all-target
 > build (1860/1860), focused frontier/schema/ABI/runtime gate (5/5), and fresh
 > consolidated selector (55/55, 42.00 s). Receipts:
-> `/tmp/fsim-cache246-full-build-20261002.log`,
-> `/tmp/fsim-cache246-focused5-20261002.log`, and
-> `/tmp/fsim-cache246-consolidated55-20261002.log`. The native runtime
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache246-full-build-20261002.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache246-focused5-20261002.log`, and
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache246-consolidated55-20261002.log`. The native runtime
 > adapter/provider and scheduler target-round addition remain in scratch
 > validation; no throughput result is claimed for this compiler batch.
 
@@ -732,9 +1287,9 @@
 > checks passed 5/5, and the exact serial consolidated gate passed 55/55 in
 > 72.68 seconds. The first A4 test run exposed a width-one fixture helper
 > overrun; bounding its phase digits to the signal width made the test pass
-> without a production change. Receipts: `/tmp/fsim-cache245-full-build-20261002.log`,
-> `/tmp/fsim-cache245-focused5-final-20261002.log`, and
-> `/tmp/fsim-cache245-consolidated55-20261002.log`. This is correctness
+> without a production change. Receipts: `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache245-full-build-20261002.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache245-focused5-final-20261002.log`, and
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache245-consolidated55-20261002.log`. This is correctness
 > qualification; no paired throughput claim was made.
 
 > **Qualified cache244 checkpoint — 2026-10-02 16:35 UTC.** Direct
@@ -746,9 +1301,9 @@
 > `OperationList` copies; the corrected copy path now retries successfully.
 > The reused Release tree built 2288/2288, focused validation passed 7/7,
 > and the exact serial consolidated gate passed 53/53 in 67.02 seconds.
-> Receipts: `/tmp/fsim-cache244-full-final-build.log`,
-> `/tmp/fsim-cache244-focused7.log`, and
-> `/tmp/fsim-cache244-consolidated53.log`. This is correctness qualification;
+> Receipts: `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache244-full-final-build.log`,
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache244-focused7.log`, and
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-cache244-consolidated53.log`. This is correctness qualification;
 > no paired throughput claim was made.
 
 > **Qualified cache243 checkpoint — 2026-10-02 15:33 UTC.** Unresolved
@@ -809,20 +1364,20 @@
 > Validation: full Release build passed; the first full CTest run passed
 > 448/454. The stale ABI inventory and its dependent gates subsequently passed
 > a 23/23 selected rerun. The three remaining package-dependent gates passed
-> using an exact intended-source export at `/tmp/fsim-ci-prep-source-20260929`,
+> using an exact intended-source export at `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-ci-prep-source-20260929`,
 > leaving protected pre-existing `.aws` untouched. All 16 other offline-closure
 > prerequisites had passed in the full run before the aggregate was checked.
 > The clean manifest contains 2,135 ordered files. Focused Release passed 5/5
 > and focused Debug passed 5/5. The Tcl-disabled build and all four selected
 > tests passed.
 > This is combined local evidence, not a fresh 454/454 run or hosted Windows
-> confirmation. Logs are `/tmp/fsim-ci-prep-{release,debug,tcl-off}-*.log` and
-> `/tmp/fsim-ci-prep-clean-{uvm,offline-closure}.log`.
+> confirmation. Logs are `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-ci-prep-{release,debug,tcl-off}-*.log` and
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-ci-prep-clean-{uvm,offline-closure}.log`.
 >
 > Preparation scope is 93 files: retained performance work, CI repairs, and
 > this report. The `.orig` backup, generated graph/cache files, and `phase.fst`
 > remain excluded. The commit message is prepared in
-> `/tmp/fsim-prepared-commit-message.txt`; no commit or push has been made.
+> `/home/colin/projects/fsim/.local-artifacts/simulation-performance/fsim-prepared-commit-message.txt`; no commit or push has been made.
 > Retain the documented aggregate-stage allocation-exception caveat. The
 > next action is user review and commit/push authorization, with no further
 > performance iteration before review.

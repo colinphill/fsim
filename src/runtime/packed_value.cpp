@@ -667,23 +667,21 @@ void PackedLogic4::initialize_storage_from(const PackedLogic4& other,
     }
 }
 
-PackedLogic4::PackedLogic4(const PackedLogic4& other)
-    : width_and_logic9_(other.width_and_logic9_ & ~plane_backing_mask)
+void PackedLogic4::copy_construct_slow(const PackedLogic4& other)
 {
     initialize_storage_from(other,
         other.has_external_planes() || other.uses_inline_storage()
             ? std::shared_ptr<WideStorage> { } : other.wide_storage());
 }
 
-PackedLogic4::PackedLogic4(PackedLogic4&& other) noexcept
-    : width_and_logic9_(other.width_and_logic9_ & ~plane_backing_mask)
+void PackedLogic4::move_construct_slow(PackedLogic4&& other) noexcept
 {
     initialize_storage_from(other,
         other.has_external_planes() || other.uses_inline_storage()
             ? std::shared_ptr<WideStorage> { } : std::move(other.wide_storage()));
 }
 
-PackedLogic4& PackedLogic4::operator=(const PackedLogic4& other)
+PackedLogic4& PackedLogic4::copy_assign_slow(const PackedLogic4& other)
 {
     if (this == &other) {
         return *this;
@@ -762,7 +760,7 @@ PackedLogic4& PackedLogic4::operator=(const PackedLogic4& other)
     return *this = std::move(replacement);
 }
 
-PackedLogic4& PackedLogic4::operator=(PackedLogic4&& other) noexcept
+PackedLogic4& PackedLogic4::move_assign_slow(PackedLogic4&& other) noexcept
 {
     if (this == &other) {
         return *this;
@@ -808,11 +806,6 @@ PackedLogic4& PackedLogic4::operator=(PackedLogic4&& other) noexcept
         other.has_external_planes() || other.uses_inline_storage()
             ? std::shared_ptr<WideStorage> { } : std::move(other.wide_storage()));
     return *this;
-}
-
-PackedLogic4::~PackedLogic4()
-{
-    destroy_active_storage();
 }
 
 void PackedLogic4::bind_plane_backing(

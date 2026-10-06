@@ -27,6 +27,8 @@ Interpreter::Impl::Impl(
     , root_seed(seed)
     , process_profile_enabled(std::getenv("FSIM_PROFILE_PROCESSES") != nullptr)
     , update_profile_enabled(std::getenv("FSIM_PROFILE_UPDATES") != nullptr)
+    , commit_signal_profile_enabled(
+          std::getenv("FSIM_PROFILE_COMMIT_SIGNALS") != nullptr)
     , native_phase_profile_enabled(
           std::getenv("FSIM_PROFILE_NATIVE_PHASE") != nullptr)
     , native_process_count_profile_enabled(

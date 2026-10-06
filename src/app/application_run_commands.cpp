@@ -246,6 +246,11 @@ int run_built_project(
 #endif
     const bool profile_phases = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
     const auto simulation_setup_begin = std::chrono::steady_clock::now();
+    // Hidden fused nets need no published events when nothing outside the
+    // SimIR processes records them.
+    built.cone_fusion = engine != SimulationEngine::debug
+        && !built.code_coverage_enabled
+        && !(trace_config.run.trace_file && trace_config.run.trace_enabled);
     Simulation simulation(
         std::move(built),
         config.run.max_deltas,
@@ -280,7 +285,7 @@ int run_built_project(
     const BuiltinStdoutFlush stdout_flush {
         sink == SimulationOutputSink::builtin_stdout
     };
-    simulation.set_report_hook(
+    simulation.set_trusted_text_report_hook(
         [&output, sink](
             const runtime::simir::ProcessId,
             const std::string_view message,

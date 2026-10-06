@@ -2459,6 +2459,12 @@ void Simulation::Impl::setup_execution(
                     = compile_all_processes
                     || (process_filter
                         && process_filter->contains(runtime_id));
+                if (runtime::simir::InterpreterProgramAccess::fusion_dormant(
+                        *interpreter, runtime_id)) {
+                    // A fused cone member never executes; its program only
+                    // feeds observation-time materialization.
+                    continue;
+                }
                 if (data_only_startup_write && !explicitly_selected) {
                     ++retained_process_count;
                     retained_operation_count
@@ -2642,11 +2648,6 @@ void Simulation::Impl::setup_execution(
                                   << profile << '\n';
                     }
                 }
-                if (!compile_all_processes && process.operations.size() > maximum_jit_process_operations) {
-                    ++retained_process_count;
-                    retained_operation_count += process.operations.size();
-                    continue;
-                }
                 const bool dynamic_wait_loop
                     = application_detail::has_dynamic_wait_backedge(process);
                 const bool recurring_process
@@ -2657,6 +2658,15 @@ void Simulation::Impl::setup_execution(
                             return runtime::simir::operation_holds<
                                 runtime::simir::WaitSensitivity>(operation);
                         });
+                // The size cap targets oversized one-off bodies. A recurring
+                // body (for example a fused combinational cone) executes on
+                // every activation, so it uses the background tier instead.
+                if (!compile_all_processes && !recurring_process
+                    && process.operations.size() > maximum_jit_process_operations) {
+                    ++retained_process_count;
+                    retained_operation_count += process.operations.size();
+                    continue;
+                }
                 if (selective_large_design_compilation
                     && !recurring_process
                     && process.operations.size()

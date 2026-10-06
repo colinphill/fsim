@@ -4,6 +4,7 @@
 #include "fsim/runtime/simir_region_graph.hpp"
 #include "runtime_fused_staging_failure_support.hpp"
 #include "../../src/runtime/simir_internal.hpp"
+#include "../../src/runtime/simir_storage_census_internal.hpp"
 
 #include <algorithm>
 #include <array>
@@ -365,6 +366,54 @@ using fsim::tests::runtime::staging_failure_support::end_allocation_count;
 using fsim::tests::runtime::staging_failure_support::require;
 using fsim::tests::runtime::staging_failure_support::
     set_allocation_failure_observer;
+
+void check_operation_body_payload_census()
+{
+    OperationList operations {
+        Operation { Concatenate {
+            0U, std::vector<RegisterId> { 1U, 2U }, 64U } },
+        Operation { WaitOn {
+            std::vector<SignalId> { 3U, 4U },
+            std::vector<EdgeKind> { EdgeKind::any, EdgeKind::posedge } } },
+        Operation { ReadSignal { 0U, 5U } },
+        Operation { LoadStringConstant { 0U, "text" } },
+    };
+    const OperationList shared = operations;
+    const auto& source = operations;
+    const auto* const concatenate
+        = operation_get_if<Concatenate>(&source[0U]);
+    const auto* const wait = operation_get_if<WaitOn>(&source[1U]);
+    require(concatenate != nullptr && wait != nullptr,
+        "payload census fixture retains its nested-vector operations");
+
+    auto overridden = operations;
+    overridden.replace(0U, Operation { ReadSignal { 0U, 5U } });
+    require(overridden.shares_body_with(operations),
+        "an instruction override preserves its immutable shared body");
+    storage_census_detail::UniqueOperationBodyStorageCensus census;
+    // The first facade differs from its immutable body. Counting facade
+    // iteration would lose the canonical Concatenate's nested operand vector.
+    census.add(overridden);
+    census.add(operations);
+    census.add(shared);
+    require(census.body_references == 3U && census.unique_bodies.size() == 1U,
+        "COW-shared OperationLists and their overrides contribute one unique body");
+    const auto& body = census.unique_bodies.begin()->second;
+    const auto expected_vector_bytes
+        = concatenate->operands.capacity() * sizeof(RegisterId)
+        + wait->signals.capacity() * sizeof(SignalId)
+        + wait->edges.capacity() * sizeof(EdgeKind);
+    require(body.operation_count == operations.size()
+            && body.operation_capacity == operations.capacity(),
+        "payload census retains the outer body size and capacity");
+    require(body.boxed_group_allocations == 2U
+            && body.boxed_group_object_bytes
+                == sizeof(SignalOperationGroup) + sizeof(StringOperationGroup),
+        "payload census accounts exact boxed group object sizes");
+    require(body.nested_vector_allocations == 3U
+            && body.nested_vector_capacity_bytes == expected_vector_bytes,
+        "payload census counts direct nested vector capacity once");
+}
 
 void check_alias_observation_invalidation_is_allocation_free()
 {
@@ -1692,6 +1741,7 @@ void check_dynamic_wait_state_is_lazy_and_first_arm_is_transactional()
 int main()
 {
     try {
+        check_operation_body_payload_census();
         check_alias_observation_invalidation_is_allocation_free();
         check_observation_query_hook_is_not_invoked_during_snapshot();
         check_completed_callback_observation_cache();

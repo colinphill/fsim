@@ -3282,6 +3282,7 @@ void Interpreter::deposit_container_object_element(
             aliases,
             [](const auto& alias) { return alias.has_value(); })) {
         const bool changed = target.initial_value.elements[ordinal] != value;
+        impl_->invalidate_container_aggregate_extract(object);
         target.initial_value.elements[ordinal] = std::move(value);
         if (changed) {
             if (impl_->container_value_reference_exposed[object] != 0U) {

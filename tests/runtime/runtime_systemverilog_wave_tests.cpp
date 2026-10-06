@@ -3102,6 +3102,7 @@ LargeSelectiveFanoutRun run_large_selective_fanout_case(
     constexpr ProcessId last_reader_id
         = static_cast<ProcessId>(reader_count - 1U);
     constexpr ProcessId clock_id = last_reader_id + 1U;
+    constexpr ProcessId anchor_writer_id = clock_id + 1U;
 
     ScopedEnvironment kernel_enabled {
         "FSIM_ENABLE_SV_REGION_KERNEL", grouped ? "1" : "0" };
@@ -3129,6 +3130,8 @@ LargeSelectiveFanoutRun run_large_selective_fanout_case(
         "a3.selective_first_trigger", PackedLogic4(1U, Logic4::zero) });
     const auto second_trigger = interpreter.add_signal({
         "a3.selective_second_trigger", PackedLogic4(1U, Logic4::zero) });
+    const auto dormant_trigger = interpreter.add_signal({
+        "a3.selective_dormant_trigger", PackedLogic4(1U, Logic4::zero) });
     std::vector<SignalId> outputs;
     outputs.reserve(reader_count);
     for (std::size_t index = 0U; index < reader_count; ++index) {
@@ -3178,6 +3181,24 @@ LargeSelectiveFanoutRun run_large_selective_fanout_case(
     require(interpreter.add_process(std::move(clock)) == clock_id,
         "selective fanout clock remains outside the reader component");
 
+    // A real dormant writer connects the readers through writer-reader edges;
+    // the two active trigger groups still contain only their 65/64 readers.
+    Process anchor_writer;
+    anchor_writer.id = anchor_writer_id;
+    anchor_writer.name = "a3_selective_anchor_writer";
+    anchor_writer.scheduling_domain = ProcessSchedulingDomain::systemverilog;
+    anchor_writer.initialize = false;
+    anchor_writer.register_count = 1U;
+    anchor_writer.static_sensitivity = { { dormant_trigger, EdgeKind::any } };
+    anchor_writer.driver_regions = { { anchor, 0U, 0U, true } };
+    anchor_writer.operations = {
+        ReadSignal { 0U, dormant_trigger },
+        WriteUpdate { anchor, 0U, SignalUpdateDomain::systemverilog_active },
+        WaitSensitivity { }, Jump { 0U },
+    };
+    require(interpreter.add_process(std::move(anchor_writer)) == anchor_writer_id,
+        "a dormant candidate writer supplies the shared anchor connection");
+
     auto& implementation
         = OwnedDriverDemotionTestAccess::implementation(interpreter);
     executor_probe.after_process_sample
@@ -3209,8 +3230,15 @@ LargeSelectiveFanoutRun run_large_selective_fanout_case(
               result.readiness_mask_sampled = true;
           };
 
-    for (std::size_t index = 0U; index < reader_count; ++index) {
-        const auto process_id = static_cast<ProcessId>(index);
+    for (ProcessId process_id = first_reader_id;
+         process_id <= anchor_writer_id; ++process_id) {
+        if (process_id == clock_id) {
+            continue;
+        }
+        const auto input = process_id == anchor_writer_id
+            ? dormant_trigger : anchor;
+        const auto output = process_id == anchor_writer_id
+            ? anchor : outputs[process_id];
         const auto& registered = interpreter.process_program(process_id);
         const ProcessExecutorProgramBinding binding {
             registered, registered, process_id };
@@ -3222,10 +3250,10 @@ LargeSelectiveFanoutRun run_large_selective_fanout_case(
         contract.expected_region_kernel_equivalent = true;
         interpreter.set_deferred_process_executor(process_id,
             [] { return true; },
-            [&executor_probe, process_id, anchor, output = outputs[index],
+            [&executor_probe, process_id, input, output,
                 wait_instruction, binding] {
                 return std::make_unique<RegionKernelExecutor>(
-                    executor_probe, process_id, anchor, output,
+                    executor_probe, process_id, input, output,
                     wait_instruction, binding, true, 0U);
             }, std::move(contract));
     }
@@ -3247,10 +3275,10 @@ LargeSelectiveFanoutRun run_large_selective_fanout_case(
             "the selective readers retain their activation program");
         const auto& kernel = program->activation_kernel;
         result.component_member_count = kernel.members.size();
-        // All readers touch the shared read-only anchor; each also contributes
-        // a single-whole output, which supplies structural SV internal state.
-        require(result.component_member_count == reader_count,
-            "the shared anchor connects exactly one 129-reader SV component");
+        require(result.component_member_count == reader_count + 1U
+                && implementation.region_component_by_process.at(anchor_writer_id)
+                    == component,
+            "the dormant anchor writer connects all 129 readers in one SV component");
         for (ProcessId process = first_reader_id;
              process <= last_reader_id; ++process) {
             require(implementation.region_component_by_process.at(process)
@@ -3434,6 +3462,9 @@ LargeSelectiveFanoutRun run_large_selective_fanout_case(
     result.final_result = interpreter.run();
     require(result.final_result.status == RunStatus::completed,
         "the second selective wake drains the remaining 64-member cohort");
+    const auto& dormant_state = implementation.get_process(anchor_writer_id);
+    require(dormant_state.waiting_on_static && !dormant_state.queued,
+        "the anchor writer remains dormant across both selective wake sets");
     result.final_resume_order = resume_order;
     result.final_stats
         = interpreter.scheduler().systemverilog_batch_compaction_stats();
@@ -3454,7 +3485,7 @@ void test_large_grouped_fanout_selective_wakeup_crosses_readiness_words()
     const auto ordinary = run_large_selective_fanout_case(false);
     const auto grouped = run_large_selective_fanout_case(true);
 
-    require(grouped.component_member_count == reader_count
+    require(grouped.component_member_count == reader_count + 1U
             && grouped.readiness_word_count >= 2U
             && grouped.first_group_descriptor_offset
                 != grouped.second_group_descriptor_offset

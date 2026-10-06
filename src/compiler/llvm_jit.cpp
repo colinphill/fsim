@@ -7,6 +7,7 @@
 #include "llvm_jit_fast_isel_census.hpp"
 #include "llvm_jit_llvm_args.hpp"
 #include "native_cache_schema.hpp"
+#include "llvm/region_frontier_initial_slot_validation.hpp"
 
 #include "fsim/compiler/object_cache.hpp"
 #include "fsim/support/bounded_bytes.hpp"
@@ -1745,6 +1746,12 @@ LlvmJit::LlvmJit(const LlvmJitOptions options)
         });
     builder.setJITTargetMachineBuilder(std::move(target_builder));
     impl_->jit = unwrap(builder.create(), "cannot create LLVM LLJIT");
+    if (auto error = llvm_detail::define_initial_slot_validation_helper(
+            *impl_->jit)) {
+        throw LlvmJitError(
+            "cannot register initial pending-slot validation helper: "
+            + llvm_error(std::move(error)));
+    }
 #if defined(__linux__)
     if (std::getenv("FSIM_PERF_MAP") != nullptr) {
         auto* const object_layer

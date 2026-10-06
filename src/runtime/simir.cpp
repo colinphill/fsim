@@ -277,6 +277,13 @@ const OperationList::Storage& OperationList::storage() const noexcept
     return storage_ ? *storage_ : empty;
 }
 
+const OperationList::OperationOverrideList&
+OperationList::operation_overrides() const noexcept
+{
+    static const OperationOverrideList empty;
+    return operation_overrides_ ? *operation_overrides_ : empty;
+}
+
 void OperationList::reset(Storage operations)
 {
     storage_ = std::make_shared<Storage>(std::move(operations));
@@ -284,7 +291,7 @@ void OperationList::reset(Storage operations)
     debug_overrides_.clear();
     assert_overrides_.clear();
     container_object_overrides_.clear();
-    operation_overrides_.clear();
+    operation_overrides_.reset();
     coverage_hit_overrides_.clear();
     debug_scope_overrides_.clear();
     operation_override_filter_ = 0;
@@ -304,7 +311,7 @@ OperationList::Storage& OperationList::mutable_storage()
     if (storage_.use_count() != 1 || !signal_remap_.empty()
         || !debug_overrides_.empty() || !assert_overrides_.empty()
         || !container_object_overrides_.empty()
-        || !operation_overrides_.empty()
+        || !operation_overrides().empty()
         || !coverage_hit_overrides_.empty()
         || !debug_scope_overrides_.empty()) {
         Storage expanded;
@@ -327,7 +334,7 @@ const Operation& OperationList::operator[](const size_type index) const noexcept
     if ((operation_override_filter_
             & (UINT64_C(1) << (index & 63U))) != 0U) {
         if (const auto* override = find_override(
-                operation_overrides_, index)) {
+                operation_overrides(), index)) {
             return override->operation;
         }
     }
@@ -358,7 +365,7 @@ OperationList::instance_operation_overrides() const
 {
     std::vector<size_type> indices;
     indices.reserve(debug_overrides_.size() + assert_overrides_.size()
-        + container_object_overrides_.size() + operation_overrides_.size()
+        + container_object_overrides_.size() + operation_overrides().size()
         + coverage_hit_overrides_.size());
     const auto add_overrides = [&indices](const auto& overrides) {
         for (const auto& override : overrides) {
@@ -368,7 +375,7 @@ OperationList::instance_operation_overrides() const
     add_overrides(debug_overrides_);
     add_overrides(assert_overrides_);
     add_overrides(container_object_overrides_);
-    add_overrides(operation_overrides_);
+    add_overrides(operation_overrides());
     add_overrides(coverage_hit_overrides_);
 
     if (!signal_remap_.empty() || !debug_scope_overrides_.empty()) {
@@ -436,18 +443,30 @@ void OperationList::replace(const size_type index, Operation operation)
     if (index >= size()) {
         throw std::out_of_range { "SimIR operation index is out of range" };
     }
+    auto* overrides = operation_overrides_.get();
+    std::shared_ptr<OperationOverrideList> detached;
+    if (!operation_overrides_ || operation_overrides_.use_count() > 1) {
+        detached = operation_overrides_
+            ? std::make_shared<OperationOverrideList>(
+                  *operation_overrides_)
+            : std::make_shared<OperationOverrideList>();
+        overrides = detached.get();
+    }
     const auto found = std::ranges::lower_bound(
-        operation_overrides_,
+        *overrides,
         static_cast<InstructionIndex>(index),
         { },
         &OperationOverride::instruction);
-    if (found != operation_overrides_.end()
+    if (found != overrides->end()
         && found->instruction == index) {
         found->operation = std::move(operation);
     } else {
-        operation_overrides_.insert(found,
+        overrides->insert(found,
             { static_cast<InstructionIndex>(index),
                 std::move(operation) });
+    }
+    if (detached) {
+        operation_overrides_ = std::move(detached);
     }
     operation_override_filter_
         |= UINT64_C(1) << (index & 63U);
@@ -511,7 +530,7 @@ ContainerObjectId OperationList::container_object(
 {
     if ((operation_override_filter_
             & (UINT64_C(1) << (index & 63U))) != 0U
-        && find_override(operation_overrides_, index) != nullptr) {
+        && find_override(operation_overrides(), index) != nullptr) {
         return canonical;
     }
     if (const auto* override = find_override(
@@ -947,6 +966,14 @@ bool operation_list_detail::ShareAccess::share_impl(
         }
     }
 
+    std::shared_ptr<OperationList::OperationOverrideList>
+        shared_operation_overrides;
+    if (!operation_overrides.empty()) {
+        shared_operation_overrides
+            = std::make_shared<OperationList::OperationOverrideList>(
+                std::move(operation_overrides));
+    }
+
     if (recycled_operations != nullptr
         && candidate.storage_
         && candidate.storage_.use_count() == 1) {
@@ -960,13 +987,13 @@ bool operation_list_detail::ShareAccess::share_impl(
     candidate.container_object_overrides_
         = std::move(container_object_overrides);
     candidate.operation_overrides_
-        = std::move(operation_overrides);
+        = std::move(shared_operation_overrides);
     candidate.coverage_hit_overrides_
         = std::move(coverage_hit_overrides);
     candidate.debug_scope_overrides_
         = std::move(debug_scope_overrides);
     candidate.operation_override_filter_ = 0;
-    for (const auto& override : candidate.operation_overrides_) {
+    for (const auto& override : candidate.operation_overrides()) {
         candidate.operation_override_filter_
             |= UINT64_C(1) << (override.instruction & 63U);
     }

@@ -1649,13 +1649,15 @@ void check_application_region_forwarding_provider()
         R"(
 module forwarding_provider_top(input logic [128:0] source,
                                output wire [128:0] sink_a,
-                               output wire [128:0] sink_b);
+                               output wire [128:0] sink_b,
+                               output wire [128:0] sink_join);
   wire [128:0] internal_a;
   wire [128:0] internal_b;
   assign sink_a = ~internal_a;
   assign sink_b = ~internal_b;
   assign internal_a = source + 129'd1;
   assign internal_b = source;
+  assign sink_join = sink_a ^ sink_b;
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
@@ -1686,7 +1688,7 @@ endmodule
     for (const auto& process : design.processes) {
         process_bindings.push_back(&process);
     }
-    assert(process_bindings.size() == 4U);
+    assert(process_bindings.size() == 5U);
 
     std::vector<RegionSignalDescriptor> descriptors;
     descriptors.reserve(design.signals.size());
@@ -1720,9 +1722,9 @@ endmodule
     }
     assert(forwarding.has_value());
     const auto& kernel = forwarding->execution_kernel;
-    assert(kernel.members.size() == 4U);
+    assert(kernel.members.size() == 5U);
     assert((kernel.member_execution_order
-        == std::vector<std::size_t> { 2U, 0U, 3U, 1U }));
+        == std::vector<std::size_t> { 2U, 0U, 3U, 1U, 4U }));
     assert(kernel.inputs.size() == 1U);
     assert(kernel.inputs.front().width == 129U);
     bool has_add_unsigned { };
@@ -1735,7 +1737,7 @@ endmodule
                 && binary->operation == BinaryOperator::add_unsigned);
     }
     assert(has_add_unsigned);
-    assert(forwarding->dependencies.size() == 2U);
+    assert(forwarding->dependencies.size() == 4U);
     assert(std::ranges::all_of(forwarding->dependencies,
         [](const RegionConeForwardingDependency& dependency) {
             return dependency.offset == 0U
@@ -1891,6 +1893,11 @@ endmodule
                 });
             assert(child_output_a != kernel.outputs.end());
             assert(child_output_b != kernel.outputs.end());
+            const auto join_output = std::ranges::find_if(kernel.outputs,
+                [](const RegionConeOutputBinding& output) {
+                    return output.owner == 4U;
+                });
+            assert(join_output != kernel.outputs.end());
             const auto output_index = [&](const auto iterator) {
                 return static_cast<std::size_t>(
                     iterator - kernel.outputs.begin());
@@ -1912,6 +1919,9 @@ endmodule
                 == invert(added_value));
             assert(outputs[output_index(child_output_b)]
                 == invert(source_value));
+            assert(outputs[output_index(join_output)]
+                == binary_value(BinaryOperator::bit_xor,
+                    invert(added_value), invert(source_value)));
         }
     }
 }
@@ -1946,13 +1956,15 @@ void check_application_region_forwarding_provider_wide_values()
         const auto source
             = "module forwarding_provider_wide_top(input logic " + range
             + " source, output wire " + range
-            + " sink_a, output wire " + range + " sink_b);\n"
+            + " sink_a, output wire " + range + " sink_b,\n"
+            + "  output wire " + range + " sink_join);\n"
               "  wire " + range + " internal_a;\n"
               "  wire " + range + " internal_b;\n"
               "  assign sink_a = ~internal_a;\n"
               "  assign sink_b = ~internal_b;\n"
               "  assign internal_a = ~source;\n"
               "  assign internal_b = source;\n"
+              "  assign sink_join = sink_a ^ sink_b;\n"
               "endmodule\n";
         const auto parsed = fsim::frontend::parse_text(
             "forwarding-provider-wide.sv", source,
@@ -1983,7 +1995,7 @@ void check_application_region_forwarding_provider_wide_values()
         for (const auto& process : design.processes) {
             process_bindings.push_back(&process);
         }
-        assert(process_bindings.size() == 4U);
+        assert(process_bindings.size() == 5U);
 
         std::vector<RegionSignalDescriptor> descriptors;
         descriptors.reserve(design.signals.size());
@@ -2014,7 +2026,7 @@ void check_application_region_forwarding_provider_wide_values()
         assert(forwarding->members.size() == process_bindings.size());
         const auto& kernel = forwarding->execution_kernel;
         assert(kernel.inputs.size() == 1U);
-        assert(kernel.outputs.size() == 4U);
+        assert(kernel.outputs.size() == 5U);
         assert(std::ranges::all_of(kernel.outputs,
             [width](const RegionConeOutputBinding& output) {
                 return output.width == width

@@ -87,8 +87,9 @@ make_region_frontier_internal_commit_emitter_v2(
     const EmitCertifiedInternalCommitV2& emit_internal_commit);
 
 /// Emit the shared private loop body. Its second argument points to the
-/// literal immutable binding described above; per-plan wrappers own that
-/// binding and retain the unchanged public Status(Frame*) entry signature.
+/// literal immutable binding described above. Per-plan wrappers supply
+/// independent alias, canonical-content, and descriptor-shape receipts while
+/// retaining the unchanged public Status(Frame*) entry signature.
 [[nodiscard]] llvm::Function* emit_region_frontier_shared_body_v2(
     llvm::Module& module, const std::string& body_symbol,
     const RegionFrontierLayoutV2& structural_layout,
@@ -96,14 +97,16 @@ make_region_frontier_internal_commit_emitter_v2(
     const EmitCertifiedInternalCommitV2& emit_internal_commit);
 
 /// Emit an exact-plan Status(Frame*) wrapper which supplies its own immutable
-/// native physical binding to the shared body symbol. The trusted form is an
-/// in-tree SystemVerilog-only entry and skips only nested range geometry after
-/// the shared body has validated its plane map; callers must authenticate the
-/// current frame ranges before selecting it.
+/// native physical binding to the shared body symbol. The private SV forms
+/// certify alias geometry and runtime-owned canonical values. The shape form
+/// requires an exact private receipt for signal and pending-write shapes. The
+/// checked public entry sets all receipts false.
 [[nodiscard]] llvm::Function* emit_region_frontier_entry_thunk_v2(
     llvm::Module& module, const std::string& wrapper_symbol,
     const std::string& body_symbol,
     const RegionFrontierLayoutV2& exact_layout,
-    bool alias_prevalidated = false);
+    bool alias_prevalidated = false,
+    bool value_contents_prevalidated = false,
+    bool descriptor_shapes_prevalidated = false);
 
 } // namespace fsim::runtime::simir::scratch

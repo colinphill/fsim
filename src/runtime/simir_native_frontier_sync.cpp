@@ -9,6 +9,7 @@ namespace {
 
 [[nodiscard]] bool frontier_role_matches(
     const AuthoritativeSignalPlanes::FrontierWriteLease& lease,
+    const std::size_t writable_ordinal,
     const SignalId signal,
     const ProcessId owner,
     const PackedPlaneRole role,
@@ -18,7 +19,8 @@ namespace {
 {
     std::array<std::span<std::uint64_t>, 4U> words;
     const auto plane_count = region_frontier_required_plane_count_v2(kind);
-    if (plane_count == 0U || !lease.plane_words(signal, role, owner, words)) {
+    if (plane_count == 0U || !lease.plane_words_at(
+            writable_ordinal, signal, role, owner, words)) {
         return false;
     }
     for (std::size_t plane = 0U; plane < words.size(); ++plane) {
@@ -42,7 +44,12 @@ void Interpreter::Impl::RegionFrontierComponentRuntime::invalidate(
 {
     const bool first_transition = !invalidated;
     invalidated = true;
+    require_full_member_sync(
+        FrontierMemberSyncFullReason::uncertain_status_or_generation);
+    member_sync_private_entry = false;
+    member_sync_workset.clear();
     clear_alias_certificate();
+    clear_canonical_values_binding_receipt();
     if (!first_transition || owner == nullptr
         || !owner->systemverilog_wave_profile_enabled) {
         return;
@@ -258,6 +265,17 @@ void Interpreter::Impl::RegionFrontierComponentRuntime::
             return;
         }
 
+        const auto writable_ordinal = static_cast<std::size_t>(
+            plane.metadata_index);
+        if (writable_ordinal >= writable_signals.size()
+            || writable_signals[writable_ordinal].signal != signal
+            || writable_signals[writable_ordinal].owner
+                != static_cast<ProcessId>(plane.owner_process_id)) {
+            invalidate_local_cache();
+            fail_closed();
+            return;
+        }
+
         const auto& signal_metadata = metadata[plane.metadata_index];
         if (signal_metadata.transaction_valid != 1U
             || signal_metadata.event_valid > 1U
@@ -273,19 +291,19 @@ void Interpreter::Impl::RegionFrontierComponentRuntime::
             return;
         }
 
-        if (!frontier_role_matches(lease, signal,
+        if (!frontier_role_matches(lease, writable_ordinal, signal,
                 static_cast<ProcessId>(plane.owner_process_id),
                 PackedPlaneRole::current, plane.value_kind,
                 plane.word_count, plane.current_planes)
-            || !frontier_role_matches(lease, signal,
+            || !frontier_role_matches(lease, writable_ordinal, signal,
                 static_cast<ProcessId>(plane.owner_process_id),
                 PackedPlaneRole::previous, plane.value_kind,
                 plane.word_count, plane.previous_planes)
-            || !frontier_role_matches(lease, signal,
+            || !frontier_role_matches(lease, writable_ordinal, signal,
                 static_cast<ProcessId>(plane.owner_process_id),
                 PackedPlaneRole::stored, plane.value_kind,
                 plane.word_count, plane.stored_planes)
-            || !frontier_role_matches(lease, signal,
+            || !frontier_role_matches(lease, writable_ordinal, signal,
                 static_cast<ProcessId>(plane.owner_process_id),
                 PackedPlaneRole::owner, plane.value_kind,
                 plane.word_count, plane.owner_planes)) {

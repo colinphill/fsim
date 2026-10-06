@@ -746,6 +746,28 @@ struct ElaboratedDesignState {
         signal_driver_inventory;
 };
 
+/// One pure acyclic continuous-assignment cone selected for A2 fusion. The
+/// sink keeps its ProcessId and runs `fused`; the other members stay installed
+/// with their original programs but never execute while the cone is fused.
+struct ConeFusionPlanCone {
+    runtime::simir::ProcessId sink { };
+    /// Topological order, including the sink.
+    std::vector<runtime::simir::ProcessId> members;
+    std::vector<runtime::simir::SignalId> internal_signals;
+    std::vector<runtime::simir::SignalId> boundary_inputs;
+    runtime::simir::Process fused;
+};
+
+struct ConeFusionPlan {
+    std::vector<ConeFusionPlanCone> cones;
+    /// Sorted members that never execute while fused (sinks excluded).
+    std::vector<runtime::simir::ProcessId> dormant;
+    bool disabled { };
+    const char* disabled_reason { "" };
+    std::size_t candidate_processes { };
+    std::size_t internal_nets { };
+};
+
 class ElaboratedDesign final {
 public:
     ElaboratedDesign() = default;
@@ -840,6 +862,14 @@ public:
     [[nodiscard]] std::unique_ptr<runtime::simir::Interpreter> create_interpreter(
         runtime::SchedulerOptions options = { },
         std::uint64_t seed = 1) &&;
+    /// Same as the consuming overload, installing the planned fused cones.
+    [[nodiscard]] std::unique_ptr<runtime::simir::Interpreter> create_interpreter(
+        runtime::SchedulerOptions options,
+        std::uint64_t seed,
+        const ConeFusionPlan& plan) &&;
+    /// Plan A2 combinational cone fusion. Callers opt in only when no
+    /// observer outside SimIR processes can inspect hidden internal nets.
+    [[nodiscard]] ConeFusionPlan plan_cone_fusion() const;
 
     [[nodiscard]] ElaboratedDesignState state() const &;
     /// Transfer the complete portable state out of a design that has reached
@@ -863,7 +893,8 @@ private:
     void populate_interpreter(
         runtime::simir::Interpreter* interpreter,
         bool validation_only,
-        std::vector<runtime::simir::Process>* consumed_processes = nullptr) const;
+        std::vector<runtime::simir::Process>* consumed_processes = nullptr,
+        const ConeFusionPlan* plan = nullptr) const;
     void finalize_signal_driver_inventory();
     void append_process_record(runtime::simir::Process process);
     void append_process_instance_record(
@@ -908,6 +939,8 @@ private:
         container_aggregate_signal_aliases_;
     std::vector<VhdlProtectedObjectInfo> vhdl_protected_object_info_;
     mutable std::vector<runtime::simir::Process> processes_;
+    // Original sink programs captured while populating a fused interpreter.
+    mutable std::vector<runtime::simir::Process> fused_sink_originals_;
     mutable std::shared_ptr<const detail::RuntimeProcessProgramTable>
         process_rows_;
     std::shared_ptr<detail::RuntimeProcessProgramTableBuilder>

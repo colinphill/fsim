@@ -4345,6 +4345,45 @@ PackedLogic4PlaneReadLease AuthoritativeSignalPlanes::plane_read_lease(
         backing->first_logic9_word };
 }
 
+std::array<std::span<const std::uint64_t>, 4U>
+AuthoritativeSignalPlanes::borrow_packed_value_planes(
+    const PackedLogic4& value) noexcept
+{
+    std::array<std::span<const std::uint64_t>, 4U> planes { };
+    if (value.width() == 0U) {
+        return planes;
+    }
+    const auto plane_count = value.is_logic9() ? 4U : 2U;
+    const auto* const backing = value.plane_backing();
+    if (backing == nullptr || !backing->cell) {
+        for (std::size_t plane = 0U; plane < plane_count; ++plane) {
+            planes[plane] = value.is_logic9()
+                ? value.logic9_plane_words(plane)
+                : plane == 0U ? value.aval_words() : value.bval_words();
+        }
+        return planes;
+    }
+
+    // This is a synchronous borrow, not an owning snapshot. The caller must
+    // finish using every span before the next publication or callback.
+    const auto block = backing->cell->current.load(std::memory_order_acquire);
+    if (!block) {
+        return planes;
+    }
+    const auto words = backing->width / 64U
+        + static_cast<std::size_t>(backing->width % 64U != 0U);
+    for (std::size_t plane = 0U; plane < plane_count; ++plane) {
+        const auto first = plane < 2U
+            ? backing->first_value_word : backing->first_logic9_word;
+        const auto& storage = block->planes[plane];
+        if (first > storage.size() || words > storage.size() - first) {
+            continue;
+        }
+        planes[plane] = storage.span().subspan(first, words);
+    }
+    return planes;
+}
+
 bool AuthoritativeSignalPlanes::try_copy_wide_logic4_role_into(
     const SignalId signal,
     const PackedPlaneRole role,
@@ -4376,6 +4415,8 @@ AuthoritativeSignalPlanes::FrontierWriteLease::FrontierWriteLease(
     : owner_(std::exchange(other.owner_, nullptr))
     , writable_signals_(std::exchange(other.writable_signals_,
           std::span<const FrontierWriteBinding> { }))
+    , writable_layout_indices_(std::exchange(
+          other.writable_layout_indices_, std::span<const std::size_t> { }))
     , blocks_(std::move(other.blocks_))
     , locked_(std::exchange(other.locked_,
           std::array<PackedLogic4PlaneBlock*, 4U> { }))
@@ -4397,6 +4438,8 @@ AuthoritativeSignalPlanes::FrontierWriteLease::operator=(
     owner_ = std::exchange(other.owner_, nullptr);
     writable_signals_ = std::exchange(other.writable_signals_,
         std::span<const FrontierWriteBinding> { });
+    writable_layout_indices_ = std::exchange(
+        other.writable_layout_indices_, std::span<const std::size_t> { });
     blocks_ = std::move(other.blocks_);
     locked_ = std::exchange(other.locked_,
         std::array<PackedLogic4PlaneBlock*, 4U> { });
@@ -4432,13 +4475,6 @@ bool AuthoritativeSignalPlanes::FrontierWriteLease::plane_words(
     }
     const auto signal_index = static_cast<std::size_t>(
         found - owner_->layout_.signal_ids_.begin());
-    const auto& entry = owner_->layout_.signals_[signal_index];
-    if (entry.width == 0U
-        || (entry.value_kind != ValueKind::logic4
-            && entry.value_kind != ValueKind::logic9)
-        || owner_->signal_seeded_[signal_index] == 0U) {
-        return false;
-    }
 
     const auto writable_binding = std::ranges::find_if(
         writable_signals_, [signal, owner_process = owner](
@@ -4446,8 +4482,55 @@ bool AuthoritativeSignalPlanes::FrontierWriteLease::plane_words(
             return binding.signal == signal
                 && binding.owner == owner_process;
         });
-    const bool is_writable = writable_binding != writable_signals_.end();
-    if (!is_writable) {
+    if (writable_binding == writable_signals_.end()) {
+        return false;
+    }
+
+    return plane_words_for_index(signal, signal_index, role, owner, planes);
+}
+
+bool AuthoritativeSignalPlanes::FrontierWriteLease::plane_words_at(
+    const std::size_t writable_ordinal,
+    const SignalId signal,
+    const PackedPlaneRole role,
+    const ProcessId owner,
+    std::array<std::span<std::uint64_t>, 4U>& planes) const noexcept
+{
+    planes = { };
+    if (owner_ == nullptr || !owner_->valid_
+        || !owner_->frontier_write_active_
+        || owner_->generation_ != captured_generation_
+        || owner_->versioned_storage_ready_ != versioned_storage_
+        || writable_ordinal >= writable_signals_.size()
+        || writable_ordinal >= writable_layout_indices_.size()) {
+        return false;
+    }
+    const auto& binding = writable_signals_[writable_ordinal];
+    if (binding.signal != signal || binding.owner != owner) {
+        return false;
+    }
+    const auto signal_index = writable_layout_indices_[writable_ordinal];
+    if (signal_index >= owner_->layout_.signal_ids_.size()
+        || owner_->layout_.signal_ids_[signal_index] != signal) {
+        return false;
+    }
+
+    return plane_words_for_index(signal, signal_index, role, owner, planes);
+}
+
+bool AuthoritativeSignalPlanes::FrontierWriteLease::plane_words_for_index(
+    const SignalId signal,
+    const std::size_t signal_index,
+    const PackedPlaneRole role,
+    const ProcessId owner,
+    std::array<std::span<std::uint64_t>, 4U>& planes) const noexcept
+{
+    // Both callers validate the active lease and resolve signal_index.
+    const auto& entry = owner_->layout_.signals_[signal_index];
+    if (entry.width == 0U
+        || (entry.value_kind != ValueKind::logic4
+            && entry.value_kind != ValueKind::logic9)
+        || owner_->signal_seeded_[signal_index] == 0U) {
         return false;
     }
 
@@ -4496,10 +4579,11 @@ bool AuthoritativeSignalPlanes::FrontierWriteLease::plane_words(
     auto& role_words = owner_->role_words(storage_role);
     PackedLogic4PlaneBlock* captured_block { };
     if (versioned_storage_) {
+        // Acquisition checked cell identity under this block's write lock.
+        // Live-slot mutation is serialized with this synchronous lease, and
+        // A4 publication rejects an active lease. Reuse the retained capture.
         captured_block = blocks_[role_index].get();
-        if (captured_block == nullptr || !role_words.cell
-            || role_words.cell->current.load(std::memory_order_acquire)
-                .get() != captured_block) {
+        if (captured_block == nullptr || !role_words.cell) {
             return false;
         }
     } else if (role_words.cell) {
@@ -4627,6 +4711,7 @@ void AuthoritativeSignalPlanes::FrontierWriteLease::release() noexcept
     owner_->frontier_write_active_ = false;
     blocks_ = { };
     writable_signals_ = { };
+    writable_layout_indices_ = { };
     owner_ = nullptr;
     captured_generation_ = 0U;
     versioned_storage_ = false;
@@ -4636,9 +4721,17 @@ void AuthoritativeSignalPlanes::FrontierWriteLease::release() noexcept
 bool AuthoritativeSignalPlanes::try_acquire_frontier_write_lease(
     const std::uint64_t expected_generation,
     const std::span<const FrontierWriteBinding> writable_signals,
-    FrontierWriteLease& lease) noexcept
+    FrontierWriteLease& lease,
+    const std::span<std::size_t> writable_layout_indices) noexcept
 {
-    if (lease.active() || !valid_ || !packed_slots_bound_
+    if (lease.active()) {
+        return false;
+    }
+    lease.writable_signals_ = { };
+    lease.writable_layout_indices_ = { };
+    if ((!writable_layout_indices.empty()
+            && writable_layout_indices.size() != writable_signals.size())
+        || !valid_ || !packed_slots_bound_
         || frontier_write_active_
         || generation_ != expected_generation || !generation_can_advance()
         || writable_signals.empty()) {
@@ -4669,11 +4762,12 @@ bool AuthoritativeSignalPlanes::try_acquire_frontier_write_lease(
             || (!versioned_storage && entry.width > 64U)
             || entry.storage_class != SignalDriverStorageClass::single_owner
             || entry.owner_count != 1U || owner_index == no_word
-            || !supports_packed_slot_binding(binding.signal)
-            || !packed_signal_slots_bound(binding.signal)
-            || !packed_owner_slot_bound(binding.signal, binding.owner)) {
+            || !packed_signal_slots_bound(binding.signal)) {
             return false;
         }
+        // The slot check covers supported storage and every owner binding.
+        // With one owner and the exact owner index above, it also proves this
+        // writable binding's owner slot without checking it a second time.
         const auto& owner_layout = layout_.owners_[owner_index];
         if (versioned_storage) {
             if (owner_layout.aliases_stored) {
@@ -4690,6 +4784,9 @@ bool AuthoritativeSignalPlanes::try_acquire_frontier_write_lease(
             if (writable_signals[earlier].signal == binding.signal) {
                 return false;
             }
+        }
+        if (!writable_layout_indices.empty()) {
+            writable_layout_indices[index] = signal_index;
         }
         needs_owner_values = needs_owner_values
             || !layout_.owners_[owner_index].aliases_stored;
@@ -4749,6 +4846,7 @@ bool AuthoritativeSignalPlanes::try_acquire_frontier_write_lease(
 
     lease.owner_ = this;
     lease.writable_signals_ = writable_signals;
+    lease.writable_layout_indices_ = writable_layout_indices;
     lease.blocks_ = std::move(blocks);
     lease.locked_ = locked;
     lease.captured_generation_ = expected_generation;

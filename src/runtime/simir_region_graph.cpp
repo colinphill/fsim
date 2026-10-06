@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdlib>
+#include <iostream>
 #include <functional>
 #include <limits>
 #include <map>
@@ -14,6 +16,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <typeindex>
 #include <typeinfo>
@@ -70,22 +73,307 @@ bool plain_register_operation(const Operation& operation)
     }, operation);
 }
 
+enum class ReadRegisterDefinitionKind : std::uint8_t {
+    read_signal,
+    copy_register,
+    other,
+};
+
+enum class ReadRegisterUseKind : std::uint8_t {
+    extract,
+    copy_register,
+    other,
+};
+
+struct ReadRegisterDefinition {
+    std::size_t instruction { };
+    ReadRegisterDefinitionKind kind { ReadRegisterDefinitionKind::other };
+};
+
+struct ReadRegisterUse {
+    std::size_t instruction { };
+    RegisterId destination { };
+    ReadRegisterUseKind kind { ReadRegisterUseKind::other };
+    std::uint32_t offset { };
+    std::uint32_t width { };
+};
+
+struct StaticReadRange {
+    std::uint32_t offset { };
+    std::uint32_t width { };
+};
+
+struct ReadRegisterFlow {
+    std::map<RegisterId, std::vector<ReadRegisterDefinition>> definitions;
+    std::map<RegisterId, std::vector<ReadRegisterUse>> uses;
+    std::map<std::size_t, ReadSignal> reads;
+    bool complete { true };
+};
+
+ReadRegisterFlow build_read_register_flow(const OperationList& operations)
+{
+    ReadRegisterFlow flow;
+    for (std::size_t instruction = 0U;
+         instruction < operations.size(); ++instruction) {
+        const auto& operation = operations.at(instruction);
+        const auto define = [&](const RegisterId destination,
+                                const ReadRegisterDefinitionKind kind
+                                    = ReadRegisterDefinitionKind::other) {
+            flow.definitions[destination].push_back({ instruction, kind });
+        };
+        const auto use = [&](const RegisterId source,
+                             const ReadRegisterUseKind kind
+                                 = ReadRegisterUseKind::other,
+                             const RegisterId destination = 0U,
+                             const std::uint32_t offset = 0U,
+                             const std::uint32_t width = 0U) {
+            flow.uses[source].push_back(
+                { instruction, destination, kind, offset, width });
+        };
+        const auto note_register_effects = [&](const auto& value) {
+            using T = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<T, ReadSignal>) {
+                flow.reads.emplace(instruction, value);
+                define(value.destination,
+                    ReadRegisterDefinitionKind::read_signal);
+            } else if constexpr (std::is_same_v<T, LoadConstant>) {
+                define(value.destination);
+            } else if constexpr (std::is_same_v<T, CopyRegister>) {
+                define(value.destination,
+                    ReadRegisterDefinitionKind::copy_register);
+                use(value.source, ReadRegisterUseKind::copy_register,
+                    value.destination);
+            } else if constexpr (std::is_same_v<T, Extract>) {
+                define(value.destination);
+                use(value.source, ReadRegisterUseKind::extract,
+                    value.destination, value.offset, value.width);
+            } else if constexpr (std::is_same_v<T, DynamicExtract>) {
+                define(value.destination);
+                use(value.source);
+                use(value.selection.index);
+            } else if constexpr (std::is_same_v<T, DynamicPartSelect>) {
+                define(value.destination);
+                use(value.source);
+                use(value.base);
+            } else if constexpr (std::is_same_v<T, Concatenate>) {
+                define(value.destination);
+                for (const auto source : value.operands) {
+                    use(source);
+                }
+            } else if constexpr (std::is_same_v<T, UnaryNot>
+                || std::is_same_v<T, LogicalNot>
+                || std::is_same_v<T, ConvertToTwoState>
+                || std::is_same_v<T, Reduction>
+                || std::is_same_v<T, CountOnes>
+                || std::is_same_v<T, CountBits>
+                || std::is_same_v<T, IntegerUnary>) {
+                define(value.destination);
+                use(value.source);
+            } else if constexpr (std::is_same_v<T, IntegerCheck>) {
+                use(value.source);
+            } else if constexpr (std::is_same_v<T, Shift>) {
+                define(value.destination);
+                use(value.value);
+                use(value.amount);
+            } else if constexpr (std::is_same_v<T, Binary>
+                || std::is_same_v<T, LogicalBinary>
+                || std::is_same_v<T, IntegerBinary>
+                || std::is_same_v<T, SystemVerilogScalarBinary>) {
+                define(value.destination);
+                use(value.lhs);
+                use(value.rhs);
+            } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
+                define(value.destination);
+                use(value.first);
+                use(value.second);
+            } else if constexpr (std::is_same_v<T, ConditionalSelect>) {
+                define(value.destination);
+                use(value.condition);
+                use(value.when_true);
+                use(value.when_false);
+            } else if constexpr (std::is_same_v<T, Insert>) {
+                define(value.destination);
+                use(value.target);
+                use(value.source);
+            } else if constexpr (std::is_same_v<T, DynamicInsert>) {
+                define(value.destination);
+                use(value.target);
+                use(value.source);
+                use(value.selection.index);
+            } else if constexpr (std::is_same_v<T, DynamicPartInsert>) {
+                define(value.destination);
+                use(value.target);
+                use(value.source);
+                use(value.selection.base);
+            } else if constexpr (std::is_same_v<T, WriteBlocking>
+                || std::is_same_v<T, WriteUpdate>
+                || std::is_same_v<T, WriteAfter>
+                || std::is_same_v<T, WriteInertial>
+                || std::is_same_v<T, WriteProjected>) {
+                use(value.source);
+            } else if constexpr (std::is_same_v<T, WriteBlockingSlice>
+                || std::is_same_v<T, WriteUpdateSlice>
+                || std::is_same_v<T, WriteAfterSlice>
+                || std::is_same_v<T, WriteInertialSlice>
+                || std::is_same_v<T, WriteProjectedSlice>) {
+                use(value.source);
+            } else if constexpr (std::is_same_v<T, WriteBlockingDynamicSlice>
+                || std::is_same_v<T, WriteUpdateDynamicSlice>
+                || std::is_same_v<T, WriteAfterDynamicSlice>
+                || std::is_same_v<T, WriteInertialDynamicSlice>
+                || std::is_same_v<T, WriteProjectedDynamicSlice>) {
+                use(value.source);
+                use(value.selection.index);
+            } else if constexpr (std::is_same_v<T,
+                                 WriteBlockingDynamicPartSlice>
+                || std::is_same_v<T, WriteUpdateDynamicPartSlice>
+                || std::is_same_v<T, WriteAfterDynamicPartSlice>
+                || std::is_same_v<T, WriteInertialDynamicPartSlice>) {
+                use(value.source);
+                use(value.selection.base);
+            } else if constexpr (std::is_same_v<T, SignalEvent>
+                || std::is_same_v<T, SignalLastValue>
+                || std::is_same_v<T, SignalLastEvent>
+                || std::is_same_v<T, SignalActive>
+                || std::is_same_v<T, SignalLastActive>
+                || std::is_same_v<T, SignalDriving>
+                || std::is_same_v<T, SignalDrivingValue>
+                || std::is_same_v<T, ReadSimulationTime>) {
+                define(value.destination);
+            } else if constexpr (std::is_same_v<T, Branch>) {
+                use(value.condition);
+            } else if constexpr (std::is_same_v<T, DebugPoint>
+                || std::is_same_v<T, Jump>
+                || std::is_same_v<T, WaitRegion>
+                || std::is_same_v<T, WaitSensitivity>
+                || std::is_same_v<T, WaitForever>
+                || std::is_same_v<T, Yield>
+                || std::is_same_v<T, Halt>
+                || std::is_same_v<T, Pause>
+                || std::is_same_v<T, Stop>) {
+                // These operations carry no packed-register operands.
+            } else if constexpr (std::is_same_v<T, WaitFor>
+                || std::is_same_v<T, WaitOn>
+                || std::is_same_v<T, WaitOrder>) {
+                // These wait forms have optional or required register uses
+                // and results. Until those fields are modeled, fail closed.
+                flow.complete = false;
+            } else {
+                flow.complete = false;
+            }
+        };
+        visit_operation(note_register_effects, operation);
+    }
+    return flow;
+}
+
+std::map<std::size_t, std::vector<StaticReadRange>>
+infer_static_read_ranges(
+    const ProcessProgramView& program,
+    const std::span<const RegionSignalDescriptor> descriptors)
+{
+    const auto& operations = program.operations();
+    std::map<std::size_t, std::vector<StaticReadRange>> ranges;
+    const auto flow = build_read_register_flow(operations);
+    if (!flow.complete) {
+        return ranges;
+    }
+
+    for (const auto& [instruction, read] : flow.reads) {
+        if (read.kind != SignalReadKind::current || read.ticks != 1U
+            || read.clock || read.gate) {
+            continue;
+        }
+        const auto definition = flow.definitions.find(read.destination);
+        if (definition == flow.definitions.end()
+            || definition->second.size() != 1U
+            || definition->second.front().instruction != instruction
+            || definition->second.front().kind
+                != ReadRegisterDefinitionKind::read_signal) {
+            continue;
+        }
+
+        const auto signal = operations.signal(read.signal);
+        if (signal >= descriptors.size()) {
+            continue;
+        }
+        std::vector<RegisterId> pending { read.destination };
+        std::vector<RegisterId> visited;
+        std::vector<StaticReadRange> candidate_ranges;
+        bool exact = true;
+        while (!pending.empty() && exact) {
+            const auto source = pending.back();
+            pending.pop_back();
+            if (std::ranges::find(visited, source) != visited.end()) {
+                exact = false;
+                break;
+            }
+            visited.push_back(source);
+
+            const auto uses = flow.uses.find(source);
+            if (uses == flow.uses.end()) {
+                continue;
+            }
+            for (const auto& use : uses->second) {
+                if (use.kind == ReadRegisterUseKind::extract) {
+                    const auto source_width = descriptors[signal].width;
+                    if (use.width == 0U || use.offset >= source_width
+                        || use.width > source_width - use.offset) {
+                        exact = false;
+                        break;
+                    }
+                    candidate_ranges.push_back({ use.offset, use.width });
+                    continue;
+                }
+                if (use.kind != ReadRegisterUseKind::copy_register) {
+                    exact = false;
+                    break;
+                }
+                const auto destination
+                    = flow.definitions.find(use.destination);
+                if (destination == flow.definitions.end()
+                    || destination->second.size() != 1U
+                    || destination->second.front().instruction
+                        != use.instruction
+                    || destination->second.front().kind
+                        != ReadRegisterDefinitionKind::copy_register) {
+                    exact = false;
+                    break;
+                }
+                pending.push_back(use.destination);
+            }
+        }
+        if (!exact || candidate_ranges.empty()) {
+            continue;
+        }
+        if (std::ranges::any_of(program.debug_locals(), [&](const auto& local) {
+                return std::ranges::find(visited, local.register_id)
+                    != visited.end();
+            })) {
+            continue;
+        }
+        ranges.emplace(instruction, std::move(candidate_ranges));
+    }
+    return ranges;
+}
+
 // Access completeness is independent from the smaller pure-execution subset.
 // The default stays opaque so a newly added operation cannot silently become
 // proof that the whole signal inventory is complete.
-template<typename FindContainer, typename Observe, typename RecordWrite,
-    typename RecordContainerWrite>
+template<typename FindContainer, typename Observe, typename ObserveRead,
+    typename RecordWrite, typename RecordContainerWrite>
 bool visit_known_region_accesses(
     const Operation& operation,
     FindContainer&& find_container,
     Observe&& observe,
+    ObserveRead&& observe_read,
     RecordWrite&& record_write,
     RecordContainerWrite&& record_container_write)
 {
     return visit_operation([&](const auto& value) -> bool {
         using T = std::decay_t<decltype(value)>;
         if constexpr (std::is_same_v<T, ReadSignal>) {
-            observe(value.signal, value.kind == SignalReadKind::current
+            observe_read(value, value.kind == SignalReadKind::current
                     ? RegionObservation::none
                     : RegionObservation::previous | RegionObservation::events);
             if (value.clock) {
@@ -245,6 +533,9 @@ bool visit_known_region_accesses(
             || std::is_same_v<T, SystemVerilogMath>
             || std::is_same_v<T, ConditionalSelect>
             || std::is_same_v<T, ReadSimulationTime>
+            // Register-only: draws from the process's own generator state and
+            // optional bound registers; it has no signal access.
+            || std::is_same_v<T, RandomValue>
             || std::is_same_v<T, DebugPoint>
             || std::is_same_v<T, Jump>
             || std::is_same_v<T, Branch>
@@ -357,6 +648,30 @@ bool fork_control_access_is_known(const Fork& fork,
     return true;
 }
 
+std::string static_loop_failure(const ProcessProgramView& process)
+{
+    const auto& operations = process.operations();
+    if (operations.size() < 3U) return "size_lt3";
+    if (process.static_sensitivity().empty()) return "no_static_sensitivity";
+    if (process.final() || process.observed() || process.reactive()
+        || process.postponed()) return "final_observed_reactive_postponed";
+    if (process.switch_source() || process.switch_target()
+        || process.switch_control() || process.switch_bidirectional()
+        || process.switch_resistive()) return "switch";
+    if (process.string_register_count() != 0U) return "string_registers";
+    if (process.container_register_count() != 0U) return "container_registers";
+    if (!process.debug_locals().empty() || !process.debug_string_locals().empty()
+        || !process.debug_container_locals().empty()) return "debug_locals";
+    if (!process.static_trigger_regions().empty()) return "static_trigger_regions";
+    const auto count = operations.size();
+    const auto tail = operations.expanded(count - 1U);
+    const auto* jump = operation_get_if<Jump>(&tail);
+    if (jump == nullptr || jump->target != 0U) return "no_tail_jump";
+    if (!operation_holds<WaitSensitivity>(operations.expanded(count - 2U)))
+        return "no_wait_sensitivity";
+    return "ok";
+}
+
 bool static_loop(const ProcessProgramView& process)
 {
     const auto& operations = process.operations();
@@ -410,12 +725,34 @@ bool ownership_matches_operations(const ProcessProgramView& process,
     const auto width_of = [&](RegisterId id) {
         return id < widths.size() ? widths[id] : 0U;
     };
+    // In flow-insensitive mode a register's width is the single width every
+    // definition agrees on; a conflicting definition makes it unknown.
+    bool flow_insensitive = false;
+    bool widths_changed = false;
+    std::vector<std::uint8_t> width_conflicts;
     const auto assign_width = [&](RegisterId id, std::uint64_t width) {
         if (id >= widths.size() || width == 0U
             || width > std::numeric_limits<std::uint32_t>::max()) {
             return false;
         }
-        widths[id] = static_cast<std::uint32_t>(width);
+        const auto narrowed = static_cast<std::uint32_t>(width);
+        if (flow_insensitive) {
+            if (width_conflicts[id] != 0U) {
+                return true;
+            }
+            if (widths[id] != 0U && widths[id] != narrowed) {
+                width_conflicts[id] = 1U;
+                widths[id] = 0U;
+                widths_changed = true;
+                return true;
+            }
+            if (widths[id] != narrowed) {
+                widths[id] = narrowed;
+                widths_changed = true;
+            }
+            return true;
+        }
+        widths[id] = narrowed;
         return true;
     };
     const auto covered = [&](SignalId signal, std::uint32_t offset,
@@ -451,17 +788,14 @@ bool ownership_matches_operations(const ProcessProgramView& process,
         }
         return exact_regions == 1U;
     };
-    for (std::size_t index = 0; index < operations.size(); ++index) {
-        if (branch_entries[index]) {
-            forget_widths();
-        }
+    const auto step = [&](const std::size_t index) -> bool {
         const auto& stored_operation = operations.at(index);
         if (operation_holds<DebugPoint>(stored_operation)) {
             // Source markers do not define or consume register widths.
-            continue;
+            return true;
         }
         const auto operation = operations.expanded(index);
-        const auto valid = visit_operation([&](const auto& value) {
+        return visit_operation([&](const auto& value) {
             using T = std::decay_t<decltype(value)>;
             if constexpr (std::is_same_v<T, LoadConstant>) {
                 return assign_width(value.destination, value.value.width());
@@ -487,8 +821,42 @@ bool ownership_matches_operations(const ProcessProgramView& process,
             } else if constexpr (std::is_same_v<T, Binary>) {
                 const auto left = width_of(value.lhs);
                 const auto right = width_of(value.rhs);
+                const bool comparison
+                    = value.operation == BinaryOperator::equal
+                    || value.operation == BinaryOperator::case_equal
+                    || value.operation == BinaryOperator::casez_equal
+                    || value.operation == BinaryOperator::casex_equal
+                    || value.operation == BinaryOperator::wildcard_equal
+                    || value.operation == BinaryOperator::not_equal
+                    || value.operation == BinaryOperator::less_unsigned
+                    || value.operation == BinaryOperator::less_equal_unsigned
+                    || value.operation == BinaryOperator::greater_unsigned
+                    || value.operation
+                        == BinaryOperator::greater_equal_unsigned
+                    || value.operation == BinaryOperator::less_signed
+                    || value.operation == BinaryOperator::less_equal_signed
+                    || value.operation == BinaryOperator::greater_signed
+                    || value.operation == BinaryOperator::greater_equal_signed
+                    || value.operation == BinaryOperator::vhdl_match_equal;
                 return left != 0U && right != 0U
-                    && assign_width(value.destination, std::max(left, right));
+                    && assign_width(value.destination,
+                        comparison ? 1U : std::max(left, right));
+            } else if constexpr (std::is_same_v<T, LogicalNot>) {
+                return width_of(value.source) != 0U
+                    && assign_width(value.destination, 1U);
+            } else if constexpr (std::is_same_v<T, LogicalBinary>) {
+                return width_of(value.lhs) != 0U && width_of(value.rhs) != 0U
+                    && assign_width(value.destination, 1U);
+            } else if constexpr (std::is_same_v<T, ConvertToTwoState>) {
+                return assign_width(value.destination, width_of(value.source));
+            } else if constexpr (std::is_same_v<T, Insert>) {
+                const auto target = width_of(value.target);
+                const auto source = width_of(value.source);
+                return target != 0U && source != 0U
+                    && value.offset < target && source <= target - value.offset
+                    && assign_width(value.destination, target);
+            } else if constexpr (std::is_same_v<T, Branch>) {
+                return width_of(value.condition) == 1U;
             } else if constexpr (std::is_same_v<T, ConditionalSelect>) {
                 const auto when_true = width_of(value.when_true);
                 const auto when_false = width_of(value.when_false);
@@ -573,8 +941,10 @@ bool ownership_matches_operations(const ProcessProgramView& process,
             } else if constexpr (std::is_same_v<T, WaitSensitivity>) {
                 return static_loop(process) && index + 2U == operations.size();
             } else if constexpr (std::is_same_v<T, Jump>) {
-                return static_loop(process) && index + 1U == operations.size()
-                    && value.target == 0U;
+                return (static_loop(process) && index + 1U == operations.size()
+                           && value.target == 0U)
+                    || (value.target > index
+                        && value.target < operations.size());
             } else if constexpr (std::is_same_v<T, Fork>
                 || std::is_same_v<T, ForkEnd>
                 || std::is_same_v<T, WaitFork>
@@ -591,7 +961,72 @@ bool ownership_matches_operations(const ProcessProgramView& process,
                 return std::is_same_v<T, DebugPoint>;
             }
         }, operation);
-        if (!valid) {
+    };
+    const bool has_fork = std::ranges::any_of(branch_entries,
+        [](const bool entry) { return entry; });
+    const auto final_loop_jump = [&](const std::size_t index) {
+        if (index + 1U != operations.size()) {
+            return false;
+        }
+        const auto tail = operations.expanded(index);
+        const auto* jump = operation_get_if<Jump>(&tail);
+        return jump != nullptr && jump->target == 0U && static_loop(process);
+    };
+    bool has_control_flow = false;
+    for (std::size_t index = 0; index < operations.size(); ++index) {
+        const auto& stored = operations.at(index);
+        if (operation_holds<Branch>(stored)
+            || (operation_holds<Jump>(stored) && !final_loop_jump(index))) {
+            has_control_flow = true;
+            break;
+        }
+    }
+    if (has_fork || !has_control_flow) {
+        for (std::size_t index = 0; index < operations.size(); ++index) {
+            if (branch_entries[index]) {
+                forget_widths();
+            }
+            if (!step(index)) {
+                return false;
+            }
+        }
+        operation_write_ranges_exact = exact_ranges;
+        return true;
+    }
+    // Forward branches without forks: widths are flow-insensitive. Iterate
+    // definitions to a fixpoint, then validate every instruction against the
+    // agreed widths. Each pass is linear in the program length.
+    for (std::size_t index = 0; index < operations.size(); ++index) {
+        const auto operation = operations.expanded(index);
+        if (const auto* jump = operation_get_if<Jump>(&operation)) {
+            if (!final_loop_jump(index)
+                && (jump->target <= index
+                    || jump->target >= operations.size())) {
+                return false;
+            }
+        } else if (const auto* branch = operation_get_if<Branch>(&operation)) {
+            if (branch->when_true <= index || branch->when_false <= index
+                || branch->when_true >= operations.size()
+                || branch->when_false >= operations.size()) {
+                return false;
+            }
+        }
+    }
+    flow_insensitive = true;
+    width_conflicts.assign(widths.size(), 0U);
+    std::ranges::fill(widths, 0U);
+    for (std::size_t pass = 0U; pass <= widths.size(); ++pass) {
+        widths_changed = false;
+        for (std::size_t index = 0; index < operations.size(); ++index) {
+            (void)step(index);
+        }
+        if (!widths_changed) {
+            break;
+        }
+    }
+    exact_ranges = true;
+    for (std::size_t index = 0; index < operations.size(); ++index) {
+        if (!step(index)) {
             return false;
         }
     }
@@ -660,7 +1095,8 @@ void count_boundary_reason(RegionCertificateInventory& inventory,
 RegionCertificateInventory build_certificate_inventory(
     const std::vector<RegionProcessNode>& processes,
     const std::vector<RegionSignalNode>& signals,
-    const std::vector<std::uint64_t>& capability_epochs)
+    const std::vector<std::uint64_t>& capability_epochs,
+    const std::vector<std::size_t>& signal_alias_family_by_signal)
 {
     RegionCertificateInventory inventory;
     inventory.access_inventory_complete = std::ranges::none_of(processes,
@@ -716,48 +1152,260 @@ RegionCertificateInventory build_certificate_inventory(
                 });
     }
 
+    struct IndexedAccess {
+        const RegionAccess* access { };
+        bool writer { };
+    };
+    struct AccessInterval {
+        ProcessId process { };
+        std::uint32_t begin { };
+        std::uint32_t end { };
+    };
+    struct WriterCluster {
+        std::uint32_t begin { };
+        std::uint32_t end { };
+        ProcessId representative { };
+    };
+
     std::vector<std::vector<ProcessId>> adjacent(processes.size());
-    for (const auto& signal : signals) {
-        std::vector<ProcessId> touching;
-        for (const auto& access : signal.readers) {
-            if (access.process < candidate_process.size()
-                && candidate_process[access.process]) {
-                touching.push_back(access.process);
-            }
+    const auto connect = [&](const ProcessId left, const ProcessId right) {
+        if (left == right) {
+            return;
         }
-        for (const auto& access : signal.writers) {
-            if (access.process < candidate_process.size()
-                && candidate_process[access.process]) {
-                touching.push_back(access.process);
+        adjacent[left].push_back(right);
+        adjacent[right].push_back(left);
+    };
+    const auto no_alias_family = std::numeric_limits<std::size_t>::max();
+
+    // These synthetic edges preserve certificate connectivity only. The
+    // topological dependency graph below still uses every known access row.
+    for (SignalId signal_id = 0U; signal_id < signals.size(); ++signal_id) {
+        const auto& signal = signals[signal_id];
+        const auto& descriptor = signal.descriptor;
+        const bool supported_resolution
+            = descriptor.resolution == ResolutionKind::none
+            || descriptor.resolution == ResolutionKind::sv_wire;
+        const bool supported_value_kind
+            = descriptor.value_kind == ValueKind::logic4
+            || descriptor.value_kind == ValueKind::logic9;
+        const bool known_driver_class = [&] {
+            switch (signal.drivers) {
+            case RegionDriverClass::undriven:
+            case RegionDriverClass::single_whole:
+            case RegionDriverClass::single_partial:
+            case RegionDriverClass::disjoint_partial:
+                return true;
+            case RegionDriverClass::resolved:
+            case RegionDriverClass::unknown:
+                return false;
             }
-        }
-        std::ranges::sort(touching, [&](const ProcessId left,
-                                        const ProcessId right) {
-            const auto& left_node = processes[left];
-            const auto& right_node = processes[right];
-            return std::tuple { left_node.scheduling_domain,
-                       left_node.update_kind, left }
-                < std::tuple { right_node.scheduling_domain,
-                    right_node.update_kind, right };
+            return false;
+        }();
+        const bool exact_interval_signal
+            = inventory.access_inventory_complete
+            && descriptor.width != 0U
+            && supported_resolution
+            && supported_value_kind
+            && known_driver_class
+            && !descriptor.implicit_driver
+            && !descriptor.external_driver
+            && !descriptor.event_variable
+            && descriptor.observations == RegionObservation::none
+            && signal.observations == RegionObservation::none
+            && !signal.writers_unknown
+            && !signal.dynamic_fork_writers
+            && !signal.partial_projected_transactions
+            && signal_id < signal_alias_family_by_signal.size()
+            && signal_alias_family_by_signal[signal_id] == no_alias_family;
+
+        std::vector<IndexedAccess> accesses;
+        accesses.reserve(signal.readers.size() + signal.writers.size());
+        const auto append_accesses = [&](const std::vector<RegionAccess>& rows,
+                                         const bool writer) {
+            for (const auto& access : rows) {
+                if (access.process < candidate_process.size()
+                    && candidate_process[access.process]) {
+                    accesses.push_back({ &access, writer });
+                }
+            }
+        };
+        append_accesses(signal.readers, false);
+        append_accesses(signal.writers, true);
+        std::ranges::sort(accesses, [&](const IndexedAccess& left,
+                                        const IndexedAccess& right) {
+            const auto key = [&](const IndexedAccess& indexed) {
+                const auto& process = processes[indexed.access->process];
+                return std::tuple { process.scheduling_domain,
+                    process.update_kind, indexed.access->process,
+                    indexed.writer, indexed.access->offset,
+                    indexed.access->width, indexed.access->edge };
+            };
+            return key(left) < key(right);
         });
-        touching.erase(std::ranges::unique(touching).begin(), touching.end());
-        for (std::size_t begin = 0U; begin < touching.size();) {
-            const auto& anchor_node = processes[touching[begin]];
-            auto end = begin + 1U;
-            while (end < touching.size()) {
-                const auto& candidate = processes[touching[end]];
-                if (candidate.scheduling_domain
-                        != anchor_node.scheduling_domain
-                    || candidate.update_kind != anchor_node.update_kind) {
+
+        for (std::size_t group_begin = 0U;
+             group_begin < accesses.size();) {
+            const auto& first_access = *accesses[group_begin].access;
+            const auto& group_process = processes[first_access.process];
+            auto group_end = group_begin + 1U;
+            while (group_end < accesses.size()) {
+                const auto& access = *accesses[group_end].access;
+                const auto& process = processes[access.process];
+                if (process.scheduling_domain
+                        != group_process.scheduling_domain
+                    || process.update_kind != group_process.update_kind) {
                     break;
                 }
-                ++end;
+                ++group_end;
             }
-            for (auto index = begin + 1U; index < end; ++index) {
-                adjacent[touching[begin]].push_back(touching[index]);
-                adjacent[touching[index]].push_back(touching[begin]);
+
+            std::vector<ProcessId> touching;
+            bool has_candidate_writer { };
+            for (auto index = group_begin; index < group_end; ++index) {
+                const auto& indexed = accesses[index];
+                const auto process = indexed.access->process;
+                if (touching.empty() || touching.back() != process) {
+                    touching.push_back(process);
+                }
+                has_candidate_writer = has_candidate_writer || indexed.writer;
             }
-            begin = end;
+            if (!has_candidate_writer) {
+                group_begin = group_end;
+                continue;
+            }
+
+            const auto make_interval = [&](const IndexedAccess& indexed,
+                                           AccessInterval& interval) {
+                const auto& access = *indexed.access;
+                if (access.edge != EdgeKind::any) {
+                    return false;
+                }
+                interval.process = access.process;
+                if (access.width == 0U) {
+                    interval.begin = 0U;
+                    interval.end = descriptor.width;
+                    return true;
+                }
+                if (access.offset >= descriptor.width
+                    || access.width > descriptor.width - access.offset) {
+                    return false;
+                }
+                interval.begin = access.offset;
+                interval.end = access.offset + access.width;
+                return true;
+            };
+
+            if (!exact_interval_signal) {
+                // Preserve the conservative prior writer-star for signals
+                // whose ownership, shape, or observation contract is broad.
+                for (auto index = 1U; index < touching.size(); ++index) {
+                    connect(touching.front(), touching[index]);
+                }
+                group_begin = group_end;
+                continue;
+            }
+
+            std::vector<AccessInterval> writer_ranges;
+            std::vector<AccessInterval> reader_ranges;
+            writer_ranges.reserve(group_end - group_begin);
+            reader_ranges.reserve(group_end - group_begin);
+            bool valid_ranges = true;
+            for (auto index = group_begin; index < group_end; ++index) {
+                AccessInterval interval;
+                if (!make_interval(accesses[index], interval)) {
+                    valid_ranges = false;
+                    break;
+                }
+                (accesses[index].writer ? writer_ranges : reader_ranges)
+                    .push_back(interval);
+            }
+            if (!valid_ranges) {
+                for (auto index = 1U; index < touching.size(); ++index) {
+                    connect(touching.front(), touching[index]);
+                }
+                group_begin = group_end;
+                continue;
+            }
+
+            std::ranges::sort(writer_ranges,
+                [](const AccessInterval& left, const AccessInterval& right) {
+                    return std::tuple { left.begin, left.end, left.process }
+                        < std::tuple { right.begin, right.end, right.process };
+                });
+            std::vector<WriterCluster> clusters;
+            clusters.reserve(writer_ranges.size());
+            for (const auto& writer : writer_ranges) {
+                if (clusters.empty()
+                    || writer.begin >= clusters.back().end) {
+                    clusters.push_back({ writer.begin, writer.end,
+                        writer.process });
+                } else {
+                    clusters.back().end = std::max(
+                        clusters.back().end, writer.end);
+                }
+            }
+
+            std::size_t cluster_index { };
+            for (const auto& writer : writer_ranges) {
+                while (cluster_index + 1U < clusters.size()
+                    && writer.begin >= clusters[cluster_index].end) {
+                    ++cluster_index;
+                }
+                connect(clusters[cluster_index].representative,
+                    writer.process);
+            }
+
+            // A contiguous read that reaches multiple writer clusters connects
+            // those clusters. Each adjacent cluster gap needs one synthetic
+            // edge regardless of how many readers bridge across it.
+            std::vector<std::size_t> next_unjoined_gap(clusters.size());
+            for (std::size_t gap = 0U;
+                 gap < next_unjoined_gap.size(); ++gap) {
+                next_unjoined_gap[gap] = gap;
+            }
+            const auto find_unjoined_gap = [&](std::size_t gap) {
+                auto root = gap;
+                while (next_unjoined_gap[root] != root) {
+                    root = next_unjoined_gap[root];
+                }
+                while (next_unjoined_gap[gap] != gap) {
+                    const auto next = next_unjoined_gap[gap];
+                    next_unjoined_gap[gap] = root;
+                    gap = next;
+                }
+                return root;
+            };
+            for (const auto& reader : reader_ranges) {
+                const auto first_cluster = std::upper_bound(
+                    clusters.begin(), clusters.end(), reader.begin,
+                    [](const std::uint32_t begin,
+                       const WriterCluster& cluster) {
+                        return begin < cluster.end;
+                    });
+                const auto past_last_cluster = std::lower_bound(
+                    clusters.begin(), clusters.end(), reader.end,
+                    [](const WriterCluster& cluster,
+                       const std::uint32_t end) {
+                        return cluster.begin < end;
+                    });
+                if (first_cluster == past_last_cluster) {
+                    continue;
+                }
+                const auto first_index = static_cast<std::size_t>(
+                    first_cluster - clusters.begin());
+                const auto past_last_index = static_cast<std::size_t>(
+                    past_last_cluster - clusters.begin());
+                connect(reader.process,
+                    clusters[first_index].representative);
+                auto gap = find_unjoined_gap(first_index);
+                while (gap < past_last_index - 1U) {
+                    connect(clusters[gap].representative,
+                        clusters[gap + 1U].representative);
+                    next_unjoined_gap[gap] = find_unjoined_gap(gap + 1U);
+                    gap = find_unjoined_gap(gap);
+                }
+            }
+            group_begin = group_end;
         }
     }
     for (auto& neighbors : adjacent) {
@@ -1208,8 +1856,19 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
             graph.signals_[leaf.signal].observations = family_observations;
         }
     }
+    // Diagnostic-only purity census (FSIM_PROFILE_REGION_PURITY): records
+    // the first reason each process loses region purity.
+    static const bool purity_profile
+        = std::getenv("FSIM_PROFILE_REGION_PURITY") != nullptr;
+    std::map<std::string, std::pair<std::uint64_t, std::string>> purity_reasons;
     for (std::size_t index = 0; index < programs.size(); ++index) {
         const auto& program = programs[index];
+        std::string first_impurity;
+        const auto note_impurity = [&](const bool pure_now, std::string reason) {
+            if (purity_profile && !pure_now && first_impurity.empty()) {
+                first_impurity = std::move(reason);
+            }
+        };
         if (!program.valid() || program.id() != index) {
             throw std::invalid_argument("RegionGraph process identities are not dense");
         }
@@ -1223,6 +1882,7 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
         node.reads = node.sensitivities;
         node.writes = program.driver_regions();
         node.pure = static_loop(program);
+        note_impurity(node.pure, "not_static_loop:" + static_loop_failure(program));
         const bool has_static_loop = node.pure;
         bool has_dynamic_fork { };
         bool ownership_complete = true;
@@ -1294,13 +1954,48 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                     = graph.signals_[leaf.signal].observations | capability;
             }
         };
-        const auto observe = [&](SignalId signal, RegionObservation capability) {
+        const auto observe_access = [&](SignalId signal,
+                                        RegionObservation capability,
+                                        const std::uint32_t offset,
+                                        const std::uint32_t width) {
             require_signal(signal, graph.signals_.size());
             auto& observed = graph.signals_[signal].observations;
             observed = observed | capability;
             observe_alias_family(signal, capability);
-            node.reads.push_back({ signal, EdgeKind::any });
-            add_alias_read_access(signal, 0U, 0U);
+            node.reads.push_back({ signal, EdgeKind::any, offset, width });
+            add_alias_read_access(signal, offset, width);
+        };
+        const auto observe = [&](SignalId signal,
+                                 RegionObservation capability) {
+            observe_access(signal, capability, 0U, 0U);
+        };
+        const auto read_ranges
+            = infer_static_read_ranges(program, descriptors);
+        const auto& operations = program.operations();
+        std::size_t current_instruction { };
+        const auto observe_read = [&](const ReadSignal& read,
+                                      const RegionObservation capability) {
+            require_signal(read.signal, descriptors.size());
+            const auto found = read_ranges.find(current_instruction);
+            if (found != read_ranges.end()) {
+                const auto width = descriptors[read.signal].width;
+                if (std::ranges::any_of(found->second,
+                        [width](const StaticReadRange& range) {
+                            return range.width == 0U || range.offset >= width
+                                || range.width > width - range.offset;
+                        })) {
+                    observe_access(read.signal, capability, 0U, 0U);
+                    return;
+                }
+                for (const auto& range : found->second) {
+                    observe_access(read.signal, capability,
+                        range.offset,
+                        range.offset == 0U && range.width == width
+                            ? 0U : range.width);
+                }
+            } else {
+                observe_access(read.signal, capability, 0U, 0U);
+            }
         };
         const auto record_write_access = [&](SignalId signal) {
             require_signal(signal, graph.signals_.size());
@@ -1368,14 +2063,15 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
             if (sensitivity.edge != EdgeKind::any) {
                 observe(sensitivity.signal, RegionObservation::events);
                 node.pure = false;
+                note_impurity(false, "edge_sensitivity");
             } else {
                 add_alias_read_access(sensitivity.signal,
                     sensitivity.offset, sensitivity.width);
             }
         }
-        const auto& operations = program.operations();
         for (std::size_t instruction = 0; instruction < operations.size();
              ++instruction) {
+            current_instruction = instruction;
             const auto& stored_operation = operations.at(instruction);
             if (operation_holds<DebugPoint>(stored_operation)) {
                 // Debug metadata remains in the program, but contributes no
@@ -1439,7 +2135,8 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
             }, operation);
             const bool access_known = fork_control_known
                 && visit_known_region_accesses(
-                operation, find_container, observe, record_write_access,
+                operation, find_container, observe, observe_read,
+                record_write_access,
                 record_container_write_access);
             if (!access_known) {
                 node.dependencies_unknown = true;
@@ -1459,6 +2156,20 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                     }
                 }, operation);
             }
+            if (node.pure && !supported) {
+                note_impurity(false, "operation:" + std::string {
+                    visit_operation([](const auto& value) {
+                        return std::string_view { typeid(value).name() };
+                    }, operation) }
+                    + visit_operation([](const auto& value) -> std::string {
+                        using T = std::decay_t<decltype(value)>;
+                        if constexpr (std::is_same_v<T, Binary>) {
+                            return ":" + std::to_string(
+                                static_cast<int>(value.operation));
+                        }
+                        return {};
+                    }, operation));
+            }
             node.pure = node.pure && supported;
         }
         if (node.pure && ownership_complete && !has_update_kind
@@ -1474,6 +2185,10 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
             || (node.scheduling_domain == ProcessSchedulingDomain::systemverilog
                 && node.update_kind != RegionUpdateKind::systemverilog_active)
             || node.update_kind == RegionUpdateKind::mixed_or_unknown) {
+            note_impurity(!node.pure,
+                !ownership_complete ? "ownership_incomplete"
+                : !has_update_kind ? "no_update_kind"
+                : "update_kind_mismatch");
             node.pure = false;
         }
         normalize_sensitivities(node.reads);
@@ -1561,6 +2276,7 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
             bool operation_write_ranges_exact { };
             if (!ownership_matches_operations(program, descriptors,
                     find_container, operation_write_ranges_exact)) {
+                note_impurity(!node.pure, "ownership_mismatch");
                 node.pure = false;
                 for (const auto& write : node.writes) {
                     auto& target = graph.signals_[write.signal];
@@ -1572,6 +2288,19 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                 node.operation_write_ranges_exact
                     = operation_write_ranges_exact;
             }
+        }
+        if (purity_profile && !first_impurity.empty()) {
+            auto& entry = purity_reasons[first_impurity];
+            if (entry.first++ == 0U) {
+                entry.second = std::to_string(program.id());
+            }
+        }
+    }
+    if (purity_profile) {
+        for (const auto& [reason, entry] : purity_reasons) {
+            std::cerr << "fsim-profile: region-purity reason=" << reason
+                      << " processes=" << entry.first
+                      << " example=" << entry.second << '\n';
         }
     }
 
@@ -1683,7 +2412,8 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
             = graph.processes_[process].pure && pending_process[process] != 0U;
     }
     graph.certificate_inventory_ = build_certificate_inventory(
-        graph.processes_, graph.signals_, graph.capability_epochs_);
+        graph.processes_, graph.signals_, graph.capability_epochs_,
+        graph.signal_alias_family_by_signal_);
     constexpr auto no_certificate_component
         = std::numeric_limits<std::size_t>::max();
     graph.certificate_component_by_process_.assign(

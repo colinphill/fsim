@@ -2,6 +2,7 @@
 #include "llvm_jit_region_frontier_shared_body_cache_test.hpp"
 
 #include "fsim/compiler/llvm_jit_region_frontier.hpp"
+#include "llvm_jit_region_frontier_private_access.hpp"
 #include "llvm_jit_region_frontier_staging_test.hpp"
 #include "llvm_jit_region_frontier_test_access.hpp"
 #include "llvm_jit_region_frontier_test_support.hpp"
@@ -27,6 +28,7 @@ namespace fsim::compiler::test {
 namespace {
 
 using llvm_detail::RegionFrontierTestAccess;
+using llvm_detail::RegionFrontierPrivateAccess;
 using runtime::simir::RegionConeActivationKernel;
 using runtime::simir::RegionFrontierCacheBindingResult;
 using runtime::simir::RegionFrontierStatusV2;
@@ -118,6 +120,49 @@ void require_probe(const RegionConeActivationKernel& kernel,
         "each live exact wrapper stages the expected producer result");
 }
 
+[[nodiscard]] bool same_probe_result(
+    const RegionFrontierCacheBindingResult& left,
+    const RegionFrontierCacheBindingResult& right)
+{
+    return left.status == right.status
+        && left.pending_aval == right.pending_aval
+        && left.pending_bval == right.pending_bval
+        && left.member_dispatches == right.member_dispatches;
+}
+
+void require_private_probe_parity(const RegionConeActivationKernel& kernel,
+    const LlvmRegionFrontierExecutor& executor)
+{
+    const auto canonical_values_entry
+        = RegionFrontierPrivateAccess::canonical_values_entry(executor);
+    const auto alias_and_canonical_values_entry
+        = RegionFrontierPrivateAccess::alias_and_canonical_values_entry(
+            executor);
+    const auto descriptor_shapes_entry
+        = RegionFrontierPrivateAccess::descriptor_shapes_entry(executor);
+    require(canonical_values_entry != nullptr
+            && alias_and_canonical_values_entry != nullptr
+            && descriptor_shapes_entry != nullptr,
+        "the exact wrapper resolves the canonical and shape entry addresses");
+
+    const auto checked = run_probe(kernel, executor);
+    const auto canonical_values = run_cache_input_binding_witness(kernel,
+        canonical_values_entry, executor.layout(), 71U);
+    const auto alias_and_canonical_values = run_cache_input_binding_witness(
+        kernel, alias_and_canonical_values_entry, executor.layout(), 71U);
+    const auto descriptor_shapes = run_cache_input_binding_witness(kernel,
+        descriptor_shapes_entry, executor.layout(), 71U);
+    require(same_probe_result(checked, canonical_values)
+            && same_probe_result(checked, alias_and_canonical_values)
+            && same_probe_result(checked, descriptor_shapes),
+        "all private entries preserve checked status and complete pending state");
+    require(checked.status == RegionFrontierStatusV2::need_scheduler_keys
+            && checked.pending_aval == std::vector<std::uint64_t> { 1U }
+            && checked.pending_bval == std::vector<std::uint64_t> { 0U }
+            && checked.member_dispatches == 1U,
+        "canonical-values cache probes use the expected valid producer result");
+}
+
 void require_clean_layer_statistics(const LlvmJitCacheStatistics& statistics)
 {
     require(statistics.load_failures == 0U && statistics.store_failures == 0U && statistics.prune_failures == 0U,
@@ -164,8 +209,26 @@ void check_concurrent_registry_and_wrapper_lifetime()
     const auto body_owner = RegionFrontierTestAccess::shared_body_owner_token(*executors.front());
     const auto body_address = RegionFrontierTestAccess::shared_body_address(*executors.front());
     const auto wrapper_entry = executors.front()->step_entry();
-    require(body_owner != nullptr && body_address != 0U && wrapper_entry != nullptr,
-        "the cold plan publishes real shared-body and wrapper identities");
+    const auto trusted_entry
+        = RegionFrontierPrivateAccess::trusted_entry(*executors.front());
+    const auto canonical_values_entry
+        = RegionFrontierPrivateAccess::canonical_values_entry(
+            *executors.front());
+    const auto alias_and_canonical_values_entry
+        = RegionFrontierPrivateAccess::alias_and_canonical_values_entry(
+            *executors.front());
+    const auto descriptor_shapes_entry
+        = RegionFrontierPrivateAccess::descriptor_shapes_entry(
+            *executors.front());
+    require(
+        body_owner != nullptr
+            && body_address != 0U
+            && wrapper_entry != nullptr
+            && trusted_entry != nullptr
+            && canonical_values_entry != nullptr
+            && alias_and_canonical_values_entry != nullptr
+            && descriptor_shapes_entry != nullptr,
+        "the cold plan publishes four existing wrappers plus the shape wrapper");
 
     std::uint64_t body_misses { };
     std::uint64_t body_hits { };
@@ -176,8 +239,21 @@ void check_concurrent_registry_and_wrapper_lifetime()
     std::uint64_t wrapper_stores { };
     std::uint64_t wrapper_reuses { };
     for (const auto& executor : executors) {
-        require(RegionFrontierTestAccess::shared_body_owner_token(*executor) == body_owner && RegionFrontierTestAccess::shared_body_address(*executor) == body_address && executor->step_entry() == wrapper_entry,
-            "same-key concurrent plans share the live body and exact wrapper");
+        require(
+            RegionFrontierTestAccess::shared_body_owner_token(*executor)
+                == body_owner
+                && RegionFrontierTestAccess::shared_body_address(*executor)
+                    == body_address
+                && executor->step_entry() == wrapper_entry
+                && RegionFrontierPrivateAccess::trusted_entry(*executor)
+                    == trusted_entry
+                && RegionFrontierPrivateAccess::canonical_values_entry(
+                    *executor) == canonical_values_entry
+                && RegionFrontierPrivateAccess::alias_and_canonical_values_entry(
+                    *executor) == alias_and_canonical_values_entry
+                && RegionFrontierPrivateAccess::descriptor_shapes_entry(
+                    *executor) == descriptor_shapes_entry,
+            "same-key concurrent plans share all five exact wrapper entries");
         const auto body_stats = RegionFrontierTestAccess::body_cache_statistics(*executor);
         const auto wrapper_stats = RegionFrontierTestAccess::wrapper_cache_statistics(*executor);
         require_clean_layer_statistics(body_stats);
@@ -202,12 +278,35 @@ void check_concurrent_registry_and_wrapper_lifetime()
     for (const auto& executor : executors) {
         require_probe(kernel, *executor);
     }
+    const auto reused_executor = std::find_if(executors.begin(),
+        executors.end(), [](const auto& executor) {
+            return RegionFrontierTestAccess::wrapper_registry_reused(
+                *executor);
+        });
+    require(reused_executor != executors.end(),
+        "the concurrent cohort includes an in-memory wrapper reuse");
+    require_private_probe_parity(kernel, **reused_executor);
 
     auto remapped_kernel = remap_frontier_physical_ids(kernel, 128U, 64U);
     auto remapped_peer = LlvmRegionFrontierExecutor::try_create(
         remapped_kernel, options, design_identity);
-    require(remapped_peer != nullptr && remapped_peer->step_entry() != nullptr && RegionFrontierTestAccess::shared_body_owner_token(*remapped_peer) == body_owner && RegionFrontierTestAccess::shared_body_address(*remapped_peer) == body_address && remapped_peer->step_entry() != wrapper_entry,
-        "a distinct physical wrapper keeps the shared body owner alive");
+    require(
+        remapped_peer != nullptr
+            && remapped_peer->step_entry() != nullptr
+            && RegionFrontierTestAccess::shared_body_owner_token(*remapped_peer)
+                == body_owner
+            && RegionFrontierTestAccess::shared_body_address(*remapped_peer)
+                == body_address
+            && remapped_peer->step_entry() != wrapper_entry
+            && RegionFrontierPrivateAccess::trusted_entry(*remapped_peer)
+                != trusted_entry
+            && RegionFrontierPrivateAccess::canonical_values_entry(
+                *remapped_peer) != canonical_values_entry
+            && RegionFrontierPrivateAccess::alias_and_canonical_values_entry(
+                *remapped_peer) != alias_and_canonical_values_entry
+            && RegionFrontierPrivateAccess::descriptor_shapes_entry(
+                *remapped_peer) != descriptor_shapes_entry,
+        "a remapped physical wrapper gets five distinct entries over the shared body");
         require(
             RegionFrontierTestAccess::body_registry_reused(*remapped_peer) && !RegionFrontierTestAccess::wrapper_registry_reused(*remapped_peer),
             "remapped IDs reuse only the certified body, not the exact wrapper");
@@ -231,6 +330,7 @@ void check_concurrent_registry_and_wrapper_lifetime()
                         remapped_wrapper_stats.rejected_entries,
             "aggregate cache statistics contain only the new exact wrapper");
     require_probe(remapped_kernel, *remapped_peer);
+    require_private_probe_parity(remapped_kernel, *remapped_peer);
     require(cached_object_paths(cache.path()).size() == 3U,
         "two exact physical bindings store separate wrapper objects for one "
         "body");
@@ -254,6 +354,7 @@ void check_concurrent_registry_and_wrapper_lifetime()
     require(replacement_wrapper_stats.hits == 1U && replacement_wrapper_stats.misses == 0U && replacement_wrapper_stats.stores == 0U,
         "exact wrapper recreation can reload its persisted object");
     require_probe(kernel, *current);
+    require_private_probe_parity(kernel, *current);
 
     for (std::size_t iteration = 0U; iteration < 8U; ++iteration) {
         std::barrier replacement_gate { 2 };
@@ -297,6 +398,7 @@ void check_concurrent_registry_and_wrapper_lifetime()
         "released owners are reconstructed from separate body and wrapper "
         "objects");
     require_probe(kernel, *warm);
+    require_private_probe_parity(kernel, *warm);
     require(cached_object_paths(cache.path()).size() == 3U,
         "warm reconstruction reuses both existing physical object layers");
 }

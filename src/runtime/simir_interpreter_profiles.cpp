@@ -10,6 +10,8 @@
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
+#include <limits>
+#include <map>
 #include <numeric>
 #include <ranges>
 #include <string_view>
@@ -243,6 +245,426 @@ void print_structural_census(std::ostream& output, const RegionGraph& graph)
     output << '\n';
 }
 
+template<typename Programs, typename FrontierRuntimes>
+void print_component_access_range_census(std::ostream& output,
+    const RegionGraph& graph, const Programs& programs,
+    const FrontierRuntimes& frontier_runtimes)
+{
+    // This profile-only snapshot diagnostic must stay off publication paths.
+    constexpr std::size_t maximum_member_count_classes = 8U;
+    constexpr std::size_t maximum_descriptor_records = 2048U;
+    constexpr auto no_component = std::numeric_limits<std::size_t>::max();
+
+    const auto& inventory = graph.certificate_inventory();
+    const auto processes = graph.processes();
+    const auto signals = graph.signals();
+    std::vector<std::size_t> component_by_process(processes.size(),
+        no_component);
+    std::vector<std::size_t> read_counts_by_process(processes.size(), 0U);
+    std::vector<std::size_t> write_counts_by_process(processes.size(), 0U);
+    std::vector<std::size_t> access_counts_by_component(
+        inventory.components.size(), 0U);
+    std::vector<std::size_t> output_counts_by_component(
+        inventory.components.size(), 0U);
+
+    std::size_t candidate_components { };
+    std::size_t candidate_members { };
+    std::size_t prepared_components { };
+    std::size_t frontier_runtime_components { };
+    std::size_t candidate_access_records { };
+    std::size_t candidate_kernel_output_records { };
+    std::size_t candidate_descriptor_records { };
+
+    for (std::size_t component_id = 0U;
+         component_id < inventory.components.size(); ++component_id) {
+        const auto& component = inventory.components[component_id];
+        if (component.status
+            != RegionComponentCertificateStatus::structural_candidate) {
+            continue;
+        }
+        ++candidate_components;
+        candidate_members += component.members.size();
+        candidate_descriptor_records += 1U + component.members.size();
+        for (const auto process : component.members) {
+            if (process < component_by_process.size()) {
+                component_by_process[process] = component_id;
+            }
+        }
+        if (component_id < programs.size()
+            && programs[component_id].has_value()) {
+            ++prepared_components;
+            output_counts_by_component[component_id]
+                = programs[component_id]->activation_kernel.outputs.size();
+            candidate_kernel_output_records +=
+                output_counts_by_component[component_id];
+            candidate_descriptor_records +=
+                output_counts_by_component[component_id];
+        }
+        if (component_id < frontier_runtimes.size()
+            && frontier_runtimes[component_id]) {
+            ++frontier_runtime_components;
+        }
+    }
+
+    for (const auto& signal : signals) {
+        for (const auto& access : signal.readers) {
+            if (access.process >= component_by_process.size()) {
+                continue;
+            }
+            const auto component_id = component_by_process[access.process];
+            if (component_id == no_component) {
+                continue;
+            }
+            ++read_counts_by_process[access.process];
+            ++access_counts_by_component[component_id];
+            ++candidate_access_records;
+        }
+        for (const auto& access : signal.writers) {
+            if (access.process >= component_by_process.size()) {
+                continue;
+            }
+            const auto component_id = component_by_process[access.process];
+            if (component_id == no_component) {
+                continue;
+            }
+            ++write_counts_by_process[access.process];
+            ++access_counts_by_component[component_id];
+            ++candidate_access_records;
+        }
+    }
+    candidate_descriptor_records += candidate_access_records;
+
+    std::vector<std::size_t> ranked_components;
+    ranked_components.reserve(candidate_components);
+    for (std::size_t component_id = 0U;
+         component_id < inventory.components.size(); ++component_id) {
+        if (inventory.components[component_id].status
+            == RegionComponentCertificateStatus::structural_candidate) {
+            ranked_components.push_back(component_id);
+        }
+    }
+    const auto member_dispatches = [&](const std::size_t component_id) {
+        return component_id < frontier_runtimes.size()
+                && frontier_runtimes[component_id]
+            ? frontier_runtimes[component_id]->native_member_dispatches
+            : std::uint64_t { };
+    };
+    std::ranges::sort(ranked_components,
+        [&](const std::size_t left, const std::size_t right) {
+            const auto left_dispatches = member_dispatches(left);
+            const auto right_dispatches = member_dispatches(right);
+            if (left_dispatches != right_dispatches) {
+                return left_dispatches > right_dispatches;
+            }
+            const auto left_size = inventory.components[left].members.size();
+            const auto right_size = inventory.components[right].members.size();
+            if (left_size != right_size) {
+                return left_size > right_size;
+            }
+            const auto left_cost = 1U
+                + inventory.components[left].members.size()
+                + access_counts_by_component[left]
+                + output_counts_by_component[left];
+            const auto right_cost = 1U
+                + inventory.components[right].members.size()
+                + access_counts_by_component[right]
+                + output_counts_by_component[right];
+            return left_cost != right_cost
+                ? left_cost < right_cost : left < right;
+        });
+
+    std::vector<std::size_t> sampled_components;
+    std::vector<std::size_t> sampled_member_count_class;
+    std::size_t sampled_record_count { };
+    const auto select_component = [&](const std::size_t component_id) {
+        const auto cost = 1U
+            + inventory.components[component_id].members.size()
+            + access_counts_by_component[component_id]
+            + output_counts_by_component[component_id];
+        if (sampled_components.size() >= maximum_member_count_classes
+            || cost > maximum_descriptor_records - sampled_record_count) {
+            return false;
+        }
+        sampled_components.push_back(component_id);
+        sampled_record_count += cost;
+        return true;
+    };
+
+    sampled_components.reserve(maximum_member_count_classes);
+    sampled_member_count_class.reserve(maximum_member_count_classes);
+    for (const auto component_id : ranked_components) {
+        const auto member_count
+            = inventory.components[component_id].members.size();
+        if (std::ranges::find(sampled_member_count_class, member_count)
+            != sampled_member_count_class.end()) {
+            continue;
+        }
+        if (select_component(component_id)) {
+            sampled_member_count_class.push_back(member_count);
+        }
+    }
+    for (const auto component_id : ranked_components) {
+        if (sampled_components.size() >= maximum_member_count_classes) {
+            break;
+        }
+        if (std::ranges::find(sampled_components, component_id)
+            == sampled_components.end()) {
+            (void)select_component(component_id);
+        }
+    }
+
+    std::vector<std::size_t> sampled_component_by_process(processes.size(),
+        no_component);
+    std::size_t sampled_members { };
+    std::size_t sampled_access_records { };
+    std::size_t sampled_kernel_output_records { };
+    for (const auto component_id : sampled_components) {
+        const auto& component = inventory.components[component_id];
+        sampled_members += component.members.size();
+        sampled_access_records += access_counts_by_component[component_id];
+        sampled_kernel_output_records += output_counts_by_component[component_id];
+        for (const auto process : component.members) {
+            if (process < sampled_component_by_process.size()) {
+                sampled_component_by_process[process] = component_id;
+            }
+        }
+    }
+
+    output << "[fsim region-access-range-census]"
+           << " scope=structural-candidate-components"
+           << " selection=one-per-member-count-by-native-work-then-size-then-fill"
+           << " candidate_components=" << candidate_components
+           << " candidate_members=" << candidate_members
+           << " prepared_program_components=" << prepared_components
+           << " frontier_runtime_components=" << frontier_runtime_components
+           << " candidate_access_records=" << candidate_access_records
+           << " candidate_kernel_output_records="
+           << candidate_kernel_output_records
+           << " candidate_descriptor_records="
+           << candidate_descriptor_records
+           << " sampled_components=" << sampled_components.size()
+           << " sampled_members=" << sampled_members
+           << " unselected_members=" << candidate_members - sampled_members
+           << " sampled_access_records=" << sampled_access_records
+           << " unselected_access_records="
+           << candidate_access_records - sampled_access_records
+           << " sampled_kernel_output_records="
+           << sampled_kernel_output_records
+           << " unselected_kernel_output_records="
+           << candidate_kernel_output_records
+                - sampled_kernel_output_records
+           << " sampled_descriptor_records=" << sampled_record_count
+           << " descriptor_record_cap=" << maximum_descriptor_records
+           << " unselected_components="
+           << candidate_components - sampled_components.size()
+           << " unselected_descriptor_records="
+           << candidate_descriptor_records - sampled_record_count
+           << " range_semantics=lsb_offset_width_zero_whole"
+           << " sample_completeness=whole_components"
+           << " member_records=one_per_member_in_selected_component\n";
+
+    const auto alias_families = graph.signal_alias_families();
+    std::vector<std::size_t> alias_family_by_signal(signals.size(),
+        no_component);
+    std::vector<std::size_t> alias_family_count_by_signal(signals.size(), 0U);
+    std::vector<std::uint8_t> alias_role_by_signal(signals.size(), 0U);
+    const auto record_alias = [&](const SignalId signal,
+                                  const std::size_t family_id,
+                                  const std::uint8_t role) {
+        if (signal >= alias_family_by_signal.size()) {
+            return;
+        }
+        ++alias_family_count_by_signal[signal];
+        if (alias_family_count_by_signal[signal] == 1U) {
+            alias_family_by_signal[signal] = family_id;
+            alias_role_by_signal[signal] = role;
+        } else if (alias_family_by_signal[signal] != family_id
+            || alias_role_by_signal[signal] != role) {
+            alias_family_by_signal[signal] = no_component;
+            alias_role_by_signal[signal] = 3U;
+        }
+    };
+    for (std::size_t family_id = 0U;
+         family_id < alias_families.size(); ++family_id) {
+        const auto& family = alias_families[family_id];
+        record_alias(family.proxy, family_id, 1U);
+        for (const auto& leaf : family.leaves) {
+            record_alias(leaf.signal, family_id, 2U);
+        }
+    }
+
+    const auto print_signal_flags = [&](const std::size_t signal_id) {
+        if (signal_id >= signals.size()) {
+            output << " signal_valid=0 signal_width=0"
+                   << " all_reader_access_count=0 all_writer_access_count=0"
+                   << " writers_unknown=1 dynamic_fork_writers=1"
+                   << " implicit_driver=1 external_driver=1"
+                   << " event_variable=1 observations=0"
+                   << " driver_class=unknown alias_family=multiple"
+                   << " alias_role=ambiguous";
+            return;
+        }
+        const auto& signal = signals[signal_id];
+        output << " signal_valid=1 signal_width="
+               << signal.descriptor.width
+               << " all_reader_access_count=" << signal.readers.size()
+               << " all_writer_access_count=" << signal.writers.size()
+               << " writers_unknown=" << (signal.writers_unknown ? 1 : 0)
+               << " dynamic_fork_writers="
+               << (signal.dynamic_fork_writers ? 1 : 0)
+               << " implicit_driver="
+               << (signal.descriptor.implicit_driver ? 1 : 0)
+               << " external_driver="
+               << (signal.descriptor.external_driver ? 1 : 0)
+               << " event_variable="
+               << (signal.descriptor.event_variable ? 1 : 0)
+               << " observations="
+               << static_cast<std::uint32_t>(signal.observations)
+               << " driver_class="
+               << static_cast<unsigned>(signal.drivers)
+               << " resolution="
+               << static_cast<unsigned>(signal.descriptor.resolution)
+               << " partial_projected_transactions="
+               << (signal.partial_projected_transactions ? 1 : 0);
+        if (alias_family_count_by_signal[signal_id] == 0U) {
+            output << " alias_family=none alias_role=none";
+        } else if (alias_family_count_by_signal[signal_id] > 1U
+            || alias_role_by_signal[signal_id] == 3U) {
+            output << " alias_family=multiple alias_role=ambiguous";
+        } else {
+            output << " alias_family=" << alias_family_by_signal[signal_id]
+                   << " alias_role="
+                   << (alias_role_by_signal[signal_id] == 1U
+                           ? "proxy" : "leaf");
+        }
+    };
+
+    for (const auto component_id : sampled_components) {
+        const auto& component = inventory.components[component_id];
+        const bool has_program = component_id < programs.size()
+            && programs[component_id].has_value();
+        const bool has_frontier_runtime = component_id
+                < frontier_runtimes.size()
+            && static_cast<bool>(frontier_runtimes[component_id]);
+        const auto output_count = output_counts_by_component[component_id];
+        output << "[fsim region-access-range-record] kind=component"
+               << " component=" << component_id
+               << " member_count=" << component.members.size()
+               << " prepared_program=" << (has_program ? 1 : 0)
+               << " frontier_runtime=" << (has_frontier_runtime ? 1 : 0)
+               << " native_member_dispatches="
+               << member_dispatches(component_id)
+               << " kernel_output_count=" << output_count;
+        if (!component.members.empty()
+            && component.members.front() < processes.size()) {
+            output << " scheduling_domain="
+                   << static_cast<unsigned>(processes[
+                       component.members.front()].scheduling_domain)
+                   << " update_kind="
+                   << static_cast<unsigned>(processes[
+                       component.members.front()].update_kind);
+        }
+        output << '\n';
+
+        for (const auto process : component.members) {
+            const bool process_valid = process < processes.size();
+            const auto process_unknown = process_valid
+                ? processes[process].dependencies_unknown : true;
+            output << "[fsim region-access-range-record] kind=member"
+                   << " component=" << component_id
+                   << " component_member_count=" << component.members.size()
+                   << " process=" << process
+                   << " process_valid=" << (process_valid ? 1 : 0)
+                   << " process_unknown=" << (process_unknown ? 1 : 0)
+                   << " pure="
+                   << (process_valid && processes[process].pure ? 1 : 0)
+                   << " reader_access_count="
+                   << (process_valid ? read_counts_by_process[process] : 0U)
+                   << " writer_access_count="
+                   << (process_valid ? write_counts_by_process[process] : 0U)
+                   << '\n';
+        }
+
+        if (has_program) {
+            for (const auto& binding
+                : programs[component_id]->activation_kernel.outputs) {
+                output << "[fsim region-access-range-record] kind=kernel-output"
+                       << " component=" << component_id
+                       << " component_member_count="
+                       << component.members.size()
+                       << " internal_output="
+                       << (std::ranges::find(programs[component_id]
+                                   ->activation_kernel.internal_signals,
+                               binding.signal)
+                               != programs[component_id]
+                                      ->activation_kernel.internal_signals.end()
+                               ? 1 : 0)
+                       << " owner=" << binding.owner
+                       << " signal=" << binding.signal
+                       << " offset=" << binding.offset
+                       << " width=" << binding.width
+                       << " binding_signal_width=" << binding.signal_width
+                       << " value_kind="
+                       << static_cast<unsigned>(binding.value_kind)
+                       << " process_unknown="
+                       << (binding.owner < processes.size()
+                               ? (processes[binding.owner].dependencies_unknown
+                                      ? 1 : 0) : 1);
+                print_signal_flags(binding.signal);
+                output << '\n';
+            }
+        }
+
+        for (std::size_t signal_id = 0U;
+             signal_id < signals.size(); ++signal_id) {
+            for (const auto& access : signals[signal_id].readers) {
+                if (access.process < sampled_component_by_process.size()
+                    && sampled_component_by_process[access.process]
+                        == component_id) {
+                    output << "[fsim region-access-range-record] kind=access"
+                           << " component=" << component_id
+                           << " component_member_count="
+                           << component.members.size()
+                           << " role=reader"
+                           << " process=" << access.process
+                           << " process_unknown="
+                           << (processes[access.process].dependencies_unknown
+                                   ? 1 : 0)
+                           << " signal=" << signal_id
+                           << " offset=" << access.offset
+                           << " width=" << access.width
+                           << " edge="
+                           << static_cast<unsigned>(access.edge);
+                    print_signal_flags(signal_id);
+                    output << '\n';
+                }
+            }
+            for (const auto& access : signals[signal_id].writers) {
+                if (access.process < sampled_component_by_process.size()
+                    && sampled_component_by_process[access.process]
+                        == component_id) {
+                    output << "[fsim region-access-range-record] kind=access"
+                           << " component=" << component_id
+                           << " component_member_count="
+                           << component.members.size()
+                           << " role=writer"
+                           << " process=" << access.process
+                           << " process_unknown="
+                           << (processes[access.process].dependencies_unknown
+                                   ? 1 : 0)
+                           << " signal=" << signal_id
+                           << " offset=" << access.offset
+                           << " width=" << access.width
+                           << " edge="
+                           << static_cast<unsigned>(access.edge);
+                    print_signal_flags(signal_id);
+                    output << '\n';
+                }
+            }
+        }
+    }
+}
+
 } // namespace
 
 Interpreter::Interpreter(
@@ -256,7 +678,121 @@ Interpreter::~Interpreter()
     if (!impl_) {
         return;
     }
+    if (impl_->commit_signal_profile_enabled) {
+        // Diagnostic-only per-signal update commit census. Rows describe the
+        // ordinary SystemVerilog update dispatch route and wall time inside
+        // the commit call, including notification and publication work.
+        auto& impl = *impl_;
+        const auto& rows = impl.commit_signal_profile_rows;
+        std::uint64_t total_calls { };
+        std::uint64_t total_slices { };
+        std::uint64_t total_ns { };
+        std::vector<SignalId> order;
+        for (std::size_t id = 0U; id < rows.size(); ++id) {
+            if (rows[id].calls == 0U) {
+                continue;
+            }
+            total_calls += rows[id].calls;
+            total_slices += rows[id].slice_calls;
+            total_ns += rows[id].nanoseconds;
+            order.push_back(static_cast<SignalId>(id));
+        }
+        std::ranges::sort(order, [&](const SignalId a, const SignalId b) {
+            return rows[a].nanoseconds > rows[b].nanoseconds;
+        });
+        const auto alias_elements = [&](const SignalId id) -> std::size_t {
+            if (id >= impl.signal_container_aggregate_aliases.size()
+                || !impl.signal_container_aggregate_aliases[id]) {
+                return 0U;
+            }
+            const auto object = *impl.signal_container_aggregate_aliases[id];
+            return object < impl.container_element_signal_aliases.size()
+                ? impl.container_element_signal_aliases[object].size()
+                : 0U;
+        };
+        struct Category {
+            std::uint64_t signals { };
+            std::uint64_t calls { };
+            std::uint64_t slice_calls { };
+            std::uint64_t nanoseconds { };
+        };
+        std::map<std::string, Category> categories;
+        for (const auto id : order) {
+            const auto& signal = impl.signals[id];
+            const auto drivers = impl.driver_values.at(id).size();
+            const auto elements = alias_elements(id);
+            std::string key = "resolution="
+                + std::to_string(static_cast<int>(signal.resolution))
+                + " alias=" + std::to_string(elements != 0U ? 1 : 0)
+                + " drivers="
+                + (drivers <= 1U ? std::to_string(drivers)
+                        : drivers <= 4U ? std::string { "2-4" }
+                        : drivers <= 16U ? std::string { "5-16" }
+                        : std::string { ">16" })
+                + " wide=" + std::to_string(
+                    signal.initial_value.width() > 64U ? 1 : 0);
+            auto& category = categories[key];
+            ++category.signals;
+            category.calls += rows[id].calls;
+            category.slice_calls += rows[id].slice_calls;
+            category.nanoseconds += rows[id].nanoseconds;
+        }
+        std::cerr << "fsim-profile: commit-signal-summary signals="
+                  << order.size() << " calls=" << total_calls
+                  << " slice_calls=" << total_slices
+                  << " nanoseconds=" << total_ns << '\n';
+        for (const auto& [key, category] : categories) {
+            std::cerr << "fsim-profile: commit-signal-category " << key
+                      << " signals=" << category.signals
+                      << " calls=" << category.calls
+                      << " slice_calls=" << category.slice_calls
+                      << " nanoseconds=" << category.nanoseconds << '\n';
+        }
+        const auto limit = std::min<std::size_t>(order.size(), 80U);
+        for (std::size_t rank = 0U; rank < limit; ++rank) {
+            const auto id = order[rank];
+            const auto& signal = impl.signals[id];
+            std::cerr << "fsim-profile: commit-signal rank=" << rank
+                      << " signal=" << id
+                      << " width=" << signal.initial_value.width()
+                      << " resolution=" << static_cast<int>(signal.resolution)
+                      << " drivers=" << impl.driver_values.at(id).size()
+                      << " alias_elements=" << alias_elements(id)
+                      << " owned_active=" << impl.owned_driver_active(id)
+                      << " calls=" << rows[id].calls
+                      << " slice_calls=" << rows[id].slice_calls
+                      << " nanoseconds=" << rows[id].nanoseconds
+                      << " name=" << impl.get_signal_cold(id).name << '\n';
+        }
+    }
     if (impl_->systemverilog_wave_profile_enabled) {
+        std::uint64_t retained_runtime_count { };
+        std::uint64_t alias_full_collectors { };
+        std::uint64_t alias_bind_attempts { };
+        std::uint64_t alias_bind_reuse_hits { };
+        std::uint64_t alias_bind_plane_misses { };
+        std::uint64_t alias_bind_unconfirmed_count_misses { };
+        for (const auto& runtime : impl_->region_frontier_runtime_by_component) {
+            if (!runtime) {
+                continue;
+            }
+            ++retained_runtime_count;
+            alias_full_collectors += runtime->alias_full_collector_calls;
+            alias_bind_attempts += runtime->alias_bind_proof_attempts;
+            alias_bind_reuse_hits += runtime->alias_bind_proof_reuse_hits;
+            alias_bind_plane_misses += runtime->alias_bind_proof_plane_misses;
+            alias_bind_unconfirmed_count_misses +=
+                runtime->alias_bind_proof_unconfirmed_task_count_misses;
+        }
+        std::cerr << "fsim-profile: sv-frontier-alias-reuse "
+                  << "scope=retained_component_runtimes runtimes="
+                  << retained_runtime_count
+                  << " full_collectors=" << alias_full_collectors
+                  << " bind_attempts=" << alias_bind_attempts
+                  << " bind_reuse_hits=" << alias_bind_reuse_hits
+                  << " bind_plane_misses=" << alias_bind_plane_misses
+                  << " bind_unconfirmed_count_misses="
+                  << alias_bind_unconfirmed_count_misses << '\n';
         const auto batch_compaction
             = impl_->scheduler.systemverilog_batch_compaction_stats();
         const auto alias_misses = [&](
@@ -268,6 +804,18 @@ Interpreter::~Interpreter()
                   << impl_->systemverilog_wave_profile_alias_checked_entries
                   << " trusted="
                   << impl_->systemverilog_wave_profile_alias_trusted_entries
+                  << " canonical_only="
+                  << impl_->systemverilog_wave_profile_canonical_values_only_entries
+                  << " alias_and_canonical="
+                  << impl_->systemverilog_wave_profile_alias_and_canonical_values_entries
+                  << " descriptor_shapes="
+                  << impl_->systemverilog_wave_profile_descriptor_shapes_entries
+                  << " public_checked="
+                  << (impl_->systemverilog_wave_profile_alias_checked_entries
+                      - impl_->systemverilog_wave_profile_canonical_values_only_entries)
+                  << " alias_only="
+                  << (impl_->systemverilog_wave_profile_alias_trusted_entries
+                      - impl_->systemverilog_wave_profile_alias_and_canonical_values_entries)
                   << " unavailable="
                   << impl_->systemverilog_wave_profile_alias_unavailable_entries
                   << " forced_staged="
@@ -295,6 +843,128 @@ Interpreter::~Interpreter()
                   << " confirmation_failures="
                   << impl_->systemverilog_wave_profile_alias_confirmation_failures
                   << '\n';
+        std::cerr << "fsim-profile: sv-frontier-member-sync-summary full_passes="
+                  << impl_->systemverilog_wave_profile_member_sync_full_passes
+                  << " full_members="
+                  << impl_->systemverilog_wave_profile_member_sync_full_members
+                  << " selected_passes="
+                  << impl_->systemverilog_wave_profile_member_sync_selected_passes
+                  << " selected_members="
+                  << impl_->systemverilog_wave_profile_member_sync_selected_members
+                  << " selected_total_members="
+                  << impl_->systemverilog_wave_profile_member_sync_selected_total_members
+                  << " boundary_sync_eligible="
+                  << impl_->systemverilog_wave_profile_boundary_sync_eligible
+                  << " boundary_sync_conservative="
+                  << impl_->systemverilog_wave_profile_boundary_sync_conservative
+                  << '\n';
+        std::uint64_t boundary_reject_sum { };
+        std::cerr << "fsim-profile: sv-frontier-boundary-sync-first-rejects";
+        for (std::size_t reason = 1U;
+             reason < kFrontierBoundarySyncRejectReasonCount; ++reason) {
+            const auto count
+                = impl_->systemverilog_wave_profile_boundary_sync_first_rejects[
+                    reason];
+            boundary_reject_sum += count;
+            std::cerr << " r" << reason << '=' << count;
+        }
+        std::cerr << " reject_sum=" << boundary_reject_sum
+                  << " conservative="
+                  << impl_->systemverilog_wave_profile_boundary_sync_conservative
+                  << '\n';
+        constexpr std::array<std::string_view, 2U> static_writer_labels {
+            "static0", "static_gt1"
+        };
+        constexpr std::array<std::string_view, 3U> driver_table_labels {
+            "table0", "table1", "table_gt1"
+        };
+        constexpr std::array<std::string_view, 2U> equality_labels {
+            "counts_differ", "counts_equal"
+        };
+        constexpr std::array<std::string_view, 2U> current_owner_labels {
+            "current_absent", "current_present"
+        };
+        constexpr std::array<std::string_view, 2U> publication_labels {
+            "whole", "slice"
+        };
+        std::uint64_t writer_inventory_sum { };
+        std::cerr << "fsim-profile: sv-frontier-boundary-writer-inventory";
+        for (std::size_t static_bucket = 0U; static_bucket < 2U;
+             ++static_bucket) {
+            for (std::size_t table_bucket = 0U; table_bucket < 3U;
+                 ++table_bucket) {
+                for (std::size_t equality_bucket = 0U;
+                     equality_bucket < 2U; ++equality_bucket) {
+                    for (std::size_t owner_bucket = 0U;
+                         owner_bucket < 2U; ++owner_bucket) {
+                        for (std::size_t publication_bucket = 0U;
+                             publication_bucket < 2U; ++publication_bucket) {
+                            auto histogram_index = static_bucket;
+                            histogram_index
+                                = histogram_index * 3U + table_bucket;
+                            histogram_index
+                                = histogram_index * 2U + equality_bucket;
+                            histogram_index
+                                = histogram_index * 2U + owner_bucket;
+                            histogram_index
+                                = histogram_index * 2U + publication_bucket;
+                            const auto count
+                                = impl_->systemverilog_wave_profile_boundary_sync_writer_inventory[
+                                    histogram_index];
+                            writer_inventory_sum += count;
+                            std::cerr << ' '
+                                      << static_writer_labels[static_bucket]
+                                      << '_'
+                                      << driver_table_labels[table_bucket]
+                                      << '_'
+                                      << equality_labels[equality_bucket]
+                                      << '_'
+                                      << current_owner_labels[owner_bucket]
+                                      << '_'
+                                      << publication_labels[publication_bucket]
+                                      << '=' << count;
+                        }
+                    }
+                }
+            }
+        }
+        const auto writer_count_rejects
+            = impl_->systemverilog_wave_profile_boundary_sync_first_rejects[
+                static_cast<std::size_t>(
+                    FrontierBoundarySyncRejectReason::writer_count)];
+        std::cerr << " histogram_sum=" << writer_inventory_sum
+                  << " writer_count_rejects=" << writer_count_rejects
+                  << " reconciled="
+                  << (writer_inventory_sum == writer_count_rejects)
+                  << '\n';
+        for (std::size_t mask = 0U;
+             mask < kFrontierMemberSyncFullReasonCombinations; ++mask) {
+            const auto passes
+                = impl_->systemverilog_wave_profile_member_sync_full_reason_passes[mask];
+            if (passes == 0U) {
+                continue;
+            }
+            const auto contains = [mask](FrontierMemberSyncFullReason reason) {
+                return (mask & static_cast<std::uint8_t>(reason)) != 0U;
+            };
+            std::cerr << "fsim-profile: sv-frontier-member-sync-full-reasons mask="
+                      << mask << " passes=" << passes
+                      << " members="
+                      << impl_->systemverilog_wave_profile_member_sync_full_reason_members[mask]
+                      << " seed=" << contains(FrontierMemberSyncFullReason::seed)
+                      << " nonprivate="
+                      << contains(FrontierMemberSyncFullReason::nonprivate_entry)
+                      << " unavailable="
+                      << contains(FrontierMemberSyncFullReason::unavailable_workset)
+                      << " boundary="
+                      << contains(FrontierMemberSyncFullReason::boundary_publication)
+                      << " invalid_journal="
+                      << contains(FrontierMemberSyncFullReason::invalid_journal)
+                      << " uncertain_status_or_generation="
+                      << contains(
+                          FrontierMemberSyncFullReason::uncertain_status_or_generation)
+                      << '\n';
+        }
         std::cerr << "fsim-profile: sv-ordered-wave-summary offered_batches="
                   << impl_->systemverilog_wave_profile_calls
                   << " offered_members=" << impl_->systemverilog_wave_profile_offered_members
@@ -508,6 +1178,9 @@ Interpreter::~Interpreter()
                   << '\n';
         if (impl_->region_graph) {
             print_structural_census(std::cerr, *impl_->region_graph);
+            print_component_access_range_census(std::cerr,
+                *impl_->region_graph, impl_->region_activation_programs,
+                impl_->region_frontier_runtime_by_component);
         }
     }
     if (impl_->native_phase_profile_enabled) {

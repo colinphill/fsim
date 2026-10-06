@@ -80,26 +80,6 @@ constexpr std::uint64_t kSystemVerilogWavePayload
         && left.phase == right.phase;
 }
 
-[[nodiscard]] std::optional<std::uint32_t> local_member_for_process(
-    const RegionFrontierLayoutV2& layout,
-    const ProcessId process) noexcept
-{
-    if (layout.members == nullptr) {
-        return std::nullopt;
-    }
-    std::optional<std::uint32_t> result;
-    for (std::uint32_t index = 0U; index < layout.member_count; ++index) {
-        if (layout.members[index].process_id != process) {
-            continue;
-        }
-        if (result) {
-            return std::nullopt;
-        }
-        result = index;
-    }
-    return result;
-}
-
 [[nodiscard]] bool decode_wave_payload(
     const std::uint64_t payload,
     ProcessId& process) noexcept
@@ -200,6 +180,7 @@ void Interpreter::Impl::record_systemverilog_readiness_key(
         return;
     }
 
+    runtime->mark_member_sync_write(static_cast<std::uint32_t>(member_index));
     auto& member = runtime->members[member_index];
     member.static_trigger_mask |= trigger_mask;
     if (!queued.key_valid) {
@@ -282,6 +263,7 @@ void Interpreter::Impl::merge_systemverilog_readiness_mask(
         || runtime->members[member_index].process_id != process) {
         return;
     }
+    runtime->mark_member_sync_write(static_cast<std::uint32_t>(member_index));
     runtime->members[member_index].static_trigger_mask |= trigger_mask;
 }
 
@@ -580,10 +562,18 @@ Interpreter::Impl::try_execute_region_frontier_component(
         || cohort_overflow_scratch_in_use || !runtime.try_enter()) {
         return std::nullopt;
     }
+    AuthoritativeSignalPlanes::FrontierWriteLease lease;
     struct LeaveRuntime {
         RegionFrontierComponentRuntime& runtime;
-        ~LeaveRuntime() { runtime.leave(); }
-    } leave_runtime { runtime };
+        AuthoritativeSignalPlanes::FrontierWriteLease& lease;
+        ~LeaveRuntime()
+        {
+            runtime.end_alias_bind_lease();
+            lease.release();
+            runtime.leave();
+        }
+    } leave_runtime { runtime, lease };
+    runtime.clear_canonical_values_binding_receipt();
 
     const auto component = runtime.component;
     const auto backend_pin = runtime.backend;
@@ -638,6 +628,21 @@ Interpreter::Impl::try_execute_region_frontier_component(
         return std::nullopt;
     }
 
+    const auto member_for_process = [&](const ProcessId process)
+        -> std::optional<std::uint32_t> {
+        if (layout.members == nullptr
+            || process >= region_readiness_member_index_by_process.size()) {
+            return std::nullopt;
+        }
+        const auto member_index
+            = region_readiness_member_index_by_process[process];
+        if (member_index >= layout.member_count
+            || layout.members[member_index].process_id != process) {
+            return std::nullopt;
+        }
+        return static_cast<std::uint32_t>(member_index);
+    };
+
     // Match the generated preflight's cumulative staged-event bounds. A
     // single certified task fits the frame, but a borrowed group may not.
     // Keep the original order and leave the first over-budget task and its
@@ -654,7 +659,7 @@ Interpreter::Impl::try_execute_region_frontier_component(
         std::uint32_t task_event_bound { };
         ProcessId process { };
         if (decode_wave_payload(payload, process)) {
-            member = local_member_for_process(layout, process);
+            member = member_for_process(process);
             prefix_budget_valid = member.has_value();
         } else {
             const auto kind = payload >> kRegionFrontierPayloadKindShiftV2;
@@ -765,7 +770,7 @@ Interpreter::Impl::try_execute_region_frontier_component(
                     if (decode_wave_payload(payload, process)) {
                         trace.task_kind = "wave-member";
                         trace.process_id = process;
-                        member = local_member_for_process(layout, process);
+                        member = member_for_process(process);
                     } else {
                         const auto kind = payload
                             >> kRegionFrontierPayloadKindShiftV2;
@@ -911,10 +916,10 @@ Interpreter::Impl::try_execute_region_frontier_component(
         return std::nullopt;
     }
 
-    AuthoritativeSignalPlanes::FrontierWriteLease lease;
     auto& authoritative_values = runtime.authoritative_state->values();
     if (!authoritative_values.try_acquire_frontier_write_lease(
-            authoritative_values.revision(), runtime.writable_signals, lease)) {
+            authoritative_values.revision(), runtime.writable_signals, lease,
+            runtime.writable_layout_indices)) {
         reservation.cancel();
         return std::nullopt;
     }
@@ -922,6 +927,7 @@ Interpreter::Impl::try_execute_region_frontier_component(
     const auto decline_before_entry = [&](const std::source_location caller
                                              = std::source_location::current())
         -> std::optional<SchedulerBatchResult> {
+        runtime.end_alias_bind_lease();
         lease.release();
         reservation.cancel();
         runtime.frame.scheduler_task_count = 0U;
@@ -946,6 +952,7 @@ Interpreter::Impl::try_execute_region_frontier_component(
         if (!pristine) {
             return decline_before_entry();
         }
+        runtime.end_alias_bind_lease();
         lease.release();
         reservation.cancel();
         return std::nullopt;
@@ -965,6 +972,83 @@ Interpreter::Impl::try_execute_region_frontier_component(
                     ProcessSchedulingDomain::systemverilog)
             && queued.queued_key.phase
                 == static_cast<std::uint32_t>(SchedulerPhase::active);
+    };
+
+    constexpr auto no_raw_activation
+        = std::numeric_limits<std::size_t>::max();
+    constexpr auto multiple_raw_activations = no_raw_activation - 1U;
+    if (runtime.raw_activation_summary.size() != layout.member_count
+        || runtime.raw_activation_summary.size() != runtime.members.size()
+        || layout.members == nullptr
+        || backend_pin->kernel.members.size() != layout.member_count
+        || frontier.tasks.size() > multiple_raw_activations) {
+        return decline_before_entry();
+    }
+    std::ranges::fill(runtime.raw_activation_summary, no_raw_activation);
+    // The process-to-member map is a generation-published unique partition.
+    // Validate each current component row against every retained identity
+    // before using it to index task activations.
+    for (std::size_t member_index = 0U;
+         member_index < layout.member_count;
+         ++member_index) {
+        const auto process
+            = backend_pin->kernel.members[member_index].process;
+        if (process >= processes.size()
+            || process >= region_readiness_member_index_by_process.size()
+            || region_readiness_member_index_by_process[process]
+                != member_index
+            || layout.members[member_index].process_id != process
+            || runtime.members[member_index].process_id != process) {
+            return decline_before_entry();
+        }
+    }
+    // Inspect the complete borrowed frontier, not just the selected prefix:
+    // duplicate and out-of-prefix activations must retain their old effect on
+    // the per-member preflight. Resolve indices only against this frontier so
+    // runtime scratch retains no pointer into the borrowed task span.
+    for (std::size_t task_index = 0U;
+         task_index < frontier.tasks.size();
+         ++task_index) {
+        ProcessId process { };
+        if (!decode_wave_payload(frontier.tasks[task_index].payload, process)
+            || process >= region_readiness_member_index_by_process.size()) {
+            continue;
+        }
+        const auto member_index
+            = region_readiness_member_index_by_process[process];
+        if (member_index >= layout.member_count
+            || layout.members[member_index].process_id != process) {
+            // A foreign component may have the same local ordinal. It is not
+            // an activation of this component and remains ignored.
+            continue;
+        }
+        auto& summary = runtime.raw_activation_summary[member_index];
+        if (summary == no_raw_activation) {
+            summary = task_index;
+        } else {
+            summary = multiple_raw_activations;
+        }
+    }
+    const auto raw_activation_for_member =
+        [&](const std::size_t member_index,
+            const SchedulerBatchFrontierEntry*& match)
+        -> std::optional<std::size_t> {
+        match = nullptr;
+        if (member_index >= runtime.raw_activation_summary.size()) {
+            return std::nullopt;
+        }
+        const auto summary = runtime.raw_activation_summary[member_index];
+        if (summary == no_raw_activation) {
+            return 0U;
+        }
+        if (summary == multiple_raw_activations) {
+            return 2U;
+        }
+        if (summary >= frontier.tasks.size()) {
+            return std::nullopt;
+        }
+        match = &frontier.tasks[summary];
+        return 1U;
     };
 
     // A missing key receipt can be an ordinary scheduler cut, but it must be
@@ -1051,27 +1135,23 @@ Interpreter::Impl::try_execute_region_frontier_component(
                 continue;
             }
         }
-        std::size_t matching_task_count { };
         const SchedulerBatchFrontierEntry* matching_task { };
-        for (const auto& task : frontier.tasks) {
-            ProcessId task_process { };
-            if (decode_wave_payload(task.payload, task_process)
-                && task_process == process) {
-                ++matching_task_count;
-                matching_task = &task;
-            }
+        const auto matching_task_count
+            = raw_activation_for_member(member_index, matching_task);
+        if (!matching_task_count) {
+            return decline_before_entry();
         }
-        if (matching_task_count > 1U) {
+        if (*matching_task_count > 1U) {
             return decline_before_entry();
         }
         if (!state.queued) {
-            if (matching_task_count != 0U) {
+            if (*matching_task_count != 0U) {
                 return decline_before_entry();
             }
             continue;
         }
         if (!runtime.scheduler_state_seeded
-            && matching_task_count == 1U && matching_task != nullptr
+            && *matching_task_count == 1U && matching_task != nullptr
             && queued.key_valid
             && !same_frontier_key(queued.queued_key,
                 frontier_key(frontier, *matching_task))) {
@@ -1100,11 +1180,12 @@ Interpreter::Impl::try_execute_region_frontier_component(
                 return decline_before_entry();
             }
         }
-        if (matching_task_count == 0U && !receipt_valid && !frame_key_valid) {
+        if (*matching_task_count == 0U && !receipt_valid && !frame_key_valid) {
             has_untracked_queued_member_before_bind = true;
         }
     }
     if (has_untracked_queued_member_before_bind) {
+        runtime.end_alias_bind_lease();
         lease.release();
         reservation.cancel();
         runtime.frame.scheduler_task_count = 0U;
@@ -1144,7 +1225,7 @@ Interpreter::Impl::try_execute_region_frontier_component(
             translated = payload;
             return true;
         }
-        const auto member = local_member_for_process(layout, process);
+        const auto member = member_for_process(process);
         if (!member) {
             return false;
         }
@@ -1165,10 +1246,6 @@ Interpreter::Impl::try_execute_region_frontier_component(
         }
     }
 
-    const auto member_for_process = [&](const ProcessId process)
-        -> std::optional<std::uint32_t> {
-        return local_member_for_process(layout, process);
-    };
     const auto activation_is_valid = [&](const ProcessId process,
                                          const SchedulerBatchFrontierEntry& task,
                                          const SchedulerBatchFrontier& task_frontier) {
@@ -1232,6 +1309,7 @@ Interpreter::Impl::try_execute_region_frontier_component(
         if (!member_index) {
             return false;
         }
+        runtime.mark_member_sync_write(static_cast<std::uint32_t>(*member_index));
         auto& member = runtime.members[*member_index];
         auto& state = get_process(process);
         const auto key = frontier_key(task_frontier, task);
@@ -1265,22 +1343,6 @@ Interpreter::Impl::try_execute_region_frontier_component(
             |= UINT64_C(1) << (*member_index % 64U);
         return true;
     };
-    const auto find_raw_activation = [&]
-        (const ProcessId process,
-            const SchedulerBatchFrontier& task_frontier,
-            const SchedulerBatchFrontierEntry*& match) {
-        match = nullptr;
-        std::size_t count { };
-        for (const auto& task : task_frontier.tasks) {
-            ProcessId task_process { };
-            if (decode_wave_payload(task.payload, task_process)
-                && task_process == process) {
-                ++count;
-                match = &task;
-            }
-        }
-        return count;
-    };
     const auto import_queued_receipt = [&](const ProcessId process,
                                             const bool initial_seed) {
         const auto member_index = member_for_process(process);
@@ -1293,6 +1355,7 @@ Interpreter::Impl::try_execute_region_frontier_component(
             return false;
         }
         auto& state = get_process(process);
+        runtime.mark_member_sync_write(static_cast<std::uint32_t>(*member_index));
         auto& member = runtime.members[*member_index];
         if (member.process_id != process || !state.queued
             || !state.waiting_on_static || state.waiting_on_signal
@@ -1332,6 +1395,7 @@ Interpreter::Impl::try_execute_region_frontier_component(
     };
 
     if (!runtime.scheduler_state_seeded) {
+        runtime.require_full_member_sync(FrontierMemberSyncFullReason::seed);
         // Check the component before seeding any frame member. An ordinary
         // activation outside this native prefix is importable only when its
         // exact scheduler key was retained by a producer receipt.
@@ -1369,7 +1433,10 @@ Interpreter::Impl::try_execute_region_frontier_component(
 
             const SchedulerBatchFrontierEntry* matching_task { };
             const auto matching_task_count
-                = find_raw_activation(process, frontier, matching_task);
+                = raw_activation_for_member(member_index, matching_task);
+            if (!matching_task_count) {
+                return decline_before_entry();
+            }
             const auto& queued
                 = region_readiness_queued_by_process[process];
             if (queued.generation != 0U
@@ -1379,10 +1446,10 @@ Interpreter::Impl::try_execute_region_frontier_component(
                 return decline_before_entry();
             }
             if (state.queued) {
-                if (matching_task_count > 1U) {
+                if (*matching_task_count > 1U) {
                     return decline_before_entry();
                 }
-                if (matching_task_count == 0U) {
+                if (*matching_task_count == 0U) {
                     has_untracked_queued_member
                         = has_untracked_queued_member
                         || !queued_receipt_is_valid(
@@ -1392,13 +1459,15 @@ Interpreter::Impl::try_execute_region_frontier_component(
                         frontier_key(frontier, *matching_task))) {
                     return decline_before_entry();
                 }
-            } else if (matching_task_count != 0U) {
+            } else if (*matching_task_count != 0U) {
                 return decline_before_entry();
             } else if (queued.generation != 0U) {
                 return decline_before_entry();
             }
         }
         if (has_untracked_queued_member) {
+            runtime.clear_canonical_values_binding_receipt();
+            runtime.end_alias_bind_lease();
             lease.release();
             reservation.cancel();
             frame.scheduler_task_count = 0U;
@@ -1432,20 +1501,23 @@ Interpreter::Impl::try_execute_region_frontier_component(
             member.static_trigger_mask = state.static_trigger_mask;
             const SchedulerBatchFrontierEntry* matching_task { };
             const auto matching_task_count
-                = find_raw_activation(process, frontier, matching_task);
+                = raw_activation_for_member(member_index, matching_task);
+            if (!matching_task_count) {
+                return decline_before_entry();
+            }
             if (state.queued) {
-                if (matching_task_count == 1U && matching_task != nullptr) {
+                if (*matching_task_count == 1U && matching_task != nullptr) {
                     if (!read_activation(process, *matching_task,
                             frontier, true)) {
                         return decline_before_entry();
                     }
-                } else if (matching_task_count == 0U
+                } else if (*matching_task_count == 0U
                     && !import_queued_receipt(process, true)) {
                     return decline_before_entry();
-                } else if (matching_task_count > 1U) {
+                } else if (*matching_task_count > 1U) {
                     return decline_before_entry();
                 }
-            } else if (matching_task_count != 0U) {
+            } else if (*matching_task_count != 0U) {
                 return decline_before_entry();
             }
         }
@@ -1469,7 +1541,10 @@ Interpreter::Impl::try_execute_region_frontier_component(
                 = region_readiness_queued_by_process[process];
             const SchedulerBatchFrontierEntry* matching_task { };
             const auto matching_task_count
-                = find_raw_activation(process, frontier, matching_task);
+                = raw_activation_for_member(member_index, matching_task);
+            if (!matching_task_count) {
+                return decline_before_entry();
+            }
             constexpr auto queued_flags
                 = RegionFrontierMemberFlagsV1::queued
                 | RegionFrontierMemberFlagsV1::queued_key_valid;
@@ -1478,18 +1553,18 @@ Interpreter::Impl::try_execute_region_frontier_component(
                     && (queued.component != component
                         || queued.member != member_index
                         || queued.generation != runtime.runtime_generation))
-                || matching_task_count > 1U) {
+                || *matching_task_count > 1U) {
                 return decline_before_entry();
             }
             if (!state.queued) {
-                if (matching_task_count != 0U || member_queue_state != 0U
+                if (*matching_task_count != 0U || member_queue_state != 0U
                     || queued.generation != 0U) {
                     return decline_before_entry();
                 }
                 continue;
             }
 
-            if (matching_task_count == 0U) {
+            if (*matching_task_count == 0U) {
                 const bool frame_key_valid = member_queue_state == queued_flags
                     && member.queued_key.stable_order == process
                     && member.queued_key.systemverilog_round != 0U
@@ -1531,6 +1606,8 @@ Interpreter::Impl::try_execute_region_frontier_component(
             }
         }
         if (has_untracked_queued_member) {
+            runtime.clear_canonical_values_binding_receipt();
+            runtime.end_alias_bind_lease();
             lease.release();
             reservation.cancel();
             frame.scheduler_task_count = 0U;
@@ -1560,7 +1637,12 @@ Interpreter::Impl::try_execute_region_frontier_component(
              member_index < runtime.members.size(); ++member_index) {
             const auto process = runtime.members[member_index].process_id;
             const SchedulerBatchFrontierEntry* matching_task { };
-            if (find_raw_activation(process, frontier, matching_task) == 0U
+            const auto matching_task_count
+                = raw_activation_for_member(member_index, matching_task);
+            if (!matching_task_count) {
+                return decline_before_entry();
+            }
+            if (*matching_task_count == 0U
                 && get_process(process).queued
                 && (runtime.members[member_index].flags
                         & RegionFrontierMemberFlagsV1::queued) == 0U
@@ -1594,9 +1676,46 @@ Interpreter::Impl::try_execute_region_frontier_component(
     const bool trusted_entry_available = trusted_view.entry != nullptr
         && trusted_view.layout == &layout
         && runtime.alias_certificate_storage_available;
-    if (!trusted_entry_available) {
-        runtime.clear_alias_certificate();
-    }
+    const auto* const canonical_values_capability
+        = dynamic_cast<const detail::RegionFrontierCanonicalValuesEntryCapability*>(
+              backend_pin->executor.get());
+    const auto canonical_values_view = canonical_values_capability != nullptr
+        ? canonical_values_capability->canonical_values_entries()
+        : detail::RegionFrontierCanonicalValuesEntryView { };
+    const bool canonical_values_view_matches =
+        canonical_values_capability != nullptr
+        && canonical_values_view.layout == &layout;
+    const auto canonical_values_entry = canonical_values_view_matches
+        ? canonical_values_view.canonical_values_entry : nullptr;
+    const auto alias_and_canonical_values_entry
+        = canonical_values_view_matches
+        ? canonical_values_view.alias_and_canonical_values_entry : nullptr;
+    const auto* const descriptor_shapes_capability
+        = dynamic_cast<const detail::RegionFrontierDescriptorShapesEntryCapability*>(
+            backend_pin->executor.get());
+    const auto descriptor_shapes_view = descriptor_shapes_capability != nullptr
+        ? descriptor_shapes_capability->descriptor_shapes_entry()
+        : detail::RegionFrontierDescriptorShapesEntryView { };
+    const auto descriptor_shapes_entry = descriptor_shapes_view.layout == &layout
+        ? descriptor_shapes_view.entry : nullptr;
+    const auto* const member_sync_capability
+        = dynamic_cast<const detail::RegionFrontierMemberSyncEntryCapability*>(
+              backend_pin->executor.get());
+    const auto member_sync_view = member_sync_capability != nullptr
+        ? member_sync_capability->member_sync_entry()
+        : detail::RegionFrontierMemberSyncEntryView { };
+    const bool member_sync_view_matches = member_sync_view.entry != nullptr
+        && member_sync_view.layout == &layout
+        && member_sync_view.entry == alias_and_canonical_values_entry
+        && layout.execution_mode
+            == RegionFrontierExecutionModeV2::systemverilog_active;
+    const bool descriptor_shapes_member_sync_view_matches
+        = descriptor_shapes_entry != nullptr
+        && member_sync_view.layout == &layout
+        && member_sync_view.descriptor_shapes_entry == descriptor_shapes_entry
+        && layout.execution_mode
+            == RegionFrontierExecutionModeV2::systemverilog_active;
+    const bool alias_only_available = trusted_entry_available;
 
     const auto dispatch_count_before = runtime.native_member_dispatches;
     struct NativeFrontierDispatchProfile {
@@ -1638,64 +1757,138 @@ Interpreter::Impl::try_execute_region_frontier_component(
         return result;
     };
     for (;;) {
+        // The receipt is minted by the most recent successful bind and is
+        // consumed once per generated call. Boundary publication can rebind
+        // before continuing this loop, so do not cache its result outside.
+        bool descriptor_shapes_binding_valid { };
+        const bool canonical_values_binding_valid
+            = runtime.consume_canonical_values_binding_receipt(
+                *backend_pin, layout, canonical_values_entry,
+                alias_and_canonical_values_entry, lease,
+                descriptor_shapes_entry, &descriptor_shapes_binding_valid);
+        const bool canonical_values_only_available
+            = canonical_values_binding_valid
+            && canonical_values_entry != nullptr;
+        const bool alias_and_canonical_values_available
+            = canonical_values_binding_valid
+            && alias_and_canonical_values_entry != nullptr;
+        const bool will_use_alias_and_canonical
+            = alias_and_canonical_values_available;
+        const bool will_use_descriptor_shapes
+            = will_use_alias_and_canonical && descriptor_shapes_binding_valid;
+        const auto alias_geometry_entry
+            = will_use_descriptor_shapes ? descriptor_shapes_entry
+            : will_use_alias_and_canonical
+                ? alias_and_canonical_values_entry
+                : (alias_only_available ? trusted_view.entry : nullptr);
+        const bool alias_geometry_entry_available
+            = alias_geometry_entry != nullptr
+            && runtime.alias_certificate_storage_available;
+        if (!alias_geometry_entry_available) {
+            runtime.clear_alias_certificate();
+        }
         const auto alias_context = runtime.make_alias_certificate_context(
             *backend_pin, checked_entry,
-            trusted_entry_available ? trusted_view.entry : nullptr);
-        const bool certificate_matches = trusted_entry_available
-            && runtime.alias_certificate_matches(alias_context);
-        bool use_trusted_entry = certificate_matches
+            alias_geometry_entry_available ? alias_geometry_entry : nullptr);
+        const bool certificate_matches = alias_geometry_entry_available
+            && runtime.alias_certificate_matches(alias_context,
+                will_use_alias_and_canonical);
+        bool use_alias_geometry = certificate_matches
             && frame.staged_event_count == 0U;
         bool certificate_confirmation_pending { };
-        if (!use_trusted_entry && trusted_entry_available
+        if (!use_alias_geometry && alias_geometry_entry_available
             && frame.staged_event_count == 0U) {
             certificate_confirmation_pending
                 = runtime.stage_alias_certificate(alias_context);
             if (certificate_confirmation_pending) {
-                use_trusted_entry
+                use_alias_geometry
                     = runtime.prove_alias_geometry_sorted();
             }
         }
-        const auto selected_entry = use_trusted_entry
-            ? trusted_view.entry : checked_entry;
+        const bool use_alias_and_canonical_values
+            = will_use_alias_and_canonical && use_alias_geometry;
+        const bool use_alias_only
+            = alias_only_available && !use_alias_and_canonical_values
+            && use_alias_geometry;
+        const bool use_canonical_values_only
+            = canonical_values_only_available
+            && !use_alias_and_canonical_values && !use_alias_only;
+        const bool selected_alias_geometry
+            = use_alias_and_canonical_values || use_alias_only;
+        const bool use_descriptor_shapes
+            = will_use_descriptor_shapes && use_alias_and_canonical_values;
+        const auto selected_entry = use_descriptor_shapes
+            ? descriptor_shapes_entry
+            : use_alias_and_canonical_values
+            ? alias_and_canonical_values_entry
+            : use_canonical_values_only ? canonical_values_entry
+            : use_alias_only ? trusted_view.entry : checked_entry;
+        const char* const selected_route = use_descriptor_shapes
+            ? "alias+canonical+descriptor-shapes"
+            : use_alias_and_canonical_values
+            ? "alias+canonical"
+            : use_canonical_values_only ? "canonical-only"
+            : use_alias_only ? "alias-only" : "checked";
         if (systemverilog_wave_profile_enabled) {
-            if (use_trusted_entry) {
+            if (selected_alias_geometry) {
                 ++systemverilog_wave_profile_alias_trusted_entries;
             } else {
                 ++systemverilog_wave_profile_alias_checked_entries;
-                if (!trusted_entry_available) {
+                if (!alias_only_available
+                    && !alias_and_canonical_values_available) {
                     ++systemverilog_wave_profile_alias_unavailable_entries;
                 }
                 if (frame.staged_event_count != 0U) {
                     ++systemverilog_wave_profile_alias_forced_staged_entries;
                 }
             }
+            if (use_canonical_values_only) {
+                ++systemverilog_wave_profile_canonical_values_only_entries;
+            } else if (use_alias_and_canonical_values) {
+                ++systemverilog_wave_profile_alias_and_canonical_values_entries;
+            }
         }
-        if (use_trusted_entry) {
+        if (use_descriptor_shapes) {
+            ++runtime.descriptor_shapes_entries;
+            if (systemverilog_wave_profile_enabled) {
+                ++systemverilog_wave_profile_descriptor_shapes_entries;
+            }
+        }
+        if (selected_alias_geometry) {
             ++runtime.alias_trusted_entries;
         } else {
             ++runtime.alias_checked_entries;
         }
+        if (use_canonical_values_only) {
+            ++runtime.canonical_values_only_entries;
+        } else if (use_alias_and_canonical_values) {
+            ++runtime.alias_and_canonical_values_entries;
+        }
         if (systemverilog_wave_profile_enabled
             && (systemverilog_wave_profile_native_frontier_alias_entry_rows
                     < 16U
-                || (use_trusted_entry
+                || (selected_alias_geometry
                     && !systemverilog_wave_profile_native_frontier_alias_trusted_entry_seen))) {
             ++systemverilog_wave_profile_native_frontier_alias_entry_rows;
-            if (use_trusted_entry) {
+            if (selected_alias_geometry) {
                 systemverilog_wave_profile_native_frontier_alias_trusted_entry_seen
                     = true;
             }
             std::fprintf(stderr,
                 "fsim-profile: sv-frontier-alias-entry component=%zu "
                 "offered=%zu selected=%s pre_staged=%u checked_total=%llu "
-                "trusted_total=%llu certificate_valid=%u "
+                "trusted_total=%llu canonical_only_total=%llu "
+                "alias_canonical_total=%llu certificate_valid=%u "
                 "host_geometry_attempts=%llu host_geometry_successes=%llu "
                 "host_geometry_failures=%llu\n",
-                component, task_prefix_count,
-                use_trusted_entry ? "trusted" : "checked",
+                component, task_prefix_count, selected_route,
                 frame.staged_event_count,
                 static_cast<unsigned long long>(runtime.alias_checked_entries),
                 static_cast<unsigned long long>(runtime.alias_trusted_entries),
+                static_cast<unsigned long long>(
+                    runtime.canonical_values_only_entries),
+                static_cast<unsigned long long>(
+                    runtime.alias_and_canonical_values_entries),
                 static_cast<unsigned>(runtime.alias_certificate_valid),
                 static_cast<unsigned long long>(
                     runtime.alias_sorted_proof_attempts),
@@ -1704,12 +1897,31 @@ Interpreter::Impl::try_execute_region_frontier_component(
                 static_cast<unsigned long long>(
                     runtime.alias_sorted_proof_failures));
         }
+        runtime.member_sync_private_entry
+            = ((use_descriptor_shapes
+                   && descriptor_shapes_member_sync_view_matches)
+                  || (use_alias_and_canonical_values && !use_descriptor_shapes
+                      && member_sync_view_matches))
+            && runtime.member_sync_workset_available;
+        const auto native_cursor_before = frame.scheduler_task_cursor;
         RegionFrontierStatusV2 status { };
         try {
             status = selected_entry(&frame);
         } catch (...) {
             runtime.clear_alias_certificate();
+            runtime.clear_canonical_values_binding_receipt();
             throw;
+        }
+        if (status != RegionFrontierStatusV2::decline_before_mutation
+            && status != RegionFrontierStatusV2::stale_generation
+            && runtime.member_sync_private_entry) {
+            runtime.collect_member_sync_writes(native_cursor_before);
+        } else {
+            runtime.require_full_member_sync(
+                status == RegionFrontierStatusV2::decline_before_mutation
+                        || status == RegionFrontierStatusV2::stale_generation
+                    ? FrontierMemberSyncFullReason::uncertain_status_or_generation
+                    : FrontierMemberSyncFullReason::nonprivate_entry);
         }
         if (certificate_confirmation_pending) {
             const bool confirmed
@@ -1723,7 +1935,7 @@ Interpreter::Impl::try_execute_region_frontier_component(
                 }
             }
         }
-        if (use_trusted_entry
+        if (selected_alias_geometry
             && (status == RegionFrontierStatusV2::decline_before_mutation
                 || status == RegionFrontierStatusV2::stale_generation)) {
             runtime.clear_alias_certificate();
@@ -1816,6 +2028,7 @@ Interpreter::Impl::try_execute_region_frontier_component(
                     signal_binding_mismatches);
             }
             runtime.invalidate();
+            runtime.end_alias_bind_lease();
             lease.release();
             reservation.cancel();
             return std::nullopt;
@@ -1853,6 +2066,8 @@ Interpreter::Impl::try_execute_region_frontier_component(
             // across checked publication: commit_driver may reserve ordinary
             // fanout tickets itself.
             reservation.cancel();
+            // Unknown observer/provider effects in publication cannot inherit
+            // a selected-set proof. The next synchronization is conservative.
             try {
                 runtime.publish_boundary_commit(task, pending_slot, lease);
             } catch (...) {
@@ -1927,7 +2142,8 @@ Interpreter::Impl::try_execute_region_frontier_component(
             }
             auto& values = runtime.authoritative_state->values();
             if (!values.try_acquire_frontier_write_lease(
-                    values.revision(), runtime.writable_signals, lease)
+                    values.revision(), runtime.writable_signals, lease,
+                    runtime.writable_layout_indices)
                 || !runtime.bind_frame_planes_and_metadata(lease)) {
                 runtime.invalidate();
                 reservation.cancel();
@@ -2073,16 +2289,27 @@ bool Interpreter::Impl::synchronize_frontier_process_states(
         return false;
     };
 
+    const bool selected_sync = runtime.member_sync_workset_available
+        && runtime.member_sync_private_entry && !runtime.member_sync_force_full;
+    const auto selected_members = runtime.member_sync_workset.selected();
+    const auto synchronization_count = selected_sync
+        ? selected_members.size() : runtime.members.size();
+
     constexpr std::uint32_t known_member_flags
         = RegionFrontierMemberFlagsV1::waiting_on_static
         | RegionFrontierMemberFlagsV1::queued
         | RegionFrontierMemberFlagsV1::executing
         | RegionFrontierMemberFlagsV1::queued_key_valid
         | RegionFrontierMemberFlagsV1::pending_activation;
-    // Validate every member before copying frame state into ProcessState.
+    // Validate the entire selected set before copying any ProcessState.
+    // Initial, checked and uncertain routes retain the complete member set.
     // Ordinary fanout can enqueue a member while a native prefix is active;
     // its producer receipt must have imported the exact key into the frame.
-    for (std::size_t index = 0U; index < runtime.members.size(); ++index) {
+    for (std::size_t position = 0U; position < synchronization_count; ++position) {
+        const auto index = selected_sync ? selected_members[position] : position;
+        if (index >= runtime.members.size()) {
+            return false;
+        }
         const auto& source = kernel.members[index];
         const auto& member = runtime.members[index];
         if (source.process >= processes.size()
@@ -2152,7 +2379,11 @@ bool Interpreter::Impl::synchronize_frontier_process_states(
         }
     }
 
-    for (std::size_t index = 0U; index < runtime.members.size(); ++index) {
+    for (std::size_t position = 0U; position < synchronization_count; ++position) {
+        const auto index = selected_sync ? selected_members[position] : position;
+        if (index >= runtime.members.size()) {
+            return false;
+        }
         const auto& source = kernel.members[index];
         const auto& member = runtime.members[index];
         const bool queued
@@ -2206,6 +2437,44 @@ bool Interpreter::Impl::synchronize_frontier_process_states(
             mask_word &= ~ready_mask;
         }
     }
+    if (selected_sync) {
+        ++runtime.member_sync_selected_passes;
+        runtime.member_sync_selected_members += synchronization_count;
+        runtime.member_sync_selected_total_members += runtime.members.size();
+    } else {
+        ++runtime.member_sync_full_passes;
+        runtime.member_sync_full_members += synchronization_count;
+    }
+    if (systemverilog_wave_profile_enabled) {
+        if (selected_sync) {
+            ++systemverilog_wave_profile_member_sync_selected_passes;
+            systemverilog_wave_profile_member_sync_selected_members
+                += synchronization_count;
+            systemverilog_wave_profile_member_sync_selected_total_members
+                += runtime.members.size();
+        } else {
+            ++systemverilog_wave_profile_member_sync_full_passes;
+            systemverilog_wave_profile_member_sync_full_members
+                += synchronization_count;
+            auto reasons = runtime.member_sync_full_reasons;
+            if (!runtime.member_sync_private_entry) {
+                reasons |= static_cast<std::uint8_t>(
+                    FrontierMemberSyncFullReason::nonprivate_entry);
+            }
+            if (!runtime.member_sync_workset_available) {
+                reasons |= static_cast<std::uint8_t>(
+                    FrontierMemberSyncFullReason::unavailable_workset);
+            }
+            // Each completed full pass appears once, including bucket zero
+            // for any unlabelled cause. Individual reason bits are not disjoint.
+            ++systemverilog_wave_profile_member_sync_full_reason_passes[reasons];
+            systemverilog_wave_profile_member_sync_full_reason_members[reasons]
+                += synchronization_count;
+        }
+    }
+    runtime.member_sync_workset.clear();
+    runtime.member_sync_force_full = false;
+    runtime.member_sync_full_reasons = 0U;
     return true;
 }
 

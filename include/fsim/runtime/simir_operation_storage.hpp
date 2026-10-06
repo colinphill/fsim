@@ -630,8 +630,12 @@ private:
         InternedString instance;
     };
 
+    using OperationOverrideList = std::vector<OperationOverride>;
+
     [[nodiscard]] const Storage& storage() const noexcept;
     [[nodiscard]] Storage& mutable_storage();
+    [[nodiscard]] const OperationOverrideList&
+    operation_overrides() const noexcept;
     void advance_access_revision() noexcept;
     void reset(Storage operations);
     void apply_instance_fields(Operation& operation, size_type index) const;
@@ -641,7 +645,9 @@ private:
     std::vector<DebugOverride> debug_overrides_;
     std::vector<AssertOverride> assert_overrides_;
     std::vector<ContainerObjectOverride> container_object_overrides_;
-    std::vector<OperationOverride> operation_overrides_;
+    // Operation-list copies can share this immutable-by-convention payload.
+    // replace() detaches before publishing an instance-specific mutation.
+    std::shared_ptr<OperationOverrideList> operation_overrides_;
     std::vector<CoverageHitOverride> coverage_hit_overrides_;
     std::vector<DebugScopeOverride> debug_scope_overrides_;
     std::uint64_t operation_override_filter_ { };

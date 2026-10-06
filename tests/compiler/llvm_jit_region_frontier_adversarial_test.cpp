@@ -2,6 +2,7 @@
 #include "llvm_jit_region_frontier_adversarial_test.hpp"
 #include "llvm_jit_region_frontier_test_support.hpp"
 #include "llvm/region_frontier_codegen_v2.hpp"
+#include "llvm/region_frontier_kernel_plan.hpp"
 
 #include <llvm/IR/Attributes.h>
 #include <llvm/IR/BasicBlock.h>
@@ -13,6 +14,7 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/Verifier.h>
 #include <llvm/Support/Casting.h>
 
 #include <algorithm>
@@ -397,7 +399,7 @@ template<typename T, typename Predicate>
 }
 
 struct PlaneStorage {
-    std::array<std::vector<std::uint64_t>, 10U> roles;
+    std::array<std::vector<std::uint64_t>, 20U> roles;
 
     bool operator==(const PlaneStorage&) const = default;
 };
@@ -405,6 +407,7 @@ struct PlaneStorage {
 struct WriteStorage {
     std::vector<std::uint64_t> aval;
     std::vector<std::uint64_t> bval;
+    std::array<std::vector<std::uint64_t>, 2U> extra_planes;
 
     bool operator==(const WriteStorage&) const = default;
 };
@@ -631,8 +634,13 @@ public:
 
     void prepare_activation_task()
     {
+        prepare_member_activation_task(root_member_index());
+    }
+
+    void prepare_member_activation_task(const std::size_t root)
+    {
+        require(root < layout_.member_count, "the offered member is in range");
         reset_scheduler_member_state();
-        const auto root = root_member_index();
         const auto key = make_key(first_task_stable_order,
             first_task_sequence);
         readiness_.at(root / 64U) |= UINT64_C(1) << (root % 64U);
@@ -675,6 +683,9 @@ public:
         members_.at(site.member_index).activation_origin = write.origin;
         write.value_planes[0U][0U] = UINT64_C(1);
         write.value_planes[1U][0U] = UINT64_C(0);
+        for (std::uint32_t plane = 2U; plane < write.plane_count; ++plane) {
+            write.value_planes[plane][0U] = UINT64_C(0);
+        }
         frame_.pending_write_count = 1U;
         tasks_[0U] = RegionFrontierSchedulerTaskV2 {
             key.stable_order,
@@ -733,6 +744,10 @@ public:
                 snapshot.write_storage[write].aval);
             copy_values(write_storage_[write].bval,
                 snapshot.write_storage[write].bval);
+            for (std::size_t plane = 0U; plane < 2U; ++plane) {
+                copy_values(write_storage_[write].extra_planes[plane],
+                    snapshot.write_storage[write].extra_planes[plane]);
+            }
         }
         copy_values(pending_arena_, snapshot.pending_arena);
         dispatch_count_ = snapshot.dispatch_count;
@@ -868,6 +883,29 @@ private:
                     = storage.roles[boundary_bval_role].data();
                 storage.roles[boundary_aval_role][0U] = UINT64_C(1);
             }
+            if (descriptor.plane_count == kRegionFrontierLogic9PlaneCountV2) {
+                // Keep legacy Logic4 role indices intact; append the two
+                // additional planes for each of the five Logic9 roles.
+                for (std::uint32_t value_plane = 2U; value_plane < 4U;
+                     ++value_plane) {
+                    const auto extra = value_plane - 2U;
+                    if ((descriptor.flags
+                            & RegionFrontierPlaneFlagsV2::certified_internal_single_owner)
+                        != 0U) {
+                        plane.current_planes[value_plane]
+                            = storage.roles[12U + extra].data();
+                        plane.previous_planes[value_plane]
+                            = storage.roles[14U + extra].data();
+                        plane.stored_planes[value_plane]
+                            = storage.roles[16U + extra].data();
+                        plane.owner_planes[value_plane]
+                            = storage.roles[18U + extra].data();
+                    } else {
+                        plane.boundary_planes[value_plane]
+                            = storage.roles[10U + extra].data();
+                    }
+                }
+            }
             require(region_frontier_plane_bindings_valid_v2(plane),
                 "fixture backing satisfies the typed plane contract");
             port_planes_[index] = &plane;
@@ -929,9 +967,10 @@ private:
             require(site.pending_slot < layout_.pending_write_capacity
                     && site.member_index < layout_.member_count
                     && site.signal_slot < layout_.signal_slot_count
-                    && site.value_kind == RegionFrontierValueKindV2::logic4
-                    && site.plane_count
-                        == kRegionFrontierLogic4PlaneCountV2
+                    && ((site.value_kind == RegionFrontierValueKindV2::logic4
+                            && site.plane_count == kRegionFrontierLogic4PlaneCountV2)
+                        || (site.value_kind == RegionFrontierValueKindV2::logic9
+                            && site.plane_count == kRegionFrontierLogic9PlaneCountV2))
                     && site.width != 0U
                     && site.word_count == words_for(site.width)
                     && site.value_kind == signal.value_kind
@@ -954,6 +993,16 @@ private:
             write.update_kind = site.update_kind;
             write.value_planes[0U] = backing.aval.data();
             write.value_planes[1U] = backing.bval.data();
+            for (std::uint32_t value_plane = 2U;
+                 value_plane < site.plane_count; ++value_plane) {
+                auto& words = backing.extra_planes[value_plane - 2U];
+                words.assign(backing_words, 0U);
+                for (std::size_t word = site.word_count;
+                     word < backing_words; ++word) {
+                    words[word] = UINT64_C(0x9876543210abcdef);
+                }
+                write.value_planes[value_plane] = words.data();
+            }
             write.value_kind = site.value_kind;
             write.plane_count = site.plane_count;
             write.width = site.width;
@@ -1582,7 +1631,8 @@ void run_pending_range_compaction_witnesses(
     auto* const i32 = llvm::Type::getInt32Ty(context);
     auto* const pointer = llvm::PointerType::getUnqual(context);
     auto* const i1 = llvm::Type::getInt1Ty(context);
-    return llvm::FunctionType::get(i32, { pointer, pointer, i1 }, false);
+    return llvm::FunctionType::get(i32,
+        { pointer, pointer, i1, i1, i1 }, false);
 }
 
 void create_test_global(llvm::Module& module, const std::string& name)
@@ -1812,31 +1862,129 @@ void require_checked_trusted_rejection(
         "trusted rejection leaves the same frame and owned buffers unchanged");
 }
 
+template <typename Mutate>
+void require_checked_private_guard_rejection(
+    const RegionConeActivationKernel& kernel,
+    const RegionFrontierStepEntryV2 checked_entry,
+    const RegionFrontierStepEntryV2 private_entry,
+    const RegionFrontierLayoutV2& layout,
+    const std::uint64_t runtime_generation,
+    const RegionFrontierStatusV2 expected_status,
+    const Mutate& mutate,
+    const std::string_view message)
+{
+    FrameStorage storage { kernel, layout, runtime_generation };
+    storage.prepare_activation_task();
+    const auto valid_before = storage.snapshot();
+    const auto validation_status = checked_entry(&storage.frame());
+    require(validation_status != RegionFrontierStatusV2::decline_before_mutation
+            && validation_status != RegionFrontierStatusV2::stale_generation,
+        "the unchanged frame first passes the checked entry");
+    storage.restore(valid_before);
+    storage.require_unchanged(valid_before,
+        "the private guard case starts from exact checked frame geometry");
+
+    mutate(storage);
+    const auto before = storage.snapshot();
+    const auto checked_status = checked_entry(&storage.frame());
+    require(checked_status == expected_status, message);
+    storage.require_unchanged(before,
+        "checked structural decline preserves all frame and plane state");
+    const auto private_status = private_entry(&storage.frame());
+    require(private_status == expected_status
+            && private_status == checked_status, message);
+    storage.require_unchanged(before,
+        "the prevalidated private entry retains the independent structural guard");
+}
+
+template <typename Prepare, typename Mutate>
+void require_checked_prepared_private_guard_rejection(
+    const RegionConeActivationKernel& kernel,
+    const RegionFrontierStepEntryV2 checked_entry,
+    const RegionFrontierStepEntryV2 private_entry,
+    const RegionFrontierLayoutV2& layout,
+    const std::uint64_t runtime_generation,
+    const RegionFrontierStatusV2 expected_status,
+    const Prepare& prepare,
+    const Mutate& mutate,
+    const std::string_view message)
+{
+    FrameStorage storage { kernel, layout, runtime_generation };
+    prepare(storage);
+    const auto valid_before = storage.snapshot();
+    const auto validation_status = checked_entry(&storage.frame());
+    require(validation_status != RegionFrontierStatusV2::decline_before_mutation
+            && validation_status != RegionFrontierStatusV2::stale_generation,
+        "the unmodified pending-write frame first passes the checked entry");
+    storage.restore(valid_before);
+    storage.require_unchanged(valid_before,
+        "the pending-slot guard starts from the checked frame and backing state");
+
+    mutate(storage);
+    const auto before = storage.snapshot();
+    const auto checked_status = checked_entry(&storage.frame());
+    require(checked_status == expected_status, message);
+    storage.require_unchanged(before,
+        "checked pending-slot rejection preserves frame and backing state");
+    const auto private_status = private_entry(&storage.frame());
+    require(private_status == expected_status
+            && private_status == checked_status, message);
+    storage.require_unchanged(before,
+        "descriptor-shape entry keeps the dynamic pending-slot guard");
+}
+
 } // namespace
 
 void run_region_frontier_alias_prevalidated_entry_tests(
     const RegionConeActivationKernel& kernel,
     const RegionFrontierStepEntryV2 checked_entry,
     const RegionFrontierStepEntryV2 trusted_entry,
+    const RegionFrontierStepEntryV2 canonical_values_entry,
+    const RegionFrontierStepEntryV2 alias_and_canonical_values_entry,
+    const RegionFrontierStepEntryV2 descriptor_shapes_entry,
     const RegionFrontierLayoutV2& layout,
     const std::uint64_t runtime_generation)
 {
-    require(checked_entry != nullptr && trusted_entry != nullptr,
-        "the built-in executor provides checked and trusted entries");
-    require(checked_entry != trusted_entry,
-        "the trusted alias-prevalidated entry is a separate thunk");
+    require(checked_entry != nullptr && trusted_entry != nullptr
+            && canonical_values_entry != nullptr
+            && alias_and_canonical_values_entry != nullptr
+            && descriptor_shapes_entry != nullptr,
+        "the built-in executor provides four existing entries and the shape entry");
+    require(checked_entry != trusted_entry
+            && checked_entry != canonical_values_entry
+            && checked_entry != alias_and_canonical_values_entry
+            && checked_entry != descriptor_shapes_entry
+            && trusted_entry != canonical_values_entry
+            && trusted_entry != alias_and_canonical_values_entry
+            && trusted_entry != descriptor_shapes_entry
+            && canonical_values_entry != alias_and_canonical_values_entry
+            && canonical_values_entry != descriptor_shapes_entry
+            && alias_and_canonical_values_entry != descriptor_shapes_entry,
+        "each checked, trusted, canonical, combined, and shape mode has a separate thunk");
     require(layout.execution_mode
             == RegionFrontierExecutionModeV2::systemverilog_active,
-        "alias-prevalidated entry equivalence is scoped to the SV kernel");
+        "private alias and canonical-value entries are scoped to SV kernels");
 
-    require_checked_trusted_success(kernel, checked_entry, trusted_entry,
-        layout, runtime_generation,
+    const auto compare_valid_entries = [&](const auto& prepare,
+                                           const std::string_view message) {
+        require_checked_trusted_success(kernel, checked_entry, trusted_entry,
+            layout, runtime_generation, prepare, message);
+        require_checked_trusted_success(kernel, checked_entry,
+            canonical_values_entry, layout, runtime_generation, prepare,
+            message);
+        require_checked_trusted_success(kernel, checked_entry,
+            alias_and_canonical_values_entry, layout, runtime_generation,
+            prepare, message);
+        require_checked_trusted_success(kernel, checked_entry,
+            descriptor_shapes_entry, layout, runtime_generation, prepare,
+            message);
+    };
+    compare_valid_entries(
         [](FrameStorage& storage) {
             storage.prepare_activation_task();
         },
-        "checked and trusted activation entries both accept the certified frame");
-    require_checked_trusted_success(kernel, checked_entry, trusted_entry,
-        layout, runtime_generation,
+        "all entry modes accept the same canonical activation frame");
+    compare_valid_entries(
         [](FrameStorage& storage) {
             storage.prepare_internal_commit_task();
             const auto pending_slot
@@ -1844,7 +1992,7 @@ void run_region_frontier_alias_prevalidated_entry_tests(
             const auto signal_slot = storage.writes().at(pending_slot).signal_slot;
             storage.role_words(signal_slot, 2U)[0U] = UINT64_C(1);
         },
-        "checked and trusted internal-commit entries produce identical state");
+        "all entry modes produce identical canonical internal-commit state");
 
     const auto stale = RegionFrontierStatusV2::stale_generation;
     const auto decline = RegionFrontierStatusV2::decline_before_mutation;
@@ -1876,18 +2024,18 @@ void run_region_frontier_alias_prevalidated_entry_tests(
             storage.planes()[internal].signal_id ^= UINT32_C(0x40000000);
         },
         "trusted entry retains the bound physical-signal guard");
-    require_checked_trusted_rejection(kernel, checked_entry, trusted_entry,
-        layout, runtime_generation, decline,
-        [](FrameStorage& storage) {
-            const auto internal = storage.internal_plane_index();
-            const auto width = storage.planes()[internal].width;
-            require(width % 64U != 0U,
-                "the tail-word witness uses a partial final word");
-            const auto tail_bit = UINT64_C(1) << (width % 64U);
-            storage.role_words(internal, 2U).at(
-                storage.planes()[internal].word_count - 1U) |= tail_bit;
-        },
-        "trusted entry retains canonical Logic4 tail-bit validation");
+    if (layout.signals[layout.write_sites[0U].signal_slot].width % 64U != 0U) {
+        require_checked_trusted_rejection(kernel, checked_entry, trusted_entry,
+            layout, runtime_generation, decline,
+            [](FrameStorage& storage) {
+                const auto internal = storage.internal_plane_index();
+                const auto width = storage.planes()[internal].width;
+                const auto tail_bit = UINT64_C(1) << (width % 64U);
+                storage.role_words(internal, 2U).at(
+                    storage.planes()[internal].word_count - 1U) |= tail_bit;
+            },
+            "checked and alias-only entries reject a noncanonical tail word");
+    }
     require_checked_trusted_rejection(kernel, checked_entry, trusted_entry,
         layout, runtime_generation, decline,
         [](FrameStorage& storage) {
@@ -1896,6 +2044,157 @@ void run_region_frontier_alias_prevalidated_entry_tests(
             storage.set_scheduler_task(0U, task);
         },
         "trusted entry retains scheduler task-key authentication");
+
+    require_checked_private_guard_rejection(kernel, checked_entry,
+        canonical_values_entry, layout, runtime_generation, stale,
+        [&layout](FrameStorage& storage) {
+            storage.frame().certificate_generation
+                = layout.certificate_generation ^ UINT64_C(1);
+        },
+        "canonical-values entry retains the certificate-generation guard");
+    require_checked_private_guard_rejection(kernel, checked_entry,
+        canonical_values_entry, layout, runtime_generation, stale,
+        [&layout](FrameStorage& storage) {
+            storage.frame().component_generation
+                = layout.component_generation ^ UINT64_C(1);
+        },
+        "canonical-values entry retains the component-generation guard");
+    require_checked_private_guard_rejection(kernel, checked_entry,
+        canonical_values_entry, layout, runtime_generation, decline,
+        [](FrameStorage& storage) {
+            const auto internal = storage.internal_plane_index();
+            storage.planes()[internal].width ^= UINT32_C(1);
+        },
+        "canonical-values entry retains the exact plane-shape guard");
+    require_checked_private_guard_rejection(kernel, checked_entry,
+        canonical_values_entry, layout, runtime_generation, decline,
+        [](FrameStorage& storage) {
+            const auto internal = storage.internal_plane_index();
+            storage.planes()[internal].signal_id ^= UINT32_C(0x40000000);
+        },
+        "canonical-values entry retains physical signal identity checks");
+    require_checked_private_guard_rejection(kernel, checked_entry,
+        canonical_values_entry, layout, runtime_generation, decline,
+        [](FrameStorage& storage) {
+            const auto internal = storage.internal_plane_index();
+            storage.planes()[internal].current_planes[0U] = nullptr;
+        },
+        "canonical-values entry retains present-plane pointer checks");
+    require_checked_private_guard_rejection(kernel, checked_entry,
+        alias_and_canonical_values_entry, layout, runtime_generation, decline,
+        [](FrameStorage& storage) {
+            const auto internal = storage.internal_plane_index();
+            storage.planes()[internal].signal_id ^= UINT32_C(0x40000000);
+        },
+        "the old combined entry retains physical signal shape checks");
+    require_checked_private_guard_rejection(kernel, checked_entry,
+        alias_and_canonical_values_entry, layout, runtime_generation, decline,
+        [](FrameStorage& storage) {
+            const auto internal = storage.internal_plane_index();
+            storage.planes()[internal].width ^= UINT32_C(1);
+        },
+        "the old combined entry still validates signal descriptor shape");
+    require_checked_private_guard_rejection(kernel, checked_entry,
+        alias_and_canonical_values_entry, layout, runtime_generation, decline,
+        [&layout](FrameStorage& storage) {
+            const auto slot = layout.write_sites[0U].pending_slot;
+            storage.writes().at(slot).width ^= UINT32_C(1);
+        },
+        "the old combined entry still validates pending-write descriptor shape");
+    require_checked_private_guard_rejection(kernel, checked_entry,
+        alias_and_canonical_values_entry, layout, runtime_generation, decline,
+        [](FrameStorage& storage) {
+            auto task = storage.snapshot().tasks.front();
+            ++task.sequence;
+            storage.set_scheduler_task(0U, task);
+        },
+        "combined entry retains scheduler-key checks on unchanged geometry");
+
+    const auto prepare_internal_commit = [](FrameStorage& storage) {
+        storage.prepare_internal_commit_task();
+    };
+    require_checked_trusted_success(kernel, checked_entry,
+        descriptor_shapes_entry, layout, runtime_generation,
+        prepare_internal_commit,
+        "descriptor-shape entry preserves a valid active pending write");
+    require_checked_prepared_private_guard_rejection(kernel, checked_entry,
+        descriptor_shapes_entry, layout, runtime_generation, decline,
+        prepare_internal_commit,
+        [](FrameStorage& storage) {
+            auto& write = storage.writes().at(
+                storage.first_internal_write_pending_slot());
+            write.flags ^= RegionFrontierPendingWriteFlagsV2::pending_value_ready;
+        },
+        "descriptor-shape entry retains dynamic active pending-flag checks");
+    require_checked_prepared_private_guard_rejection(kernel, checked_entry,
+        descriptor_shapes_entry, layout, runtime_generation, decline,
+        prepare_internal_commit,
+        [](FrameStorage& storage) {
+            auto& write = storage.writes().at(
+                storage.first_internal_write_pending_slot());
+            ++write.commit_key.sequence;
+        },
+        "descriptor-shape entry retains dynamic pending commit-key checks");
+    require_checked_prepared_private_guard_rejection(kernel, checked_entry,
+        descriptor_shapes_entry, layout, runtime_generation, decline,
+        prepare_internal_commit,
+        [](FrameStorage& storage) {
+            auto& write = storage.writes().at(
+                storage.first_internal_write_pending_slot());
+            ++write.origin.sequence;
+        },
+        "descriptor-shape entry retains dynamic pending-origin checks");
+    require_checked_prepared_private_guard_rejection(kernel, checked_entry,
+        descriptor_shapes_entry, layout, runtime_generation, decline,
+        prepare_internal_commit,
+        [](FrameStorage& storage) {
+            auto& write = storage.writes().at(
+                storage.first_internal_write_pending_slot());
+            write.source_instruction ^= UINT32_C(0x80000000);
+        },
+        "descriptor-shape entry retains dynamic pending-site identity checks");
+    require_checked_prepared_private_guard_rejection(kernel, checked_entry,
+        descriptor_shapes_entry, layout, runtime_generation, decline,
+        prepare_internal_commit,
+        [](FrameStorage& storage) {
+            auto& write = storage.writes().at(
+                storage.first_internal_write_pending_slot());
+            write.reserved = 1U;
+        },
+        "descriptor-shape entry retains the active pending reserved-field check");
+    require_checked_prepared_private_guard_rejection(kernel, checked_entry,
+        descriptor_shapes_entry, layout, runtime_generation, decline,
+        prepare_internal_commit,
+        [](FrameStorage& storage) {
+            storage.frame().pending_write_count = 0U;
+        },
+        "descriptor-shape entry rejects fewer declared rows than active slots");
+    require_checked_prepared_private_guard_rejection(kernel, checked_entry,
+        descriptor_shapes_entry, layout, runtime_generation, decline,
+        prepare_internal_commit,
+        [&layout](FrameStorage& storage) {
+            storage.frame().pending_write_count
+                = layout.pending_write_capacity;
+        },
+        "descriptor-shape entry rejects more declared rows than active slots");
+    require_checked_trusted_success(kernel, checked_entry,
+        descriptor_shapes_entry, layout, runtime_generation,
+        [](FrameStorage& storage) {
+            storage.prepare_activation_task();
+            auto& inactive = storage.writes().at(
+                storage.first_internal_write_pending_slot());
+            inactive.flags = UINT32_C(0x80000000);
+            inactive.member_index = UINT32_MAX;
+            inactive.signal_slot = UINT32_MAX;
+            inactive.source_instruction = UINT32_MAX;
+            inactive.update_kind = UINT32_MAX;
+            inactive.commit_key = RegionFrontierKeyV2 {
+                UINT64_MAX, UINT64_MAX, UINT64_MAX, UINT64_MAX,
+                UINT64_MAX, UINT32_MAX, UINT32_MAX,
+            };
+            inactive.origin = inactive.commit_key;
+        },
+        "an inactive row ignores stale identity, keys, origin, and unknown flags");
 }
 
 void run_region_frontier_adversarial_tests(
@@ -2020,6 +2319,429 @@ void run_region_frontier_shared_binding_guard_tests(
         "the matching bound root member emits a source write event");
 }
 
+void run_region_frontier_repeated_binding_tests(
+    const RegionConeActivationKernel& kernel,
+    const RegionFrontierStepEntryV2 checked_entry,
+    const RegionFrontierStepEntryV2 trusted_entry,
+    const RegionFrontierLayoutV2& layout)
+{
+    require(layout.member_count == 8U,
+        "the repeated-binding witness retains its eight original members");
+    const auto plan = RegionFrontierKernelPlan::try_create(kernel);
+    require(plan.has_value(), "the repeated-body witness has a certified plan");
+    llvm::LLVMContext witness_context;
+    llvm::Module witness_module { "frontier.repeated.binding", witness_context };
+    const auto commit = make_region_frontier_internal_commit_emitter_v2(
+        plan->layout(), plan->fanout_range_spans(),
+        plan->fanout_sensitivity_ranges());
+    (void) plan->emit_shared_body(witness_module, "repeated.binding.body", commit);
+    std::size_t reused_helpers { };
+    for (const auto& function : witness_module) {
+        if (!function.getName().starts_with("fsim.frontier.member.template.v1.")) {
+            continue;
+        }
+        std::size_t calls { };
+        for (const auto* user : function.users()) {
+            const auto* call = llvm::dyn_cast<llvm::CallBase>(user);
+            if (call != nullptr && call->getCalledFunction() == &function) {
+                ++calls;
+            }
+        }
+        if (calls >= 2U) {
+            ++reused_helpers;
+        }
+    }
+    require(reused_helpers != 0U && !llvm::verifyModule(witness_module),
+        "the behavioral witness actually exercises a shared repeated-member helper");
+    for (const auto entry : { checked_entry, trusted_entry }) {
+        require(entry != nullptr, "both checked and trusted entries are callable");
+        for (const auto unknown : { false, true }) {
+            for (const auto member_index : { 1U, 2U, 3U, 4U, 5U, 7U }) {
+                FrameStorage storage { kernel, layout, 71U };
+                storage.prepare_member_activation_task(member_index);
+                const auto origin = storage.members()[member_index].activation_origin;
+                for (std::size_t slot = 0U; slot < layout.signal_slot_count; ++slot) {
+                    auto& plane = storage.planes()[slot];
+                    const bool internal = (plane.flags
+                        & RegionFrontierPlaneFlagsV2::certified_internal_single_owner)
+                        != 0U;
+                    const std::size_t first_role = internal ? 2U : 0U;
+                    storage.role_words(slot, first_role)[0U] = plane.signal_id == 102U ? UINT64_C(0x96)
+                        : plane.signal_id == 103U ? UINT64_C(0x33) : UINT64_C(0);
+                    storage.role_words(slot, first_role + 1U)[0U]
+                        = unknown && plane.signal_id == 102U
+                        ? UINT64_C(0x81) : UINT64_C(0);
+                }
+                const auto status = entry(&storage.frame());
+                require(status != RegionFrontierStatusV2::decline_before_mutation
+                        && status != RegionFrontierStatusV2::stale_generation
+                        && storage.frame().scheduler_task_cursor == 1U
+                        && storage.dispatch_count() == 1U,
+                    "each originally bound member executes exactly once");
+                const bool has_output = member_index != 7U;
+                require(storage.frame().pending_write_count == (has_output ? 1U : 0U)
+                        && storage.frame().staged_event_count == (has_output ? 1U : 0U),
+                    "zero-output members and one-output members retain exact work counts");
+                for (std::size_t site_index = 0U;
+                     site_index < layout.write_site_count; ++site_index) {
+                    const auto& site = layout.write_sites[site_index];
+                    const auto& write = storage.writes()[site.pending_slot];
+                    if (site.member_index != member_index) {
+                        require(write.flags == 0U,
+                            "a shared body leaves every other instance's pending slot untouched");
+                        continue;
+                    }
+                    std::uint64_t expected_aval;
+                    const auto expected_bval = unknown && member_index != 2U
+                        ? UINT64_C(0x81) : UINT64_C(0);
+                    if (member_index <= 3U) {
+                        expected_aval = (member_index == 2U
+                            ? UINT64_C(0x33) : UINT64_C(0x96))
+                            ^ (member_index == 3U ? UINT64_C(0xa) : UINT64_C(0x5));
+                    } else if (member_index == 4U) {
+                        expected_aval = 0U;
+                    } else {
+                        expected_aval = UINT64_C(0x96) ^ UINT64_C(0x33);
+                    }
+                    expected_aval |= expected_bval;
+                    require(write.value_planes[0U][0U] == expected_aval
+                            && write.value_planes[1U][0U] == expected_bval,
+                        "constant and input-alias differences preserve exact known/X/Z results");
+                    require(write.member_index == member_index
+                            && write.signal_slot == site.signal_slot
+                            && write.source_instruction == site.source_instruction
+                            && write.update_kind == site.update_kind
+                            && same_key(write.origin, origin),
+                        "shared lowering preserves each original write's binding and origin");
+                    const auto& event = storage.frame().staged_events[0U];
+                    require(event.descriptor_index == site.pending_slot
+                            && event.stable_order == layout.members[member_index].process_id
+                            && same_key(event.origin, origin),
+                        "the event retains the original pending slot, process, and activation key");
+                }
+            }
+        }
+    }
+
+    // SV admission requires a nonempty write table. The generic emitter
+    // accepts no-output layouts and still constructs the shared validation
+    // blocks, so exercise their null write-table types independently.
+    auto empty_layout = layout;
+    std::vector<RegionFrontierMemberLayoutV2> empty_members(
+        layout.members, layout.members + layout.member_count);
+    std::vector<std::uint32_t> empty_bounds(layout.member_count, 0U);
+    for (auto& member : empty_members) {
+        member.first_write_site = 0U;
+        member.write_site_count = 0U;
+    }
+    empty_layout.members = empty_members.data();
+    empty_layout.write_sites = nullptr;
+    empty_layout.write_site_count = 0U;
+    empty_layout.pending_write_capacity = 0U;
+    empty_layout.execution_mode = RegionFrontierExecutionModeV2::generic_deferred_update;
+    empty_layout.metadata_count = 0U;
+    empty_layout.fanout_edge_count = 0U;
+    empty_layout.fanout_edges = nullptr;
+    empty_layout.max_commit_fanout_events = 0U;
+    empty_layout.staged_event_capacity = 0U;
+    empty_layout.committed_signal_capacity = 0U;
+    std::vector<RegionFrontierSignalLayoutV2> empty_signals(
+        layout.signals, layout.signals + layout.signal_slot_count);
+    for (auto& signal : empty_signals) {
+        signal.flags = RegionFrontierPlaneFlagsV2::read_only_boundary_port;
+        signal.owner_process_id = UINT32_MAX;
+        signal.metadata_index = UINT32_MAX;
+    }
+    empty_layout.signals = empty_signals.data();
+    empty_layout.max_member_write_counts = empty_bounds.data();
+    empty_layout.max_member_staged_event_counts = empty_bounds.data();
+    llvm::LLVMContext context;
+    llvm::Module module { "frontier.no.write.sites", context };
+    const auto no_member = [](llvm::IRBuilder<>&, std::size_t, llvm::Value*) { };
+    const auto no_commit = [](llvm::IRBuilder<>&, llvm::Value*, llvm::Value*) { };
+    (void) emit_region_frontier_loop_v2(module, "no.write.sites", empty_layout,
+        no_member, no_commit);
+    require(!llvm::verifyModule(module),
+        "the all-zero-write-site layout produces valid LLVM IR");
+}
+
+void run_region_frontier_repeated_copy_member_tests(
+    const RegionConeActivationKernel& kernel,
+    const RegionFrontierStepEntryV2 checked_entry,
+    const RegionFrontierStepEntryV2 trusted_entry,
+    const RegionFrontierLayoutV2& layout,
+    const std::uint32_t width, const ValueKind value_kind)
+{
+    require(width >= 65U && layout.member_count == 4U,
+        "the repeated-copy witness uses a wide four-member layout");
+    require(layout.execution_mode
+                == (value_kind == ValueKind::logic9
+                    ? RegionFrontierExecutionModeV2::generic_deferred_update
+                    : RegionFrontierExecutionModeV2::systemverilog_active),
+        "the repeated-copy witness uses the value kind's supported route");
+    const auto plan = RegionFrontierKernelPlan::try_create(kernel);
+    require(plan.has_value(),
+        "the repeated-copy witness has a certified plan");
+    llvm::LLVMContext witness_context;
+    llvm::Module witness_module {
+        "frontier.repeated.copy.member", witness_context,
+    };
+    const auto commit = make_region_frontier_internal_commit_emitter_v2(
+        plan->layout(), plan->fanout_range_spans(),
+        plan->fanout_sensitivity_ranges());
+    (void) plan->emit_shared_body(
+        witness_module, "repeated.copy.member.body", commit);
+    const bool generic_route = layout.execution_mode
+        == RegionFrontierExecutionModeV2::generic_deferred_update;
+    std::size_t repeated_helpers { };
+    std::size_t repeated_call_sites { };
+    for (const auto& function : witness_module) {
+        if (!function.getName().starts_with(
+                "fsim.frontier.member.template.v1.")) {
+            continue;
+        }
+        std::size_t calls { };
+        for (const auto* user : function.users()) {
+            const auto* call = llvm::dyn_cast<llvm::CallBase>(user);
+            if (call != nullptr && call->getCalledFunction() == &function) {
+                ++calls;
+            }
+        }
+        if (calls >= 2U) {
+            ++repeated_helpers;
+            repeated_call_sites += calls;
+        }
+    }
+    const auto expected_repeated_call_sites = generic_route ? 4U : 2U;
+    require(repeated_helpers == 1U
+            && repeated_call_sites == expected_repeated_call_sites
+            && !llvm::verifyModule(witness_module),
+        generic_route
+            ? "all four Generic bodies call one verified shared helper"
+            : "the two middle SV bodies call one verified shared helper");
+
+    constexpr std::array<std::size_t, 4U> current_roles {
+        2U, 3U, 12U, 13U,
+    };
+    constexpr std::array<std::size_t, 4U> boundary_roles {
+        0U, 1U, 10U, 11U,
+    };
+    const auto& input_roles = generic_route ? boundary_roles : current_roles;
+    const auto plane_count = value_kind == ValueKind::logic9 ? 4U : 2U;
+    const auto expected_kind = value_kind == ValueKind::logic9
+        ? RegionFrontierValueKindV2::logic9
+        : RegionFrontierValueKindV2::logic4;
+    const auto make_pattern = [width, value_kind](
+                                  const std::size_t salt) {
+        std::array<std::vector<std::uint64_t>, 4U> planes;
+        for (auto& words : planes) {
+            words.assign(words_for(width), 0U);
+        }
+        std::array<bool, 9U> seen_logic9 { };
+        bool saw_x = false;
+        bool saw_z = false;
+        for (std::uint32_t bit = 0U; bit < width; ++bit) {
+            const auto word = static_cast<std::size_t>(bit / 64U);
+            const auto mask = UINT64_C(1) << (bit % 64U);
+            if (value_kind == ValueKind::logic4) {
+                const auto code = static_cast<std::uint8_t>(
+                    (static_cast<std::size_t>(bit) + salt) % 4U);
+                saw_x = saw_x || code == 2U;
+                saw_z = saw_z || code == 3U;
+                if (code == 1U || code == 2U) {
+                    planes[0U][word] |= mask;
+                }
+                if (code == 2U || code == 3U) {
+                    planes[1U][word] |= mask;
+                }
+            } else {
+                const auto code = static_cast<std::uint8_t>(
+                    (static_cast<std::size_t>(bit) + salt) % 9U);
+                seen_logic9[code] = true;
+                for (std::size_t plane = 0U; plane < 4U; ++plane) {
+                    if ((code & (1U << plane)) != 0U) {
+                        planes[plane][word] |= mask;
+                    }
+                }
+            }
+        }
+        if (value_kind == ValueKind::logic4) {
+            require(saw_x && saw_z,
+                "the repeated Logic4 pattern includes X and Z bits");
+        } else {
+            require(std::all_of(seen_logic9.begin(), seen_logic9.end(),
+                        [](const bool seen) { return seen; }),
+                "the repeated Logic9 pattern includes all nine valid states");
+            for (std::size_t word = 0U; word < words_for(width); ++word) {
+                require(region_frontier_logic9_word_is_canonical_v2(
+                            planes[0U][word], planes[1U][word],
+                            planes[2U][word], planes[3U][word]),
+                    "the repeated Logic9 pattern has no reserved code bits");
+            }
+        }
+        return planes;
+    };
+
+    for (std::size_t member_index = 0U; member_index < layout.member_count;
+         ++member_index) {
+        require(kernel.members[member_index].all_registers_definitely_defined,
+            "every member keeps its dense-register definition certificate");
+    }
+    require(checked_entry != nullptr
+            && (generic_route || trusted_entry != nullptr),
+        "the public checked entry and SV trusted entry are available");
+    for (const auto entry : { checked_entry, trusted_entry }) {
+        if (entry == nullptr) {
+            continue;
+        }
+        for (const std::size_t member_index : { 1U, 2U }) {
+            const auto expected = make_pattern(member_index);
+            FrameStorage storage { kernel, layout, 71U };
+            storage.prepare_member_activation_task(member_index);
+            const auto origin
+                = storage.members()[member_index].activation_origin;
+            const auto& member = kernel.members[member_index];
+            require(member.sensitivities.size() == 1U,
+                "each repeated middle member has one exact input signal");
+            std::size_t input_slot = layout.signal_slot_count;
+            for (std::size_t slot = 0U; slot < layout.signal_slot_count; ++slot) {
+                if (layout.signals[slot].signal_id
+                    == member.sensitivities.front().signal) {
+                    input_slot = slot;
+                    break;
+                }
+            }
+            const auto expected_input_flag = generic_route
+                ? RegionFrontierPlaneFlagsV2::read_only_boundary_port
+                : RegionFrontierPlaneFlagsV2::certified_internal_single_owner;
+            require(input_slot < layout.signal_slot_count
+                    && (layout.signals[input_slot].flags & expected_input_flag) != 0U
+                    && layout.signals[input_slot].width == width
+                    && layout.signals[input_slot].value_kind
+                        == expected_kind,
+                "the shared members read the expected internal typed plane");
+            for (std::size_t plane = 0U; plane < plane_count; ++plane) {
+                auto& input = storage.role_words(
+                    input_slot, input_roles[plane]);
+                std::copy(expected[plane].begin(), expected[plane].end(),
+                    input.begin());
+            }
+
+            const auto status = entry(&storage.frame());
+            require(status != RegionFrontierStatusV2::decline_before_mutation
+                    && status != RegionFrontierStatusV2::stale_generation
+                    && storage.frame().scheduler_task_cursor == 1U
+                    && storage.dispatch_count() == 1U
+                    && storage.frame().pending_write_count == 1U
+                    && storage.frame().staged_event_count == 1U,
+                "each selected member executes once and stages exactly one write");
+            if (value_kind == ValueKind::logic9) {
+                require(status
+                        == RegionFrontierStatusV2::generic_update_batch_ready,
+                    "the Generic Logic9 helper returns one deferred update");
+            }
+
+            const RegionFrontierWriteSiteV2* selected_site = nullptr;
+            const RegionFrontierWriteSiteV2* sibling_site = nullptr;
+            for (std::size_t index = 0U; index < layout.write_site_count; ++index) {
+                const auto& site = layout.write_sites[index];
+                if (site.member_index == member_index) {
+                    require(selected_site == nullptr,
+                        "each repeated member owns exactly one output site");
+                    selected_site = &site;
+                } else if (site.member_index == (member_index == 1U ? 2U : 1U)) {
+                    sibling_site = &site;
+                }
+            }
+            require(selected_site != nullptr && sibling_site != nullptr
+                    && selected_site->pending_slot != sibling_site->pending_slot
+                    && selected_site->signal_slot != sibling_site->signal_slot
+                    && selected_site->source_instruction
+                        != sibling_site->source_instruction,
+                "shared bodies retain distinct signal, source, and pending bindings");
+
+            const auto owner = member.process;
+            const RegionConeOutputBinding* output_binding = nullptr;
+            for (const auto& output : kernel.outputs) {
+                if (output.owner == owner) {
+                    require(output_binding == nullptr,
+                        "each middle process owns one source output binding");
+                    output_binding = &output;
+                }
+            }
+            require(output_binding != nullptr
+                    && output_binding->owner == owner
+                    && output_binding->source_instruction
+                        == selected_site->source_instruction
+                    && static_cast<std::uint32_t>(output_binding->update_kind)
+                        == selected_site->update_kind
+                    && output_binding->domain
+                        == (generic_route ? SignalUpdateDomain::generic
+                            : SignalUpdateDomain::systemverilog_active)
+                    && output_binding->signal
+                        == layout.signals[selected_site->signal_slot].signal_id
+                    && output_binding->value_kind == value_kind
+                    && output_binding->width == width,
+                "the write site preserves this member's source output metadata");
+
+            for (std::size_t index = 0U; index < layout.write_site_count; ++index) {
+                const auto& site = layout.write_sites[index];
+                const auto& write = storage.writes()[site.pending_slot];
+                if (&site != selected_site) {
+                    require(write.flags == 0U,
+                        "the selected shared body leaves other pending slots empty");
+                    continue;
+                }
+                require(write.member_index == member_index
+                        && write.signal_slot == site.signal_slot
+                        && write.source_instruction == site.source_instruction
+                        && write.update_kind == site.update_kind
+                        && write.value_kind == site.value_kind
+                        && write.width == width
+                        && write.word_count == words_for(width)
+                        && write.plane_count == plane_count
+                        && (write.flags
+                            & RegionFrontierPendingWriteFlagsV2::pending_active) != 0U
+                        && (write.flags
+                            & RegionFrontierPendingWriteFlagsV2::pending_value_ready) != 0U
+                        && (write.flags
+                            & (value_kind == ValueKind::logic9
+                                ? RegionFrontierPendingWriteFlagsV2::pending_generic_target
+                                : RegionFrontierPendingWriteFlagsV2::pending_internal_target))
+                            != 0U
+                        && same_key(write.origin, origin),
+                    "the private write retains exact member and value provenance");
+                for (std::size_t plane = 0U; plane < plane_count; ++plane) {
+                    require(write.value_planes[plane] != nullptr
+                            && std::equal(expected[plane].begin(),
+                                expected[plane].end(), write.value_planes[plane]),
+                        "every word of every output plane matches the input");
+                }
+            }
+
+            const auto& event = storage.frame().staged_events[0U];
+            const auto expected_stable_order = generic_route
+                ? first_task_stable_order
+                : static_cast<std::uint64_t>(owner);
+            require(event.descriptor_index == selected_site->pending_slot
+                    && event.kind == selected_site->event_kind
+                    && event.stable_order == expected_stable_order
+                    && same_key(event.origin, origin),
+                "the event retains the selected pending slot and member origin");
+            for (std::size_t index = 0U; index < layout.write_site_count; ++index) {
+                if (layout.write_sites[index].member_index != member_index) {
+                    continue;
+                }
+                require(layout.write_sites[index].value_kind
+                            == expected_kind
+                        && layout.write_sites[index].width == width
+                        && layout.write_sites[index].plane_count == plane_count,
+                    "the immutable site has the exact wide typed-plane shape");
+            }
+        }
+    }
+}
+
 void run_region_frontier_entry_thunk_guard_tests(
     const RegionFrontierLayoutV2& layout)
 {
@@ -2103,22 +2825,96 @@ void run_region_frontier_entry_thunk_guard_tests(
             if (call == nullptr) {
                 continue;
             }
-            const auto* const alias_prevalidated = call->arg_size() == 3U
+            const auto* const alias_prevalidated = call->arg_size() == 5U
                 ? llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(2U))
+                : nullptr;
+            const auto* const value_contents_prevalidated
+                = call->arg_size() == 5U
+                ? llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(3U))
+                : nullptr;
+            const auto* const descriptor_shapes_prevalidated
+                = call->arg_size() == 5U
+                ? llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(4U))
                 : nullptr;
             found_no_unwind_call = call->doesNotThrow()
                 && call->getCalledFunction() == body
                 && alias_prevalidated != nullptr
-                && alias_prevalidated->isZero();
+                && alias_prevalidated->isZero()
+                && value_contents_prevalidated != nullptr
+                && value_contents_prevalidated->isZero()
+                && descriptor_shapes_prevalidated != nullptr
+                && descriptor_shapes_prevalidated->isZero();
         }
     }
     require(found_no_unwind_call,
-        "the exact wrapper's call preserves the checked no-unwind contract");
+        "the checked thunk passes independent false receipts to its no-unwind body");
     const auto* const binding = module.getGlobalVariable(
         "wrapper.physical.binding", true);
     require(binding != nullptr && binding->isConstant()
             && binding->getLinkage() == llvm::GlobalValue::PrivateLinkage,
         "the thunk keeps its per-plan physical binding in an immutable private global");
+    const auto wrapper_passes_receipts = [&](llvm::Function* const candidate,
+                                              const bool expected_alias,
+                                              const bool expected_contents,
+                                              const bool expected_shapes) {
+        for (const auto& candidate_block : *candidate) {
+            for (const auto& instruction : candidate_block) {
+                const auto* const call
+                    = llvm::dyn_cast<llvm::CallBase>(&instruction);
+                if (call == nullptr || call->getCalledFunction() != body
+                    || call->arg_size() != 5U || !call->doesNotThrow()) {
+                    continue;
+                }
+                const auto* const alias_receipt
+                    = llvm::dyn_cast<llvm::ConstantInt>(
+                        call->getArgOperand(2U));
+                const auto* const content_receipt
+                    = llvm::dyn_cast<llvm::ConstantInt>(
+                        call->getArgOperand(3U));
+                const auto* const shapes_receipt
+                    = llvm::dyn_cast<llvm::ConstantInt>(
+                        call->getArgOperand(4U));
+                return alias_receipt != nullptr
+                    && content_receipt != nullptr
+                    && shapes_receipt != nullptr
+                    && alias_receipt->isOne() == expected_alias
+                    && content_receipt->isOne() == expected_contents
+                    && shapes_receipt->isOne() == expected_shapes;
+            }
+        }
+        return false;
+    };
+    auto* const alias_wrapper = emit_region_frontier_entry_thunk_v2(module,
+        "wrapper.alias", "body", layout, true, false);
+    auto* const contents_wrapper = emit_region_frontier_entry_thunk_v2(module,
+        "wrapper.contents", "body", layout, false, true);
+    auto* const combined_wrapper = emit_region_frontier_entry_thunk_v2(module,
+        "wrapper.alias.contents", "body", layout, true, true);
+    auto* const descriptor_shapes_wrapper
+        = emit_region_frontier_entry_thunk_v2(module,
+            "wrapper.alias.canonical.shapes", "body", layout,
+            true, true, true);
+    require(alias_wrapper != nullptr && contents_wrapper != nullptr
+            && combined_wrapper != nullptr
+            && descriptor_shapes_wrapper != nullptr,
+        "the old exact thunks and shape thunk are emitted separately");
+    require(wrapper_passes_receipts(wrapper, false, false, false)
+            && wrapper_passes_receipts(alias_wrapper, true, false, false)
+            && wrapper_passes_receipts(contents_wrapper, false, true, false)
+            && wrapper_passes_receipts(combined_wrapper, true, true, false)
+            && wrapper_passes_receipts(descriptor_shapes_wrapper, true, true,
+                true),
+        "only the exact shape thunk adds a third true receipt");
+    bool rejected_unpaired_shapes_receipt = false;
+    try {
+        (void) emit_region_frontier_entry_thunk_v2(module,
+            "wrapper.shapes.without.alias", "body", layout,
+            false, true, true);
+    } catch (const std::invalid_argument&) {
+        rejected_unpaired_shapes_receipt = true;
+    }
+    require(rejected_unpaired_shapes_receipt,
+        "descriptor-shape receipt requires the old alias and canonical receipts");
 }
 
 void run_region_frontier_generic_stable_order_test(

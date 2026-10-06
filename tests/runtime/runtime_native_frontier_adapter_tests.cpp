@@ -297,6 +297,8 @@ void exercise_ordered_log_adapter_sync()
     runtime->authoritative_state = state;
     runtime->writable_signals.assign(
         writable_signals.begin(), writable_signals.end());
+    runtime->writable_layout_indices.resize(
+        runtime->writable_signals.size());
     runtime->planes.resize(signal_count);
     runtime->metadata.resize(signal_count);
     runtime->committed_signals.resize(log_count);
@@ -325,7 +327,8 @@ void exercise_ordered_log_adapter_sync()
     const auto expected_generation = values.revision();
     AuthoritativeSignalPlanes::FrontierWriteLease lease;
     require(values.try_acquire_frontier_write_lease(
-                expected_generation, writable_signals, lease)
+                expected_generation, writable_signals, lease,
+                runtime->writable_layout_indices)
             && lease.active(),
         "adapter test acquires the genuine component write lease");
     require(values.current(s2) == zero && values.stored(s2) == one

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
+#include "simir_builtin_process_executor_capability.hpp"
+
+#include <algorithm>
 
 namespace fsim::runtime::simir {
 
@@ -7,6 +10,7 @@ namespace {
 
 [[nodiscard]] bool frontier_role_matches(
     const AuthoritativeSignalPlanes::FrontierWriteLease& lease,
+    const std::size_t writable_ordinal,
     const SignalId signal,
     const ProcessId owner,
     const PackedPlaneRole role,
@@ -16,7 +20,8 @@ namespace {
 {
     std::array<std::span<std::uint64_t>, 4U> words;
     const auto plane_count = region_frontier_required_plane_count_v2(kind);
-    if (plane_count == 0U || !lease.plane_words(signal, role, owner, words)) {
+    if (plane_count == 0U || !lease.plane_words_at(
+            writable_ordinal, signal, role, owner, words)) {
         return false;
     }
     for (std::size_t plane = 0U; plane < words.size(); ++plane) {
@@ -428,13 +433,16 @@ void Interpreter::Impl::RegionFrontierComponentRuntime::
             fail_closed();
         }
 
-        const auto process_program = owner->get_process(process).program();
-        const auto& operations = process_program.operations();
+        const auto source_program = owner->processes.program_view(process);
+        const auto& operations = source_program.operations();
         if (write.source_instruction >= operations.size()) {
             fail_closed();
         }
-        const auto source_operation
-            = operations.expanded(write.source_instruction);
+        // Inspect the current override without copying the operation. These
+        // write types have only a signal binding to expand; all other fields
+        // are already exact in the stored operation.
+        const auto& source_operation
+            = operations.at(write.source_instruction);
         const auto* const whole_write
             = operation_get_if<WriteUpdate>(&source_operation);
         const auto* const slice_write
@@ -446,7 +454,8 @@ void Interpreter::Impl::RegionFrontierComponentRuntime::
         std::size_t publication_offset { };
         if (whole_write != nullptr) {
             source_matches
-                = whole_write->signal == signal_layout.signal_id
+                = operations.signal(whole_write->signal)
+                    == signal_layout.signal_id
                 && whole_write->domain
                     == SignalUpdateDomain::systemverilog_active
                 && output_binding->offset == 0U
@@ -454,7 +463,8 @@ void Interpreter::Impl::RegionFrontierComponentRuntime::
         } else if (slice_write != nullptr
             && slice_write->domain
                 == SignalUpdateDomain::systemverilog_active) {
-            if (slice_write->signal == signal_layout.signal_id
+            const auto source_signal = operations.signal(slice_write->signal);
+            if (source_signal == signal_layout.signal_id
                 && slice_write->offset == output_binding->offset
                 && slice_write->offset <= runtime_signal_width
                 && write.width
@@ -464,12 +474,10 @@ void Interpreter::Impl::RegionFrontierComponentRuntime::
                     = slice_write->offset != 0U
                     || write.width != runtime_signal_width;
                 if (partial_output) {
-                    const auto source_program
-                        = owner->processes.program_view(process);
                     bool matching_driver_region { };
                     for (const auto& region
                          : source_program.driver_regions()) {
-                        if (region.signal == slice_write->signal
+                        if (region.signal == source_signal
                             && !region.whole
                             && region.offset == slice_write->offset
                             && region.width == write.width) {
@@ -480,17 +488,17 @@ void Interpreter::Impl::RegionFrontierComponentRuntime::
                         fail_closed();
                     }
                     slice_publication = true;
-                    publication_signal = slice_write->signal;
+                    publication_signal = source_signal;
                     publication_offset = slice_write->offset;
                 }
             } else if (output_binding->offset == 0U
                 && owner->native_boundary_slice_matches_alias_family(
-                           slice_write->signal, slice_write->offset,
+                           source_signal, slice_write->offset,
                            write.width,
                            static_cast<SignalId>(signal_layout.signal_id))) {
                 source_matches = true;
                 slice_publication = true;
-                publication_signal = slice_write->signal;
+                publication_signal = source_signal;
                 publication_offset = slice_write->offset;
             }
         }
@@ -551,16 +559,37 @@ void Interpreter::Impl::RegionFrontierComponentRuntime::
         if (writable_signals.empty()) {
             fail_closed();
         }
-        for (const auto& writable : writable_signals) {
+        bool planes_strictly_ordered = true;
+        for (std::size_t slot = 1U; slot < planes.size(); ++slot) {
+            if (planes[slot - 1U].signal_id >= planes[slot].signal_id) {
+                planes_strictly_ordered = false;
+                break;
+            }
+        }
+        for (std::size_t writable_ordinal = 0U;
+             writable_ordinal < writable_signals.size();
+             ++writable_ordinal) {
+            const auto& writable = writable_signals[writable_ordinal];
             const RegionFrontierPlaneV2* writable_plane { };
-            for (const auto& candidate : planes) {
-                if (candidate.signal_id != writable.signal) {
-                    continue;
+            if (planes_strictly_ordered) {
+                const auto candidate = std::ranges::lower_bound(planes,
+                    writable.signal, std::ranges::less { },
+                    &RegionFrontierPlaneV2::signal_id);
+                if (candidate != planes.end()
+                    && candidate->signal_id == writable.signal) {
+                    writable_plane = &*candidate;
                 }
-                if (writable_plane != nullptr) {
-                    fail_closed();
+            } else {
+                // Unordered descriptors retain the full uniqueness check.
+                for (const auto& candidate : planes) {
+                    if (candidate.signal_id != writable.signal) {
+                        continue;
+                    }
+                    if (writable_plane != nullptr) {
+                        fail_closed();
+                    }
+                    writable_plane = &candidate;
                 }
-                writable_plane = &candidate;
             }
             if (writable_plane == nullptr
                 || writable_plane->owner_process_id != writable.owner
@@ -568,22 +597,26 @@ void Interpreter::Impl::RegionFrontierComponentRuntime::
                         & certified_internal_single_owner)
                     == 0U
                 || (writable_plane->flags & read_only_boundary_port) != 0U
-                || !frontier_role_matches(lease, writable.signal,
+                || !frontier_role_matches(lease, writable_ordinal,
+                    writable.signal,
                     writable.owner, PackedPlaneRole::current,
                     writable_plane->value_kind,
                     writable_plane->word_count,
                     writable_plane->current_planes)
-                || !frontier_role_matches(lease, writable.signal,
+                || !frontier_role_matches(lease, writable_ordinal,
+                    writable.signal,
                     writable.owner, PackedPlaneRole::previous,
                     writable_plane->value_kind,
                     writable_plane->word_count,
                     writable_plane->previous_planes)
-                || !frontier_role_matches(lease, writable.signal,
+                || !frontier_role_matches(lease, writable_ordinal,
+                    writable.signal,
                     writable.owner, PackedPlaneRole::stored,
                     writable_plane->value_kind,
                     writable_plane->word_count,
                     writable_plane->stored_planes)
-                || !frontier_role_matches(lease, writable.signal,
+                || !frontier_role_matches(lease, writable_ordinal,
+                    writable.signal,
                     writable.owner, PackedPlaneRole::owner,
                     writable_plane->value_kind,
                     writable_plane->word_count,
@@ -607,8 +640,436 @@ void Interpreter::Impl::RegionFrontierComponentRuntime::
             static_cast<SchedulerPhase>(write.origin.phase)
         };
 
-        // Checked commit may invoke user observers and detach authoritative
-        // roles, so no A4 write lease may remain active across this call.
+        const auto can_preserve_selected_member_sync = [&]()
+            -> FrontierBoundarySyncRejectReason {
+            using Reject = FrontierBoundarySyncRejectReason;
+            if (owner == nullptr || !backend_pin || !backend_pin->executor
+                || !owner->region_graph) {
+                return Reject::runtime_or_backend_missing;
+            }
+            if (runtime_generation == 0U
+                || runtime_generation != owner->region_runtime_generation) {
+                return Reject::runtime_generation_stale;
+            }
+            if (component >= owner->region_frontier_runtime_by_component.size()
+                || owner->region_frontier_runtime_by_component[component].get()
+                    != this) {
+                return Reject::component_runtime_stale;
+            }
+            if (component >= owner->region_authoritative_state_by_component.size()
+                || !authoritative_state || !authoritative_state->valid()
+                || owner->region_authoritative_state_by_component[component].get()
+                    != authoritative_state.get()) {
+                return Reject::authoritative_state_stale;
+            }
+            if (!owner->region_graph->component_epochs_current(component)) {
+                return Reject::component_epoch_stale;
+            }
+            if (layout.execution_mode
+                != RegionFrontierExecutionModeV2::systemverilog_active) {
+                return Reject::wrong_execution_mode;
+            }
+            if (!member_sync_private_entry) {
+                return Reject::nonprivate_entry;
+            }
+            if (!member_sync_workset_available) {
+                return Reject::unavailable_workset;
+            }
+            if (member_sync_force_full) {
+                return Reject::prior_force_full;
+            }
+            if (publication_signal != signal_layout.signal_id) {
+                return Reject::publication_signal_mismatch;
+            }
+
+            const auto signal_id = static_cast<SignalId>(publication_signal);
+            if (signal_id >= owner->signals.size()) {
+                return Reject::signal_id_out_of_range;
+            }
+            if (signal_id >= owner->external_driver_values.size()
+                || signal_id >= owner->forced_values.size()
+                || signal_id >= owner->forced_masks.size()
+                || signal_id >= owner->forced_driver_values.size()
+                || signal_id >= owner->forced_driver_masks.size()
+                || signal_id >= owner->signal_transaction_observed.size()
+                || signal_id >= owner->dynamic_fanout.size()) {
+                return Reject::signal_effect_vectors_misaligned;
+            }
+            if (signal_id >= owner->signal_container_aliases.size()
+                || signal_id >= owner->signal_container_element_aliases.size()
+                || signal_id >= owner->signal_container_aggregate_aliases.size()) {
+                return Reject::container_vectors_misaligned;
+            }
+            if (signal_id >= owner->signal_writer_counts.size()
+                || signal_id >= owner->stable_single_writer_processes.size()
+                || signal_id >= owner->driver_values.size()
+                || signal_id >= owner->module_path_destination_mask.size()) {
+                return Reject::ownership_vectors_misaligned;
+            }
+            if (owner->native_signal_dependencies_unknown
+                || owner->native_signal_dependency_mask.size()
+                    != owner->signals.size()
+                || owner->native_signal_non_range_dependency_mask.size()
+                    != owner->signals.size()) {
+                return Reject::dependency_masks_unavailable;
+            }
+            if (owner->static_fanout_dirty
+                || owner->static_fanout_category_spans.size()
+                    != owner->signals.size()
+                || owner->static_fanout_offsets.size()
+                    != owner->signals.size() + 1U) {
+                return Reject::static_fanout_index_unavailable;
+            }
+
+            const auto& signal = owner->signals[signal_id];
+            if (signal.value_kind != ValueKind::logic4) {
+                return Reject::wrong_value_kind;
+            }
+            if (signal.resolution != ResolutionKind::sv_wire) {
+                return Reject::wrong_resolution;
+            }
+            if (signal.initial_value.width() > 64U) {
+                return Reject::signal_too_wide;
+            }
+            if (signal.initial_value.is_logic9()) {
+                return Reject::logic9_value;
+            }
+            if (signal.event_variable) {
+                return Reject::event_variable;
+            }
+            if (signal.has_implicit_driver) {
+                return Reject::implicit_driver;
+            }
+            if (signal.has_charge_strength) {
+                return Reject::charge_strength;
+            }
+            if (signal.systemverilog_scalar
+                != SystemVerilogScalarKind::None) {
+                return Reject::systemverilog_scalar;
+            }
+            if (owner->external_driver_values[signal_id]) {
+                return Reject::external_driver;
+            }
+            if (owner->forced_values[signal_id]) {
+                return Reject::forced_value;
+            }
+            if (owner->forced_masks[signal_id]) {
+                return Reject::forced_mask;
+            }
+            if (owner->forced_driver_values[signal_id]) {
+                return Reject::forced_driver_value;
+            }
+            if (owner->forced_driver_masks[signal_id]) {
+                return Reject::forced_driver_mask;
+            }
+            if (owner->signal_transaction_observed[signal_id]) {
+                return Reject::transaction_observed;
+            }
+            if (!owner->dynamic_fanout[signal_id].empty()) {
+                return Reject::dynamic_fanout;
+            }
+            if (!owner->signal_container_aliases[signal_id].empty()) {
+                return Reject::container_alias;
+            }
+            if (owner->signal_container_element_aliases[signal_id]) {
+                return Reject::container_element_alias;
+            }
+            if (owner->signal_container_aggregate_aliases[signal_id]) {
+                return Reject::container_aggregate_alias;
+            }
+            const auto static_writer_count
+                = owner->signal_writer_counts[signal_id];
+            const bool multiowner_slice
+                = slice_publication && static_writer_count > 1U;
+            if (static_writer_count != 1U && !multiowner_slice) {
+                return Reject::writer_count;
+            }
+            const auto no_stable_writer
+                = std::numeric_limits<ProcessId>::max();
+            if (multiowner_slice) {
+                if (owner->stable_single_writer_processes[signal_id]
+                    != no_stable_writer) {
+                    return Reject::stable_writer_mismatch;
+                }
+            } else if (owner->stable_single_writer_processes[signal_id]
+                != process) {
+                return Reject::stable_writer_mismatch;
+            }
+            if (owner->module_path_destination_mask[signal_id] != 0U) {
+                return Reject::module_path_destination;
+            }
+            if (owner->native_signal_non_range_dependency_mask[signal_id] != 0U) {
+                return Reject::nonrange_dependency;
+            }
+            if (owner->requires_sampled_values) {
+                if (owner->sampled_value_dependencies_unknown) {
+                    return Reject::sampled_values_unknown;
+                }
+                if (owner->sampled_value_dependency_mask.size()
+                    != owner->signals.size()) {
+                    return Reject::sampled_mask_unavailable;
+                }
+                if (owner->sampled_value_dependency_mask[signal_id] != 0U) {
+                    return Reject::sampled_dependency;
+                }
+            }
+            if (owner->monitor_watches(signal_id)) {
+                return Reject::monitor_watch;
+            }
+            if (owner->has_bidirectional_switches) {
+                return Reject::bidirectional_switches;
+            }
+
+            for (const auto& sensitivity
+                 : owner->static_fanout_for(signal_id)) {
+                if (sensitivity.process >= owner->processes.size()) {
+                    return Reject::fanout_process_out_of_range;
+                }
+                const auto* const state
+                    = owner->processes.full_state_if_present(
+                        sensitivity.process);
+                if (state && state->executor
+                    && dynamic_cast<const detail::BuiltinProcessExecutorCapability*>(
+                        state->executor.get()) == nullptr) {
+                    return Reject::unsealed_fanout_executor;
+                }
+            }
+
+            const auto& drivers = owner->driver_values[signal_id];
+            if (multiowner_slice) {
+                if (owner->owned_driver_active(signal_id)) {
+                    return Reject::active_owned_driver;
+                }
+                if (!owner->process_signal_access_inventory_complete
+                    || !owner->region_graph
+                    || !owner->region_graph->certificate_inventory()
+                            .access_inventory_complete) {
+                    return Reject::writer_graph_unavailable;
+                }
+                const auto graph_signals
+                    = owner->region_graph->signals();
+                const auto graph_processes
+                    = owner->region_graph->processes();
+                if (signal_id >= graph_signals.size()
+                    || graph_processes.size() != owner->processes.size()) {
+                    return Reject::writer_graph_unavailable;
+                }
+                const auto& graph_signal = graph_signals[signal_id];
+                if (graph_signal.writers_unknown
+                    || graph_signal.dynamic_fork_writers
+                    || (graph_signal.drivers != RegionDriverClass::resolved
+                        && graph_signal.drivers
+                            != RegionDriverClass::disjoint_partial)
+                    || graph_signal.descriptor.width
+                        != signal.initial_value.width()
+                    || graph_signal.descriptor.value_kind != signal.value_kind
+                    || graph_signal.descriptor.resolution != signal.resolution
+                    || graph_signal.descriptor.implicit_driver
+                        != signal.has_implicit_driver
+                    || graph_signal.descriptor.event_variable
+                        != signal.event_variable) {
+                    return Reject::writer_graph_shape;
+                }
+                if (drivers.size() != static_writer_count) {
+                    return Reject::driver_count;
+                }
+                const auto* const current_state
+                    = owner->processes.full_state_if_present(process);
+                if (current_state == nullptr || !current_state->executor
+                    || dynamic_cast<const detail::BuiltinProcessExecutorCapability*>(
+                        current_state->executor.get()) == nullptr) {
+                    return Reject::unsealed_current_writer;
+                }
+
+                const auto& graph_writers = graph_signal.writers;
+                std::size_t graph_owner_count { };
+                ProcessId previous_owner { };
+                bool have_previous_owner { };
+                for (const auto& writer : graph_writers) {
+                    if (writer.process >= graph_processes.size()
+                        || (have_previous_owner
+                            && writer.process < previous_owner)) {
+                        return Reject::writer_graph_shape;
+                    }
+                    if (!have_previous_owner
+                        || writer.process != previous_owner) {
+                        ++graph_owner_count;
+                        previous_owner = writer.process;
+                        have_previous_owner = true;
+                    }
+                }
+                if (graph_owner_count != static_writer_count
+                    || graph_owner_count != drivers.size()) {
+                    return Reject::driver_owner_set_mismatch;
+                }
+
+                std::size_t graph_writer_index { };
+                bool owner_set_matches { true };
+                bool current_owner_present { };
+                bool nondefault_strength { };
+                bool scalar_driver_regions { };
+                drivers.for_each_in_process_order(
+                    [&](const DriverRecord& record) {
+                        while (graph_writer_index < graph_writers.size()
+                            && graph_writers[graph_writer_index].process
+                                < record.process) {
+                            const auto missing_owner
+                                = graph_writers[graph_writer_index].process;
+                            owner_set_matches = false;
+                            do {
+                                ++graph_writer_index;
+                            } while (graph_writer_index < graph_writers.size()
+                                && graph_writers[graph_writer_index].process
+                                    == missing_owner);
+                        }
+                        if (graph_writer_index >= graph_writers.size()
+                            || graph_writers[graph_writer_index].process
+                                != record.process) {
+                            owner_set_matches = false;
+                        } else {
+                            current_owner_present |= record.process == process;
+                            do {
+                                ++graph_writer_index;
+                            } while (graph_writer_index < graph_writers.size()
+                                && graph_writers[graph_writer_index].process
+                                    == record.process);
+                        }
+                        nondefault_strength |= record.strength
+                            != DriveStrength { };
+                        scalar_driver_regions |= static_cast<bool>(
+                            record.scalar_regions);
+                    });
+                owner_set_matches &= graph_writer_index == graph_writers.size();
+                if (nondefault_strength) {
+                    return Reject::driver_strength;
+                }
+                if (scalar_driver_regions) {
+                    return Reject::scalar_driver_regions;
+                }
+                if (!owner_set_matches) {
+                    return Reject::driver_owner_set_mismatch;
+                }
+                if (!current_owner_present) {
+                    return Reject::driver_record_missing;
+                }
+            } else {
+                if (drivers.size() != 1U) {
+                    return Reject::driver_count;
+                }
+                const auto* const driver = drivers.find(process);
+                if (driver == nullptr) {
+                    return Reject::driver_record_missing;
+                }
+                if (driver->strength != DriveStrength { }) {
+                    return Reject::driver_strength;
+                }
+                if (driver->scalar_regions) {
+                    return Reject::scalar_driver_regions;
+                }
+            }
+            const auto program = owner->processes.program_view(process);
+            if (program.switch_source()) {
+                return Reject::process_switch_source;
+            }
+            if (program.switch_target()) {
+                return Reject::process_switch_target;
+            }
+            if (program.switch_bidirectional()) {
+                return Reject::process_bidirectional_switch;
+            }
+
+            if (owner->process_profile_enabled) {
+                return Reject::process_profile_enabled;
+            }
+            if (owner->execution_point_hook) {
+                return Reject::execution_point_hook;
+            }
+            if (owner->scheduler.trace_hook_installed()) {
+                return Reject::scheduler_trace_hook;
+            }
+            if (owner->driver_change_hook) {
+                return Reject::driver_change_hook;
+            }
+            if (owner->signal_change_hook) {
+                return Reject::signal_change_hook;
+            }
+            if (owner->stored_signal_change_hook) {
+                return Reject::stored_signal_change_hook;
+            }
+            if (owner->scalar_signal_change_hook) {
+                return Reject::scalar_signal_change_hook;
+            }
+            if (owner->container_object_change_hook) {
+                return Reject::container_object_change_hook;
+            }
+            if (owner->container_element_change_hook) {
+                return Reject::container_element_change_hook;
+            }
+            if (owner->native_signal_observation_any_hook) {
+                return Reject::native_observation_any_hook;
+            }
+            if (owner->native_signal_observation_required_hook) {
+                return Reject::native_observation_required_hook;
+            }
+
+            return Reject::admitted;
+        };
+        const auto boundary_sync_decision
+            = can_preserve_selected_member_sync();
+        const bool preserve_selected_member_sync
+            = boundary_sync_decision
+                == FrontierBoundarySyncRejectReason::admitted;
+        if (owner->systemverilog_wave_profile_enabled) {
+            if (preserve_selected_member_sync) {
+                ++owner->systemverilog_wave_profile_boundary_sync_eligible;
+            } else {
+                ++owner->systemverilog_wave_profile_boundary_sync_conservative;
+                const auto reject_index = static_cast<std::size_t>(
+                    boundary_sync_decision);
+                if (reject_index != 0U
+                    && reject_index
+                        < owner->systemverilog_wave_profile_boundary_sync_first_rejects
+                              .size()) {
+                    ++owner->systemverilog_wave_profile_boundary_sync_first_rejects[
+                        reject_index];
+                }
+                if (boundary_sync_decision
+                    == FrontierBoundarySyncRejectReason::writer_count) {
+                    const auto signal_id = publication_signal;
+                    const auto static_count
+                        = owner->signal_writer_counts[signal_id];
+                    const auto& drivers = owner->driver_values[signal_id];
+                    const auto table_size = drivers.size();
+                    const auto static_bucket = static_count == 0U ? 0U : 1U;
+                    const auto table_bucket = table_size == 0U
+                        ? 0U : table_size == 1U ? 1U : 2U;
+                    const auto counts_equal = table_size == static_count;
+                    const auto current_present = drivers.find(process) != nullptr;
+                    const auto publication_bucket = slice_publication ? 1U : 0U;
+                    std::size_t histogram_index = static_bucket;
+                    histogram_index = histogram_index * 3U + table_bucket;
+                    histogram_index = histogram_index * 2U
+                        + static_cast<std::size_t>(counts_equal);
+                    histogram_index = histogram_index * 2U
+                        + static_cast<std::size_t>(current_present);
+                    histogram_index = histogram_index * 2U
+                        + publication_bucket;
+                    ++owner->systemverilog_wave_profile_boundary_sync_writer_inventory[
+                        histogram_index];
+                }
+            }
+        }
+
+        // Checked commit remains responsible for value resolution, events,
+        // publication, and exact fanout. The selected journal omits only the
+        // redundant boundary full-sync cause when the target and all static
+        // fanout executors have the current private proof. Existing trigger
+        // masks are OR-idempotent; newly queued readiness is receipt-imported.
+        end_alias_bind_lease();
+        if (!preserve_selected_member_sync) {
+            require_full_member_sync(
+                FrontierMemberSyncFullReason::boundary_publication);
+        }
         lease.release();
         boundary_callback_started_slot = pending_slot;
         try {

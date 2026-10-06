@@ -2537,6 +2537,10 @@ bool Interpreter::Impl::can_try_wide_single_owner_commit(
     const ProcessId process,
     const SignalId signal_id)
 {
+    if (signal_id >= signals.size()
+        || signals[signal_id].initial_value.width() <= 64U) {
+        return false;
+    }
     if (!a4_wide_single_owner_commit_enabled || !started
         || !region_graph || scheduler.trace_hook_installed()
         || signal_id >= signals.size()
@@ -2561,8 +2565,7 @@ bool Interpreter::Impl::can_try_wide_single_owner_commit(
     }
 
     const auto& signal = signals[signal_id];
-    if (signal.initial_value.width() <= 64U
-        || signal.event_variable || signal.has_implicit_driver
+    if (signal.event_variable || signal.has_implicit_driver
         || signal.has_charge_strength
         || signal.systemverilog_scalar != SystemVerilogScalarKind::None
         || owned_driver_active(signal_id)

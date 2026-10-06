@@ -22,4 +22,6 @@ add_test(
 set_tests_properties(
   fsim.application.native-frontier-generic-update
   PROPERTIES LABELS "fast;application;native;frontier;generic;differential"
+    # Certified regions are opt-in; this witness exercises that route.
+    ENVIRONMENT "FSIM_ENABLE_SV_REGION_KERNEL=1"
     RUN_SERIAL TRUE)

@@ -664,6 +664,7 @@ bool Interpreter::Impl::RegionFrontierComponentRuntime::commit_staged_events(
 
         if (event.kind == static_cast<std::uint32_t>(
                               RegionFrontierEventKindV2::member_activation)) {
+            mark_member_sync_write(event.descriptor_index);
             auto& member = members[event.descriptor_index];
             member.queued_key = issued_key;
             member.flags |= RegionFrontierMemberFlagsV2::queued

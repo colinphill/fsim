@@ -361,6 +361,7 @@ void configure_logic9_runtime_arena(
     require(add_test_workspace_slice<
                 AuthoritativeSignalPlanes::FrontierWriteBinding>(
                     1U, byte_count)
+            && add_test_workspace_slice<std::size_t>(1U, byte_count)
             && add_test_workspace_slice<RegionFrontierMemberV2>(
                 1U, byte_count)
             && add_test_workspace_slice<RegionFrontierPlaneV2>(
@@ -576,6 +577,8 @@ void exercise_logic9_sync_width(const std::uint32_t width)
         configure_logic9_runtime_arena(*runtime, values);
     }
     runtime->writable_signals.push_back({ target, owner });
+    runtime->writable_layout_indices.resize(
+        runtime->writable_signals.size());
     runtime->members.resize(1U);
     runtime->members[0U].process_id = owner;
     runtime->planes.resize(1U);
@@ -674,7 +677,8 @@ void exercise_logic9_sync_width(const std::uint32_t width)
         const auto old_generation = values.revision();
         AuthoritativeSignalPlanes::FrontierWriteLease lease;
         require(values.try_acquire_frontier_write_lease(
-                    old_generation, writable, lease)
+                    old_generation, writable, lease,
+                    runtime->writable_layout_indices)
                 && lease.active(),
             "each Logic9 commit holds the real A4 exclusive write lease");
 

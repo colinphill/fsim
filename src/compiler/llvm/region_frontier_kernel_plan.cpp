@@ -3,6 +3,7 @@
 #include "region_frontier_codegen_v2.hpp"
 #include "region_frontier_kernel_plan.hpp"
 #include "logic9_word_lowering.hpp"
+#include "region_frontier_planner_storage_profile.hpp"
 
 #include <fsim/compiler/object_cache.hpp>
 #include <fsim/runtime/simir.hpp>
@@ -174,11 +175,14 @@ struct MemberShapeCensusKeys {
     std::string template_key;
     std::string strict_key;
     std::string binding_tuple;
+    std::vector<RegisterId> ordered_inputs;
+    std::vector<std::uint32_t> ordered_sites;
 };
 
-// These diagnostic keys describe only the lowered operation body. They omit
-// member scheduling, activation initialization, and final debug descriptors;
-// neither key is suitable for codegen or cache admission.
+// These keys describe only the lowered operation body and are insufficient
+// as full-region or cache identities. Helper reuse additionally requires the
+// admitted plan and explicit immutable binding contract; scheduling, activation
+// initialization, and final debug descriptors remain in the original caller.
 [[nodiscard]] bool append_member_shape_keys(
     MemberShapeCensusKeys& keys, const MemberBody& body,
     const std::size_t member_index,
@@ -186,7 +190,8 @@ struct MemberShapeCensusKeys {
     const std::vector<RegisterShape>& register_shapes,
     const std::vector<RegionFrontierSignalLayoutV2>& signals,
     const std::map<RegisterId, std::uint32_t>& input_slots,
-    const std::vector<RegionFrontierWriteSiteV2>& sites)
+    const std::vector<RegionFrontierWriteSiteV2>& sites,
+    const bool diagnostic_details = true)
 {
     if (body.process_id != member_layout.process_id) {
         return false;
@@ -230,6 +235,8 @@ struct MemberShapeCensusKeys {
         return ordinal;
     };
 
+    keys.ordered_inputs.clear();
+    keys.ordered_sites.clear();
     std::map<std::uint32_t, std::uint32_t> site_ordinals;
     std::uint32_t next_site_ordinal { };
     const auto site_ordinal = [&](const std::uint32_t site) {
@@ -242,6 +249,7 @@ struct MemberShapeCensusKeys {
         }
         const auto ordinal = next_site_ordinal++;
         site_ordinals.emplace(site, ordinal);
+        keys.ordered_sites.push_back(site);
         return ordinal;
     };
 
@@ -327,6 +335,7 @@ struct MemberShapeCensusKeys {
         return left.first < right.first;
     });
     for (const auto& [reg_ordinal, reg] : ordered_inputs) {
+        keys.ordered_inputs.push_back(reg);
         const auto slot = input_slots.at(reg);
         const auto slot_ordinal = signal_slot_ordinal(slot);
         if (slot_ordinal == UINT32_MAX) {
@@ -455,6 +464,10 @@ struct MemberShapeCensusKeys {
             static_cast<std::uint8_t>(register_shapes[reg].value_kind));
     }
     append_number(key, signal_slots_by_ordinal.size());
+
+    if (!diagnostic_details) {
+        return true;
+    }
 
     // The descriptor tuple is deliberately separate from the candidate key.
     // It records every absolute/member-specific binding value normalized
@@ -872,14 +885,48 @@ void copy_key(Builder& builder, llvm::Value* destination,
     }
 }
 
+// Member templates share code only. Their immutable descriptor carries every
+// member-specific input and staged-write coordinate; the outer loop retains
+// scheduling, debug descriptors, exact admission and member bookkeeping.
+struct MemberTemplateRuntimeBinding {
+    llvm::Value* descriptor { };
+    std::map<RegisterId, std::uint32_t> input_ordinals;
+    std::map<std::uint32_t, std::uint32_t> site_ordinals;
+    std::uint32_t input_count { };
+};
+
+[[nodiscard]] llvm::Value* load_member_template_field(Builder& builder,
+    const MemberTemplateRuntimeBinding& binding, const std::uint32_t field,
+    const char* name)
+{
+    return load_integer(builder, binding.descriptor,
+        static_cast<std::size_t>(field) * sizeof(std::uint32_t),
+        i32(builder), name);
+}
+
+[[nodiscard]] llvm::Value* member_template_input_slot(Builder& builder,
+    const MemberTemplateRuntimeBinding* binding, const RegisterId reg,
+    const std::uint32_t static_slot)
+{
+    if (binding == nullptr) {
+        return constant_i32(builder, static_slot);
+    }
+    const auto found = binding->input_ordinals.find(reg);
+    if (found == binding->input_ordinals.end()) {
+        throw std::logic_error("member template input is not certified");
+    }
+    return load_member_template_field(builder, *binding, 1U + found->second,
+        "template.input.slot");
+}
+
 [[nodiscard]] WordValue load_input_value(Builder& builder,
-    llvm::Value* frame, const std::uint32_t signal_slot,
+    llvm::Value* frame, llvm::Value* signal_slot,
     const RegionFrontierSignalLayoutV2& signal)
 {
     auto* const ports = load_frame_pointer(builder, frame,
         offsetof(RegionFrontierFrameV2, port_planes), "port.planes");
     auto* const port_slot = indexed_byte_pointer(builder, ports,
-        constant_i32(builder, signal_slot), sizeof(void*));
+        signal_slot, sizeof(void*));
     auto* const plane = builder.CreateLoad(
         llvm::PointerType::getUnqual(builder.getContext()), port_slot,
         "input.plane");
@@ -1179,7 +1226,9 @@ constexpr std::uint32_t kStageWriteHelperMaximumPayloadWords = 16U;
 void emit_stage_write(Builder& builder, llvm::Value* frame,
     const MemberBody& member, const RegionFrontierWriteSiteV2& site,
     const WordValue& value, llvm::Value* bound_process_id,
-    const bool generic_execution)
+    const bool generic_execution,
+    const MemberTemplateRuntimeBinding* binding = nullptr,
+    const std::uint32_t site_index = UINT32_MAX)
 {
     if (value.value_kind != runtime_value_kind(site.value_kind)
         || value.width != site.width
@@ -1210,17 +1259,39 @@ void emit_stage_write(Builder& builder, llvm::Value* frame,
             "region frontier write event does not match execution domain");
     }
 
+    llvm::Value* member_index = constant_i32(builder, site.member_index);
+    llvm::Value* signal_slot = constant_i32(builder, site.signal_slot);
+    llvm::Value* source_instruction = constant_i32(builder,
+        site.source_instruction);
+    llvm::Value* update_kind = constant_i32(builder, site.update_kind);
+    llvm::Value* pending_slot = constant_i32(builder, site.pending_slot);
+    if (binding != nullptr) {
+        const auto found = binding->site_ordinals.find(site_index);
+        if (found == binding->site_ordinals.end()) {
+            throw std::logic_error("member template write is not certified");
+        }
+        const auto first_field = 1U + binding->input_count
+            + 4U * found->second;
+        member_index = load_member_template_field(builder, *binding, 0U,
+            "template.member.index");
+        signal_slot = load_member_template_field(builder, *binding,
+            first_field, "template.output.signal.slot");
+        source_instruction = load_member_template_field(builder, *binding,
+            first_field + 1U, "template.output.source.instruction");
+        update_kind = load_member_template_field(builder, *binding,
+            first_field + 2U, "template.output.update.kind");
+        pending_slot = load_member_template_field(builder, *binding,
+            first_field + 3U, "template.output.pending.slot");
+    }
+
     const bool helper_sized = site.word_count != 0U
         && site.plane_count != 0U
         && site.plane_count
             <= kStageWriteHelperMaximumPayloadWords / site.word_count;
     if (!helper_sized) {
         emit_stage_write_body(builder, frame, site, value,
-            constant_i32(builder, site.member_index),
-            constant_i32(builder, site.signal_slot),
-            constant_i32(builder, site.source_instruction),
-            constant_i32(builder, site.update_kind),
-            constant_i32(builder, site.pending_slot),
+            member_index, signal_slot, source_instruction, update_kind,
+            pending_slot,
             bound_process_id != nullptr ? bound_process_id
                 : constant_i32(builder, member.process_id));
         return;
@@ -1236,11 +1307,11 @@ void emit_stage_write(Builder& builder, llvm::Value* frame,
     arguments.reserve(7U
         + static_cast<std::size_t>(site.plane_count) * site.word_count);
     arguments.push_back(frame);
-    arguments.push_back(constant_i32(builder, site.member_index));
-    arguments.push_back(constant_i32(builder, site.signal_slot));
-    arguments.push_back(constant_i32(builder, site.source_instruction));
-    arguments.push_back(constant_i32(builder, site.update_kind));
-    arguments.push_back(constant_i32(builder, site.pending_slot));
+    arguments.push_back(member_index);
+    arguments.push_back(signal_slot);
+    arguments.push_back(source_instruction);
+    arguments.push_back(update_kind);
+    arguments.push_back(pending_slot);
     arguments.push_back(bound_process_id != nullptr ? bound_process_id
         : constant_i32(builder, member.process_id));
     for (std::uint32_t plane = 0U; plane < site.plane_count; ++plane) {
@@ -1633,7 +1704,8 @@ void emit_member_operations(Builder& builder,
     const std::map<RegisterId, std::uint32_t>& input_slots,
     const std::vector<RegionFrontierWriteSiteV2>& sites,
     const bool known_logic4, std::map<RegisterId, WordValue> values,
-    llvm::Value* bound_process_id, const bool generic_execution)
+    llvm::Value* bound_process_id, const bool generic_execution,
+    const MemberTemplateRuntimeBinding* binding = nullptr)
 {
     const auto lookup = [&](const RegisterId reg) -> const WordValue& {
         const auto found = values.find(reg);
@@ -1649,8 +1721,9 @@ void emit_member_operations(Builder& builder,
                 "known region frontier member input was not preloaded");
         }
         const auto inserted = values.emplace(reg,
-            load_input_value(builder, frame, input->second,
-                signals[input->second]));
+            load_input_value(builder, frame,
+                member_template_input_slot(builder, binding, reg,
+                    input->second), signals[input->second]));
         return inserted.first->second;
     };
 
@@ -1686,7 +1759,7 @@ void emit_member_operations(Builder& builder,
             if (operation.output_site != UINT32_MAX) {
                 emit_stage_write(builder, frame, member,
                     sites[operation.output_site], value, bound_process_id,
-                    generic_execution);
+                    generic_execution, binding, operation.output_site);
             }
             values.insert_or_assign(operation.destination, std::move(value));
             break;
@@ -2179,7 +2252,8 @@ void emit_member_body(Builder& builder,
     const std::vector<RegionFrontierSignalLayoutV2>& signals,
     const std::map<RegisterId, std::uint32_t>& input_slots,
     const std::vector<RegionFrontierWriteSiteV2>& sites,
-    llvm::Value* bound_process_id, const bool generic_execution)
+    llvm::Value* bound_process_id, const bool generic_execution,
+    const MemberTemplateRuntimeBinding* binding = nullptr)
 {
     std::map<RegisterId, WordValue> fallback_values;
     std::map<RegisterId, WordValue> known_values;
@@ -2192,7 +2266,8 @@ void emit_member_body(Builder& builder,
             throw std::logic_error(
                 "region frontier knownness input is not bound");
         }
-        auto value = load_input_value(builder, frame, slot->second,
+        auto value = load_input_value(builder, frame,
+            member_template_input_slot(builder, binding, reg, slot->second),
             signals[slot->second]);
         auto known_value = value;
         for (std::size_t word = 0U; word < value.bval.size(); ++word) {
@@ -2208,13 +2283,13 @@ void emit_member_body(Builder& builder,
     if (member.has_unknown_constant || member.has_logic9_value) {
         emit_member_operations(builder, frame, member, signals, input_slots,
             sites, false, std::move(fallback_values), bound_process_id,
-            generic_execution);
+            generic_execution, binding);
         return;
     }
     if (member.used_input_registers.empty()) {
         emit_member_operations(builder, frame, member, signals, input_slots,
             sites, true, std::move(known_values), bound_process_id,
-            generic_execution);
+            generic_execution, binding);
         return;
     }
 
@@ -2235,13 +2310,13 @@ void emit_member_body(Builder& builder,
     builder.SetInsertPoint(known_block);
     emit_member_operations(builder, frame, member, signals, input_slots,
         sites, true, std::move(known_values), bound_process_id,
-        generic_execution);
+        generic_execution, binding);
     builder.CreateBr(done_block);
 
     builder.SetInsertPoint(fallback_block);
     emit_member_operations(builder, frame, member, signals, input_slots,
         sites, false, std::move(fallback_values), bound_process_id,
-        generic_execution);
+        generic_execution, binding);
     builder.CreateBr(done_block);
     builder.SetInsertPoint(done_block);
 }
@@ -2259,7 +2334,15 @@ struct RegionFrontierKernelPlan::Impl {
     std::vector<RegionFrontierFanoutRangeSpan> fanout_range_spans;
     std::vector<RegionFrontierFanoutSensitivityRange>
         fanout_sensitivity_ranges;
+    struct MemberTemplateDescription {
+        std::uint32_t shape_index { };
+        std::vector<RegisterId> ordered_inputs;
+        std::vector<std::uint32_t> ordered_sites;
+    };
     std::vector<MemberBody> bodies;
+    std::vector<MemberTemplateDescription> member_templates;
+    std::vector<std::string> member_template_shapes;
+    std::vector<std::uint32_t> member_template_shape_counts;
     std::map<RegisterId, std::uint32_t> input_slots;
     std::string identity;
     std::string structural_census_identity;
@@ -2276,6 +2359,15 @@ struct RegionFrontierKernelPlan::Impl {
         layout.max_member_staged_event_counts
             = max_member_staged_event_counts.data();
         layout.fanout_edges = fanout_edges.data();
+    }
+
+    void release_codegen_storage() noexcept
+    {
+        std::vector<MemberBody> { }.swap(bodies);
+        std::vector<MemberTemplateDescription> { }.swap(member_templates);
+        std::vector<std::string> { }.swap(member_template_shapes);
+        std::vector<std::uint32_t> { }.swap(member_template_shape_counts);
+        std::map<RegisterId, std::uint32_t> { }.swap(input_slots);
     }
 };
 
@@ -2330,6 +2422,22 @@ RegionFrontierKernelPlan::shared_body_identity() const noexcept
         return std::nullopt;
     }
     return impl_->shared_body_identity;
+}
+
+void RegionFrontierKernelPlan::report_codegen_storage_profile(
+    const std::string_view event) const noexcept
+{
+    if (impl_) {
+        frontier_planner_detail::report_planner_storage(event, impl_.get(),
+            impl_->layout.member_count, impl_->bodies);
+    }
+}
+
+void RegionFrontierKernelPlan::release_codegen_storage() noexcept
+{
+    if (impl_) {
+        impl_->release_codegen_storage();
+    }
 }
 
 std::optional<RegionFrontierKernelPlan> RegionFrontierKernelPlan::try_create(
@@ -3814,7 +3922,7 @@ std::optional<RegionFrontierKernelPlan> RegionFrontierKernelPlan::try_create(
     // existing deterministic SHA-256 cache key; retain the compact digest in
     // the plan instead of duplicating the whole kernel description.
     CacheKeyBuilder identity_builder;
-    identity_builder.add("region-frontier-kernel-plan-v6", impl->identity);
+    identity_builder.add("region-frontier-kernel-plan-v7", impl->identity);
     auto compact_identity = identity_builder.finish();
     impl->identity.swap(compact_identity);
 
@@ -4020,11 +4128,15 @@ std::optional<RegionFrontierKernelPlan> RegionFrontierKernelPlan::try_create(
         if (body_shape_supported) {
             CacheKeyBuilder shared_builder;
             shared_builder.add("domain",
-                "region-frontier-certified-shared-body-v1");
+                "region-frontier-certified-shared-body-v2");
             shared_builder.add("codegen-contract",
                 "loop-v2-bound-member-id-internal-commit-v2-v1;"
                 "stage-write-helper-v1-max16-payload-words;"
-                "alias-prevalidated-geometry-entry-v1");
+                "bound-member-template-helper-v1;"
+                "immutable-member-bound-and-selected-site-tables-v1;"
+                "alias-prevalidated-geometry-entry-v1;"
+                "canonical-values-prevalidated-entry-v1;"
+                "initial-slot-validation-helper-v1");
             shared_builder.add("canonical-structural-plan",
                 canonical_structural_identity);
             shared_builder.add("post-lowering-emitted-shape",
@@ -4033,6 +4145,44 @@ std::optional<RegionFrontierKernelPlan> RegionFrontierKernelPlan::try_create(
             impl->shared_body_identity_available = true;
         }
     }
+
+    // The operation-shape key alone is not full-region admission. Here it
+    // certifies only helper emission after the complete plan has succeeded:
+    // omitted scheduling/debug coordinates remain in the caller and every
+    // staged-write coordinate is carried by the immutable binding descriptor.
+    impl->member_templates.reserve(impl->bodies.size());
+    std::map<std::string, std::uint32_t> template_shapes;
+    for (std::size_t index = 0U; index < impl->bodies.size(); ++index) {
+        MemberShapeCensusKeys keys;
+        if (!append_member_shape_keys(keys, impl->bodies[index], index,
+                impl->members[index], register_shapes, impl->signals,
+                impl->input_slots, impl->write_sites, false)) {
+            impl->member_templates.clear();
+            break;
+        }
+        const auto input_count = keys.ordered_inputs.size();
+        if (input_count > UINT32_MAX - 1U
+            || keys.ordered_sites.size()
+                > (UINT32_MAX - 1U - input_count) / 4U) {
+            impl->member_templates.clear();
+            break;
+        }
+        const auto next_shape = static_cast<std::uint32_t>(
+            impl->member_template_shapes.size());
+        const auto [shape, inserted] = template_shapes.emplace(
+            keys.template_key, next_shape);
+        if (inserted) {
+            impl->member_template_shapes.push_back(std::move(keys.template_key));
+            impl->member_template_shape_counts.push_back(0U);
+        }
+        ++impl->member_template_shape_counts[shape->second];
+        impl->member_templates.push_back({ shape->second,
+            std::move(keys.ordered_inputs), std::move(keys.ordered_sites) });
+    }
+
+    frontier_planner_detail::report_member_template_census(
+        impl->bodies, impl->member_templates,
+        impl->member_template_shape_counts);
 
     emit_member_shape_census(impl->identity, impl->bodies, impl->members,
         register_shapes, impl->signals, impl->input_slots,
@@ -4125,10 +4275,105 @@ llvm::Function* RegionFrontierKernelPlan::emit_shared_body(
             = load_region_frontier_member_process_id_v2(builder,
                 binding_type, physical_binding,
                 constant_i32(builder, static_cast<std::uint32_t>(index)));
-        emit_member_body(builder, frame, index, impl_->bodies[index],
-            impl_->signals, impl_->input_slots, impl_->write_sites,
-            member_process_id, impl_->layout.execution_mode
-                == RegionFrontierExecutionModeV2::generic_deferred_update);
+        const bool generic_execution = impl_->layout.execution_mode
+            == RegionFrontierExecutionModeV2::generic_deferred_update;
+        if (impl_->member_templates.size() != impl_->bodies.size()) {
+            emit_member_body(builder, frame, index, impl_->bodies[index],
+                impl_->signals, impl_->input_slots, impl_->write_sites,
+                member_process_id, generic_execution);
+            return;
+        }
+        const auto& description = impl_->member_templates[index];
+        if (impl_->member_template_shape_counts[description.shape_index] < 2U) {
+            emit_member_body(builder, frame, index, impl_->bodies[index],
+                impl_->signals, impl_->input_slots, impl_->write_sites,
+                member_process_id, generic_execution);
+            return;
+        }
+        auto* const module = builder.GetInsertBlock()->getModule();
+        CacheKeyBuilder helper_key;
+        // Shape covers operation kind, alpha-register aliases, widths,
+        // constants, extracts/shifts, input plane shape and output event shape.
+        // Descriptors carry member/input/output IDs, source instructions,
+        // update/pending slots; physical process ID is a separate argument.
+        // Scheduling, readiness and final debug state remain in the caller.
+        helper_key.add("domain", "certified-member-template-helper-v1");
+        helper_key.add("operations",
+            impl_->member_template_shapes[description.shape_index]);
+        helper_key.add("execution", generic_execution ? "generic" : "sv");
+        helper_key.add("binding-contract",
+            "member-index;normalized-input-slots;output-signal-source-kind-slot;"
+            "dynamic-process-id;preserved-known-fallback-stage-order-v1");
+        const auto name = "fsim.frontier.member.template.v1."
+            + helper_key.finish();
+        auto* const descriptor_type = llvm::PointerType::getUnqual(
+            builder.getContext());
+        std::vector<llvm::Type*> argument_types {
+            frame->getType(), descriptor_type, i32(builder),
+        };
+        auto* const function_type = llvm::FunctionType::get(
+            llvm::Type::getVoidTy(builder.getContext()), argument_types, false);
+        auto* helper = module->getFunction(name);
+        if (helper == nullptr) {
+            helper = llvm::Function::Create(function_type,
+                llvm::GlobalValue::InternalLinkage, name, *module);
+            helper->addFnAttr(llvm::Attribute::NoInline);
+            helper->addFnAttr(llvm::Attribute::NoUnwind);
+            auto* const entry = llvm::BasicBlock::Create(builder.getContext(),
+                "entry", helper);
+            Builder helper_builder(builder.getContext());
+            helper_builder.SetInsertPoint(entry);
+            MemberTemplateRuntimeBinding binding;
+            binding.descriptor = helper->getArg(1U);
+            binding.input_count = static_cast<std::uint32_t>(
+                description.ordered_inputs.size());
+            for (std::size_t input = 0U;
+                 input < description.ordered_inputs.size(); ++input) {
+                binding.input_ordinals.emplace(
+                    description.ordered_inputs[input],
+                    static_cast<std::uint32_t>(input));
+            }
+            for (std::size_t site = 0U;
+                 site < description.ordered_sites.size(); ++site) {
+                binding.site_ordinals.emplace(description.ordered_sites[site],
+                    static_cast<std::uint32_t>(site));
+            }
+            emit_member_body(helper_builder, helper->getArg(0U), index,
+                impl_->bodies[index], impl_->signals, impl_->input_slots,
+                impl_->write_sites, helper->getArg(2U), generic_execution,
+                &binding);
+            helper_builder.CreateRetVoid();
+        } else if (helper->getFunctionType() != function_type
+            || helper->getLinkage() != llvm::GlobalValue::InternalLinkage
+            || !helper->hasFnAttribute(llvm::Attribute::NoInline)
+            || !helper->hasFnAttribute(llvm::Attribute::NoUnwind)
+            || helper->empty()) {
+            throw std::logic_error("member template helper name collision");
+        }
+
+        std::vector<llvm::Constant*> descriptor_fields;
+        descriptor_fields.push_back(llvm::ConstantInt::get(i32(builder),
+            static_cast<std::uint32_t>(index)));
+        for (const auto reg : description.ordered_inputs) {
+            descriptor_fields.push_back(llvm::ConstantInt::get(i32(builder),
+                impl_->input_slots.at(reg)));
+        }
+        for (const auto site_index : description.ordered_sites) {
+            const auto& site = impl_->write_sites[site_index];
+            descriptor_fields.push_back(llvm::ConstantInt::get(i32(builder), site.signal_slot));
+            descriptor_fields.push_back(llvm::ConstantInt::get(i32(builder),
+                site.source_instruction));
+            descriptor_fields.push_back(llvm::ConstantInt::get(i32(builder), site.update_kind));
+            descriptor_fields.push_back(llvm::ConstantInt::get(i32(builder), site.pending_slot));
+        }
+        auto* const descriptor_array_type = llvm::ArrayType::get(i32(builder),
+            descriptor_fields.size());
+        auto* const descriptor = new llvm::GlobalVariable(*module,
+            descriptor_array_type, true, llvm::GlobalValue::PrivateLinkage,
+            llvm::ConstantArray::get(descriptor_array_type, descriptor_fields),
+            "fsim.frontier.member.binding");
+        builder.CreateCall(helper,
+            { frame, descriptor, member_process_id });
     };
     return emit_region_frontier_shared_body_v2(module, std::string { symbol },
         structural_layout, emit_member, emit_internal_commit);

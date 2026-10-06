@@ -18,7 +18,9 @@ int main(const int argc, const char* const* argv)
                 std::cout << "VPI C/C++ reference plug-in tests passed\n";
                 return EXIT_SUCCESS;
             }
-            if (selection == "a4_signal_state") {
+            if (selection == "region_graph") {
+                test_region_graph();
+            } else if (selection == "a4_signal_state") {
                 test_a4_signal_state();
             } else if (selection == "executor_provenance_contract") {
                 test_executor_provenance_contract();

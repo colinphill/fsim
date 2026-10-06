@@ -783,6 +783,7 @@ add_library(
     src/runtime/simir_native_frontier_generic.cpp
     src/runtime/simir_native_frontier_generic_stage.cpp
     src/runtime/simir_native_frontier_issue.cpp
+    src/runtime/simir_native_frontier_member_sync.cpp
     src/runtime/simir_native_frontier_fallback.cpp
     src/runtime/simir_native_frontier_boundary.cpp
     src/runtime/simir_native_frontier_sync.cpp
@@ -804,6 +805,7 @@ add_library(
     src/runtime/simir_container_values.cpp
     src/runtime/simir_execution.cpp
     src/runtime/simir_execution_part2.cpp
+    src/runtime/simir_fused_cone.cpp
     src/runtime/simir_fused_static_graph.cpp
     src/runtime/simir_execution_context.cpp
     src/runtime/simir_execution_boundaries.cpp
@@ -864,6 +866,7 @@ endif()
       src/elaboration/coverage_hir_points.cpp
       src/elaboration/coverage_points.cpp
       src/elaboration/elaborated_design.cpp
+      src/elaboration/elaborated_design_cone_fusion.cpp
       src/elaboration/elaborate.cpp
       src/frontend/verilog_coverage_points.cpp
       src/frontend/verilog_coverage_conditions.cpp
@@ -1181,10 +1184,13 @@ if(FSIM_WITH_LLVM)
     src/compiler/llvm_jit_region_kernel.cpp
     src/compiler/llvm_jit_region_frontier.cpp
     src/compiler/llvm/region_frontier_kernel_plan.cpp
+    src/compiler/llvm/region_frontier_planner_storage_profile.hpp
     src/compiler/llvm/emit_region_frontier_loop.cpp
     src/compiler/llvm/emit_region_frontier_internal_commit.cpp
     src/compiler/llvm/emit_region_frontier_loop_v2.cpp
     src/compiler/llvm/emit_region_frontier_internal_commit_v2.cpp
+    src/compiler/llvm/region_frontier_initial_slot_validation.cpp
+    src/compiler/llvm/region_frontier_initial_slot_validation.hpp
     src/compiler/llvm/logic9_word_lowering.cpp
       src/compiler/llvm_jit_value_lowering.cpp
       src/compiler/llvm_jit_wide_bitwise_lowering.cpp

@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <map>
 #include <optional>
@@ -133,6 +134,388 @@ RegionGraph build(const std::vector<Process>& processes,
     }
     return RegionGraph::build(bindings, signals,
         collect_opaque_operation_counts);
+}
+
+using TestBitRange = std::pair<std::uint32_t, std::uint32_t>;
+
+struct IntervalProcessSpec {
+    std::vector<TestBitRange> reads;
+    std::vector<TestBitRange> writes;
+};
+
+Process interval_process(ProcessId id, SignalId signal, SignalId trigger,
+    const std::uint32_t signal_width, const IntervalProcessSpec& spec)
+{
+    Process process;
+    process.id = id;
+    process.name = "range_graph_process_" + std::to_string(id);
+    process.scheduling_domain = ProcessSchedulingDomain::systemverilog;
+    process.register_count = std::max<std::size_t>(1U, spec.writes.size());
+    if (spec.reads.empty()) {
+        process.static_sensitivity = { { trigger, EdgeKind::any } };
+    } else {
+        for (const auto& [offset, width] : spec.reads) {
+            process.static_sensitivity.push_back({
+                signal, EdgeKind::any, offset, width });
+        }
+    }
+
+    for (std::size_t index = 0U; index < spec.writes.size(); ++index) {
+        const auto [offset, width] = spec.writes[index];
+        const auto source_width = width == 0U ? signal_width : width;
+        process.operations.push_back(LoadConstant {
+            static_cast<RegisterId>(index),
+            PackedLogic4(source_width, Logic4::zero) });
+        if (width == 0U) {
+            process.driver_regions.push_back({ signal, 0U, 0U, true });
+            process.operations.push_back(WriteUpdate {
+                signal, static_cast<RegisterId>(index),
+                SignalUpdateDomain::systemverilog_active });
+        } else {
+            process.driver_regions.push_back({ signal, offset, width, false });
+            process.operations.push_back(WriteUpdateSlice {
+                signal, static_cast<RegisterId>(index), offset,
+                SignalUpdateDomain::systemverilog_active });
+        }
+    }
+    if (spec.writes.empty()) {
+        process.operations.push_back(LoadConstant {
+            0U, PackedLogic4(1U, Logic4::zero) });
+    }
+    process.operations.push_back(WaitSensitivity { });
+    process.operations.push_back(Jump { 0U });
+    return process;
+}
+
+RegionGraph build_interval_graph(
+    const std::vector<IntervalProcessSpec>& specifications,
+    const std::uint32_t signal_width,
+    const ResolutionKind resolution = ResolutionKind::sv_wire,
+    const RegionObservation observations = RegionObservation::none)
+{
+    RegionSignalDescriptor output { signal_width, resolution };
+    output.observations = observations;
+    std::vector<RegionSignalDescriptor> descriptors(
+        specifications.size() + 1U, { 1U });
+    descriptors[0U] = output;
+
+    std::vector<Process> processes;
+    processes.reserve(specifications.size());
+    for (std::size_t index = 0U; index < specifications.size(); ++index) {
+        processes.push_back(interval_process(
+            static_cast<ProcessId>(index), 0U,
+            static_cast<SignalId>(index + 1U), signal_width,
+            specifications[index]));
+    }
+    return build(processes, descriptors);
+}
+
+std::vector<std::vector<ProcessId>> certificate_members(
+    const RegionGraph& graph)
+{
+    std::vector<std::vector<ProcessId>> result;
+    for (const auto& component : graph.certificate_inventory().components) {
+        result.push_back(component.members);
+    }
+    std::ranges::sort(result);
+    return result;
+}
+
+std::vector<std::vector<ProcessId>> pairwise_interval_components(
+    const RegionGraph& graph, const SignalId signal_id)
+{
+    const auto& signal = graph.signals()[signal_id];
+    const auto process_count = graph.processes().size();
+    std::vector<std::vector<ProcessId>> adjacent(process_count);
+    const auto overlaps = [&](const RegionAccess& left,
+                              const RegionAccess& right) {
+        const auto left_begin = left.width == 0U ? 0U : left.offset;
+        const auto left_end = left.width == 0U
+            ? signal.descriptor.width
+            : left.offset + left.width;
+        const auto right_begin = right.width == 0U ? 0U : right.offset;
+        const auto right_end = right.width == 0U
+            ? signal.descriptor.width
+            : right.offset + right.width;
+        return left_begin < right_end && right_begin < left_end;
+    };
+    const auto accesses_overlap = [&](const std::vector<RegionAccess>& left,
+                                      const ProcessId left_process,
+                                      const std::vector<RegionAccess>& right,
+                                      const ProcessId right_process) {
+        return std::ranges::any_of(left, [&](const RegionAccess& left_access) {
+            return left_access.process == left_process
+                && std::ranges::any_of(right,
+                    [&](const RegionAccess& right_access) {
+                        return right_access.process == right_process
+                            && overlaps(left_access, right_access);
+                    });
+        });
+    };
+    for (ProcessId left = 0U; left < process_count; ++left) {
+        for (ProcessId right = left + 1U; right < process_count; ++right) {
+            const bool connected
+                = accesses_overlap(signal.writers, left,
+                      signal.writers, right)
+                || accesses_overlap(signal.writers, left,
+                    signal.readers, right)
+                || accesses_overlap(signal.writers, right,
+                    signal.readers, left);
+            if (connected) {
+                adjacent[left].push_back(right);
+                adjacent[right].push_back(left);
+            }
+        }
+    }
+
+    std::vector<std::uint8_t> visited(process_count, 0U);
+    std::vector<std::vector<ProcessId>> result;
+    for (ProcessId seed = 0U; seed < process_count; ++seed) {
+        if (visited[seed] != 0U) {
+            continue;
+        }
+        std::vector<ProcessId> members { seed };
+        visited[seed] = 1U;
+        for (std::size_t cursor = 0U; cursor < members.size(); ++cursor) {
+            for (const auto neighbor : adjacent[members[cursor]]) {
+                if (visited[neighbor] == 0U) {
+                    visited[neighbor] = 1U;
+                    members.push_back(neighbor);
+                }
+            }
+        }
+        std::ranges::sort(members);
+        result.push_back(std::move(members));
+    }
+    std::ranges::sort(result);
+    return result;
+}
+
+void require_pairwise_interval_agreement(
+    const std::vector<IntervalProcessSpec>& specifications,
+    const std::uint32_t width,
+    const char* message)
+{
+    const auto graph = build_interval_graph(specifications, width);
+    require(std::ranges::all_of(graph.processes(), &RegionProcessNode::pure)
+            && graph.certificate_inventory().access_inventory_complete
+            && certificate_members(graph)
+                == pairwise_interval_components(graph, 0U),
+        message);
+}
+
+void check_range_aware_writer_components()
+{
+    constexpr std::uint32_t width = 16U;
+    auto selective = build_interval_graph({
+        { { }, { { 0U, 4U } } },
+        { { }, { { 8U, 4U } } },
+        { { { 1U, 1U } }, { } },
+        { { { 9U, 1U } }, { } },
+        { { { 4U, 4U } }, { } },
+    }, width);
+    require(certificate_members(selective)
+                == std::vector<std::vector<ProcessId>> {
+                    { 0U, 2U }, { 1U, 3U }, { 4U } }
+            && certificate_members(selective)
+                == pairwise_interval_components(selective, 0U),
+        "partial readers connect only to overlapping writers, with touching endpoints separate");
+    const auto invalidated = selective.observe_signal(
+        0U, RegionObservation::current);
+    bool every_split_component_is_stale = true;
+    for (std::size_t component = 0U;
+         component < selective.certificate_inventory().components.size();
+         ++component) {
+        every_split_component_is_stale = every_split_component_is_stale
+            && !selective.component_epochs_current(component);
+    }
+    require(std::ranges::equal(invalidated,
+                std::array<ProcessId, 5U> { 0U, 1U, 2U, 3U, 4U })
+            && every_split_component_is_stale,
+        "a later signal observation invalidates every split component using that signal");
+
+    require_pairwise_interval_agreement({
+        { { }, { { 0U, 4U } } },
+        { { }, { { 8U, 4U } } },
+        { { { 2U, 8U } }, { } },
+        { { { 4U, 4U } }, { } },
+    }, width,
+        "the pairwise reference preserves a bridge read and an unmatched reader");
+    require_pairwise_interval_agreement({
+        { { }, { { 0U, 3U } } },
+        { { }, { { 6U, 3U } } },
+        { { }, { { 12U, 3U } } },
+        { { { 2U, 5U } }, { } },
+        { { { 8U, 5U } }, { } },
+        { { { 3U, 3U } }, { } },
+    }, width,
+        "the pairwise reference preserves transitive reader bridges and endpoint-only separation");
+    require_pairwise_interval_agreement({
+        { { }, { { 0U, 2U }, { 8U, 2U } } },
+        { { { 0U, 1U } }, { } },
+        { { { 8U, 1U } }, { } },
+        { { { 4U, 2U } }, { } },
+    }, width,
+        "one process identity joins readers of its disjoint write intervals");
+
+    const auto whole_reader = build_interval_graph({
+        { { }, { { 0U, 4U } } },
+        { { }, { { 8U, 4U } } },
+        { { { 0U, 0U } }, { } },
+    }, width);
+    require(certificate_members(whole_reader)
+                == std::vector<std::vector<ProcessId>> {
+                    { 0U, 1U, 2U } }
+            && certificate_members(whole_reader)
+                == pairwise_interval_components(whole_reader, 0U),
+        "a whole-signal reader joins every disjoint writer cluster");
+
+    const auto whole_writer = build_interval_graph({
+        { { }, { { 0U, 0U } } },
+        { { { 14U, 1U } }, { } },
+    }, width);
+    require(certificate_members(whole_writer)
+                == std::vector<std::vector<ProcessId>> { { 0U, 1U } }
+            && certificate_members(whole_writer)
+                == pairwise_interval_components(whole_writer, 0U),
+        "a width-zero writer interval covers every finite reader range");
+
+    const auto overlapping_writer_fallback = build_interval_graph({
+        { { }, { { 0U, 4U } } },
+        { { }, { { 3U, 3U } } },
+        { { }, { { 5U, 3U } } },
+        { { }, { { 8U, 2U } } },
+        { { { 12U, 2U } }, { } },
+    }, width);
+    require(certificate_members(overlapping_writer_fallback)
+                == std::vector<std::vector<ProcessId>> {
+                    { 0U, 1U, 2U, 3U, 4U } },
+        "resolved overlapping writers keep the conservative writer-star grouping");
+
+    const auto observed_fallback = build_interval_graph({
+        { { }, { { 0U, 2U } } },
+        { { }, { { 8U, 2U } } },
+        { { { 4U, 2U } }, { } },
+    }, width, ResolutionKind::sv_wire, RegionObservation::current);
+    require(certificate_members(observed_fallback)
+                == std::vector<std::vector<ProcessId>> {
+                    { 0U, 1U, 2U } },
+        "observed signals retain the conservative writer-star grouping");
+
+    const auto unsupported_fallback = build_interval_graph({
+        { { }, { { 0U, 2U } } },
+        { { }, { { 8U, 2U } } },
+        { { { 4U, 2U } }, { } },
+    }, width, ResolutionKind::sv_wand);
+    require(certificate_members(unsupported_fallback)
+                == std::vector<std::vector<ProcessId>> {
+                    { 0U, 1U, 2U } },
+        "unsupported resolution retains the conservative writer-star grouping");
+
+    auto opaque_process = transfer(2U, 4U, 1U);
+    ClassStaticMethodCall opaque_effect;
+    opaque_effect.method_identity = "@dpi:range_component_fallback";
+    opaque_process.operations.insert(opaque_process.operations.end() - 2,
+        std::move(opaque_effect));
+    auto incomplete_access = interval_process(
+        0U, 0U, 2U, width, { { }, { { 0U, 2U } } });
+    auto second_incomplete_writer = interval_process(
+        1U, 0U, 3U, width, { { }, { { 8U, 2U } } });
+    const std::vector<Process> incomplete_processes {
+        incomplete_access, second_incomplete_writer, opaque_process
+    };
+    std::vector<const Process*> incomplete_bindings;
+    for (const auto& process : incomplete_processes) {
+        incomplete_bindings.push_back(&process);
+    }
+    std::vector<RegionSignalDescriptor> incomplete_signals {
+        { width, ResolutionKind::sv_wire }, { 1U }, { 1U }, { 1U }, { 1U }
+    };
+    const auto incomplete_inventory_graph
+        = RegionGraph::build(incomplete_bindings, incomplete_signals);
+    require(!incomplete_inventory_graph.certificate_inventory()
+                .access_inventory_complete
+            && certificate_members(incomplete_inventory_graph)
+                == std::vector<std::vector<ProcessId>> { { 0U, 1U } },
+        "an incomplete global access inventory retains conservative writer-star grouping");
+
+    const std::vector<RegionSignalDescriptor> alias_signals {
+        { 4U, ResolutionKind::sv_wire },
+        { 4U, ResolutionKind::sv_wire },
+        { 1U }, { 1U },
+    };
+    const std::vector<RegionContainerDescriptor> alias_containers {
+        { 0U, {
+            { 0U, true, true, true },
+            { 1U, true, true, false },
+        }, true },
+    };
+    const std::vector<RegionSignalAliasFamilyDescriptor> alias_families {
+        { 0U, 0U, 4U, { { 1U, 0U, 0U, 4U } },
+            true, true, true },
+    };
+    const std::vector<IntervalProcessSpec> alias_writers {
+        { { }, { { 0U, 1U } } },
+        { { }, { { 2U, 1U } } },
+    };
+    std::vector<Process> alias_processes;
+    for (std::size_t index = 0U; index < alias_writers.size(); ++index) {
+        alias_processes.push_back(interval_process(
+            static_cast<ProcessId>(index), 1U,
+            static_cast<SignalId>(index + 2U), 4U,
+            alias_writers[index]));
+    }
+    std::vector<const Process*> alias_bindings;
+    for (const auto& process : alias_processes) {
+        alias_bindings.push_back(&process);
+    }
+    auto alias_graph = RegionGraph::build(alias_bindings, alias_signals,
+        false, alias_containers, { }, alias_families);
+    require(certificate_members(alias_graph)
+                == std::vector<std::vector<ProcessId>> { { 0U, 1U } }
+            && alias_graph.component_epochs_current(0U),
+        "aliased leaf signals retain conservative writer-star grouping");
+    static_cast<void>(alias_graph.observe_signal(
+        0U, RegionObservation::current));
+    require(!alias_graph.component_epochs_current(0U),
+        "an alias-family observation invalidates the retained component");
+
+    constexpr std::uint32_t generated_width = 64U;
+    for (std::size_t case_index = 0U; case_index < 32U; ++case_index) {
+        std::vector<IntervalProcessSpec> specifications;
+        const auto writer_count = 1U + case_index % 4U;
+        for (std::size_t writer = 0U; writer < writer_count; ++writer) {
+            const auto offset = static_cast<std::uint32_t>(
+                writer * 12U + (case_index * 3U + writer * 5U) % 5U);
+            const auto write_width = static_cast<std::uint32_t>(
+                1U + (case_index + writer * 3U) % 4U);
+            specifications.push_back({ { }, { { offset, write_width } } });
+        }
+        for (std::size_t reader = 0U; reader < 5U; ++reader) {
+            IntervalProcessSpec read_specification;
+            if ((case_index + reader) % 11U == 0U) {
+                read_specification.reads.push_back({ 0U, 0U });
+            } else {
+                const auto read_width = static_cast<std::uint32_t>(
+                    1U + (case_index * 5U + reader * 3U) % 12U);
+                auto offset = static_cast<std::uint32_t>(
+                    (case_index * 7U + reader * 11U) % generated_width);
+                if (read_width > generated_width - offset) {
+                    offset = generated_width - read_width;
+                }
+                read_specification.reads.push_back({ offset, read_width });
+            }
+            if (reader == 0U && case_index % 2U != 0U) {
+                const auto offset = static_cast<std::uint32_t>(
+                    (case_index * 13U) % (generated_width - 3U));
+                read_specification.reads.push_back({ offset, 2U });
+            }
+            specifications.push_back(std::move(read_specification));
+        }
+        require_pairwise_interval_agreement(specifications,
+            generated_width,
+            "generated disjoint-writer interval sets match the pairwise reference");
+    }
 }
 
 void check_read_only_systemverilog_member()
@@ -3363,6 +3746,120 @@ void check_certificate_boundaries()
         "remain counted as signal boundaries");
 }
 
+void check_read_only_sibling_certificate_partition()
+{
+    const std::vector<RegionSignalDescriptor> signals(4U, { 1U });
+    const std::vector<Process> readers {
+        transfer(0U, 0U, 1U), transfer(1U, 0U, 2U)
+    };
+    auto graph = build(readers, signals);
+    const auto& inventory = graph.certificate_inventory();
+    require(inventory.components.size() == 2U
+            && inventory.components[0U].members == std::vector<ProcessId> { 0U }
+            && inventory.components[1U].members == std::vector<ProcessId> { 1U }
+            && inventory.components[0U].structural_internal_signal_candidates
+                == std::vector<SignalId> { 1U }
+            && inventory.components[1U].structural_internal_signal_candidates
+                == std::vector<SignalId> { 2U }
+            && inventory.components[0U].boundary_signals
+                == std::vector<SignalId> { 0U }
+            && inventory.components[1U].boundary_signals
+                == std::vector<SignalId> { 0U }
+            && inventory.components[0U].status
+                == RegionComponentCertificateStatus::structural_candidate
+            && inventory.components[1U].status
+                == RegionComponentCertificateStatus::structural_candidate,
+        "read-only same-domain siblings stay separate around their shared input");
+    require(boundary_reason_count(inventory,
+                RegionBoundaryReason::no_internal_writer) == 2U
+            && boundary_reason_count(inventory,
+                RegionBoundaryReason::reader_outside_component) == 2U
+            && build(readers, signals).certificate_inventory() == inventory,
+        "split reader certificates retain exact boundary reasons and deterministic order");
+
+    const auto output_observers = graph.observe_signal(1U,
+        RegionObservation::current);
+    require(std::ranges::equal(output_observers,
+                std::array<ProcessId, 1U> { 0U })
+            && !graph.component_epochs_current(0U)
+            && graph.component_epochs_current(1U),
+        "observing one private output stales only its reader component");
+    const auto shared_input_observers = graph.observe_signal(0U,
+        RegionObservation::current);
+    require(std::ranges::equal(shared_input_observers,
+                std::array<ProcessId, 2U> { 0U, 1U })
+            && !graph.component_epochs_current(0U)
+            && !graph.component_epochs_current(1U),
+        "a late observation of the shared input stales both reader components");
+
+    auto externally_driven_signals = signals;
+    externally_driven_signals[0U].external_driver = true;
+    const auto external_inventory
+        = build(readers, externally_driven_signals).certificate_inventory();
+    require(external_inventory.components.size() == 2U
+            && external_inventory.components[0U].members
+                == std::vector<ProcessId> { 0U }
+            && external_inventory.components[1U].members
+                == std::vector<ProcessId> { 1U }
+            && external_inventory.components[0U].boundary_signals
+                == std::vector<SignalId> { 0U }
+            && external_inventory.components[1U].boundary_signals
+                == std::vector<SignalId> { 0U }
+            && boundary_reason_count(external_inventory,
+                RegionBoundaryReason::external_driver) == 2U,
+        "an external driver does not reunite read-only sibling components");
+
+    auto same_domain_writer = transfer(2U, 3U, 0U);
+    const std::vector<Process> closed_processes {
+        readers[0U], readers[1U], same_domain_writer
+    };
+    const auto closed_inventory = build(closed_processes, signals)
+        .certificate_inventory();
+    require(closed_inventory.components.size() == 1U
+            && closed_inventory.components[0U].members
+                == std::vector<ProcessId> { 0U, 1U, 2U }
+            && closed_inventory.components[0U]
+                .structural_internal_signal_candidates
+                    == std::vector<SignalId> { 0U, 1U, 2U }
+            && closed_inventory.components[0U].boundary_signals
+                == std::vector<SignalId> { 3U },
+        "a same-domain candidate writer still closes over all of its readers");
+
+    auto other_domain_writer = transfer(2U, 3U, 0U);
+    other_domain_writer.scheduling_domain = ProcessSchedulingDomain::generic;
+    other_domain_writer.operations[1U] = WriteUpdate {
+        0U, 0U, SignalUpdateDomain::generic };
+    auto noncandidate_writer = transfer(3U, 3U, 0U);
+    noncandidate_writer.operations[1U] = WriteUpdate {
+        0U, 0U, SignalUpdateDomain::systemverilog_nba };
+    const std::vector<Process> mixed_writers {
+        readers[0U], readers[1U], other_domain_writer, noncandidate_writer
+    };
+    const auto mixed_inventory = build(mixed_writers, signals)
+        .certificate_inventory();
+    require(mixed_inventory.components.size() == 3U
+            && mixed_inventory.components[0U].members
+                == std::vector<ProcessId> { 0U }
+            && mixed_inventory.components[1U].members
+                == std::vector<ProcessId> { 1U }
+            && mixed_inventory.components[2U].members
+                == std::vector<ProcessId> { 2U }
+            && mixed_inventory.components[0U].boundary_signals
+                == std::vector<SignalId> { 0U }
+            && mixed_inventory.components[1U].boundary_signals
+                == std::vector<SignalId> { 0U }
+            && mixed_inventory.components[2U].boundary_signals
+                == std::vector<SignalId> { 0U, 3U }
+            && boundary_reason_count(mixed_inventory,
+                RegionBoundaryReason::reader_outside_component) >= 2U
+            && process_exclusion_count(mixed_inventory,
+                RegionProcessExclusionReason::not_pure) != 0U
+            && build(mixed_writers, signals).certificate_inventory()
+                == mixed_inventory,
+        "other-domain writers stay separate, noncandidate writers stay outside, "
+        "and membership is stable");
+}
+
 void check_certificate_signal_exclusions()
 {
     auto partial = transfer(0U, 0U, 1U);
@@ -4482,6 +4979,8 @@ void test_region_graph()
     check_fixed_signal_effects();
     check_closed_component_certificates();
     check_certificate_boundaries();
+    check_read_only_sibling_certificate_partition();
+    check_range_aware_writer_components();
     check_certificate_signal_exclusions();
     check_blocking_write_graph_admission();
     check_certificate_process_exclusions();

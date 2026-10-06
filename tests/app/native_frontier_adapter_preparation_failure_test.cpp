@@ -93,6 +93,23 @@ struct NativeRegionAllocationTestAccess {
         std::uint64_t unavailable_trusted_entries { };
     };
 
+    struct MemberSyncSummary {
+        std::size_t systemverilog_runtime_count { };
+        std::size_t available_count { };
+        std::size_t unavailable_count { };
+        std::size_t empty_unavailable_count { };
+        std::size_t partial_unavailable_count { };
+        std::size_t unavailable_component {
+            std::numeric_limits<std::size_t>::max() };
+        std::size_t member_count { };
+        std::size_t signal_slot_count { };
+        std::size_t fanout_edge_count { };
+        std::uint64_t full_passes { };
+        std::uint64_t full_members { };
+        std::uint64_t selected_passes { };
+        std::uint64_t selected_members { };
+    };
+
     struct RetainedPlaneLease {
         PackedLogic4PlaneReadLease lease;
         std::array<std::vector<std::uint64_t>, 4U> words;
@@ -748,6 +765,63 @@ struct NativeRegionAllocationTestAccess {
         return result;
     }
 
+    [[nodiscard]] static MemberSyncSummary member_sync_summary(
+        std::span<const std::shared_ptr<Interpreter::Impl::
+            RegionFrontierComponentRuntime>> runtimes,
+        const std::size_t tracked_component
+            = std::numeric_limits<std::size_t>::max())
+    {
+        MemberSyncSummary result;
+        for (const auto& runtime : runtimes) {
+            if (!runtime || !runtime->backend || !runtime->backend->executor
+                || runtime->execution_mode
+                    != RegionFrontierExecutionModeV2::systemverilog_active) {
+                continue;
+            }
+            ++result.systemverilog_runtime_count;
+            if (runtime->member_sync_workset_available) {
+                ++result.available_count;
+            } else {
+                ++result.unavailable_count;
+                result.unavailable_component = runtime->component;
+                if (runtime->member_sync_workset.retained_capacity_bytes() == 0U) {
+                    ++result.empty_unavailable_count;
+                } else {
+                    ++result.partial_unavailable_count;
+                }
+            }
+            if (tracked_component != std::numeric_limits<std::size_t>::max()
+                && runtime->component != tracked_component) {
+                continue;
+            }
+            const auto& layout = runtime->backend->executor->layout();
+            result.member_count += layout.member_count;
+            result.signal_slot_count += layout.signal_slot_count;
+            result.fanout_edge_count += layout.fanout_edge_count;
+            result.full_passes += runtime->member_sync_full_passes;
+            result.full_members += runtime->member_sync_full_members;
+            result.selected_passes += runtime->member_sync_selected_passes;
+            result.selected_members += runtime->member_sync_selected_members;
+        }
+        return result;
+    }
+
+    [[nodiscard]] static MemberSyncSummary member_sync_summary(
+        const Interpreter::Impl::RegionRuntimeSnapshot& candidate)
+    {
+        return member_sync_summary(candidate.frontier_runtime_by_component);
+    }
+
+    [[nodiscard]] static MemberSyncSummary member_sync_summary(
+        fsim::app::Simulation& simulation,
+        const std::size_t tracked_component
+            = std::numeric_limits<std::size_t>::max())
+    {
+        return member_sync_summary(
+            interpreter_impl(simulation).region_frontier_runtime_by_component,
+            tracked_component);
+    }
+
     [[nodiscard]] static AliasCertificateSummary
     alias_certificate_summary(
         const Interpreter::Impl::RegionRuntimeSnapshot& candidate)
@@ -764,12 +838,17 @@ struct NativeRegionAllocationTestAccess {
 
     [[nodiscard]] static std::size_t build_candidate(
         fsim::app::Simulation& simulation,
-        AliasCertificateSummary* const alias_summary = nullptr)
+        AliasCertificateSummary* const alias_summary = nullptr,
+        MemberSyncSummary* const member_sync_summary = nullptr)
     {
         auto& impl = interpreter_impl(simulation);
         auto candidate = impl.build_region_runtime_snapshot(false, true, true);
         if (alias_summary != nullptr) {
             *alias_summary = alias_certificate_summary(candidate);
+        }
+        if (member_sync_summary != nullptr) {
+            *member_sync_summary = NativeRegionAllocationTestAccess::
+                member_sync_summary(candidate);
         }
         return validate_candidate(candidate);
     }
@@ -809,6 +888,51 @@ struct NativeRegionAllocationTestAccess {
                 || result.unavailable_trusted_entries != 0U) {
                 throw std::runtime_error {
                     "failed optional alias allocations must leave all geometry buffers empty"
+                };
+            }
+            impl.publish_region_runtime_snapshot(std::move(candidate));
+            return result;
+        } catch (...) {
+            clear_allocation_failure();
+            throw;
+        }
+    }
+
+    [[nodiscard]] static MemberSyncSummary
+    build_and_publish_candidate_with_member_sync_allocation_failure(
+        fsim::app::Simulation& simulation,
+        const std::size_t fail_after,
+        const std::size_t expected_component)
+    {
+        auto& impl = interpreter_impl(simulation);
+        using fsim::tests::runtime::staging_failure_support::
+            allocation_failure_was_injected;
+        using fsim::tests::runtime::staging_failure_support::
+            arm_allocation_failure;
+        using fsim::tests::runtime::staging_failure_support::
+            clear_allocation_failure;
+
+        arm_allocation_failure(fail_after);
+        try {
+            auto candidate
+                = impl.build_region_runtime_snapshot(false, true, true);
+            const bool injected = allocation_failure_was_injected();
+            clear_allocation_failure();
+            if (!injected || validate_candidate(candidate) == 0U) {
+                throw std::runtime_error {
+                    "the selected optional member-sync allocation must yield a valid candidate"
+                };
+            }
+            const auto result = member_sync_summary(candidate);
+            if (result.systemverilog_runtime_count == 0U
+                || result.available_count + result.unavailable_count
+                    != result.systemverilog_runtime_count
+                || result.unavailable_count != 1U
+                || result.unavailable_component != expected_component
+                || result.empty_unavailable_count != 1U
+                || result.partial_unavailable_count != 0U) {
+                throw std::runtime_error {
+                    "a failed optional member-sync allocation must leave the workset empty"
                 };
             }
             impl.publish_region_runtime_snapshot(std::move(candidate));
@@ -1265,13 +1389,14 @@ endmodule
 
 [[nodiscard]] std::size_t count_candidate_allocations(
     Simulation& simulation,
-    NativeRegionAllocationTestAccess::AliasCertificateSummary& alias_summary)
+    NativeRegionAllocationTestAccess::AliasCertificateSummary& alias_summary,
+    NativeRegionAllocationTestAccess::MemberSyncSummary* const member_summary = nullptr)
 {
     begin_allocation_count();
     try {
         const auto frontier_runtime_count
             = NativeRegionAllocationTestAccess::build_candidate(
-                simulation, &alias_summary);
+                simulation, &alias_summary, member_summary);
         require(frontier_runtime_count != 0U,
             "a successful no-failpoint candidate must prepare a frontier runtime");
     } catch (...) {
@@ -1421,8 +1546,11 @@ void test_preparation_failure_is_transactional_and_retryable()
 
     NativeRegionAllocationTestAccess::AliasCertificateSummary
         successful_alias_summary;
+    NativeRegionAllocationTestAccess::MemberSyncSummary
+        successful_member_sync_summary;
     const auto successful_preparation_allocations
-        = count_candidate_allocations(simulation, successful_alias_summary);
+        = count_candidate_allocations(simulation, successful_alias_summary,
+            &successful_member_sync_summary);
     require(successful_preparation_allocations != 0U,
         "the startup-equivalent builder must exercise the allocator failpoint");
     require(successful_alias_summary.capable_runtime_count != 0U
@@ -1431,9 +1559,21 @@ void test_preparation_failure_is_transactional_and_retryable()
             && successful_alias_summary.storage_unavailable_count == 0U
             && successful_alias_summary.partial_unavailable_count == 0U,
         "the successful candidate must allocate both range vectors and the sorted index scratch");
+    require(successful_member_sync_summary.systemverilog_runtime_count != 0U
+            && successful_member_sync_summary.available_count
+                == successful_member_sync_summary.systemverilog_runtime_count
+            && successful_member_sync_summary.unavailable_count == 0U
+            && successful_member_sync_summary.member_count != 0U
+            && successful_member_sync_summary.signal_slot_count != 0U
+            && successful_member_sync_summary.fanout_edge_count != 0U,
+        "the successful candidate must allocate its five nonempty sparse workset vectors");
 
     std::size_t alias_failure_component
         = std::numeric_limits<std::size_t>::max();
+    std::size_t member_sync_failure_component
+        = std::numeric_limits<std::size_t>::max();
+    std::array<std::size_t, 5U> member_sync_failure_indices { };
+    std::size_t member_sync_failure_index_count { };
 
     for (std::size_t fail_after = 0U;
          fail_after < successful_preparation_allocations; ++fail_after) {
@@ -1442,10 +1582,13 @@ void test_preparation_failure_is_transactional_and_retryable()
         bool candidate_returned { };
         NativeRegionAllocationTestAccess::AliasCertificateSummary
             candidate_alias_summary;
+        NativeRegionAllocationTestAccess::MemberSyncSummary
+            candidate_member_sync_summary;
         try {
             static_cast<void>(
                 NativeRegionAllocationTestAccess::build_candidate(
-                    simulation, &candidate_alias_summary));
+                    simulation, &candidate_alias_summary,
+                    &candidate_member_sync_summary));
             candidate_returned = true;
         } catch (const std::bad_alloc&) {
             caught_bad_alloc = true;
@@ -1458,6 +1601,28 @@ void test_preparation_failure_is_transactional_and_retryable()
         require(injected && (caught_bad_alloc || candidate_returned),
             "each allocator failpoint must either propagate or return a "
             "coherent unpublished candidate after an optional decline");
+        if (candidate_returned
+            && candidate_member_sync_summary.systemverilog_runtime_count
+                == successful_member_sync_summary.systemverilog_runtime_count
+            && candidate_member_sync_summary.unavailable_count != 0U) {
+            require(candidate_member_sync_summary.unavailable_count == 1U
+                    && candidate_member_sync_summary.empty_unavailable_count == 1U
+                    && candidate_member_sync_summary.partial_unavailable_count == 0U,
+                "an optional member-sync failure must release every partially allocated workset vector");
+            if (member_sync_failure_component
+                == std::numeric_limits<std::size_t>::max()) {
+                member_sync_failure_component
+                    = candidate_member_sync_summary.unavailable_component;
+            }
+            if (candidate_member_sync_summary.unavailable_component
+                == member_sync_failure_component) {
+                require(member_sync_failure_index_count
+                            < member_sync_failure_indices.size(),
+                    "the allocation sweep must expose exactly five workset allocations for the selected component");
+                member_sync_failure_indices[member_sync_failure_index_count++]
+                    = fail_after;
+            }
+        }
         if (candidate_returned
             && candidate_alias_summary.capable_runtime_count
                 == successful_alias_summary.capable_runtime_count
@@ -1493,10 +1658,34 @@ void test_preparation_failure_is_transactional_and_retryable()
     require(alias_failure_component
                 != std::numeric_limits<std::size_t>::max(),
         "the allocation sweep must identify an optional certificate failure");
+    require(member_sync_failure_index_count
+                == member_sync_failure_indices.size()
+            && member_sync_failure_component
+                != std::numeric_limits<std::size_t>::max(),
+        "the allocation sweep must identify all five optional workset allocation failures");
     const auto sequence_after
         = NativeRegionAllocationTestAccess::reserve_sequence_probe(simulation);
     require(sequence_after == sequence_before + 1U,
         "failed preparation must consume no scheduler insertion sequences");
+
+    const auto failed_member_sync
+        = NativeRegionAllocationTestAccess::
+            build_and_publish_candidate_with_member_sync_allocation_failure(
+                simulation, member_sync_failure_indices[1U],
+                member_sync_failure_component);
+    require(failed_member_sync.systemverilog_runtime_count
+                == successful_member_sync_summary.systemverilog_runtime_count
+            && failed_member_sync.unavailable_count == 1U
+            && failed_member_sync.unavailable_component
+                == member_sync_failure_component
+            && failed_member_sync.empty_unavailable_count == 1U
+            && failed_member_sync.partial_unavailable_count == 0U,
+        "a later workset-init allocation failure must publish only empty fallback state");
+    const auto before_member_sync_fallback
+        = NativeRegionAllocationTestAccess::member_sync_summary(
+            simulation, member_sync_failure_component);
+    require(before_member_sync_fallback.fanout_edge_count != 0U,
+        "the selected component has a nonempty fanout-member allocation");
 
     const auto dispatches_before_first_run
         = NativeRegionAllocationTestAccess::summarize(simulation)
@@ -1522,6 +1711,71 @@ void test_preparation_failure_is_transactional_and_retryable()
     require(dispatches_after_first_run > dispatches_before_first_run,
         "the retained V2 generated entry must execute after the preparation "
         "failures");
+    const auto after_member_sync_fallback
+        = NativeRegionAllocationTestAccess::member_sync_summary(
+            simulation, member_sync_failure_component);
+    require(after_member_sync_fallback.full_passes
+                > before_member_sync_fallback.full_passes
+            && after_member_sync_fallback.full_members
+                - before_member_sync_fallback.full_members
+                == (after_member_sync_fallback.full_passes
+                       - before_member_sync_fallback.full_passes)
+                    * before_member_sync_fallback.member_count
+            && after_member_sync_fallback.selected_passes
+                == before_member_sync_fallback.selected_passes
+            && after_member_sync_fallback.unavailable_count == 1U
+            && after_member_sync_fallback.empty_unavailable_count == 1U
+            && NativeRegionAllocationTestAccess::
+                current_signal_value_passive(simulation, *observed)
+                    .to_msb_string() == "1",
+        "the unavailable workset must use full member synchronization with correct output");
+
+    // Warm the full fallback once, then count a public deposit+run window. The
+    // next native member marks still see the unavailable workset guard.
+    simulation.deposit_signal(*stimulus,
+        PackedLogic4(1U, Logic4::zero));
+    require(simulation.run(simulation.now() + 1U).status == RunStatus::time_limit,
+        "the full fallback must remain executable after its first dispatch");
+    const auto after_member_sync_warmup
+        = NativeRegionAllocationTestAccess::member_sync_summary(
+            simulation, member_sync_failure_component);
+    require(after_member_sync_warmup.full_passes
+                > after_member_sync_fallback.full_passes
+            && after_member_sync_warmup.selected_passes
+                == after_member_sync_fallback.selected_passes
+            && NativeRegionAllocationTestAccess::
+                current_signal_value_passive(simulation, *observed)
+                    .to_msb_string() == "0",
+        "the warmed unavailable-workset path must continue full native synchronization");
+    begin_allocation_count();
+    try {
+        simulation.deposit_signal(*stimulus,
+            PackedLogic4(1U, Logic4::one));
+        require(simulation.run(simulation.now() + 1U).status
+                    == RunStatus::time_limit,
+            "the counted full-fallback run must remain executable");
+    } catch (...) {
+        static_cast<void>(end_allocation_count());
+        throw;
+    }
+    const auto fallback_allocations = end_allocation_count();
+    const auto after_warmed_member_sync_fallback
+        = NativeRegionAllocationTestAccess::member_sync_summary(
+            simulation, member_sync_failure_component);
+    require(fallback_allocations == 0U
+            && after_warmed_member_sync_fallback.full_passes
+                > after_member_sync_warmup.full_passes
+            && after_warmed_member_sync_fallback.full_members
+                - after_member_sync_warmup.full_members
+                == (after_warmed_member_sync_fallback.full_passes
+                       - after_member_sync_warmup.full_passes)
+                    * after_warmed_member_sync_fallback.member_count
+            && after_warmed_member_sync_fallback.selected_passes
+                == after_member_sync_warmup.selected_passes
+            && NativeRegionAllocationTestAccess::
+                current_signal_value_passive(simulation, *observed)
+                    .to_msb_string() == "1",
+        "the warmed unavailable-workset route must allocate nothing and preserve full-sync output");
 
     const auto scheduler_before_alias_failures
         = NativeRegionAllocationTestAccess::scheduler_snapshot(simulation);

@@ -1057,6 +1057,56 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
                         || std::is_same_v<Type, LogicalBinary>
                         || std::is_same_v<Type, Reduction>) {
                         offer(value.destination, 1U);
+                    } else if constexpr (std::is_same_v<Type, Binary>) {
+                        // Mirrors binary_value: comparisons produce one bit;
+                        // bitwise and add/subtract results take the common
+                        // operand width. Other arithmetic stays unknown.
+                        switch (value.operation) {
+                        case BinaryOperator::equal:
+                        case BinaryOperator::case_equal:
+                        case BinaryOperator::casez_equal:
+                        case BinaryOperator::casex_equal:
+                        case BinaryOperator::wildcard_equal:
+                        case BinaryOperator::not_equal:
+                        case BinaryOperator::less_unsigned:
+                        case BinaryOperator::less_equal_unsigned:
+                        case BinaryOperator::greater_unsigned:
+                        case BinaryOperator::greater_equal_unsigned:
+                        case BinaryOperator::less_signed:
+                        case BinaryOperator::less_equal_signed:
+                        case BinaryOperator::greater_signed:
+                        case BinaryOperator::greater_equal_signed:
+                        case BinaryOperator::vhdl_match_equal:
+                            offer(value.destination, 1U);
+                            break;
+                        case BinaryOperator::bit_and:
+                        case BinaryOperator::bit_or:
+                        case BinaryOperator::bit_xor:
+                        case BinaryOperator::add_unsigned:
+                        case BinaryOperator::subtract_unsigned:
+                        case BinaryOperator::add_signed:
+                        case BinaryOperator::subtract_signed:
+                            copy_rules.push_back(
+                                { value.destination, value.lhs });
+                            copy_rules.push_back(
+                                { value.destination, value.rhs });
+                            break;
+                        default:
+                            invalidate(value.destination);
+                            break;
+                        }
+                    } else if constexpr (
+                        std::is_same_v<Type, ConditionalSelect>) {
+                        // conditional_value requires equal arm widths and
+                        // returns that width.
+                        copy_rules.push_back(
+                            { value.destination, value.when_true });
+                        copy_rules.push_back(
+                            { value.destination, value.when_false });
+                    } else if constexpr (std::is_same_v<Type, Shift>) {
+                        // shift_value returns the shifted value's width.
+                        copy_rules.push_back(
+                            { value.destination, value.value });
                     } else if constexpr (
                         std::is_same_v<Type, CountOnes>
                         || std::is_same_v<Type, CountBits>) {

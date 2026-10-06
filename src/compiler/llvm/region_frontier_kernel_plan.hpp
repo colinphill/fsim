@@ -82,6 +82,11 @@ public:
             emit_internal_commit) const;
 
 private:
+    friend class LlvmRegionFrontierExecutor;
+
+    void report_codegen_storage_profile(std::string_view event) const noexcept;
+    void release_codegen_storage() noexcept;
+
     struct Impl;
     explicit RegionFrontierKernelPlan(std::unique_ptr<Impl> impl) noexcept;
     std::unique_ptr<Impl> impl_;

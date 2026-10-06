@@ -149,37 +149,41 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     if (required_direct_read_handle) {
         required_direct_read_binding_
             = jit_.bind(required_direct_read_handle);
-        required_direct_read_layout_
+        const auto required_direct_read_layout
             = jit_.frame_layout(required_direct_read_binding_);
-        if (required_direct_read_layout_.register_count
+        if (required_direct_read_layout.register_count
                 != layout_.register_count
-            || required_direct_read_layout_.register_word_count
+            || required_direct_read_layout.register_word_count
                 != layout_.register_word_count
-            || required_direct_read_layout_.signal_callback_ids_are_actual
+            || required_direct_read_layout.signal_callback_ids_are_actual
                 != layout_.signal_callback_ids_are_actual
-            || required_direct_read_layout_.signal_callback_operand_word_base
+            || required_direct_read_layout.signal_callback_operand_word_base
                 != layout_.signal_callback_operand_word_base
-            || required_direct_read_layout_.signal_callback_operands
+            || required_direct_read_layout.signal_callback_operands
                 != layout_.signal_callback_operands
-            || required_direct_read_layout_.string_register_count
+            || required_direct_read_layout.string_register_count
                 != layout_.string_register_count
-            || required_direct_read_layout_.uses_logic9
+            || required_direct_read_layout.uses_logic9
                 != layout_.uses_logic9
-            || required_direct_read_layout_.tracks_register_initialization
+            || required_direct_read_layout.tracks_register_initialization
                 != layout_.tracks_register_initialization
-            || required_direct_read_layout_.register_widths
+            || required_direct_read_layout.register_widths
                 != layout_.register_widths
-            || required_direct_read_layout_.register_word_offsets
+            || required_direct_read_layout.register_word_offsets
                 != layout_.register_word_offsets
-            || required_direct_read_layout_.direct_read_signals
+            || required_direct_read_layout.direct_read_signals
                 != layout_.direct_read_signals
-            || required_direct_read_layout_.direct_update_signals
+            || required_direct_read_layout.direct_update_signals
                 != layout_.direct_update_signals
-            || required_direct_read_layout_.register_values_persistent
+            || required_direct_read_layout.register_values_persistent
                 != layout_.register_values_persistent) {
             throw compiler::LlvmJitError(
                 "required-read entry has an incompatible process frame layout");
         }
+        required_direct_read_layout_id_low_
+            = required_direct_read_layout.layout_id_low;
+        required_direct_read_layout_id_high_
+            = required_direct_read_layout.layout_id_high;
     }
     register_aval_.resize(layout_.register_word_count);
     register_bval_.resize(layout_.register_word_count);

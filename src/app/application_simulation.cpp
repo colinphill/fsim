@@ -762,7 +762,14 @@ void Simulation::set_builtin_stdout_output()
 
 void Simulation::set_report_hook(ReportHook hook)
 {
+    impl_->trusted_text_report_hook = false;
     impl_->report_hook = std::move(hook);
+}
+
+void Simulation::set_trusted_text_report_hook(ReportHook hook)
+{
+    impl_->report_hook = std::move(hook);
+    impl_->trusted_text_report_hook = static_cast<bool>(impl_->report_hook);
 }
 
 void Simulation::set_concurrent_assertion_hook(

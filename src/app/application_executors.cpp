@@ -614,7 +614,7 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
             && (!signal_remap_ || signal_remap_->empty())
             && runtime.flags == 0U
             && callback_state.supports_direct_word_updates
-            && (required_direct_read_layout_.direct_update_signals.empty()
+            && (layout_.direct_update_signals.empty()
                 || (runtime.direct_update_slots != nullptr
                     && runtime.direct_update_active_words != nullptr))
             && runtime.direct_read_signals
@@ -622,7 +622,7 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
             && runtime.direct_read_signal_count
                 == direct_read_signals_.size()
             && std::ranges::equal(
-                required_direct_read_layout_.direct_read_signals,
+                layout_.direct_read_signals,
                 direct_read_signals_)
             && runtime.code_coverage_hit_counters == nullptr
             && runtime.code_coverage_hit_count == 0U
@@ -675,9 +675,9 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
                     frame_, frame_.layout_id_low, frame_.layout_id_high
                 };
                 frame_.layout_id_low
-                    = required_direct_read_layout_.layout_id_low;
+                    = required_direct_read_layout_id_low_;
                 frame_.layout_id_high
-                    = required_direct_read_layout_.layout_id_high;
+                    = required_direct_read_layout_id_high_;
                 if (!required_direct_read_lease_) {
                     const auto lease
                         = jit_.bind_required_direct_read_prevalidated(

@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
+#include "simir_allocator_arena_statistics.hpp"
 #include "simir_execution_context.hpp"
 #include "simir_region_graph_bindings.hpp"
+#include "simir_region_metadata_census.hpp"
+#include "simir_storage_census_internal.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -1562,7 +1565,7 @@ Interpreter::Impl::prepare_region_runtime_snapshot(
                 }
                 return left.owner < right.owner;
             });
-        const auto& forwarding_kernel
+        auto& forwarding_kernel
             = snapshot.programs_by_component[component]->forwarding_kernel;
         if (systemverilog_local_wave_enabled
             && kernel.program.scheduling_domain
@@ -1596,6 +1599,9 @@ Interpreter::Impl::prepare_region_runtime_snapshot(
                     });
             if (matching_forwarding_backend
                 != snapshot.forwarding_backend_pool.end()) {
+                forwarding_kernel->execution_kernel.program.operations
+                    = (*matching_forwarding_backend)->kernel
+                          .execution_kernel.program.operations;
                 snapshot.forwarding_backends_by_component[component]
                     = *matching_forwarding_backend;
             } else if (may_compile_backends
@@ -2549,7 +2555,7 @@ Interpreter::Impl::prepare_region_runtime_snapshot(
         backend_pool.reserve(backend_pool.size() + new_backend_candidates);
         for (auto& candidate : candidates) {
             const auto component = candidate.component;
-            const auto& kernel
+            auto& kernel
                 = snapshot.programs_by_component[component]->activation_kernel;
             std::shared_ptr<RegionFrontierBackendEntry> entry
                 = std::move(candidate.pool_entry);
@@ -2615,6 +2621,10 @@ Interpreter::Impl::prepare_region_runtime_snapshot(
                     ++census.final_declines;
                     continue;
                 }
+                if (!newly_materialized) {
+                    kernel.program.operations
+                        = entry->kernel.program.operations;
+                }
                 if (newly_materialized) {
                     snapshot.frontier_backend_pool.push_back(entry);
                 }
@@ -2678,7 +2688,7 @@ Interpreter::Impl::prepare_region_runtime_snapshot(
         if (!snapshot.programs_by_component[component]) {
             continue;
         }
-        const auto& kernel
+        auto& kernel
             = snapshot.programs_by_component[component]->activation_kernel;
         const auto* const frontier_runtime
             = component < snapshot.frontier_runtime_by_component.size()
@@ -2702,6 +2712,8 @@ Interpreter::Impl::prepare_region_runtime_snapshot(
                     && same_region_kernel_mapping(entry->kernel, kernel);
             });
         if (matching_backend != snapshot.backend_pool.end()) {
+            kernel.program.operations
+                = (*matching_backend)->kernel.program.operations;
             snapshot.backends_by_component[component] = *matching_backend;
             snapshot.backend_generation_by_component[component]
                 = snapshot.generation;
@@ -3317,6 +3329,171 @@ Interpreter::Impl::build_region_runtime_snapshot(
         may_compile_backends, std::move(driver_inventory));
     snapshot.profile_systemverilog_waves = profile_systemverilog_waves;
     if (profile_systemverilog_waves) {
+        report_prepared_allocator_arena_statistics(snapshot.generation);
+        // Count current source views and the prepared snapshot only, without
+        // expanding lazy startup banks. Register slots are occurrences across
+        // views, not unique allocated runtime slots. Storage totals cover
+        // unique OperationList bodies, boxed group object sizes, and direct
+        // capacities for common nested vectors. Vector element payloads,
+        // string character buffers, other nested payloads, per-instance remaps,
+        // allocator metadata, transient builder storage, old snapshots, and
+        // escaped facades are excluded. These lower bounds are not total RSS.
+        struct StorageCensus {
+            std::size_t views { };
+            std::size_t operation_occurrences { };
+            std::size_t register_slot_occurrences { };
+            std::size_t uncached_startup_banks { };
+            storage_census_detail::UniqueOperationBodyStorageCensus bodies;
+        };
+
+        StorageCensus original_views;
+        StorageCensus activation_programs_census;
+        StorageCensus forwarding_programs_census;
+        StorageCensus backend_pool_kernel_refs;
+        StorageCensus all_views;
+        const auto add_body = [](StorageCensus& census,
+                                  const OperationList& operations) {
+            census.bodies.add(operations);
+        };
+        const auto add_operations = [&](StorageCensus& census,
+                                        const OperationList& operations,
+                                        const std::size_t register_count) {
+            ++census.views;
+            census.operation_occurrences += operations.size();
+            census.register_slot_occurrences += register_count;
+            add_body(census, operations);
+            ++all_views.views;
+            all_views.operation_occurrences += operations.size();
+            all_views.register_slot_occurrences += register_count;
+            add_body(all_views, operations);
+        };
+        const auto add_uncached_startup_bank = [&](StorageCensus& census,
+                                                    const std::size_t count,
+                                                    const std::size_t registers) {
+            ++census.views;
+            census.operation_occurrences += count;
+            census.register_slot_occurrences += registers;
+            ++census.uncached_startup_banks;
+            ++all_views.views;
+            all_views.operation_occurrences += count;
+            all_views.register_slot_occurrences += registers;
+            ++all_views.uncached_startup_banks;
+        };
+        for (ProcessId id = 0U; id < processes.size(); ++id) {
+            const auto program = processes.program_view(id);
+            const auto* const compact = processes.compact_constant(id);
+            if (compact != nullptr && compact->startup_write_bank != nullptr) {
+                const auto cached
+                    = compact->startup_write_bank->cached_operations();
+                if (cached) {
+                    add_operations(original_views, *cached,
+                        program.register_count());
+                } else {
+                    add_uncached_startup_bank(original_views,
+                        compact->startup_write_bank->operation_count,
+                        program.register_count());
+                }
+                continue;
+            }
+            add_operations(original_views, program.operations(),
+                program.register_count());
+        }
+        for (const auto& program : snapshot.programs_by_component) {
+            if (!program) {
+                continue;
+            }
+            const auto& activation = program->activation_kernel.program;
+            add_operations(activation_programs_census,
+                activation.operations, activation.register_count);
+            if (!program->forwarding_kernel) {
+                continue;
+            }
+            const auto& forwarding
+                = program->forwarding_kernel->execution_kernel.program;
+            add_operations(forwarding_programs_census,
+                forwarding.operations, forwarding.register_count);
+        }
+        for (const auto& entry : snapshot.backend_pool) {
+            if (entry) {
+                add_operations(backend_pool_kernel_refs,
+                    entry->kernel.program.operations,
+                    entry->kernel.program.register_count);
+            }
+        }
+        for (const auto& entry : snapshot.forwarding_backend_pool) {
+            if (entry) {
+                const auto& forwarding = entry->kernel.execution_kernel.program;
+                add_operations(backend_pool_kernel_refs,
+                    forwarding.operations, forwarding.register_count);
+            }
+        }
+        for (const auto& entry : snapshot.frontier_backend_pool) {
+            if (entry) {
+                add_operations(backend_pool_kernel_refs,
+                    entry->kernel.program.operations,
+                    entry->kernel.program.register_count);
+            }
+        }
+        const auto report_census = [&](const char* const category,
+                                       const StorageCensus& census) {
+            std::size_t unique_operations { };
+            std::size_t operation_capacity_bytes { };
+            std::size_t boxed_group_allocations { };
+            std::size_t boxed_group_object_bytes { };
+            std::size_t nested_vector_allocations { };
+            std::size_t nested_vector_capacity_elements { };
+            std::size_t nested_vector_capacity_bytes { };
+            for (const auto& [identity, body] : census.bodies.unique_bodies) {
+                static_cast<void>(identity);
+                unique_operations += body.operation_count;
+                operation_capacity_bytes
+                    += body.operation_capacity * sizeof(Operation);
+                boxed_group_allocations += body.boxed_group_allocations;
+                boxed_group_object_bytes += body.boxed_group_object_bytes;
+                nested_vector_allocations += body.nested_vector_allocations;
+                nested_vector_capacity_elements
+                    += body.nested_vector_capacity_elements;
+                nested_vector_capacity_bytes
+                    += body.nested_vector_capacity_bytes;
+            }
+            const auto body_references = census.bodies.body_references;
+            const auto unique_bodies = census.bodies.unique_bodies.size();
+            std::fprintf(stderr,
+                "[fsim simir-storage-census] generation=%llu "
+                "scope=current-source-views-and-prepared-snapshot "
+                "bytes_scope=outer-operations-boxed-groups-common-nested-vectors "
+                "unique_capacity_bytes_scope=Operation-vector-only "
+                "excluded=instance-overrides,string-buffers,vector-element-payloads,"
+                "RareVector-wrapper-shells "
+                "category=%s views=%zu operation_occurrences=%zu "
+                "register_slot_occurrences=%zu body_references=%zu "
+                "unique_bodies=%zu duplicate_body_references=%zu "
+                "unique_body_operations=%zu "
+                "unique_capacity_bytes_lower_bound=%zu "
+                "boxed_group_allocations=%zu "
+                "boxed_group_object_bytes_lower_bound=%zu "
+                "nested_vector_allocations=%zu "
+                "nested_vector_capacity_elements=%zu "
+                "nested_vector_capacity_bytes_lower_bound=%zu "
+                "uncached_startup_banks=%zu unbacked_views=%zu\n",
+                static_cast<unsigned long long>(snapshot.generation), category,
+                census.views, census.operation_occurrences,
+                census.register_slot_occurrences, body_references, unique_bodies,
+                body_references - unique_bodies, unique_operations,
+                operation_capacity_bytes, boxed_group_allocations,
+                boxed_group_object_bytes, nested_vector_allocations,
+                nested_vector_capacity_elements, nested_vector_capacity_bytes,
+                census.uncached_startup_banks, census.bodies.unbacked_views);
+        };
+        report_census("original_process_views", original_views);
+        report_census("activation_programs", activation_programs_census);
+        report_census("optional_forwarding_programs",
+            forwarding_programs_census);
+        report_census("backend_pool_kernel_refs", backend_pool_kernel_refs);
+        report_census("all_categories", all_views);
+        region_graph_detail::report_prepared_region_metadata_census(snapshot);
+    }
+    if (profile_systemverilog_waves) {
         auto* const frontier_provider = region_kernel_backend_provider
             ? dynamic_cast<RegionFrontierBackendProvider*>(
                   region_kernel_backend_provider.get())
@@ -3397,11 +3574,14 @@ void Interpreter::Impl::build_region_graph()
         = std::getenv("FSIM_PROFILE_SV_WAVES") != nullptr;
     const auto* const region_kernel_environment
         = std::getenv("FSIM_ENABLE_SV_REGION_KERNEL");
-    // Certified regions are the ordinary execution route. Explicitly disabling
-    // them retains checked execution for differential validation; it does not
-    // change any language scheduling rules.
-    const bool enable_region_kernel = region_kernel_environment == nullptr
-        || std::string_view { region_kernel_environment } == "1";
+    // Certified regions are opt-in. On the representative throughput designs
+    // they executed no native region kernels or frontier members while their
+    // admission, authority and recertification work cost simulation time
+    // (r37 analysis). Disabling them retains checked execution and does not
+    // change any language scheduling rules; FSIM_ENABLE_SV_REGION_KERNEL=1
+    // enables them for differential validation and further development.
+    const bool enable_region_kernel = region_kernel_environment != nullptr
+        && std::string_view { region_kernel_environment } == "1";
     const auto* const wide_commit_environment
         = std::getenv("FSIM_ENABLE_A4_WIDE_SINGLE_OWNER_COMMIT");
     a4_wide_single_owner_commit_enabled = enable_region_kernel
@@ -4052,6 +4232,13 @@ void Interpreter::Impl::prepare_signal_observation(const SignalId signal)
     if (!started) {
         return;
     }
+    if (!fused_cone_materializing && signal < fused_cone_by_signal.size()
+        && fused_cone_by_signal[signal]
+            != std::numeric_limits<std::uint32_t>::max()) {
+        // A hidden net of a fused cone becomes visible only through this
+        // barrier; publish its current value before any observer reads it.
+        materialize_fused_cone(fused_cone_by_signal[signal]);
+    }
     completed_callback_observation_generation = 0U;
     if (!region_graph) {
         throw std::logic_error("started interpreter has no observation graph");
@@ -4310,7 +4497,9 @@ void Interpreter::Impl::ReportCallback::operator()(
     if (owner == nullptr) {
         throw std::logic_error("report callback has no interpreter owner");
     }
-    owner->prepare_callback_observation();
+    if (!trusted_text_only) {
+        owner->prepare_callback_observation();
+    }
     (*selected)(process, message, severity, source, time, delta);
 }
 

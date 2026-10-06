@@ -831,6 +831,133 @@ void test_default_codec_uses_expanded_operation_content()
         decoded.processes[1].operations));
 }
 
+void test_operation_override_copy_isolation_and_artifact_bytes()
+{
+    using fsim::runtime::simir::Concatenate;
+    using fsim::runtime::simir::RegisterId;
+    using fsim::runtime::simir::SignalUpdateDomain;
+    using fsim::runtime::simir::WaitSensitivity;
+    using fsim::runtime::simir::WriteUpdate;
+    using fsim::runtime::simir::operation_get_if;
+
+    const OperationList body {
+        Operation { WaitSensitivity { } },
+        Operation { WaitSensitivity { } },
+    };
+    OperationList original = body;
+    original.replace(0U, Operation { Concatenate {
+        7U, { 1U, 2U, 3U, 4U }, 16U
+    } });
+    original.replace(1U, Operation { WriteUpdate {
+        5U, 6U, SignalUpdateDomain::systemverilog_active
+    } });
+
+    const auto row_copy = original;
+    auto runtime_copy = row_copy;
+    auto snapshot_copy = runtime_copy;
+    const auto original_revision = original.access_revision();
+    const Operation* const shared_write_update
+        = &std::as_const(original)[1U];
+    assert(shared_write_update == &std::as_const(row_copy)[1U]);
+    assert(shared_write_update == &std::as_const(runtime_copy)[1U]);
+    assert(shared_write_update == &std::as_const(snapshot_copy)[1U]);
+
+    const auto has_concatenate = [](const OperationList& operations,
+                                     const std::vector<RegisterId>& operands,
+                                     const std::uint32_t width) {
+        const auto* const operation
+            = operation_get_if<Concatenate>(&operations[0U]);
+        return operation != nullptr && operation->operands == operands
+            && operation->width == width;
+    };
+    const auto has_write_update = [](
+        const OperationList& operations,
+        const fsim::runtime::simir::SignalId signal,
+        const RegisterId source,
+        const SignalUpdateDomain domain) {
+        const auto* const operation
+            = operation_get_if<WriteUpdate>(&operations[1U]);
+        return operation != nullptr && operation->signal == signal
+            && operation->source == source && operation->domain == domain;
+    };
+    const std::vector<RegisterId> original_operands {
+        1U, 2U, 3U, 4U
+    };
+    assert(has_concatenate(original, original_operands, 16U));
+    assert(has_concatenate(row_copy, original_operands, 16U));
+    assert(has_concatenate(runtime_copy, original_operands, 16U));
+    assert(has_concatenate(snapshot_copy, original_operands, 16U));
+    assert(has_write_update(
+        original, 5U, 6U, SignalUpdateDomain::systemverilog_active));
+    assert(has_write_update(
+        row_copy, 5U, 6U, SignalUpdateDomain::systemverilog_active));
+    assert(has_write_update(
+        runtime_copy, 5U, 6U, SignalUpdateDomain::systemverilog_active));
+    assert(has_write_update(
+        snapshot_copy, 5U, 6U, SignalUpdateDomain::systemverilog_active));
+    assert(original.instance_operation_overrides().size() == 2U);
+    assert(original.shares_body_with(row_copy));
+
+    runtime_copy.replace(0U, Operation { Concatenate {
+        7U, { 8U, 9U, 10U }, 12U
+    } });
+    assert(has_concatenate(runtime_copy,
+        std::vector<RegisterId> { 8U, 9U, 10U }, 12U));
+    assert(has_concatenate(original, original_operands, 16U));
+    assert(has_concatenate(row_copy, original_operands, 16U));
+    assert(has_concatenate(snapshot_copy, original_operands, 16U));
+    assert(has_write_update(
+        original, 5U, 6U, SignalUpdateDomain::systemverilog_active));
+    assert(has_write_update(
+        row_copy, 5U, 6U, SignalUpdateDomain::systemverilog_active));
+    assert(has_write_update(
+        snapshot_copy, 5U, 6U, SignalUpdateDomain::systemverilog_active));
+    assert(&std::as_const(runtime_copy)[1U] != shared_write_update);
+    assert(original.access_revision() == original_revision);
+    assert(snapshot_copy.access_revision() == original_revision);
+    assert(runtime_copy.access_revision() != original_revision);
+
+    snapshot_copy[1U] = Operation { WriteUpdate {
+        9U, 10U, SignalUpdateDomain::systemverilog_nba
+    } };
+    assert(has_write_update(
+        snapshot_copy, 9U, 10U, SignalUpdateDomain::systemverilog_nba));
+    assert(&std::as_const(snapshot_copy)[1U] != shared_write_update);
+    assert(&std::as_const(original)[1U] == shared_write_update);
+    assert(&std::as_const(row_copy)[1U] == shared_write_update);
+    assert(has_write_update(
+        original, 5U, 6U, SignalUpdateDomain::systemverilog_active));
+    assert(has_write_update(
+        row_copy, 5U, 6U, SignalUpdateDomain::systemverilog_active));
+    assert(has_write_update(
+        runtime_copy, 5U, 6U, SignalUpdateDomain::systemverilog_active));
+    assert(has_concatenate(snapshot_copy,
+        std::vector<RegisterId> { 1U, 2U, 3U, 4U }, 16U));
+    assert(has_concatenate(original, original_operands, 16U));
+    assert(has_concatenate(runtime_copy,
+        std::vector<RegisterId> { 8U, 9U, 10U }, 12U));
+
+    OperationList independently_built {
+        Operation { WaitSensitivity { } },
+        Operation { WaitSensitivity { } },
+    };
+    assert(!original.shares_body_with(independently_built));
+    independently_built.replace(0U, Operation { Concatenate {
+        7U, original_operands, 16U
+    } });
+    independently_built.replace(1U, Operation { WriteUpdate {
+        5U, 6U, SignalUpdateDomain::systemverilog_active
+    } });
+    const auto encode = [](const OperationList& operations) {
+        codec_detail::Writer writer;
+        writer.write(operations);
+        assert(writer.failure().empty());
+        return std::move(writer).finish();
+    };
+    assert(encode(original) == encode(independently_built));
+    assert(encode(original) != encode(runtime_copy));
+}
+
 } // namespace
 
 int main()
@@ -842,4 +969,5 @@ int main()
     test_untrusted_operation_body_records();
     test_empty_body_partition();
     test_default_codec_uses_expanded_operation_content();
+    test_operation_override_copy_isolation_and_artifact_bytes();
 }

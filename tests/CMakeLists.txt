@@ -4277,6 +4277,17 @@ if(FSIM_WITH_LLVM)
     PROPERTIES LABELS "fast;application;systemverilog;region;native;allocation"
       RUN_SERIAL TRUE)
 
+  add_executable(fsim_application_cone_fusion_tests app/cone_fusion_test.cpp)
+  fsim_configure_test(fsim_application_cone_fusion_tests)
+  target_link_libraries(
+    fsim_application_cone_fusion_tests PRIVATE fsim_application)
+  add_test(
+    NAME fsim.application.cone-fusion
+    COMMAND fsim_application_cone_fusion_tests)
+  set_tests_properties(
+    fsim.application.cone-fusion
+    PROPERTIES LABELS "fast;application;systemverilog;cone-fusion;llvm")
+
   # Standalone fixed-topology steady-state allocation gate for the default
   # native-frontier application route. Keep this separate from the broader
   # activation-only and mutation/failure fixtures.

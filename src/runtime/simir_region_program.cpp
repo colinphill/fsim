@@ -1805,6 +1805,18 @@ std::optional<RegionConeProgram> RegionGraph::build_compute_program(
         return std::nullopt;
     }
     settled_program.operations.push_back(Halt { });
+    // Each retained runtime form has the settled body plus one branch per member.
+    const auto settled_operation_count = settled_program.operations.size();
+    const auto member_count = ordered_members.size();
+    const auto maximum_operation_count
+        = std::numeric_limits<InstructionIndex>::max();
+    if (settled_operation_count > maximum_operation_count
+        || member_count > maximum_operation_count
+            - settled_operation_count) {
+        return std::nullopt;
+    }
+    const auto expected_runtime_operation_count
+        = settled_operation_count + member_count;
 
     // Build the runtime form separately from the topological settled-value
     // oracle above. Every selected member reads the same committed input
@@ -1816,6 +1828,11 @@ std::optional<RegionConeProgram> RegionGraph::build_compute_program(
     kernel.program.name = "simir_region_activation_"
         + std::to_string(component_index);
     kernel.program.operations = OperationList { };
+    if (expected_runtime_operation_count
+        > kernel.program.operations.max_size()) {
+        return std::nullopt;
+    }
+    kernel.program.operations.reserve(expected_runtime_operation_count);
     kernel.program.static_sensitivity.clear();
     kernel.program.driver_regions.clear();
     kernel.program.initialize = true;
@@ -2012,7 +2029,8 @@ std::optional<RegionConeProgram> RegionGraph::build_compute_program(
         return std::nullopt;
     }
     kernel.program.operations.push_back(Halt { });
-    if (kernel.outputs.size() != all_outputs.size()) {
+    if (kernel.program.operations.size() != expected_runtime_operation_count
+        || kernel.outputs.size() != all_outputs.size()) {
         return std::nullopt;
     }
 
@@ -2213,6 +2231,12 @@ std::optional<RegionConeProgram> RegionGraph::build_compute_program(
         execution.program.name = "simir_region_forwarding_"
             + std::to_string(component_index);
         execution.program.operations = OperationList { };
+        if (expected_runtime_operation_count
+            > execution.program.operations.max_size()) {
+            return std::nullopt;
+        }
+        execution.program.operations.reserve(
+            expected_runtime_operation_count);
         execution.program.static_sensitivity.clear();
         execution.program.static_trigger_regions.clear();
         execution.program.driver_regions.clear();
@@ -2427,6 +2451,10 @@ std::optional<RegionConeProgram> RegionGraph::build_compute_program(
             return std::nullopt;
         }
         execution.program.operations.push_back(Halt { });
+        if (execution.program.operations.size()
+            != expected_runtime_operation_count) {
+            return std::nullopt;
+        }
         forwarding.execution_kernel = std::move(execution);
         return forwarding;
     };

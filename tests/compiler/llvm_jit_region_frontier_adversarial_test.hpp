@@ -16,12 +16,15 @@ void run_region_frontier_adversarial_tests(
     const runtime::simir::RegionFrontierLayoutV2& layout,
     std::uint64_t runtime_generation);
 
-/// Compare checked and private alias-prevalidated thunks after validating
-/// identical geometry, and preserve all non-geometric guards on both entries.
+/// Compare the four existing entries and descriptor-shape entry on valid
+/// states, retaining old shape guards and dynamic pending-slot checks.
 void run_region_frontier_alias_prevalidated_entry_tests(
     const runtime::simir::RegionConeActivationKernel& kernel,
     runtime::simir::RegionFrontierStepEntryV2 checked_entry,
     runtime::simir::RegionFrontierStepEntryV2 trusted_entry,
+    runtime::simir::RegionFrontierStepEntryV2 canonical_values_entry,
+    runtime::simir::RegionFrontierStepEntryV2 alias_and_canonical_values_entry,
+    runtime::simir::RegionFrontierStepEntryV2 descriptor_shapes_entry,
     const runtime::simir::RegionFrontierLayoutV2& layout,
     std::uint64_t runtime_generation);
 
@@ -32,6 +35,23 @@ void run_region_frontier_shared_binding_guard_tests(
     runtime::simir::RegionFrontierStepEntryV2 entry,
     const runtime::simir::RegionFrontierLayoutV2& layout,
     std::uint64_t runtime_generation);
+
+/// Verify repeated bodies retain instance-specific values and write provenance.
+void run_region_frontier_repeated_binding_tests(
+    const runtime::simir::RegionConeActivationKernel& kernel,
+    runtime::simir::RegionFrontierStepEntryV2 checked_entry,
+    runtime::simir::RegionFrontierStepEntryV2 trusted_entry,
+    const runtime::simir::RegionFrontierLayoutV2& layout);
+
+/// Prove wide Logic4/Logic9 copy bodies share a helper and keep each member's
+/// complete value planes and write/event provenance intact.
+void run_region_frontier_repeated_copy_member_tests(
+    const runtime::simir::RegionConeActivationKernel& kernel,
+    runtime::simir::RegionFrontierStepEntryV2 checked_entry,
+    runtime::simir::RegionFrontierStepEntryV2 trusted_entry,
+    const runtime::simir::RegionFrontierLayoutV2& layout,
+    std::uint32_t width,
+    runtime::simir::ValueKind value_kind);
 
 /// Exercise construction-time symbol, signature, and no-unwind guards for an
 /// exact-plan Status(Frame*) entry thunk.

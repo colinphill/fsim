@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "simir_frontier_member_sync_workset.hpp"
+
 #include "fsim/runtime/simir.hpp"
 #include "fsim/runtime/simir_coverage.hpp"
 #include "fsim/runtime/simir_region_kernel_backend.hpp"
@@ -37,6 +39,83 @@
 #include <utility>
 
 namespace fsim::runtime::simir {
+
+// First failed predicate for profiled boundary member-sync admission. The
+// numeric order is stable for one source revision and is emitted as rN=count.
+enum class FrontierBoundarySyncRejectReason : std::uint8_t {
+    admitted,
+    runtime_or_backend_missing,
+    runtime_generation_stale,
+    component_runtime_stale,
+    authoritative_state_stale,
+    component_epoch_stale,
+    wrong_execution_mode,
+    nonprivate_entry,
+    unavailable_workset,
+    prior_force_full,
+    publication_signal_mismatch,
+    signal_id_out_of_range,
+    signal_effect_vectors_misaligned,
+    container_vectors_misaligned,
+    ownership_vectors_misaligned,
+    dependency_masks_unavailable,
+    static_fanout_index_unavailable,
+    wrong_value_kind,
+    wrong_resolution,
+    signal_too_wide,
+    logic9_value,
+    event_variable,
+    implicit_driver,
+    charge_strength,
+    systemverilog_scalar,
+    external_driver,
+    forced_value,
+    forced_mask,
+    forced_driver_value,
+    forced_driver_mask,
+    transaction_observed,
+    dynamic_fanout,
+    container_alias,
+    container_element_alias,
+    container_aggregate_alias,
+    writer_count,
+    stable_writer_mismatch,
+    module_path_destination,
+    nonrange_dependency,
+    sampled_values_unknown,
+    sampled_mask_unavailable,
+    sampled_dependency,
+    monitor_watch,
+    bidirectional_switches,
+    fanout_process_out_of_range,
+    unsealed_fanout_executor,
+    driver_count,
+    driver_record_missing,
+    driver_strength,
+    scalar_driver_regions,
+    process_switch_source,
+    process_switch_target,
+    process_bidirectional_switch,
+    process_profile_enabled,
+    execution_point_hook,
+    scheduler_trace_hook,
+    driver_change_hook,
+    signal_change_hook,
+    stored_signal_change_hook,
+    scalar_signal_change_hook,
+    container_object_change_hook,
+    container_element_change_hook,
+    native_observation_any_hook,
+    native_observation_required_hook,
+    writer_graph_unavailable,
+    writer_graph_shape,
+    driver_owner_set_mismatch,
+    active_owned_driver,
+    unsealed_current_writer,
+    count,
+};
+inline constexpr std::size_t kFrontierBoundarySyncRejectReasonCount
+    = static_cast<std::size_t>(FrontierBoundarySyncRejectReason::count);
 
 struct SignalChangeOrigin {
     ProcessSchedulingDomain process_domain {
@@ -426,15 +505,28 @@ struct Interpreter::Impl : SchedulerBatchTask {
     struct ReportCallback {
         Impl* owner { };
         std::shared_ptr<const ReportHook> callback;
+        bool trusted_text_only { };
 
         ReportCallback& operator=(ReportHook hook)
         {
+            // Revoke trust before allocating, as for OutputCallback.
+            trusted_text_only = false;
             std::shared_ptr<const ReportHook> prepared;
             if (hook) {
                 prepared = std::make_shared<ReportHook>(std::move(hook));
             }
             callback = std::move(prepared);
             return *this;
+        }
+
+        void set_trusted_text_hook(ReportHook hook)
+        {
+            std::shared_ptr<const ReportHook> prepared;
+            if (hook) {
+                prepared = std::make_shared<ReportHook>(std::move(hook));
+            }
+            callback = std::move(prepared);
+            trusted_text_only = static_cast<bool>(callback);
         }
 
         [[nodiscard]] explicit operator bool() const noexcept
@@ -1331,6 +1423,15 @@ struct Interpreter::Impl : SchedulerBatchTask {
         [[nodiscard]] const ProcessState* full_state_if_present(
             ProcessId id) const noexcept;
         [[nodiscard]] ProcessProgramView program_view(ProcessId id) const;
+        /// Hot per-slot copy of the program's scheduling domain.
+        [[nodiscard]] ProcessSchedulingDomain scheduling_domain(
+            const ProcessId id) const
+        {
+            if (id >= slots_.size()) {
+                throw std::out_of_range { "invalid SimIR process ID" };
+            }
+            return slots_[id].scheduling_domain;
+        }
         [[nodiscard]] SignalChangeOrigin scheduling_origin(
             ProcessId id) const
         {
@@ -2019,15 +2120,42 @@ struct Interpreter::Impl : SchedulerBatchTask {
     };
 
     /// Exact byte interval included in the V2 nested alias-geometry proof.
-    /// Pointer and extent are captured after binding; alias_tag mirrors the
-    /// generated key/role encoding for a same-slot stored/owner exception.
+    /// The numeric start and extent are captured while the backing is live;
+    /// alias_tag mirrors the generated key/role encoding for a same-slot
+    /// stored/owner exception.
     struct RegionFrontierAliasRange final {
-        const void* address { };
+        std::uintptr_t address { };
         std::size_t bytes { };
         std::uint64_t alias_tag { };
 
         friend bool operator==(const RegionFrontierAliasRange&,
             const RegionFrontierAliasRange&) = default;
+    };
+
+    struct RegionFrontierAliasCertifiedPendingBacking final {
+        std::uintptr_t words_address { };
+        std::size_t word_count { };
+        std::uintptr_t offsets_address { };
+        std::size_t offset_count { };
+        std::uintptr_t writable_signals_address { };
+        std::size_t writable_signal_count { };
+        bool valid { };
+    };
+
+    struct RegionFrontierAliasBindProof final {
+        std::uint64_t serial { };
+        const RegionFrontierBackendEntry* backend { };
+        const RegionFrontierBackend* executor { };
+        const RegionFrontierLayoutV2* layout { };
+        const RegionFrontierFrameV2* frame { };
+        const RegionAuthoritativeComponentState* state { };
+        const AuthoritativeSignalPlanes::FrontierWriteLease* lease { };
+        std::uint64_t runtime_generation { };
+        std::uint64_t state_revision { };
+        bool valid { };
+        bool plane_ranges_match_certificate { };
+        bool pending_backing_matches_certificate { };
+        bool receipt_consumed { };
     };
 
     /// The cache is local to one persistent component runtime, but its key
@@ -2053,6 +2181,86 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
         friend bool operator==(const RegionFrontierAliasCertificateContext&,
             const RegionFrontierAliasCertificateContext&) = default;
+    };
+
+    /// The successful preparation owns every pending row and payload span.
+    /// This certificate names that exact immutable recipe and storage, and is
+    /// available only for the sealed builtin descriptor-shapes producer.
+    struct RegionFrontierDescriptorShapesStorageCertificate final {
+        const RegionFrontierBackendEntry* backend { };
+        const RegionFrontierBackend* executor { };
+        const RegionFrontierLayoutV2* layout { };
+        const RegionFrontierWriteSiteV2* write_sites { };
+        RegionFrontierPendingWriteV2* pending_writes { };
+        const std::uint64_t* pending_plane_words { };
+        const std::size_t* pending_plane_offsets { };
+        RegionFrontierStepEntryV2 entry { };
+        std::size_t pending_write_count { };
+        std::size_t pending_plane_word_count { };
+        std::size_t pending_plane_offset_count { };
+        std::uint32_t write_site_count { };
+        std::uint64_t runtime_generation { };
+        std::uint64_t certificate_generation { };
+        std::uint64_t component_generation { };
+    };
+
+    /// Separately consumed authority attached to the current binding snapshot.
+    /// Canonical success alone never authorizes descriptor shape elision.
+    struct RegionFrontierDescriptorShapesBindingReceipt final {
+        RegionFrontierStepEntryV2 entry { };
+        std::uint64_t bind_serial { };
+    };
+
+    /// A one-use proof that this exact backend layout was bound to the live
+    /// runtime-owned planes under an active A4 write lease. This is a content
+    /// provenance receipt, not an alias-geometry certificate: the successful
+    /// binder validates each read-only boundary plane and binds internal roles
+    /// through the current A4 lease, while pending value words are runtime-owned
+    /// buffers whose only nonzero writer is the generated stage-write helper.
+    /// It authorizes only builtin canonical-values entries and is consumed
+    /// before each generated call.
+    struct RegionFrontierCanonicalValuesBindingReceipt final {
+        const Impl* owner { };
+        std::size_t component { no_systemverilog_update_slot };
+        const RegionFrontierBackendEntry* backend { };
+        const RegionFrontierBackend* executor { };
+        const RegionFrontierLayoutV2* layout { };
+        const RegionAuthoritativeComponentState* authoritative_state { };
+        std::uint64_t* ready_words { };
+        RegionFrontierMemberV2* members { };
+        const RegionFrontierSchedulerTaskV2* scheduler_tasks { };
+        RegionFrontierPlaneV2* planes { };
+        RegionFrontierSignalMetadataV2* metadata { };
+        const RegionFrontierFanoutEdgeV2* fanout_edges { };
+        const RegionFrontierPlaneV2* const* port_planes { };
+        RegionFrontierPendingWriteV2* pending_writes { };
+        RegionFrontierStagedEventV2* staged_events { };
+        RegionFrontierCommittedSignalV2* committed_signals { };
+        std::uint64_t* native_frontier_member_dispatches { };
+        const std::uint32_t* stop_requested { };
+        const std::uint64_t* pending_plane_words { };
+        const std::size_t* pending_plane_offsets { };
+        const AuthoritativeSignalPlanes::FrontierWriteBinding*
+            writable_signals { };
+        const AuthoritativeSignalPlanes::FrontierWriteLease* lease { };
+        std::size_t pending_plane_word_count { };
+        std::size_t pending_plane_offset_count { };
+        std::size_t writable_signal_count { };
+        std::uint64_t runtime_generation { };
+        std::uint64_t certificate_generation { };
+        std::uint64_t component_generation { };
+        std::uint64_t authoritative_revision { };
+        std::uint64_t bind_serial { };
+        std::uint32_t member_count { };
+        std::uint32_t scheduler_task_capacity { };
+        std::uint32_t readiness_word_count { };
+        std::uint32_t signal_slot_count { };
+        std::uint32_t metadata_count { };
+        std::uint32_t fanout_edge_count { };
+        std::uint32_t pending_write_capacity { };
+        std::uint32_t staged_event_capacity { };
+        std::uint32_t committed_signal_capacity { };
+        bool valid { };
     };
 
     // The component's mutable V2 frame buffers share one aligned allocation.
@@ -2332,6 +2540,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
                   std::uint64_t> { workspace_allocation } }
             , generic_member_task_indices { RegionFrontierWorkspaceAllocator<
                   std::size_t> { workspace_allocation } }
+            , raw_activation_summary { RegionFrontierWorkspaceAllocator<
+                  std::size_t> { workspace_allocation } }
             , generic_ticket_member_offsets { RegionFrontierWorkspaceAllocator<
                   std::size_t> { workspace_allocation } }
             , generic_queued_ready_words { RegionFrontierWorkspaceAllocator<
@@ -2347,6 +2557,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
             , writable_signals { RegionFrontierWorkspaceAllocator<
                   AuthoritativeSignalPlanes::FrontierWriteBinding> {
                   workspace_allocation } }
+            , writable_layout_indices { RegionFrontierWorkspaceAllocator<
+                  std::size_t> { workspace_allocation } }
             , pending_plane_offsets { RegionFrontierWorkspaceAllocator<
                   std::size_t> { workspace_allocation } }
             , pending_plane_words { RegionFrontierWorkspaceAllocator<
@@ -2379,6 +2591,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
         Vector<std::size_t> generic_snapshot_plane_offsets;
         Vector<std::uint64_t> generic_snapshot_words;
         Vector<std::size_t> generic_member_task_indices;
+        // Borrowed scheduler activations are indexed once per dispatch from
+        // the active frontier. Values are task indices, never retained task
+        // pointers, and the summary is rebuilt on every dispatch.
+        Vector<std::size_t> raw_activation_summary;
         // Authenticated scheduler-ticket position for every runtime member.
         // This is callback scratch; it is pre-sized with the component and
         // never escapes the borrowed Generic compact-ticket callback.
@@ -2397,6 +2613,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
         Vector<std::uint32_t> generic_prefix_members;
         Vector<AuthoritativeSignalPlanes::FrontierWriteBinding>
             writable_signals;
+        // A4 layout ordinals are filled by each acquired lease. The caller-
+        // owned span remains stable until lease release and is reused on the
+        // post-callback reacquire.
+        Vector<std::size_t> writable_layout_indices;
         Vector<std::size_t> pending_plane_offsets;
         Vector<std::uint64_t> pending_plane_words;
         Vector<SystemVerilogCompactBatchMember> compact_members;
@@ -2445,17 +2665,61 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::uint32_t boundary_callback_started_slot {
             std::numeric_limits<std::uint32_t>::max() };
         std::uint64_t native_member_dispatches { };
+        // This journal proves only which private frame members have been
+        // written since their last host copy. It caches no host-state validity.
+        FrontierMemberSyncWorkset member_sync_workset;
+        bool member_sync_workset_available { };
+        bool member_sync_force_full { true };
+        bool member_sync_private_entry { };
+        std::uint8_t member_sync_full_reasons {
+            static_cast<std::uint8_t>(FrontierMemberSyncFullReason::seed) };
+        void require_full_member_sync(
+            FrontierMemberSyncFullReason reason) noexcept
+        {
+            member_sync_force_full = true;
+            if (owner && owner->systemverilog_wave_profile_enabled) {
+                member_sync_full_reasons |= static_cast<std::uint8_t>(reason);
+            }
+        }
+        std::uint64_t member_sync_full_passes { };
+        std::uint64_t member_sync_full_members { };
+        std::uint64_t member_sync_selected_passes { };
+        std::uint64_t member_sync_selected_members { };
+        std::uint64_t member_sync_selected_total_members { };
+        void mark_member_sync_write(std::uint32_t member) noexcept;
+        void collect_member_sync_writes(std::uint32_t old_cursor) noexcept;
         RegionFrontierAliasCertificateContext alias_certificate_context;
-        // Each exact scheduler task count is certified independently; no
-        // smaller or larger task extent inherits another count's proof.
+        // A confirmed task extent also certifies every smaller prefix for
+        // the same task-buffer address and exact peer-range geometry.
         std::array<std::uint8_t, scheduler_task_capacity + 1U>
             alias_certificate_task_count_valid { };
         std::size_t alias_certificate_pending_task_count { };
+        RegionFrontierAliasCertifiedPendingBacking
+            alias_certificate_pending_backing;
+        RegionFrontierAliasBindProof alias_bind_proof;
+        std::uint64_t alias_bind_serial { };
+        bool alias_bind_serial_exhausted { };
+        // Geometry-route totals: canonical-only is included in checked, and
+        // alias+canonical is included in trusted.
         std::uint64_t alias_checked_entries { };
         std::uint64_t alias_trusted_entries { };
+        std::uint64_t canonical_values_only_entries { };
+        std::uint64_t alias_and_canonical_values_entries { };
+        std::uint64_t descriptor_shapes_entries { };
+        RegionFrontierDescriptorShapesStorageCertificate
+            descriptor_shapes_storage_certificate;
+        RegionFrontierDescriptorShapesBindingReceipt
+            descriptor_shapes_binding_receipt;
+        RegionFrontierCanonicalValuesBindingReceipt
+            canonical_values_binding_receipt;
         std::uint64_t alias_sorted_proof_attempts { };
         std::uint64_t alias_sorted_proof_successes { };
         std::uint64_t alias_sorted_proof_failures { };
+        std::uint64_t alias_full_collector_calls { };
+        std::uint64_t alias_bind_proof_attempts { };
+        std::uint64_t alias_bind_proof_reuse_hits { };
+        std::uint64_t alias_bind_proof_plane_misses { };
+        std::uint64_t alias_bind_proof_unconfirmed_task_count_misses { };
         bool frame_initialized { };
         bool scheduler_state_seeded { };
         bool alias_certificate_storage_available { };
@@ -2471,8 +2735,15 @@ struct Interpreter::Impl : SchedulerBatchTask {
             return !in_use.test_and_set(std::memory_order_acquire);
         }
 
+        void end_alias_bind_lease() noexcept
+        {
+            clear_alias_bind_proof();
+            clear_canonical_values_binding_receipt();
+        }
+
         void leave() noexcept
         {
+            end_alias_bind_lease();
             in_use.clear(std::memory_order_release);
         }
 
@@ -2481,6 +2752,21 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
         [[nodiscard]] bool collect_alias_certificate_ranges(
             const RegionFrontierLayoutV2& layout) noexcept;
+        void clear_alias_bind_proof() noexcept;
+        void begin_alias_bind_attempt() noexcept;
+        void begin_alias_bind_proof(
+            const RegionFrontierBackendEntry& backend_entry,
+            const RegionFrontierLayoutV2& layout,
+            const AuthoritativeSignalPlanes::FrontierWriteLease& lease)
+            noexcept;
+        void compare_bound_alias_plane_ranges(std::size_t slot,
+            const RegionFrontierPlaneV2& plane,
+            std::size_t& tuple_index) noexcept;
+        void finish_alias_bind_proof(bool receipt_issued) noexcept;
+        [[nodiscard]] bool alias_certificate_frame_ranges_match()
+            const noexcept;
+        [[nodiscard]] bool alias_certificate_pending_backing_matches_receipt()
+            const noexcept;
         [[nodiscard]] bool prove_alias_geometry_sorted() noexcept;
         [[nodiscard]] RegionFrontierAliasCertificateContext
         make_alias_certificate_context(
@@ -2493,13 +2779,36 @@ struct Interpreter::Impl : SchedulerBatchTask {
             bool& task_address_changed,
             bool& task_alias_tag_changed) const noexcept;
         [[nodiscard]] bool alias_certificate_matches(
-            const RegionFrontierAliasCertificateContext& context) noexcept;
+            const RegionFrontierAliasCertificateContext& context,
+            bool builtin_alias_and_canonical_route = false) noexcept;
         [[nodiscard]] bool stage_alias_certificate(
             const RegionFrontierAliasCertificateContext& context) noexcept;
         [[nodiscard]] bool confirm_alias_certificate(
             const RegionFrontierAliasCertificateContext& context,
             RegionFrontierStatusV2 status) noexcept;
         void clear_alias_certificate() noexcept;
+        void prepare_descriptor_shapes_storage_certificate(
+            const RegionFrontierLayoutV2& layout) noexcept;
+        [[nodiscard]] bool descriptor_shapes_storage_matches(
+            const RegionFrontierBackendEntry& backend_entry,
+            const RegionFrontierLayoutV2& layout) const noexcept;
+        void issue_descriptor_shapes_binding_receipt(
+            const RegionFrontierBackendEntry& backend_entry,
+            const RegionFrontierLayoutV2& layout) noexcept;
+        void clear_canonical_values_binding_receipt() noexcept;
+        [[nodiscard]] bool issue_canonical_values_binding_receipt(
+            const RegionFrontierBackendEntry& backend_entry,
+            const RegionFrontierLayoutV2& layout,
+            const AuthoritativeSignalPlanes::FrontierWriteLease& lease)
+            noexcept;
+        [[nodiscard]] bool consume_canonical_values_binding_receipt(
+            const RegionFrontierBackendEntry& backend_entry,
+            const RegionFrontierLayoutV2& layout,
+            RegionFrontierStepEntryV2 canonical_values_entry,
+            RegionFrontierStepEntryV2 alias_and_canonical_values_entry,
+            const AuthoritativeSignalPlanes::FrontierWriteLease& lease,
+            RegionFrontierStepEntryV2 descriptor_shapes_entry = nullptr,
+            bool* descriptor_shapes_binding_valid = nullptr) noexcept;
         void record_alias_certificate_miss(
             RegionFrontierAliasMissReason reason,
             std::size_t tuple_index = std::numeric_limits<std::size_t>::max(),
@@ -3220,11 +3529,32 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::uint64_t systemverilog_wave_profile_region_kernel_runs { };
     std::uint64_t
         systemverilog_wave_profile_native_frontier_member_dispatches { };
+    std::uint64_t systemverilog_wave_profile_member_sync_full_passes { };
+    std::uint64_t systemverilog_wave_profile_member_sync_full_members { };
+    std::uint64_t systemverilog_wave_profile_member_sync_selected_passes { };
+    std::uint64_t systemverilog_wave_profile_member_sync_selected_members { };
+    std::uint64_t systemverilog_wave_profile_member_sync_selected_total_members { };
+    std::uint64_t systemverilog_wave_profile_boundary_sync_eligible { };
+    std::uint64_t systemverilog_wave_profile_boundary_sync_conservative { };
+    std::array<std::uint64_t, kFrontierBoundarySyncRejectReasonCount>
+        systemverilog_wave_profile_boundary_sync_first_rejects { };
+    // Correlated writer-inventory dimensions: static owners (0/>1),
+    // DriverTable size (0/1/>1), exact count equality, current owner present,
+    // and whole/slice publication kind.
+    std::array<std::uint64_t, 48U>
+        systemverilog_wave_profile_boundary_sync_writer_inventory { };
+    std::array<std::uint64_t, kFrontierMemberSyncFullReasonCombinations>
+        systemverilog_wave_profile_member_sync_full_reason_passes { };
+    std::array<std::uint64_t, kFrontierMemberSyncFullReasonCombinations>
+        systemverilog_wave_profile_member_sync_full_reason_members { };
     std::uint64_t systemverilog_wave_profile_native_frontier_budget_trims { };
     std::uint64_t systemverilog_wave_profile_native_frontier_alias_entry_rows { };
     bool systemverilog_wave_profile_native_frontier_alias_trusted_entry_seen { };
     std::uint64_t systemverilog_wave_profile_alias_checked_entries { };
     std::uint64_t systemverilog_wave_profile_alias_trusted_entries { };
+    std::uint64_t systemverilog_wave_profile_canonical_values_only_entries { };
+    std::uint64_t systemverilog_wave_profile_alias_and_canonical_values_entries { };
+    std::uint64_t systemverilog_wave_profile_descriptor_shapes_entries { };
     std::uint64_t systemverilog_wave_profile_alias_unavailable_entries { };
     std::uint64_t systemverilog_wave_profile_alias_forced_staged_entries { };
     std::uint64_t systemverilog_wave_profile_alias_confirmation_attempts { };
@@ -3570,6 +3900,37 @@ struct Interpreter::Impl : SchedulerBatchTask {
     bool process_profile_reported { };
     bool update_profile_enabled { };
     bool update_profile_reported { };
+    struct CommitSignalProfileRow {
+        std::uint64_t calls { };
+        std::uint64_t slice_calls { };
+        std::uint64_t nanoseconds { };
+    };
+    bool commit_signal_profile_enabled { };
+    // Aggregate revision at which each aliased container's element vector
+    // was last extracted from its proxy (no_container_extract_revision when
+    // never or invalidated).
+    static constexpr std::uint64_t no_container_extract_revision
+        = std::numeric_limits<std::uint64_t>::max();
+    std::vector<std::uint64_t> container_aggregate_extract_revisions;
+    void invalidate_container_aggregate_extract(
+        const ContainerObjectId id) noexcept
+    {
+        if (id < container_aggregate_extract_revisions.size()) {
+            container_aggregate_extract_revisions[id]
+                = no_container_extract_revision;
+        }
+    }
+    struct FusedConeState {
+        FusedConeRuntimeSpec spec;
+        std::vector<std::uint64_t> boundary_revisions;
+        bool materialized { };
+    };
+    std::vector<FusedConeState> fused_cones;
+    std::vector<std::uint32_t> fused_cone_by_signal;
+    std::vector<std::uint8_t> fusion_dormant_process;
+    bool fused_cone_materializing { };
+    void materialize_fused_cone(std::size_t cone);
+    std::vector<CommitSignalProfileRow> commit_signal_profile_rows;
     std::uint64_t update_profile_commits { };
     std::uint64_t update_profile_updates { };
     std::uint64_t update_profile_whole { };

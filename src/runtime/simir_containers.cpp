@@ -710,6 +710,7 @@ void Interpreter::Impl::synchronize_container_value_references(
             }
         }
         std::size_t leaf_index { };
+        invalidate_container_aggregate_extract(object);
         auto& destination = container_objects[object].initial_value;
         visit_container_packed_leaves(
             destination, [&](auto& element) noexcept {
@@ -734,6 +735,7 @@ void Interpreter::Impl::synchronize_container_value_references(
                 object, changed_signals)) {
             continue;
         }
+        invalidate_container_aggregate_extract(object);
         auto& container = container_objects[object];
         if (container.slice_alias) {
             const auto& alias = *container.slice_alias;
@@ -907,6 +909,17 @@ Interpreter::Impl::read_container_object_value(
         if (id < container_aggregate_signal_aliases.size()
             && container_aggregate_signal_aliases[id]
             && container_alias_authority_active(id)) {
+            // Leaf changes advance the container's aggregate revision; while
+            // it is unchanged the extracted elements are already current.
+            if (container_aggregate_extract_revisions.size()
+                != container_objects.size()) {
+                container_aggregate_extract_revisions.assign(
+                    container_objects.size(), no_container_extract_revision);
+            }
+            const auto revision = container_aggregate_current_revisions.at(id);
+            if (container_aggregate_extract_revisions[id] == revision) {
+                return object.initial_value;
+            }
             const auto proxy = container_aggregate_signal_aliases[id]->signal;
             const auto& packed = aggregate_signal_current_value(proxy);
             const auto width = object.initial_value.type.element_width;
@@ -915,6 +928,7 @@ Interpreter::Impl::read_container_object_value(
                 object.initial_value.elements[ordinal] = extract_value(
                     packed, (count - ordinal - 1U) * width, width);
             }
+            container_aggregate_extract_revisions[id] = revision;
             return object.initial_value;
         }
         const auto& element_aliases = container_element_signal_aliases.at(id);
@@ -2030,6 +2044,7 @@ void Interpreter::Impl::write_container_object_value(
     require_container_signal_role_materialized(*this, id);
     validate_container_value(value);
     auto& object = get_container_object(id);
+    invalidate_container_aggregate_extract(id);
     if (object.initial_value.type != value.type) {
         throw std::invalid_argument {
             "container object write type mismatch"
@@ -2231,6 +2246,7 @@ void Interpreter::Impl::write_container_object_element_value(
 {
     require_container_signal_role_materialized(*this, id);
     auto& object = get_container_object(id);
+    invalidate_container_aggregate_extract(id);
     auto& target = object.initial_value;
     if ((target.type.element_kind != ContainerElementKind::Packed
             && target.type.element_kind != ContainerElementKind::Scalar)
@@ -2386,6 +2402,7 @@ void Interpreter::Impl::write_container_object_dynamic_part_element_value(
     const SignalChangeOrigin origin)
 {
     auto& object = get_container_object(id);
+    invalidate_container_aggregate_extract(id);
     const auto& type = object.initial_value.type;
     if (!type.fixed || type.associative || object.slice_alias
         || (type.element_kind != ContainerElementKind::Packed

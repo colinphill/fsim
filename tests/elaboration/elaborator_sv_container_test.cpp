@@ -1510,6 +1510,79 @@ endmodule
             return alias.object == *wand_fallback_object;
         }));
 
+    // Element writes whose value comes from Binary, ConditionalSelect or
+    // Shift results must still target the physical leaf nets rather than
+    // the aggregate proxy (cascade shapes such as XOR trees and reductions).
+    const auto computed_leaf_parsed = fsim::frontend::parse_text(
+        "physical-net-array-computed-writes.sv",
+        R"(
+module physical_net_array_computed_writes;
+  wire [7:0] x = 8'h0f;
+  wire [7:0] chain[0:3];
+  wire [7:0] picks[0:1];
+  wire [7:0] shifted[0:1];
+  assign chain[0] = x;
+  genvar i;
+  generate
+    for (i = 1; i < 4; i = i + 1) begin : g
+      assign chain[i] = chain[i-1] ^ x;
+    end
+  endgenerate
+  assign picks[0] = x;
+  assign picks[1] = x[0] ? ~picks[0] : picks[0];
+  assign shifted[0] = x;
+  assign shifted[1] = shifted[0] << 2;
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(computed_leaf_parsed.ok());
+    const auto computed_leaf_elaborated = compile_and_elaborate(
+        computed_leaf_parsed.design,
+        "physical_net_array_computed_writes");
+    assert(computed_leaf_elaborated.ok());
+    for (const auto* array_name : { "chain", "picks", "shifted" }) {
+        const auto object
+            = computed_leaf_elaborated.design->find_container(array_name);
+        const auto proxy
+            = computed_leaf_elaborated.design->find_signal(array_name);
+        assert(object && proxy);
+        assert(std::ranges::any_of(
+            computed_leaf_elaborated.design->container_element_signal_aliases(),
+            [&](const auto& alias) { return alias.object == *object; }));
+        for (const auto& computed_process
+            : computed_leaf_elaborated.design->processes()) {
+            for (const auto& operation : computed_process.operations) {
+                if (const auto* slice
+                    = operation_get_if<WriteUpdateSlice>(&operation)) {
+                    assert(slice->signal != *proxy);
+                }
+                if (const auto* whole
+                    = operation_get_if<WriteUpdate>(&operation)) {
+                    assert(whole->signal != *proxy);
+                }
+            }
+        }
+    }
+    auto computed_leaf_runtime
+        = computed_leaf_elaborated.design->create_interpreter();
+    assert(computed_leaf_runtime->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto element_strings = [&](const char* name) {
+        const auto object = computed_leaf_elaborated.design->find_container(name);
+        std::vector<std::string> values;
+        for (const auto& element
+            : computed_leaf_runtime->container_object_value(*object).elements) {
+            values.push_back(element.to_msb_string());
+        }
+        return values;
+    };
+    assert((element_strings("chain") == std::vector<std::string> {
+        "00001111", "00000000", "00001111", "00000000" }));
+    assert((element_strings("picks") == std::vector<std::string> {
+        "00001111", "11110000" }));
+    assert((element_strings("shifted") == std::vector<std::string> {
+        "00001111", "00111100" }));
+
     const auto procedural_memory_parsed = fsim::frontend::parse_text(
         "procedural-memory.sv",
         R"(

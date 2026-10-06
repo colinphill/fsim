@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <unordered_map>
+#include <vector>
 
 namespace fsim::runtime::simir {
 
@@ -134,6 +135,22 @@ struct ProcessProgramOverlay {
     OperationList operations;
     CopyOnWriteVector<ValueKind> register_value_kinds;
     CopyOnWriteVector<ContainerType> container_register_types;
+};
+
+/// One fused combinational cone installed by the elaboration fusion planner.
+/// The sink ProcessId executes the fused body; the other members remain
+/// installed with their original programs but never run (no sensitivity, no
+/// initialization). Internal nets are not published while the cone is fused;
+/// observing one recomputes the cone's internal values from the committed
+/// boundary inputs and commits them under each original member's identity.
+struct FusedConeRuntimeSpec {
+    /// Topological order; includes the sink.
+    std::vector<ProcessId> members;
+    ProcessId sink { };
+    /// The sink's original program, used only for materialization.
+    Process sink_original;
+    std::vector<SignalId> internal_signals;
+    std::vector<SignalId> boundary_inputs;
 };
 
 /// Non-owning read view used by runtime consumers. Runtime views borrow the
@@ -277,6 +294,19 @@ public:
     static void set_trusted_signal_driver_inventory(
         Interpreter& interpreter,
         std::shared_ptr<const SignalDriverInventory> inventory) noexcept;
+    /// Install a report sink that consumes only the supplied message and
+    /// metadata. It skips the implicit signal-observation barrier; before it
+    /// inspects or mutates interpreter state it must call
+    /// Interpreter::prepare_output_callback_observation().
+    static void set_trusted_text_report_hook(
+        Interpreter& interpreter, Interpreter::ReportHook hook);
+    /// Install fused-cone metadata before start. `dormant` lists members that
+    /// never execute while fused.
+    static void install_fused_cones(Interpreter& interpreter,
+        std::vector<FusedConeRuntimeSpec> cones,
+        const std::vector<ProcessId>& dormant);
+    [[nodiscard]] static bool fusion_dormant(
+        const Interpreter& interpreter, ProcessId process) noexcept;
 };
 
 /// Startup-only interner. Operation-body identity narrows likely matches;

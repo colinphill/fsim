@@ -190,7 +190,10 @@ add_test(
   COMMAND fsim_runtime_tests generic_update_region)
 set_tests_properties(
   fsim.runtime.generic_update_region
-  PROPERTIES LABELS "fast;runtime;region;generic-update;systemverilog;windows;linux")
+  PROPERTIES
+    LABELS "fast;runtime;region;generic-update;systemverilog;windows;linux"
+    # Certified regions are opt-in; this witness exercises that route.
+    ENVIRONMENT "FSIM_ENABLE_SV_REGION_KERNEL=1")
 add_executable(
   fsim_runtime_generic_update_allocation_failure_tests
   runtime_generic_update_region_tests.cpp
@@ -209,7 +212,8 @@ set_tests_properties(
   fsim.runtime.generic_update_region_allocation_failure
   PROPERTIES
     LABELS
-      "fast;runtime;region;generic-update;allocation;failure;windows;linux")
+      "fast;runtime;region;generic-update;allocation;failure;windows;linux"
+    ENVIRONMENT "FSIM_ENABLE_SV_REGION_KERNEL=1")
 add_test(
   NAME fsim.runtime.a4_signal_state
   COMMAND fsim_runtime_tests a4_signal_state)
@@ -1251,6 +1255,7 @@ if(TARGET fsim_llvm)
   add_executable(
     fsim_runtime_native_frontier_boundary_tests
     runtime_native_frontier_boundary_tests.cpp
+    runtime_native_frontier_canonical_values_tests.cpp
     runtime_fused_staging_failure_support.cpp)
   fsim_configure_test(fsim_runtime_native_frontier_boundary_tests)
   target_link_libraries(
@@ -1266,3 +1271,15 @@ if(TARGET fsim_llvm)
 endif()
 include("${CMAKE_CURRENT_SOURCE_DIR}/runtime_native_frontier_logic9_sync_tests.cmake")
 include("${CMAKE_CURRENT_SOURCE_DIR}/runtime_a2_role_journal_tests.cmake")
+add_executable(
+  fsim_runtime_region_graph_read_range_tests
+  runtime_region_graph_read_range_tests.cpp)
+target_link_libraries(
+  fsim_runtime_region_graph_read_range_tests PRIVATE fsim_runtime)
+fsim_configure_test(fsim_runtime_region_graph_read_range_tests)
+add_test(
+  NAME fsim.runtime.region_graph_read_ranges
+  COMMAND fsim_runtime_region_graph_read_range_tests)
+set_tests_properties(
+  fsim.runtime.region_graph_read_ranges
+  PROPERTIES LABELS "fast;runtime;region-graph;range;linux;windows")

@@ -3,6 +3,7 @@
 #include "region_frontier_codegen_v2.hpp"
 
 #include "logic9_word_lowering.hpp"
+#include "region_frontier_initial_slot_validation.hpp"
 
 #include <llvm/ADT/Twine.h>
 #include <llvm/IR/Attributes.h>
@@ -386,113 +387,6 @@ static llvm::Value* emit_and(llvm::IRBuilder<>& builder,
 static llvm::Value* emit_all_flags_set(llvm::IRBuilder<>& builder,
     llvm::Value* flags, const std::uint32_t mask);
 
-static llvm::Value* pending_site_identity_matches(
-    llvm::IRBuilder<>& builder, llvm::Value* write,
-    llvm::Value* expected_member_index,
-    llvm::Value* expected_signal_slot,
-    llvm::Value* expected_source_instruction,
-    llvm::Value* expected_update_kind,
-    llvm::Value* expected_value_kind,
-    llvm::Value* expected_width,
-    llvm::Value* expected_word_count,
-    llvm::Value* expected_plane_count)
-{
-    const auto i32 = i32_type(builder);
-    auto* matches = emit_equal(builder,
-        load_at(builder, write,
-            offsetof(RegionFrontierPendingWriteV2, member_index), i32,
-            "site.member.index"),
-        expected_member_index);
-    matches = emit_and(builder, matches, emit_equal(builder,
-        load_at(builder, write,
-            offsetof(RegionFrontierPendingWriteV2, signal_slot), i32,
-            "site.signal.slot"),
-        expected_signal_slot));
-    matches = emit_and(builder, matches, emit_equal(builder,
-        load_at(builder, write,
-            offsetof(RegionFrontierPendingWriteV2, source_instruction), i32,
-            "site.source.instruction"),
-        expected_source_instruction));
-    matches = emit_and(builder, matches, emit_equal(builder,
-        load_at(builder, write,
-            offsetof(RegionFrontierPendingWriteV2, update_kind), i32,
-            "site.update.kind"),
-        expected_update_kind));
-    matches = emit_and(builder, matches, emit_equal(builder,
-        load_at(builder, write,
-            offsetof(RegionFrontierPendingWriteV2, reserved), i32,
-            "site.reserved"),
-        llvm::ConstantInt::get(i32, 0U)));
-    matches = emit_and(builder, matches, emit_equal(builder,
-        load_at(builder, write,
-            offsetof(RegionFrontierPendingWriteV2, value_kind), i32,
-            "site.value.kind"),
-        expected_value_kind));
-    matches = emit_and(builder, matches, emit_equal(builder,
-        load_at(builder, write,
-            offsetof(RegionFrontierPendingWriteV2, width), i32,
-            "site.width"),
-        expected_width));
-    matches = emit_and(builder, matches, emit_equal(builder,
-        load_at(builder, write,
-            offsetof(RegionFrontierPendingWriteV2, word_count), i32,
-            "site.word.count"),
-        expected_word_count));
-    return emit_and(builder, matches, emit_equal(builder,
-        load_at(builder, write,
-            offsetof(RegionFrontierPendingWriteV2, plane_count), i32,
-            "site.plane.count"),
-        expected_plane_count));
-}
-
-static llvm::Value* pending_target_flags_match(
-    llvm::IRBuilder<>& builder, llvm::Value* flags,
-    llvm::Value* event_kind, llvm::Value* allow_committed)
-{
-    const auto i32 = i32_type(builder);
-    const auto is_internal = emit_equal(builder, event_kind,
-        llvm::ConstantInt::get(i32, static_cast<std::uint32_t>(
-            RegionFrontierEventKindV2::internal_commit)));
-    const auto target_flag = builder.CreateSelect(is_internal,
-        llvm::ConstantInt::get(i32,
-            RegionFrontierPendingWriteFlagsV2::pending_internal_target),
-        llvm::ConstantInt::get(i32,
-            RegionFrontierPendingWriteFlagsV2::pending_boundary_target));
-    const auto other_target = builder.CreateSelect(is_internal,
-        llvm::ConstantInt::get(i32,
-            RegionFrontierPendingWriteFlagsV2::pending_boundary_target),
-        llvm::ConstantInt::get(i32,
-            RegionFrontierPendingWriteFlagsV2::pending_internal_target));
-    constexpr auto common_required
-        = RegionFrontierPendingWriteFlagsV2::pending_active
-        | RegionFrontierPendingWriteFlagsV2::pending_value_ready
-        | RegionFrontierPendingWriteFlagsV2::pending_key_assigned;
-    const auto required = builder.CreateOr(
-        llvm::ConstantInt::get(i32, common_required), target_flag);
-    auto* matches = builder.CreateICmpEQ(builder.CreateAnd(flags, required),
-        required);
-    matches = emit_and(builder, matches,
-        builder.CreateICmpEQ(builder.CreateAnd(flags, other_target),
-            llvm::ConstantInt::get(i32, 0U)));
-    constexpr auto known_flags
-        = RegionFrontierPendingWriteFlagsV2::pending_active
-        | RegionFrontierPendingWriteFlagsV2::pending_value_ready
-        | RegionFrontierPendingWriteFlagsV2::pending_key_assigned
-        | RegionFrontierPendingWriteFlagsV2::pending_internal_target
-        | RegionFrontierPendingWriteFlagsV2::pending_boundary_target
-        | RegionFrontierPendingWriteFlagsV2::pending_committed;
-    matches = emit_and(builder, matches,
-        builder.CreateICmpEQ(builder.CreateAnd(flags,
-                                  llvm::ConstantInt::get(i32, ~known_flags)),
-            llvm::ConstantInt::get(i32, 0U)));
-    const auto committed_clear = builder.CreateICmpEQ(
-        builder.CreateAnd(flags, llvm::ConstantInt::get(i32,
-            RegionFrontierPendingWriteFlagsV2::pending_committed)),
-        llvm::ConstantInt::get(i32, 0U));
-    return emit_and(builder, matches,
-        builder.CreateOr(allow_committed, committed_clear));
-}
-
 template<typename Field>
 static llvm::Value* select_write_site_field(llvm::IRBuilder<>& builder,
     llvm::Value* pending_slot, const RegionFrontierLayoutV2& layout,
@@ -546,6 +440,42 @@ static llvm::Value* select_write_site_field(llvm::IRBuilder<>& builder,
         "write.site.field.table.value");
     return builder.CreateSelect(site_in_range, selected_field, invalid,
         "write.site.field.result");
+}
+
+static llvm::Value* select_member_table_field(llvm::IRBuilder<>& builder,
+    llvm::Value* member_index, const std::span<const std::uint32_t> values,
+    const std::uint32_t invalid_value)
+{
+    auto* const i32 = i32_type(builder);
+    if (values.empty()) {
+        return llvm::ConstantInt::get(i32, invalid_value);
+    }
+    std::vector<llvm::Constant*> fields;
+    fields.reserve(values.size());
+    for (const auto value : values) {
+        fields.push_back(llvm::ConstantInt::get(i32, value));
+    }
+    auto* const table_type = llvm::ArrayType::get(i32, values.size());
+    auto* const table = new llvm::GlobalVariable(
+        *builder.GetInsertBlock()->getModule(), table_type, true,
+        llvm::GlobalValue::PrivateLinkage,
+        llvm::ConstantArray::get(table_type, fields),
+        "region.frontier.member.field");
+    const auto in_range = builder.CreateICmpULT(member_index,
+        llvm::ConstantInt::get(i32, values.size()),
+        "member.field.index.in.range");
+    const auto safe_index = builder.CreateSelect(in_range, member_index,
+        llvm::ConstantInt::get(i32, 0U), "member.field.clamped.index");
+    const std::array<llvm::Value*, 2U> indices {
+        llvm::ConstantInt::get(i64_type(builder), 0U),
+        builder.CreateZExt(safe_index, i64_type(builder)),
+    };
+    auto* const address = builder.CreateInBoundsGEP(table_type, table,
+        indices, "member.field.address");
+    const auto selected = builder.CreateLoad(i32, address,
+        "member.field.value");
+    return builder.CreateSelect(in_range, selected,
+        llvm::ConstantInt::get(i32, invalid_value), "member.field.result");
 }
 
 static llvm::Value* pointer_ranges_disjoint(llvm::IRBuilder<>& builder,
@@ -779,36 +709,6 @@ static llvm::Value* emit_slot_matches_key(llvm::IRBuilder<>& builder,
             i32_type(builder), "slot.phase")));
 }
 
-static llvm::Value* emit_keys_equal(llvm::IRBuilder<>& builder,
-    llvm::Value* left, llvm::Value* right)
-{
-    constexpr std::size_t u64_fields[] {
-        offsetof(RegionFrontierKeyV2, time),
-        offsetof(RegionFrontierKeyV2, delta),
-        offsetof(RegionFrontierKeyV2, systemverilog_round),
-        offsetof(RegionFrontierKeyV2, stable_order),
-        offsetof(RegionFrontierKeyV2, sequence),
-    };
-    constexpr std::size_t u32_fields[] {
-        offsetof(RegionFrontierKeyV2, process_domain),
-        offsetof(RegionFrontierKeyV2, phase),
-    };
-    llvm::Value* matches = llvm::ConstantInt::getTrue(builder.getContext());
-    for (const auto offset : u64_fields) {
-        matches = emit_and(builder, matches,
-            emit_equal(builder,
-                load_at(builder, left, offset, i64_type(builder), "left.key"),
-                load_at(builder, right, offset, i64_type(builder), "right.key")));
-    }
-    for (const auto offset : u32_fields) {
-        matches = emit_and(builder, matches,
-            emit_equal(builder,
-                load_at(builder, left, offset, i32_type(builder), "left.key"),
-                load_at(builder, right, offset, i32_type(builder), "right.key")));
-    }
-    return matches;
-}
-
 static llvm::Value* emit_key_before(llvm::IRBuilder<>& builder,
     llvm::Value* left_stable, llvm::Value* left_sequence,
     llvm::Value* right_stable, llvm::Value* right_sequence)
@@ -959,6 +859,42 @@ static llvm::Function* emit_region_frontier_loop_impl_v2(llvm::Module& module,
         = std::span<const std::uint32_t> {
             layout.max_member_staged_event_counts, member_count };
     const auto max_commit_fanout_events = layout.max_commit_fanout_events;
+    // Only immutable certified recipe coordinates drive selected-member loops.
+    // Public frame member descriptors remain mutable and are validated normally.
+    std::vector<std::uint32_t> member_first_write_sites;
+    std::vector<std::uint32_t> member_write_site_counts;
+    bool contiguous_member_sites { true };
+    for (std::size_t member = 0U; member < member_count; ++member) {
+        const auto first = layout.members[member].first_write_site;
+        const auto count = layout.members[member].write_site_count;
+        if (first > layout.write_site_count
+            || count > layout.write_site_count - first) {
+            contiguous_member_sites = false;
+            break;
+        }
+        for (std::uint32_t site = first; site < first + count; ++site) {
+            if (layout.write_sites[site].member_index != member) {
+                contiguous_member_sites = false;
+                break;
+            }
+        }
+        member_first_write_sites.push_back(first);
+        member_write_site_counts.push_back(count);
+    }
+    if (contiguous_member_sites) {
+        // Every member-owned write site must occur in the selected span.
+        for (std::uint32_t site = 0U; site < layout.write_site_count; ++site) {
+            const auto member = layout.write_sites[site].member_index;
+            if (member >= member_count
+                || site < member_first_write_sites[member]
+                || site - member_first_write_sites[member]
+                    >= member_write_site_counts[member]) {
+                contiguous_member_sites = false;
+                break;
+            }
+        }
+    }
+
     assert(member_count != 0U);
     assert(max_member_staged_event_counts.size() == member_count);
     assert(static_cast<bool>(emit_member));
@@ -987,6 +923,8 @@ static llvm::Function* emit_region_frontier_loop_impl_v2(llvm::Module& module,
     if (shared_body) {
         function_parameters.push_back(frame_pointer);
         function_parameters.push_back(i1);
+        function_parameters.push_back(i1);
+        function_parameters.push_back(i1);
     }
     auto* const function_type = llvm::FunctionType::get(i32,
         function_parameters, false);
@@ -1003,11 +941,22 @@ static llvm::Function* emit_region_frontier_loop_impl_v2(llvm::Module& module,
         ? function->getArg(1U) : nullptr;
     auto* const alias_prevalidated = shared_body
         ? function->getArg(2U) : nullptr;
+    auto* const value_contents_prevalidated = shared_body
+        ? function->getArg(3U) : nullptr;
+    auto* const descriptor_shapes_prevalidated = shared_body
+        ? function->getArg(4U) : nullptr;
     if (physical_binding != nullptr) {
         physical_binding->setName("physical_binding");
     }
     if (alias_prevalidated != nullptr) {
         alias_prevalidated->setName("alias_prevalidated");
+    }
+    if (value_contents_prevalidated != nullptr) {
+        value_contents_prevalidated->setName("value_contents_prevalidated");
+    }
+    if (descriptor_shapes_prevalidated != nullptr) {
+        descriptor_shapes_prevalidated->setName(
+            "descriptor_shapes_prevalidated");
     }
 
     auto* const entry = llvm::BasicBlock::Create(context, "entry", function);
@@ -1638,6 +1587,19 @@ static llvm::Function* emit_region_frontier_loop_impl_v2(llvm::Module& module,
     llvm::StructType* signal_shape_record_type { };
     llvm::ArrayType* signal_shape_array_type { };
     llvm::GlobalVariable* expected_signal_shapes { };
+    llvm::BasicBlock* descriptor_shape_skip { };
+    const auto descriptor_shape_base_map_ok = plane_map_ok;
+    if (shared_body
+        && (signal_plane_shape_count != 0U
+            || layout.write_site_count != 0U)) {
+        auto* const descriptor_shape_validation = llvm::BasicBlock::Create(
+            context, "validate.descriptor.shapes", function);
+        descriptor_shape_skip = llvm::BasicBlock::Create(context,
+            "descriptor.shapes.prevalidated", function);
+        builder.CreateCondBr(descriptor_shapes_prevalidated,
+            descriptor_shape_skip, descriptor_shape_validation);
+        builder.SetInsertPoint(descriptor_shape_validation);
+    }
     if (signal_plane_shape_count != 0U) {
         const std::array<llvm::Type*, 8U> shape_field_types {
             i32, i32, i32, i32, i32, i32, i32, i32,
@@ -1848,18 +1810,8 @@ static llvm::Function* emit_region_frontier_loop_impl_v2(llvm::Module& module,
     // shapes are immutable layout data. Keep those expectations in a private
     // module constant and validate the frame records with a compact runtime
     // loop instead of unrolling one copy of the checks per write site.
-    struct PendingWriteShape {
-        std::uint32_t pending_slot { };
-        std::uint32_t value_kind { };
-        std::uint32_t width { };
-        std::uint32_t word_count { };
-        std::uint32_t plane_count { };
-        std::uint32_t member_index { };
-        std::uint32_t signal_slot { };
-        std::uint32_t source_instruction { };
-        std::uint32_t update_kind { };
-        std::uint32_t event_kind { };
-    };
+    using PendingWriteShape
+        = fsim::compiler::llvm_detail::ExpectedInitialPendingSiteV1;
     constexpr auto pending_write_shape_bytes
         = sizeof(PendingWriteShape);
     const auto pending_write_shape_count
@@ -2043,6 +1995,24 @@ static llvm::Function* emit_region_frontier_loop_impl_v2(llvm::Module& module,
         plane_map_ok = accumulated_shape_match;
     }
 
+    if (descriptor_shape_skip != nullptr) {
+        auto* const descriptor_shape_checked_exit = builder.GetInsertBlock();
+        const auto descriptor_shape_checked_map_ok = plane_map_ok;
+        auto* const descriptor_shape_merge = llvm::BasicBlock::Create(
+            context, "descriptor.shape.validation.done", function);
+        builder.CreateBr(descriptor_shape_merge);
+        builder.SetInsertPoint(descriptor_shape_skip);
+        builder.CreateBr(descriptor_shape_merge);
+        builder.SetInsertPoint(descriptor_shape_merge);
+        auto* const merged_plane_map_ok = builder.CreatePHI(i1, 2U,
+            "plane.map.matches");
+        merged_plane_map_ok->addIncoming(descriptor_shape_checked_map_ok,
+            descriptor_shape_checked_exit);
+        merged_plane_map_ok->addIncoming(descriptor_shape_base_map_ok,
+            descriptor_shape_skip);
+        plane_map_ok = merged_plane_map_ok;
+    }
+
     auto* const validate_plane_tails = llvm::BasicBlock::Create(
         context, "validate.plane.tails", function);
     if (shared_body) {
@@ -2052,10 +2022,10 @@ static llvm::Function* emit_region_frontier_loop_impl_v2(llvm::Module& module,
             "plane.map.valid", function);
         builder.CreateCondBr(plane_map_ok, plane_map_valid, decline);
         builder.SetInsertPoint(plane_map_valid);
-        // The private runtime capability certifies only the current nested
-        // buffer-range geometry. Plane shape and map validation still gates
-        // both entries, and the checked entry continues through every range
-        // comparison below.
+        // The existing alias receipt skips only range geometry here. The
+        // explicit descriptor-shape receipt has already bypassed only the
+        // signal and pending shape loops; all entries still pass the live
+        // member and fanout map checks above.
         builder.CreateCondBr(alias_prevalidated, validate_plane_tails,
             validate_range_geometry);
         builder.SetInsertPoint(validate_range_geometry);
@@ -2461,7 +2431,19 @@ static llvm::Function* emit_region_frontier_loop_impl_v2(llvm::Module& module,
         context, "initialize.pending.slots", function);
     auto* const validate_loop = llvm::BasicBlock::Create(
         context, "validate.loop", function);
+    auto* const validate_value_contents = shared_body
+        ? llvm::BasicBlock::Create(context, "validate.value.contents", function)
+        : validate_plane_tails;
     builder.SetInsertPoint(validate_plane_tails);
+    if (shared_body) {
+        // This private receipt skips the repeated value-buffer canonicality
+        // helper. The descriptor-shape receipt is separate; frame, alias,
+        // task, key, and dynamic initial-slot checks still run on every entry.
+        builder.CreateCondBr(value_contents_prevalidated, initialize_slots,
+            validate_value_contents);
+        builder.SetInsertPoint(validate_value_contents);
+    }
+    auto* const value_contents_preheader = builder.GetInsertBlock();
     llvm::Value* tail_words_ok = llvm::ConstantInt::getTrue(context);
     if (signal_plane_shape_count != 0U) {
         auto* const signal_tail_header = llvm::BasicBlock::Create(context,
@@ -2493,9 +2475,9 @@ static llvm::Function* emit_region_frontier_loop_impl_v2(llvm::Module& module,
             llvm::Type::getInt1Ty(context), 2U,
             "tail.signal.valid");
         signal_index->addIncoming(expected_i32(builder, 0U),
-            validate_plane_tails);
+            value_contents_preheader);
         accumulated_signal_valid->addIncoming(tail_words_ok,
-            validate_plane_tails);
+            value_contents_preheader);
         builder.CreateCondBr(builder.CreateICmpULT(signal_index,
                 expected_i32(builder, static_cast<std::uint32_t>(
                     signal_plane_shape_count))),
@@ -2718,133 +2700,25 @@ static llvm::Function* emit_region_frontier_loop_impl_v2(llvm::Module& module,
     auto* const initial_slot_done = llvm::BasicBlock::Create(context,
         "initialize.pending.slots.done", function);
     if (layout.write_site_count != 0U) {
-        auto* const initial_slot_header = llvm::BasicBlock::Create(context,
-            "initial.slot.header", function);
-        auto* const initial_slot_body = llvm::BasicBlock::Create(context,
-            "initial.slot.body", function);
-        auto* const inactive_block = llvm::BasicBlock::Create(context,
-            "initial.slot.inactive", function);
-        auto* const active_block = llvm::BasicBlock::Create(context,
-            "initial.slot.active", function);
-        auto* const active_ok = llvm::BasicBlock::Create(context,
-            "initial.slot.active.valid", function);
-        auto* const initial_slot_advance = llvm::BasicBlock::Create(context,
-            "initial.slot.next", function);
-
-        builder.CreateBr(initial_slot_header);
-        builder.SetInsertPoint(initial_slot_header);
-        auto* const site_index = builder.CreatePHI(i64, 2U,
-            "initial.slot.index");
-        site_index->addIncoming(expected_i64(builder, 0U), initialize_slots);
-        const auto has_site = builder.CreateICmpULT(site_index,
-            expected_i64(builder, pending_write_shape_count));
-        builder.CreateCondBr(has_site, initial_slot_body,
-            initial_slot_done);
-
-        builder.SetInsertPoint(initial_slot_body);
-        const std::array<llvm::Value*, 2U> site_indices {
-            expected_i64(builder, 0U), site_index,
-        };
-        auto* const expected_site = builder.CreateInBoundsGEP(
-            expected_write_shape_array_type, expected_write_shapes,
-            site_indices, "expected.initial.write.site");
-        const auto load_expected_site_field = [&](const unsigned field,
-                                                   const llvm::Twine& name) {
-            auto* const field_pointer = builder.CreateStructGEP(
-                expected_write_shape_type, expected_site, field,
-                name + ".field");
-            return builder.CreateLoad(i32, field_pointer, name);
-        };
-        const auto expected_pending_slot = load_expected_site_field(0U,
-            "initial.pending.slot");
-        const auto expected_value_kind = load_expected_site_field(1U,
-            "initial.value.kind");
-        const auto expected_width = load_expected_site_field(2U,
-            "initial.width");
-        const auto expected_word_count = load_expected_site_field(3U,
-            "initial.word.count");
-        const auto expected_plane_count = load_expected_site_field(4U,
-            "initial.plane.count");
-        const auto expected_member_index = load_expected_site_field(5U,
-            "initial.member.index");
-        const auto expected_signal_slot = load_expected_site_field(6U,
-            "initial.signal.slot");
-        const auto expected_source_instruction = load_expected_site_field(7U,
-            "initial.source.instruction");
-        const auto expected_update_kind = load_expected_site_field(8U,
-            "initial.update.kind");
-        const auto expected_event_kind = load_expected_site_field(9U,
-            "initial.event.kind");
-        auto* const write = indexed_pointer(builder, writes_ptr,
-            expected_pending_slot, sizeof(RegionFrontierPendingWriteV2));
-        const auto flags = load_at(builder, write,
-            offsetof(RegionFrontierPendingWriteV2, flags), i32,
-            "initial.write.flags");
-        builder.CreateCondBr(emit_flag_set(builder, flags,
-                RegionFrontierPendingWriteFlagsV2::pending_active),
-            active_block, inactive_block);
-
-        builder.SetInsertPoint(inactive_block);
-        auto* const inactive_state = builder.CreateInBoundsGEP(i8,
-            slot_states, builder.CreateZExt(expected_pending_slot, i64));
-        builder.CreateStore(llvm::ConstantInt::get(i8, 0U), inactive_state);
-        builder.CreateBr(initial_slot_advance);
-
-        builder.SetInsertPoint(active_block);
-        const auto commit_key = constant_offset(builder, write,
-            offsetof(RegionFrontierPendingWriteV2, commit_key));
-        const auto allow_committed = emit_equal(builder, expected_event_kind,
-            expected_i32(builder, static_cast<std::uint32_t>(
-                RegionFrontierEventKindV2::boundary_commit)));
-        auto* active_valid = pending_target_flags_match(builder, flags,
-            expected_event_kind, allow_committed);
-        active_valid = emit_and(builder, active_valid,
-            pending_site_identity_matches(builder, write,
-                expected_member_index, expected_signal_slot,
-                expected_source_instruction, expected_update_kind,
-                expected_value_kind, expected_width, expected_word_count,
-                expected_plane_count));
-        active_valid = emit_and(builder, active_valid,
-            emit_slot_matches_key(builder, frame, commit_key, true));
-        const auto write_origin = constant_offset(builder, write,
-            offsetof(RegionFrontierPendingWriteV2, origin));
-        const auto member_pointer = indexed_pointer(builder, members_ptr,
-            expected_member_index, sizeof(RegionFrontierMemberV2));
-        const auto activation_origin = constant_offset(builder, member_pointer,
-            offsetof(RegionFrontierMemberV2, activation_origin));
-        active_valid = emit_and(builder, active_valid,
-            emit_keys_equal(builder, write_origin, activation_origin));
-        active_valid = emit_and(builder, active_valid, emit_equal(builder,
-            load_at(builder, write_origin,
-                offsetof(RegionFrontierKeyV2, process_domain), i32,
-                "active.origin.domain"),
-            expected_i32(builder, static_cast<std::uint32_t>(
-                ProcessSchedulingDomain::systemverilog))));
-        active_valid = emit_and(builder, active_valid, emit_equal(builder,
-            load_at(builder, write_origin,
-                offsetof(RegionFrontierKeyV2, phase), i32,
-                "active.origin.phase"),
-            expected_i32(builder, static_cast<std::uint32_t>(
-                SchedulerPhase::active))));
-        builder.CreateCondBr(active_valid, active_ok, decline);
-
-        builder.SetInsertPoint(active_ok);
-        auto* const active_state = builder.CreateInBoundsGEP(i8,
-            slot_states, builder.CreateZExt(expected_pending_slot, i64));
-        builder.CreateStore(llvm::ConstantInt::get(i8, 1U), active_state);
-        const auto active_count = builder.CreateLoad(i64, live_pending_count);
-        builder.CreateStore(builder.CreateAdd(active_count,
-            expected_i64(builder, 1U)), live_pending_count);
-        builder.CreateBr(initial_slot_advance);
-
-        builder.SetInsertPoint(initial_slot_advance);
-        const auto next_site_index = builder.CreateAdd(site_index,
-            expected_i64(builder, 1U), "initial.slot.next.index");
-        auto* const initial_slot_latch
-            = builder.CreateBr(initial_slot_header);
-        initial_slot_latch->setMetadata(llvm::LLVMContext::MD_loop,
-            create_unroll_disabled_loop_id(context));
-        site_index->addIncoming(next_site_index, initial_slot_advance);
+        auto* const helper_pointer = llvm::PointerType::getUnqual(context);
+        auto* const helper_type = llvm::FunctionType::get(i32,
+            { helper_pointer, helper_pointer, i32, helper_pointer,
+                helper_pointer }, false);
+        auto helper = module.getOrInsertFunction(
+            fsim::compiler::llvm_detail::kInitialSlotValidationHelperSymbol,
+            helper_type);
+        llvm::cast<llvm::Function>(helper.getCallee())->addFnAttr(
+            llvm::Attribute::NoUnwind);
+        auto* const expected_shapes_pointer = builder.CreateBitCast(
+            expected_write_shapes, helper_pointer);
+        auto* const helper_valid = builder.CreateCall(helper,
+            { frame, expected_shapes_pointer,
+                expected_i32(builder, layout.write_site_count),
+                slot_states, live_pending_count },
+            "initial.slot.validation.valid");
+        helper_valid->setDoesNotThrow();
+        builder.CreateCondBr(emit_equal(builder, helper_valid,
+                expected_i32(builder, 1U)), initial_slot_done, decline);
     } else {
         builder.CreateBr(initial_slot_done);
     }
@@ -2964,20 +2838,10 @@ static llvm::Function* emit_region_frontier_loop_impl_v2(llvm::Module& module,
         validate_activation_capacity, decline);
 
     builder.SetInsertPoint(validate_activation_capacity);
-    llvm::Value* member_write_bound = expected_i32(builder, 0U);
-    llvm::Value* member_event_bound = expected_i32(builder, 0U);
-    for (std::size_t index = member_count; index > 0U; --index) {
-        const auto member_index = static_cast<std::uint32_t>(index - 1U);
-        const auto matches_member = emit_equal(builder, activation_index,
-            expected_i32(builder, member_index));
-        member_write_bound = builder.CreateSelect(matches_member,
-            expected_i32(builder, max_member_write_counts[index - 1U]),
-            member_write_bound);
-        member_event_bound = builder.CreateSelect(matches_member,
-            expected_i32(builder,
-                max_member_staged_event_counts[index - 1U]),
-            member_event_bound);
-    }
+    llvm::Value* member_write_bound = select_member_table_field(builder,
+        activation_index, max_member_write_counts, 0U);
+    llvm::Value* member_event_bound = select_member_table_field(builder,
+        activation_index, max_member_staged_event_counts, 0U);
     member_write_bound = builder.CreateSelect(contributes_to_prefix,
         member_write_bound, expected_i32(builder, 0U));
     member_event_bound = builder.CreateSelect(contributes_to_prefix,
@@ -2999,43 +2863,116 @@ static llvm::Function* emit_region_frontier_loop_impl_v2(llvm::Module& module,
         context, "activation.capacity.valid", function);
     builder.CreateCondBr(member_capacity_ok,
         activation_site_capacity, decline);
+    const auto emit_selected_member_site_loop = [&](
+        llvm::BasicBlock* const done, const bool mark_slots) {
+        if (layout.write_site_count == 0U) {
+            builder.CreateBr(done);
+            builder.SetInsertPoint(done);
+            return;
+        }
+        auto* const loop_entry = builder.GetInsertBlock();
+        const auto first_site = select_member_table_field(builder,
+            activation_index, member_first_write_sites, 0U);
+        const auto site_count = select_member_table_field(builder,
+            activation_index, member_write_site_counts, 0U);
+        auto* const header = llvm::BasicBlock::Create(context,
+            mark_slots ? "activation.site.mark.header"
+                       : "activation.site.check.header", function);
+        auto* const body = llvm::BasicBlock::Create(context,
+            "activation.selected.site", function);
+        auto* const advance = llvm::BasicBlock::Create(context,
+            "activation.selected.site.next", function);
+        builder.CreateBr(header);
+        builder.SetInsertPoint(header);
+        auto* const cursor = builder.CreatePHI(i32, 2U,
+            "activation.member.site.cursor");
+        cursor->addIncoming(expected_i32(builder, 0U), loop_entry);
+        builder.CreateCondBr(builder.CreateICmpULT(cursor, site_count),
+            body, done);
+        builder.SetInsertPoint(body);
+        const auto site_index = builder.CreateAdd(first_site, cursor);
+        const std::array<llvm::Value*, 2U> indices {
+            expected_i64(builder, 0U), builder.CreateZExt(site_index, i64),
+        };
+        auto* const site = builder.CreateInBoundsGEP(
+            expected_write_shape_array_type, expected_write_shapes, indices,
+            "activation.expected.site");
+        auto* const pending_slot_address = builder.CreateStructGEP(
+            expected_write_shape_type, site, 0U);
+        const auto pending_slot = builder.CreateLoad(i32, pending_slot_address,
+            "activation.selected.pending.slot");
+        auto* const state_address = builder.CreateInBoundsGEP(i8, slot_states,
+            builder.CreateZExt(pending_slot, i64));
+        const auto state = builder.CreateLoad(i8, state_address,
+            "activation.selected.slot.state");
+        if (mark_slots) {
+            const auto new_state = builder.CreateSelect(contributes_to_prefix,
+                llvm::ConstantInt::get(i8, 1U), state);
+            builder.CreateStore(new_state, state_address);
+            builder.CreateBr(advance);
+        } else {
+            const auto free = emit_equal(builder, state,
+                llvm::ConstantInt::get(i8, 0U));
+            builder.CreateCondBr(builder.CreateOr(
+                    builder.CreateNot(contributes_to_prefix), free),
+                advance, decline);
+        }
+        builder.SetInsertPoint(advance);
+        const auto next = builder.CreateAdd(cursor, expected_i32(builder, 1U));
+        auto* const latch = builder.CreateBr(header);
+        latch->setMetadata(llvm::LLVMContext::MD_loop,
+            create_unroll_disabled_loop_id(context));
+        cursor->addIncoming(next, advance);
+        builder.SetInsertPoint(done);
+    };
     builder.SetInsertPoint(activation_site_capacity);
-    llvm::Value* available_write_sites = llvm::ConstantInt::getTrue(context);
-    for (std::uint32_t site_index = 0U;
-         site_index < layout.write_site_count; ++site_index) {
-        const auto& site = layout.write_sites[site_index];
-        const auto belongs_to_activation = emit_equal(builder, activation_index,
-            expected_i32(builder, site.member_index));
-        const auto creates_site = builder.CreateAnd(contributes_to_prefix,
-            belongs_to_activation);
-        auto* const state_pointer = builder.CreateInBoundsGEP(i8, slot_states,
-            expected_i64(builder, site.pending_slot));
-        const auto state = builder.CreateLoad(i8, state_pointer,
-            "activation.pending.slot.state");
-        const auto free = emit_equal(builder, state,
-            llvm::ConstantInt::get(i8, 0U));
-        available_write_sites = emit_and(builder, available_write_sites,
-            builder.CreateOr(builder.CreateNot(creates_site), free));
+    if (contiguous_member_sites) {
+        // Complete the read-only pass before any slot is marked occupied.
+        emit_selected_member_site_loop(activation_capacity_valid, false);
+    } else {
+        llvm::Value* available_write_sites = llvm::ConstantInt::getTrue(context);
+        for (std::uint32_t site_index = 0U;
+             site_index < layout.write_site_count; ++site_index) {
+            const auto& site = layout.write_sites[site_index];
+            const auto belongs_to_activation = emit_equal(builder, activation_index,
+                expected_i32(builder, site.member_index));
+            const auto creates_site = builder.CreateAnd(contributes_to_prefix,
+                belongs_to_activation);
+            auto* const state_pointer = builder.CreateInBoundsGEP(i8, slot_states,
+                expected_i64(builder, site.pending_slot));
+            const auto state = builder.CreateLoad(i8, state_pointer,
+                "activation.pending.slot.state");
+            const auto free = emit_equal(builder, state,
+                llvm::ConstantInt::get(i8, 0U));
+            available_write_sites = emit_and(builder, available_write_sites,
+                builder.CreateOr(builder.CreateNot(creates_site), free));
+        }
+        builder.CreateCondBr(available_write_sites,
+            activation_capacity_valid, decline);
     }
-    builder.CreateCondBr(available_write_sites,
-        activation_capacity_valid, decline);
     builder.SetInsertPoint(activation_capacity_valid);
     builder.CreateStore(pending_after_member_bound, live_pending_count);
     builder.CreateStore(events_after_member_bound, live_event_count);
-    for (std::uint32_t site_index = 0U;
-         site_index < layout.write_site_count; ++site_index) {
-        const auto& site = layout.write_sites[site_index];
-        const auto belongs_to_activation = emit_equal(builder, activation_index,
-            expected_i32(builder, site.member_index));
-        const auto creates_site = builder.CreateAnd(contributes_to_prefix,
-            belongs_to_activation);
-        auto* const state_pointer = builder.CreateInBoundsGEP(i8, slot_states,
-            expected_i64(builder, site.pending_slot));
-        const auto old_state = builder.CreateLoad(i8, state_pointer,
-            "activation.old.pending.slot.state");
-        const auto new_state = builder.CreateSelect(creates_site,
-            llvm::ConstantInt::get(i8, 1U), old_state);
-        builder.CreateStore(new_state, state_pointer);
+    if (contiguous_member_sites) {
+        auto* const marked = llvm::BasicBlock::Create(context,
+            "activation.member.sites.marked", function);
+        emit_selected_member_site_loop(marked, true);
+    } else {
+        for (std::uint32_t site_index = 0U;
+             site_index < layout.write_site_count; ++site_index) {
+            const auto& site = layout.write_sites[site_index];
+            const auto belongs_to_activation = emit_equal(builder, activation_index,
+                expected_i32(builder, site.member_index));
+            const auto creates_site = builder.CreateAnd(contributes_to_prefix,
+                belongs_to_activation);
+            auto* const state_pointer = builder.CreateInBoundsGEP(i8, slot_states,
+                expected_i64(builder, site.pending_slot));
+            const auto old_state = builder.CreateLoad(i8, state_pointer,
+                "activation.old.pending.slot.state");
+            const auto new_state = builder.CreateSelect(creates_site,
+                llvm::ConstantInt::get(i8, 1U), old_state);
+            builder.CreateStore(new_state, state_pointer);
+        }
     }
     builder.CreateBr(validate_advance);
 
@@ -3554,20 +3491,10 @@ static llvm::Function* emit_region_frontier_loop_impl_v2(llvm::Module& module,
         offsetof(RegionFrontierFrameV2, pending_write_count), i32,
         "pending.now");
     const auto pending_room = builder.CreateSub(pending_capacity, pending_now);
-    llvm::Value* runtime_member_write_bound = expected_i32(builder, 0U);
-    llvm::Value* runtime_member_event_bound = expected_i32(builder, 0U);
-    for (std::size_t index = member_count; index > 0U; --index) {
-        const auto member_index = static_cast<std::uint32_t>(index - 1U);
-        const auto matches_member = emit_equal(builder, event_index,
-            expected_i32(builder, member_index));
-        runtime_member_write_bound = builder.CreateSelect(matches_member,
-            expected_i32(builder, max_member_write_counts[index - 1U]),
-            runtime_member_write_bound);
-        runtime_member_event_bound = builder.CreateSelect(matches_member,
-            expected_i32(builder,
-                max_member_staged_event_counts[index - 1U]),
-            runtime_member_event_bound);
-    }
+    const auto runtime_member_write_bound = select_member_table_field(builder,
+        event_index, max_member_write_counts, 0U);
+    const auto runtime_member_event_bound = select_member_table_field(builder,
+        event_index, max_member_staged_event_counts, 0U);
     const auto pending_bound_ok = builder.CreateICmpUGE(pending_room,
         runtime_member_write_bound);
     const auto events_now = load_frame(builder, frame,
@@ -3893,7 +3820,9 @@ llvm::Function* emit_region_frontier_entry_thunk_v2(llvm::Module& module,
     const std::string& wrapper_symbol,
     const std::string& body_symbol,
     const RegionFrontierLayoutV2& exact_layout,
-    const bool alias_prevalidated)
+    const bool alias_prevalidated,
+    const bool value_contents_prevalidated,
+    const bool descriptor_shapes_prevalidated)
 {
     if (wrapper_symbol.empty() || body_symbol.empty()
         || wrapper_symbol == body_symbol
@@ -3903,11 +3832,18 @@ llvm::Function* emit_region_frontier_entry_thunk_v2(llvm::Module& module,
         || exact_layout.member_count == 0U || exact_layout.members == nullptr
         || exact_layout.signal_slot_count == 0U
         || exact_layout.signals == nullptr
-        || (alias_prevalidated
+        || ((alias_prevalidated || value_contents_prevalidated
+                || descriptor_shapes_prevalidated)
             && exact_layout.execution_mode
                 != RegionFrontierExecutionModeV2::systemverilog_active)) {
         throw std::invalid_argument {
             "invalid region frontier exact wrapper layout"
+        };
+    }
+    if (descriptor_shapes_prevalidated
+        && (!alias_prevalidated || !value_contents_prevalidated)) {
+        throw std::invalid_argument {
+            "descriptor-shape receipt requires alias and canonical receipts"
         };
     }
     validate_region_frontier_internal_commit_layout_v2(exact_layout);
@@ -3964,7 +3900,7 @@ llvm::Function* emit_region_frontier_entry_thunk_v2(llvm::Module& module,
         true, llvm::GlobalValue::PrivateLinkage, binding_constant, binding_name);
 
     auto* const body_type = llvm::FunctionType::get(i32,
-        { pointer, pointer, i1 }, false);
+        { pointer, pointer, i1, i1, i1 }, false);
     auto* const named_body = module.getNamedValue(body_symbol);
     auto* body = llvm::dyn_cast_or_null<llvm::Function>(named_body);
     if (named_body != nullptr && body == nullptr) {
@@ -3995,7 +3931,11 @@ llvm::Function* emit_region_frontier_entry_thunk_v2(llvm::Module& module,
     llvm::IRBuilder<> builder { entry };
     auto* const status = builder.CreateCall(body_type, body,
         { frame, binding_global,
-            llvm::ConstantInt::get(i1, alias_prevalidated ? 1U : 0U) },
+            llvm::ConstantInt::get(i1, alias_prevalidated ? 1U : 0U),
+            llvm::ConstantInt::get(i1,
+                value_contents_prevalidated ? 1U : 0U),
+            llvm::ConstantInt::get(i1,
+                descriptor_shapes_prevalidated ? 1U : 0U) },
         "shared.status");
     status->setDoesNotThrow();
     builder.CreateRet(status);

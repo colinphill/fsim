@@ -29,6 +29,9 @@
 #include <vector>
 
 namespace fsim::tests::runtime {
+
+void run_native_frontier_canonical_values_tests();
+
 namespace {
 
 using namespace fsim::runtime;
@@ -490,7 +493,8 @@ public:
 
         const auto expected_generation = state_->values().revision();
         require(state_->values().try_acquire_frontier_write_lease(
-                    expected_generation, runtime_->writable_signals, lease_)
+                    expected_generation, runtime_->writable_signals, lease_,
+                    runtime_->writable_layout_indices)
                 && lease_.active(),
             "the real A4 component yields its certified frontier write lease");
         bind_runtime_planes();
@@ -499,6 +503,71 @@ public:
         } else {
             initialize_root_activation();
         }
+    }
+
+    void check_cache_recertification_operation_sharing()
+    {
+        const auto& published_program
+            = impl_->region_activation_programs.at(component_);
+        require(published_program.has_value(),
+            "the published snapshot retains its activation program");
+        const auto& published_kernel = published_program->activation_kernel;
+        const auto& cached_entry
+            = impl_->region_frontier_backends_by_component.at(component_);
+        require(cached_entry != nullptr
+                && same_region_kernel_mapping(
+                    cached_entry->kernel, published_kernel),
+            "the initial cached frontier entry matches its published activation");
+        const auto* const cached_body
+            = cached_entry->kernel.program.operations.body_identity();
+        const auto* const published_body
+            = published_kernel.program.operations.body_identity();
+        const auto cached_operation_count
+            = cached_entry->kernel.program.operations.size();
+        require(cached_body == published_body,
+            "the initial frontier entry shares its activation operation body");
+
+        auto candidate = impl_->build_region_runtime_snapshot(
+            false, true, false);
+        require(candidate.frontier_backends_by_component.at(component_)
+                == cached_entry,
+            "same-graph recertification reuses the cached frontier entry");
+        require(candidate.programs_by_component.at(component_).has_value(),
+            "same-graph recertification rebuilds the activation program");
+        const auto& fresh_kernel
+            = candidate.programs_by_component.at(component_)
+                  ->activation_kernel;
+        require(same_region_kernel_mapping(
+                    cached_entry->kernel, fresh_kernel),
+            "the cached and rebuilt kernels have the exact same mapping");
+        require(fresh_kernel.program.operations.shares_body_with(
+                    cached_entry->kernel.program.operations),
+            "the rebuilt activation shares the exact cached COW operation body");
+        require(fresh_kernel.program.operations.access_revision()
+                    == cached_entry->kernel.program.operations.access_revision(),
+            "the whole copied operation wrapper retains its access revision");
+        require(cached_entry->kernel.program.operations.body_identity()
+                    == cached_body
+                && impl_->region_activation_programs.at(component_)
+                       ->activation_kernel.program.operations.body_identity()
+                    == published_body,
+            "candidate preparation leaves the cached entry and old snapshot unchanged");
+
+        auto detached_operations = fresh_kernel.program.operations;
+        detached_operations.push_back(Halt { });
+        require(!detached_operations.shares_body_with(
+                    cached_entry->kernel.program.operations)
+                && detached_operations.size() == cached_operation_count + 1U
+                && fresh_kernel.program.operations.size()
+                    == cached_operation_count
+                && cached_entry->kernel.program.operations.size()
+                    == cached_operation_count
+                && cached_entry->kernel.program.operations.body_identity()
+                    == cached_body
+                && impl_->region_activation_programs.at(component_)
+                       ->activation_kernel.program.operations.body_identity()
+                    == published_body,
+            "mutating a disposable COW copy cannot alter either snapshot");
     }
 
     [[nodiscard]] bool frontier_runtime_prepared() const noexcept
@@ -1485,6 +1554,109 @@ void install_reentrant_alias_observer(
                 interpreter.signal_value(proxy).to_msb_string());
             interpreter.deposit_container_object(object, nested_replacement);
         });
+}
+
+void check_boundary_scan_unsorted_fallback_and_invalid_rows(
+    const std::shared_ptr<RegionKernelBackendProvider>& provider)
+{
+    const auto internal_slots = [](FrontierRuntime& runtime) {
+        std::array<std::size_t, 2U> result { };
+        std::size_t count { };
+        for (std::size_t slot = 0U; slot < runtime.planes.size(); ++slot) {
+            if (runtime.planes[slot].flags
+                != certified_internal_single_owner) {
+                continue;
+            }
+            require(count < result.size(),
+                "the fixture exposes exactly two internal plane rows");
+            result[count++] = slot;
+        }
+        require(count == result.size(),
+            "the fixture exposes both internal plane rows");
+        return result;
+    };
+
+    {
+        NativeBoundaryFixture fixture { 1U, provider };
+        require(fixture.reach_boundary_publication()
+                    == RegionFrontierStatusV2::boundary_publication,
+            "the generated entry stages a boundary write before the scan test");
+        auto& runtime = fixture.runtime();
+        const auto slots = internal_slots(runtime);
+        require(runtime.planes[slots[0U]].signal_id
+                < runtime.planes[slots[1U]].signal_id,
+            "the authentic internal plane rows begin in strict signal order");
+        std::swap(runtime.planes[slots[0U]], runtime.planes[slots[1U]]);
+
+        const auto expected = fixture.pending_boundary_value();
+        const auto flags = fixture.pending_flags();
+        const auto cursor = fixture.task_cursor();
+        const auto dispatches = fixture.native_dispatches();
+        runtime.publish_boundary_commit(fixture.boundary_task(),
+            static_cast<std::uint32_t>(fixture.boundary_pending_slot()),
+            fixture.lease());
+        require(!runtime.invalidated && !fixture.lease_active()
+                && fixture.pending_flags() == (flags | pending_committed)
+                && fixture.task_cursor() == cursor
+                && fixture.native_dispatches() == dispatches
+                && fixture.original_owner_value() == expected
+                && fixture.public_boundary_value() == expected,
+            "an unsorted internal plane inventory uses the legacy exact scan and commits once");
+    }
+
+    const auto require_corrupt_inventory_rejected =
+        [&](const bool duplicate, const std::string_view description) {
+            NativeBoundaryFixture fixture { 1U, provider };
+            require(fixture.reach_boundary_publication()
+                        == RegionFrontierStatusV2::boundary_publication,
+                "the generated entry stages a boundary write before invalid-row validation");
+            auto& runtime = fixture.runtime();
+            const auto slots = internal_slots(runtime);
+            const auto original_owner = fixture.original_owner_value();
+            const auto original_boundary = fixture.public_boundary_value();
+            const auto boundary_revision
+                = fixture.implementation().signal_value_revisions.at(
+                    fixture.boundary_signal());
+            const auto boundary_transaction
+                = fixture.implementation().signal_transactions.at(
+                    fixture.boundary_signal());
+            const auto flags = fixture.pending_flags();
+            const auto cursor = fixture.task_cursor();
+            const auto dispatches = fixture.native_dispatches();
+            if (duplicate) {
+                runtime.planes[slots[1U]].signal_id
+                    = runtime.planes[slots[0U]].signal_id;
+            } else {
+                runtime.planes[slots[1U]].signal_id
+                    = std::numeric_limits<std::uint32_t>::max();
+            }
+
+            bool rejected { };
+            try {
+                runtime.publish_boundary_commit(fixture.boundary_task(),
+                    static_cast<std::uint32_t>(fixture.boundary_pending_slot()),
+                    fixture.lease());
+            } catch (const std::logic_error&) {
+                rejected = true;
+            }
+            require(rejected && runtime.invalidated && fixture.lease_active()
+                    && fixture.pending_flags() == flags
+                    && (flags & pending_committed) == 0U
+                    && fixture.task_cursor() == cursor
+                    && fixture.native_dispatches() == dispatches
+                    && fixture.original_owner_value() == original_owner
+                    && fixture.public_boundary_value() == original_boundary
+                    && fixture.implementation().signal_value_revisions.at(
+                        fixture.boundary_signal()) == boundary_revision
+                    && fixture.implementation().signal_transactions.at(
+                        fixture.boundary_signal()) == boundary_transaction,
+                description);
+        };
+
+    require_corrupt_inventory_rejected(true,
+        "duplicate internal rows fail closed before checked publication");
+    require_corrupt_inventory_rejected(false,
+        "a missing internal row fails closed before checked publication");
 }
 
 void check_direct_partial_boundary_commit_matches_checked_reference(
@@ -3420,8 +3592,542 @@ void check_checked_publication_exception_is_terminal(
         "without ACK or replay");
 }
 
+struct MemberSyncProcessCut final {
+    ProcessId process { };
+    InstructionIndex pc { };
+    std::optional<InstructionIndex> wait_timeout_origin;
+    std::uint64_t static_trigger_mask { };
+    SchedulerPhase execution_phase { SchedulerPhase::active };
+    ProcessStatus status { ProcessStatus::running };
+    ProcessStatus suspended_status { ProcessStatus::running };
+    std::uint32_t generation { };
+    bool queued { };
+    bool waiting_on_static { };
+    bool waiting_on_signal { };
+    bool suspended { };
+    bool suspended_wake { };
+    bool halted { };
+    bool killed { };
+    bool boundary_validated { };
+    bool debug_token_valid { };
+    std::uint64_t debug_runtime_generation { };
+    SourceLocation current_source;
+    std::string current_scope;
+    std::size_t readiness_component { std::numeric_limits<std::size_t>::max() };
+    std::size_t readiness_member { std::numeric_limits<std::size_t>::max() };
+    std::uint64_t readiness_generation { };
+    RegionFrontierKeyV1 readiness_key;
+    std::uint64_t readiness_trigger_mask { };
+    bool readiness_key_valid { };
+};
+
+struct MemberSyncCut final {
+    RegionFrontierSlotV2 slot;
+    RegionFrontierCutV2 cut;
+    std::uint64_t runtime_generation { };
+    std::uint64_t component_generation { };
+    std::uint32_t task_count { };
+    std::uint32_t task_cursor { };
+    std::uint32_t pending_write_count { };
+    std::uint32_t staged_event_count { };
+    std::uint32_t committed_signal_count { };
+    std::vector<RegionFrontierMemberV2> members;
+    std::vector<RegionFrontierSchedulerTaskV2> tasks;
+    std::vector<SchedulerBatchFrontierEntry> original_tasks;
+    std::vector<std::uint64_t> ready_words;
+    std::vector<std::uint64_t> readiness_mask_words;
+    std::vector<MemberSyncProcessCut> processes;
+    std::uint64_t native_dispatches { };
+    std::uint64_t descriptor_shapes_entries { };
+    std::uint64_t full_passes { };
+    std::uint64_t full_members { };
+    std::uint64_t selected_passes { };
+    std::uint64_t selected_members { };
+    std::uint64_t selected_total_members { };
+    bool invalidated { };
+};
+
+[[nodiscard]] bool same_member_sync_process_cut(
+    const MemberSyncProcessCut& left,
+    const MemberSyncProcessCut& right) noexcept
+{
+    return left.process == right.process
+        && left.pc == right.pc
+        && left.wait_timeout_origin == right.wait_timeout_origin
+        && left.static_trigger_mask == right.static_trigger_mask
+        && left.execution_phase == right.execution_phase
+        && left.status == right.status
+        && left.suspended_status == right.suspended_status
+        && left.generation == right.generation
+        && left.queued == right.queued
+        && left.waiting_on_static == right.waiting_on_static
+        && left.waiting_on_signal == right.waiting_on_signal
+        && left.suspended == right.suspended
+        && left.suspended_wake == right.suspended_wake
+        && left.halted == right.halted
+        && left.killed == right.killed
+        && left.boundary_validated == right.boundary_validated
+        && left.debug_token_valid == right.debug_token_valid
+        && left.debug_runtime_generation == right.debug_runtime_generation
+        && left.current_source == right.current_source
+        && left.current_scope == right.current_scope
+        && left.readiness_component == right.readiness_component
+        && left.readiness_member == right.readiness_member
+        && left.readiness_generation == right.readiness_generation
+        && same_frontier_key(left.readiness_key, right.readiness_key)
+        && left.readiness_trigger_mask == right.readiness_trigger_mask
+        && left.readiness_key_valid == right.readiness_key_valid;
+}
+
+[[nodiscard]] bool same_member_sync_cut(
+    const MemberSyncCut& left,
+    const MemberSyncCut& right) noexcept
+{
+    return same_frontier_slot(left.slot, right.slot)
+        && same_frontier_cut(left.cut, right.cut)
+        && left.runtime_generation == right.runtime_generation
+        && left.component_generation == right.component_generation
+        && left.task_count == right.task_count
+        && left.task_cursor == right.task_cursor
+        && left.pending_write_count == right.pending_write_count
+        && left.staged_event_count == right.staged_event_count
+        && left.committed_signal_count == right.committed_signal_count
+        && std::ranges::equal(left.members, right.members,
+            same_frontier_member)
+        && std::ranges::equal(left.tasks, right.tasks,
+            same_frontier_task)
+        && std::ranges::equal(left.original_tasks, right.original_tasks,
+            [](const SchedulerBatchFrontierEntry& first,
+                const SchedulerBatchFrontierEntry& second) {
+                return first.stable_order == second.stable_order
+                    && first.sequence == second.sequence
+                    && first.payload == second.payload;
+            })
+        && left.ready_words == right.ready_words
+        && left.readiness_mask_words == right.readiness_mask_words
+        && std::ranges::equal(left.processes, right.processes,
+            same_member_sync_process_cut)
+        && left.native_dispatches == right.native_dispatches
+        && left.invalidated == right.invalidated;
+}
+
+enum class RawActivationProbeKind : std::uint8_t {
+    none,
+    prefix_reentry,
+    duplicate_outside_prefix,
+    corrupted_member_map_after_seed,
+};
+
+struct RawActivationProbeSnapshot final {
+    MemberSyncCut member_sync;
+    std::array<AliasSignalState, 3U> signals;
+};
+
+[[nodiscard]] bool same_alias_signal_frames(
+    const std::array<AliasSignalState, 3U>& left,
+    const std::array<AliasSignalState, 3U>& right) noexcept
+{
+    return same_alias_signal_state(left[0U], right[0U])
+        && same_alias_signal_state(left[1U], right[1U])
+        && same_alias_signal_state(left[2U], right[2U]);
+}
+
+[[nodiscard]] bool same_raw_activation_snapshot_after_decline(
+    const RawActivationProbeSnapshot& before,
+    const RawActivationProbeSnapshot& after) noexcept
+{
+    auto expected = before.member_sync;
+    expected.task_count = 0U;
+    expected.task_cursor = 0U;
+    expected.tasks.clear();
+    expected.original_tasks.clear();
+    expected.invalidated = true;
+    return same_member_sync_cut(expected, after.member_sync)
+        && same_alias_signal_frames(before.signals, after.signals);
+}
+
+template<typename SnapshotCapture>
+class RawActivationDispatchProbe final : public SchedulerBatchTask {
+public:
+    RawActivationDispatchProbe(RuntimeImplementation& implementation,
+        std::shared_ptr<FrontierRuntime> runtime,
+        SnapshotCapture capture_snapshot,
+        const RawActivationProbeKind kind)
+        : implementation_ { implementation }
+        , runtime_ { std::move(runtime) }
+        , capture_snapshot_ { std::move(capture_snapshot) }
+        , kind_ { kind }
+    {
+    }
+
+    [[nodiscard]] SchedulerSystemVerilogKeyReceipt enqueue(
+        Scheduler& active_scheduler, const ProcessId process,
+        const bool record_readiness = true)
+    {
+        constexpr std::uint64_t wave_payload_bit = UINT64_C(1) << 61U;
+        const auto payload = wave_payload_bit | process;
+        SchedulerSystemVerilogKeyReceipt receipt;
+        active_scheduler.schedule_systemverilog_group_batchable(
+            SchedulerPhase::active, process, *this, payload,
+            [this](Scheduler& fallback_scheduler) {
+                ++fallback_calls_;
+                require(!fallback_scheduler.current_batch_frontier().has_value(),
+                    "a declined raw activation reaches fallback after the borrowed frontier ends");
+            }, { }, &receipt);
+        require(receipt.valid && receipt.phase == SchedulerPhase::active
+                && receipt.stable_order == process
+                && receipt.systemverilog_round != 0U,
+            "the raw-activation task receives an authentic scheduler receipt");
+        require(receipt_count_ < receipts_.size(),
+            "the focused frontier keeps its bounded receipt set");
+        receipts_[receipt_count_++] = { process, payload, receipt };
+        if (record_readiness) {
+            const auto member
+                = implementation_.region_readiness_member_index_by_process.at(
+                    process);
+            require(member < runtime_->members.size()
+                    && runtime_->members[member].process_id == process,
+                "the queued receipt maps to its exact runtime member");
+            auto& state = implementation_.processes.at(process);
+            state.queued = true;
+            implementation_.record_systemverilog_readiness_key(
+                process, runtime_->component, member,
+                runtime_->runtime_generation, receipt,
+                state.static_trigger_mask);
+        }
+        return receipt;
+    }
+
+    [[nodiscard]] SchedulerBatchResult execute(
+        Scheduler& active_scheduler,
+        const std::span<const std::uint64_t> payloads) override
+    {
+        ++calls_;
+        if (runtime_->invalidated) {
+            return { };
+        }
+        const auto frontier = active_scheduler.current_batch_frontier();
+        require(frontier.has_value()
+                && frontier->tasks.size() == payloads.size()
+                && frontier->cursor == 0U
+                && frontier->end == frontier->tasks.size(),
+            "the production dispatcher receives its live complete task span");
+        for (std::size_t index = 0U; index < payloads.size(); ++index) {
+            require(frontier->tasks[index].payload == payloads[index],
+                "the scheduler payloads match the borrowed current frontier");
+        }
+
+        if (kind_ == RawActivationProbeKind::prefix_reentry) {
+            return execute_prefix_reentry(*frontier, payloads);
+        }
+        if (kind_ == RawActivationProbeKind::duplicate_outside_prefix) {
+            return execute_duplicate(*frontier, payloads);
+        }
+        return execute_map_corruption(active_scheduler, *frontier, payloads);
+    }
+
+    void verify_complete() const
+    {
+        require(calls_ == 2U,
+            "each raw-activation probe reaches its intended scheduler cuts");
+        if (kind_ == RawActivationProbeKind::duplicate_outside_prefix) {
+            require(duplicate_declined_ && runtime_->invalidated,
+                "duplicate raw activations fail closed before native entry");
+        } else if (kind_
+            == RawActivationProbeKind::corrupted_member_map_after_seed) {
+            require(map_declined_ && runtime_->invalidated,
+                "a corrupted process map fails closed after the seeded dispatch");
+        } else {
+            require(prefix_reentry_completed_ && !runtime_->invalidated,
+                "a valid out-of-prefix receipt survives selected dispatch and reentry");
+        }
+        const auto expected_fallbacks = kind_
+                == RawActivationProbeKind::duplicate_outside_prefix
+            ? 2U : kind_ == RawActivationProbeKind::corrupted_member_map_after_seed
+                ? 1U : 0U;
+        require(fallback_calls_ == expected_fallbacks,
+            "only rejected current frontiers reach ordinary scheduler fallback");
+    }
+
+private:
+    struct ReceiptRecord {
+        ProcessId process { };
+        std::uint64_t payload { };
+        SchedulerSystemVerilogKeyReceipt receipt;
+    };
+
+    [[nodiscard]] const ReceiptRecord& receipt_for(
+        const ProcessId process, const std::size_t occurrence = 0U) const
+    {
+        std::size_t seen { };
+        for (std::size_t index = 0U; index < receipt_count_; ++index) {
+            if (receipts_[index].process == process && seen++ == occurrence) {
+                return receipts_[index];
+            }
+        }
+        throw std::runtime_error {
+            "the focused frontier retains the requested scheduler receipt" };
+    }
+
+    [[nodiscard]] static bool key_matches_receipt(
+        const RegionFrontierKeyV2& key,
+        const SchedulerSystemVerilogKeyReceipt& receipt) noexcept
+    {
+        return key.time == receipt.time && key.delta == receipt.delta
+            && key.systemverilog_round == receipt.systemverilog_round
+            && key.stable_order == receipt.stable_order
+            && key.sequence == receipt.sequence
+            && key.process_domain == static_cast<std::uint32_t>(
+                ProcessSchedulingDomain::systemverilog)
+            && key.phase == static_cast<std::uint32_t>(receipt.phase);
+    }
+
+    [[nodiscard]] std::size_t task_index_for(
+        const SchedulerBatchFrontier& frontier,
+        const ProcessId process, const std::size_t occurrence = 0U) const
+    {
+        const auto& record = receipt_for(process, occurrence);
+        for (std::size_t index = 0U; index < frontier.tasks.size(); ++index) {
+            if (frontier.tasks[index].payload == record.payload
+                && frontier.tasks[index].sequence == record.receipt.sequence) {
+                return index;
+            }
+        }
+        return frontier.tasks.size();
+    }
+
+    void verify_receipt_parity(const ProcessId process,
+        const SchedulerBatchFrontier& frontier,
+        const std::size_t member_index, const bool frame_seeded) const
+    {
+        const auto& record = receipt_for(process);
+        const auto& state = implementation_.processes.at(process);
+        const auto& queued
+            = implementation_.region_readiness_queued_by_process.at(process);
+        const auto& member = runtime_->members.at(member_index);
+        const auto task_index = task_index_for(frontier, process);
+        const auto frame_receipt_matches = !frame_seeded
+            || (((member.flags & (RegionFrontierMemberFlagsV2::queued
+                        | RegionFrontierMemberFlagsV2::queued_key_valid))
+                    == (RegionFrontierMemberFlagsV2::queued
+                        | RegionFrontierMemberFlagsV2::queued_key_valid))
+                && key_matches_receipt(member.queued_key, record.receipt));
+        require(task_index < frontier.tasks.size()
+                && frontier.tasks[task_index].sequence
+                    == record.receipt.sequence
+                && frontier.time == record.receipt.time
+                && frontier.delta == record.receipt.delta
+                && frontier.systemverilog_round
+                    == record.receipt.systemverilog_round
+                && state.queued && queued.key_valid
+                && queued.component == runtime_->component
+                && queued.member == member_index
+                && queued.generation == runtime_->runtime_generation
+                && key_matches_receipt(queued.queued_key, record.receipt)
+                && member.process_id == process
+                && frame_receipt_matches,
+            "the full-frontier task, process sidecar, and frame member retain one exact receipt");
+    }
+
+    [[nodiscard]] std::optional<SchedulerBatchResult> dispatch(
+        const SchedulerBatchFrontier& frontier,
+        const std::span<const std::uint64_t> payloads,
+        const std::size_t prefix_count)
+    {
+        return implementation_.try_execute_region_frontier_component(
+            *runtime_, frontier, payloads, prefix_count);
+    }
+
+    [[nodiscard]] SchedulerBatchResult execute_prefix_reentry(
+        const SchedulerBatchFrontier& frontier,
+        const std::span<const std::uint64_t> payloads)
+    {
+        constexpr auto producer = producer_process_id;
+        constexpr auto reader = consumer_process_id;
+        const auto producer_member
+            = implementation_.region_readiness_member_index_by_process.at(
+                producer);
+        const auto reader_member
+            = implementation_.region_readiness_member_index_by_process.at(
+                reader);
+        if (calls_ == 1U) {
+            require(payloads.size() == 2U
+                    && frontier.tasks[0U].payload
+                        == receipt_for(producer).payload
+                    && frontier.tasks[1U].payload
+                        == receipt_for(reader).payload
+                    && frontier.tasks[1U].sequence
+                        == receipt_for(reader).receipt.sequence,
+                "producer and outside-prefix reader occupy one scheduler-authored frontier");
+            verify_receipt_parity(reader, frontier, reader_member, false);
+            const auto dispatches = runtime_->native_member_dispatches;
+            const auto result = dispatch(frontier, payloads, 1U);
+            require(result.has_value() && result->executed == 1U
+                    && runtime_->scheduler_state_seeded
+                    && runtime_->native_member_dispatches == dispatches + 1U
+                    && !runtime_->invalidated,
+                "the selected producer prefix seeds and executes the authentic runtime");
+            require(runtime_->raw_activation_summary[producer_member] == 0U
+                    && runtime_->raw_activation_summary[reader_member] == 1U,
+                "the first summary includes the reader beyond the selected prefix");
+            verify_receipt_parity(reader, frontier, reader_member, true);
+            return *result;
+        }
+        if (calls_ == 2U) {
+            const auto reader_task = task_index_for(frontier, reader);
+            require(reader_task < frontier.tasks.size()
+                    && reader_task < payloads.size()
+                    && payloads[reader_task] == receipt_for(reader).payload,
+                "the scheduler reoffers the authentic reader task in the current suffix frontier");
+            verify_receipt_parity(reader, frontier, reader_member, true);
+            const auto selected_prefix = reader_task + 1U;
+            const auto dispatches = runtime_->native_member_dispatches;
+            const auto result = dispatch(frontier, payloads, selected_prefix);
+            require(result.has_value()
+                    && result->executed >= selected_prefix
+                    && runtime_->native_member_dispatches == dispatches + 1U
+                    && !runtime_->invalidated,
+                "the outside-prefix member later enters through its own receipt");
+            require(reader_task < frontier.tasks.size()
+                    && runtime_->raw_activation_summary[reader_member]
+                        == reader_task
+                    && runtime_->raw_activation_summary[producer_member]
+                        == std::numeric_limits<std::size_t>::max(),
+                "reentry rebuilds indices against the new offered frontier");
+            const auto& reader_state = implementation_.processes.at(reader);
+            require(reader_state.waiting_on_static && !reader_state.queued,
+                "the reentered reader consumes its exact activation and returns to its wait");
+            prefix_reentry_completed_ = true;
+            return *result;
+        }
+        throw std::runtime_error {
+            "the prefix probe receives only its two expected scheduler cuts" };
+    }
+
+    [[nodiscard]] SchedulerBatchResult execute_duplicate(
+        const SchedulerBatchFrontier& frontier,
+        const std::span<const std::uint64_t> payloads)
+    {
+        if (calls_ != 1U) {
+            return { };
+        }
+        constexpr auto producer = producer_process_id;
+        constexpr auto no_activation
+            = std::numeric_limits<std::size_t>::max();
+        const auto member
+            = implementation_.region_readiness_member_index_by_process.at(
+                producer);
+        require(payloads.size() == 2U
+                && payloads[0U] == receipt_for(producer, 0U).payload
+                && payloads[1U] == receipt_for(producer, 1U).payload
+                && frontier.tasks[1U].sequence
+                    == receipt_for(producer, 1U).receipt.sequence
+                && frontier.tasks[1U].sequence
+                    != frontier.tasks[0U].sequence,
+            "the duplicate is a distinct scheduler task beyond the selected prefix");
+        const auto before = capture_snapshot_();
+        const auto dispatches = runtime_->native_member_dispatches;
+        const auto result = dispatch(frontier, payloads, 1U);
+        const auto after = capture_snapshot_();
+        require(!result.has_value() && runtime_->invalidated
+                && runtime_->native_member_dispatches == dispatches
+                && runtime_->raw_activation_summary.at(member) == no_activation - 1U
+                && same_raw_activation_snapshot_after_decline(before, after),
+            "duplicate full-frontier activations decline before frame, process, or signal mutation");
+        duplicate_declined_ = true;
+        return { };
+    }
+
+    [[nodiscard]] SchedulerBatchResult execute_map_corruption(
+        Scheduler& active_scheduler, const SchedulerBatchFrontier& frontier,
+        const std::span<const std::uint64_t> payloads)
+    {
+        constexpr auto producer = producer_process_id;
+        constexpr auto no_activation
+            = std::numeric_limits<std::size_t>::max();
+        if (calls_ == 1U) {
+            require(payloads.size() == 1U
+                    && payloads.front() == receipt_for(producer).payload,
+                "the map witness first offers one seeded producer activation");
+            const auto producer_task = task_index_for(frontier, producer);
+            require(producer_task < frontier.tasks.size()
+                    && producer_task < payloads.size(),
+                "the seeded producer receipt appears in the offered frontier");
+            const auto dispatches = runtime_->native_member_dispatches;
+            const auto result = dispatch(frontier, payloads, producer_task + 1U);
+            require(result.has_value() && result->executed == 1U
+                    && runtime_->scheduler_state_seeded
+                    && runtime_->native_member_dispatches == dispatches + 1U
+                    && !runtime_->invalidated,
+                "the map witness establishes a genuine seeded runtime first");
+            const auto producer_member
+                = implementation_.region_readiness_member_index_by_process.at(
+                    producer);
+            require(runtime_->raw_activation_summary.at(producer_member)
+                        == producer_task,
+                "the initial map witness summary names its offered seed activation");
+            const auto old_receipt = receipt_for(producer).receipt;
+            const auto new_receipt = enqueue(active_scheduler, producer);
+            require(new_receipt.sequence != old_receipt.sequence,
+                "the post-seed probe receives a fresh queue sequence");
+            return *result;
+        }
+        if (calls_ == 2U) {
+            const auto producer_task = task_index_for(frontier, producer, 1U);
+            require(producer_task < frontier.tasks.size()
+                    && producer_task < payloads.size()
+                    && payloads[producer_task]
+                        == receipt_for(producer, 1U).payload,
+                "the corrupted-map task reaches the same seeded component");
+            const auto reader_member
+                = implementation_.region_readiness_member_index_by_process.at(
+                    consumer_process_id);
+            implementation_.region_readiness_member_index_by_process.at(
+                producer) = reader_member;
+            const auto member
+                = implementation_.region_readiness_member_index_by_process.at(
+                    producer);
+            require(member
+                    == implementation_.region_readiness_member_index_by_process.at(
+                        consumer_process_id),
+                "the probe corrupts only the process-to-member identity");
+            const auto before = capture_snapshot_();
+            const auto dispatches = runtime_->native_member_dispatches;
+            const auto result = dispatch(frontier, payloads, producer_task + 1U);
+            const auto after = capture_snapshot_();
+            require(!result.has_value() && runtime_->invalidated
+                    && runtime_->native_member_dispatches == dispatches
+                    && std::ranges::all_of(runtime_->raw_activation_summary,
+                        [](const std::size_t index) {
+                            return index == no_activation;
+                        })
+                    && same_raw_activation_snapshot_after_decline(before, after),
+                "map identity corruption declines after summary reset and before member or signal mutation");
+            map_declined_ = true;
+            return { };
+        }
+        throw std::runtime_error {
+            "the map probe receives only its seed and fail-closed cuts" };
+    }
+
+    RuntimeImplementation& implementation_;
+    std::shared_ptr<FrontierRuntime> runtime_;
+    SnapshotCapture capture_snapshot_;
+    RawActivationProbeKind kind_;
+    std::array<ReceiptRecord, 4U> receipts_ { };
+    std::size_t receipt_count_ { };
+    std::size_t calls_ { };
+    std::size_t fallback_calls_ { };
+    bool prefix_reentry_completed_ { };
+    bool duplicate_declined_ { };
+    bool map_declined_ { };
+};
+
 struct InternalRangeReadinessRun final {
     std::vector<std::array<AliasSignalState, 3U>> frames;
+    std::vector<MemberSyncCut> member_sync_cuts;
+    std::array<AliasSignalState, 3U> observer_frame;
+    std::vector<std::tuple<SignalId, std::string, SimulationTick>> observer_callbacks;
     std::array<std::uint64_t, 4U> native_dispatch_deltas { };
     std::array<std::uint64_t, 4U> alias_checked_entry_deltas { };
     std::array<std::uint64_t, 4U> alias_trusted_entry_deltas { };
@@ -3590,11 +4296,10 @@ struct AliasGeometryCase final {
     return true;
 }
 
-[[nodiscard]] const void* alias_geometry_opaque_address(
+[[nodiscard]] std::uintptr_t alias_geometry_opaque_address(
     const std::uint64_t address) noexcept
 {
-    return reinterpret_cast<const void*>(
-        static_cast<std::uintptr_t>(address));
+    return static_cast<std::uintptr_t>(address);
 }
 
 [[nodiscard]] AliasGeometryCase make_alias_geometry_case(
@@ -3801,7 +4506,11 @@ void check_alias_sorted_geometry_oracle()
 [[nodiscard]] InternalRangeReadinessRun run_internal_range_readiness_case(
     const std::shared_ptr<RegionKernelBackendProvider>& provider,
     fsim::compiler::LlvmJit* const process_jit,
-    const bool exercise_debug_token = false)
+    const bool exercise_debug_token = false,
+    const bool force_full_member_sync = false,
+    const RawActivationProbeKind raw_activation_probe
+        = RawActivationProbeKind::none,
+    const std::string_view process_name_suffix = { })
 {
     constexpr SignalId input_id = 0U;
     constexpr SignalId internal_id = 1U;
@@ -3810,6 +4519,11 @@ void check_alias_sorted_geometry_oracle()
     constexpr ProcessId reader_id = 1U;
     constexpr ProcessId clock_id = 2U;
 
+    const bool raw_probe = raw_activation_probe
+        != RawActivationProbeKind::none;
+    require(!raw_probe || (provider != nullptr && process_jit != nullptr
+            && !exercise_debug_token && !force_full_member_sync),
+        "raw activation probes use a fresh authentic selected runtime");
     const std::array<std::uint32_t, 3U> signal_widths { 8U, 8U, 8U };
     const std::array<ValueKind, 3U> signal_kinds {
         ValueKind::logic4, ValueKind::logic4, ValueKind::logic4 };
@@ -3836,8 +4550,9 @@ void check_alias_sorted_geometry_oracle()
 
     Process producer;
     producer.id = producer_id;
-    producer.name = exercise_debug_token
-        ? "range_v2_debug_producer" : "range_v2_producer";
+    producer.name = std::string { exercise_debug_token
+            ? "range_v2_debug_producer" : "range_v2_producer" }
+        + std::string { process_name_suffix };
     producer.scheduling_domain = ProcessSchedulingDomain::systemverilog;
     producer.register_count = 1U;
     producer.register_value_kinds = { ValueKind::logic4 };
@@ -3892,7 +4607,8 @@ void check_alias_sorted_geometry_oracle()
 
     Process reader;
     reader.id = reader_id;
-    reader.name = "range_v2_reader";
+    reader.name = std::string { "range_v2_reader" }
+        + std::string { process_name_suffix };
     reader.scheduling_domain = ProcessSchedulingDomain::systemverilog;
     reader.register_count = 1U;
     reader.register_value_kinds = { ValueKind::logic4 };
@@ -3901,7 +4617,7 @@ void check_alias_sorted_geometry_oracle()
         { internal, EdgeKind::any, 6U, 1U },
     };
     reader.driver_regions = { { output, 0U, 0U, true } };
-    reader.operations = {
+    reader.operations = std::vector<Operation> {
         ReadSignal { 0U, internal },
         WriteUpdate { output, 0U,
             SignalUpdateDomain::systemverilog_active },
@@ -3910,6 +4626,8 @@ void check_alias_sorted_geometry_oracle()
     };
     add_process(std::move(reader));
 
+    const auto observer_input
+        = make_internal_range_input(Logic4::one, Logic4::zero);
     const std::array<PackedLogic4, 4U> inputs {
         make_internal_range_input(Logic4::zero, Logic4::zero),
         make_internal_range_input(Logic4::x, Logic4::zero),
@@ -3918,19 +4636,29 @@ void check_alias_sorted_geometry_oracle()
     };
     Process clock;
     clock.id = clock_id;
-    clock.name = "range_v2_clock";
+    clock.name = std::string { "range_v2_clock" }
+        + std::string { process_name_suffix };
     clock.scheduling_domain = ProcessSchedulingDomain::systemverilog;
     clock.register_count = 1U;
     clock.register_value_kinds = { ValueKind::logic4 };
     clock.driver_regions = { { input, 0U, 0U, true } };
-    // An undriven SV wire starts at Z. Settle zero at tick zero so the first
-    // timed update changes only the unrelated bit.
-    clock.operations.emplace_back(LoadConstant {
-        0U, PackedLogic4 { 8U, Logic4::zero } });
-    clock.operations.emplace_back(WriteBlocking { input, 0U });
-    for (const auto& value : inputs) {
+    if (raw_probe) {
+        // Keep the authentic input owner present for state capture, but do not
+        // publish an input transition before the scheduler-frontier probe.
         clock.operations.emplace_back(WaitFor { 1U });
-        clock.operations.emplace_back(LoadConstant { 0U, value });
+    } else {
+        // An undriven SV wire starts at Z. Settle zero at tick zero so the
+        // first timed update changes only the unrelated bit.
+        clock.operations.emplace_back(LoadConstant {
+            0U, PackedLogic4 { 8U, Logic4::zero } });
+        clock.operations.emplace_back(WriteBlocking { input, 0U });
+        for (const auto& value : inputs) {
+            clock.operations.emplace_back(WaitFor { 1U });
+            clock.operations.emplace_back(LoadConstant { 0U, value });
+            clock.operations.emplace_back(WriteBlocking { input, 0U });
+        }
+        clock.operations.emplace_back(WaitFor { 1U });
+        clock.operations.emplace_back(LoadConstant { 0U, observer_input });
         clock.operations.emplace_back(WriteBlocking { input, 0U });
     }
     clock.operations.emplace_back(Halt { });
@@ -3943,6 +4671,20 @@ void check_alias_sorted_geometry_oracle()
     interpreter.start();
     auto& implementation
         = OwnedDriverDemotionTestAccess::implementation(interpreter);
+    if (provider && force_full_member_sync) {
+        const auto component
+            = implementation.region_component_by_process.at(producer_id);
+        require(component
+                    < implementation.region_frontier_runtime_by_component.size()
+                && implementation.region_frontier_runtime_by_component[component]
+                && implementation.region_frontier_runtime_by_component[component]
+                    ->member_sync_workset_available,
+            "the full-sync control starts from an authentic prepared builtin runtime");
+        // Keep the same LLVM body and private entry, but disable only the
+        // optional journal so every successful sync uses the conservative loop.
+        implementation.region_frontier_runtime_by_component[component]
+            ->member_sync_workset_available = false;
+    }
     InternalRangeReadinessRun result;
     // Retained plane-backed copies pin the live A4 write lease. Capture owned
     // bits so earlier comparison frames cannot disable subsequent V2 writes.
@@ -4130,6 +4872,132 @@ void check_alias_sorted_geometry_oracle()
             "the checked reference is deliberately built without region programs or providers");
     }
 
+    const auto capture_member_sync_cut = [&]() {
+        MemberSyncCut cut;
+        require(frontier_runtime != nullptr,
+            "a member-sync cut requires the authentic component runtime");
+        const auto& frame = frontier_runtime->frame;
+        cut.slot = frame.slot;
+        cut.cut = frame.cut;
+        cut.runtime_generation = frame.runtime_generation;
+        cut.component_generation = frame.component_generation;
+        cut.task_count = frame.scheduler_task_count;
+        cut.task_cursor = frame.scheduler_task_cursor;
+        cut.pending_write_count = frame.pending_write_count;
+        cut.staged_event_count = frame.staged_event_count;
+        cut.committed_signal_count = frame.committed_signal_count;
+        require(cut.task_count <= frontier_runtime->scheduler_tasks.size()
+                && cut.task_count
+                    <= frontier_runtime->original_scheduler_tasks.size(),
+            "the captured scheduler prefix fits both authenticated task arrays");
+        cut.members.assign(frontier_runtime->members.begin(),
+            frontier_runtime->members.end());
+        cut.tasks.assign(frontier_runtime->scheduler_tasks.begin(),
+            frontier_runtime->scheduler_tasks.begin() + cut.task_count);
+        cut.original_tasks.assign(
+            frontier_runtime->original_scheduler_tasks.begin(),
+            frontier_runtime->original_scheduler_tasks.begin() + cut.task_count);
+        cut.ready_words.assign(frontier_runtime->ready_words.begin(),
+            frontier_runtime->ready_words.end());
+        const auto& mask_descriptor
+            = implementation.region_readiness_mask_by_component.at(component);
+        require(mask_descriptor.offset
+                    <= implementation.region_readiness_mask_words.size()
+                && mask_descriptor.word_count
+                    <= implementation.region_readiness_mask_words.size()
+                        - mask_descriptor.offset,
+            "the captured readiness mask remains within its component span");
+        const auto mask_begin
+            = implementation.region_readiness_mask_words.begin()
+            + static_cast<std::ptrdiff_t>(mask_descriptor.offset);
+        cut.readiness_mask_words.assign(mask_begin,
+            mask_begin + static_cast<std::ptrdiff_t>(mask_descriptor.word_count));
+        for (const auto& member : frontier_runtime->backend->kernel.members) {
+            const auto& state = implementation.processes.at(member.process);
+            const auto& cold = state.cold();
+            const auto& queued
+                = implementation.region_readiness_queued_by_process.at(
+                    member.process);
+            MemberSyncProcessCut process_cut;
+            process_cut.process = member.process;
+            process_cut.pc = state.pc;
+            process_cut.wait_timeout_origin = state.wait_timeout_origin;
+            process_cut.static_trigger_mask = state.static_trigger_mask;
+            process_cut.execution_phase = state.execution_phase;
+            process_cut.status = state.status;
+            process_cut.suspended_status = state.suspended_status;
+            process_cut.generation = state.generation;
+            process_cut.queued = state.queued;
+            process_cut.waiting_on_static = state.waiting_on_static;
+            process_cut.waiting_on_signal = state.waiting_on_signal;
+            process_cut.suspended = state.suspended;
+            process_cut.suspended_wake = state.suspended_wake;
+            process_cut.halted = state.halted;
+            process_cut.killed = state.killed;
+            process_cut.boundary_validated
+                = state.region_kernel_completion_boundary_validated;
+            process_cut.debug_token_valid
+                = state.frontier_debug_target != nullptr;
+            process_cut.debug_runtime_generation
+                = state.frontier_debug_runtime_generation;
+            process_cut.current_source = cold.current_source;
+            process_cut.current_scope = cold.current_scope;
+            process_cut.readiness_component = queued.component;
+            process_cut.readiness_member = queued.member;
+            process_cut.readiness_generation = queued.generation;
+            process_cut.readiness_key = queued.queued_key;
+            process_cut.readiness_trigger_mask = queued.static_trigger_mask;
+            process_cut.readiness_key_valid = queued.key_valid;
+            cut.processes.push_back(std::move(process_cut));
+        }
+        cut.native_dispatches = frontier_runtime->native_member_dispatches;
+        cut.descriptor_shapes_entries = frontier_runtime->descriptor_shapes_entries;
+        cut.full_passes = frontier_runtime->member_sync_full_passes;
+        cut.full_members = frontier_runtime->member_sync_full_members;
+        cut.selected_passes = frontier_runtime->member_sync_selected_passes;
+        cut.selected_members = frontier_runtime->member_sync_selected_members;
+        cut.selected_total_members
+            = frontier_runtime->member_sync_selected_total_members;
+        cut.invalidated = frontier_runtime->invalidated;
+        return cut;
+    };
+
+    if (frontier_runtime) {
+        result.member_sync_cuts.push_back(capture_member_sync_cut());
+    }
+
+    if (raw_probe) {
+        require(frontier_runtime != nullptr
+                && !frontier_runtime->invalidated,
+            "each raw-activation case starts from an authentic live runtime");
+        const auto snapshot = [&]() {
+            return RawActivationProbeSnapshot {
+                capture_member_sync_cut(), capture() };
+        };
+        RawActivationDispatchProbe probe {
+            implementation, frontier_runtime, snapshot, raw_activation_probe };
+        auto& scheduler = implementation.scheduler;
+        if (raw_activation_probe == RawActivationProbeKind::prefix_reentry) {
+            static_cast<void>(probe.enqueue(scheduler, producer_id));
+            static_cast<void>(probe.enqueue(scheduler, reader_id));
+        } else if (raw_activation_probe
+            == RawActivationProbeKind::duplicate_outside_prefix) {
+            static_cast<void>(probe.enqueue(scheduler, producer_id));
+            static_cast<void>(probe.enqueue(scheduler, producer_id, false));
+        } else {
+            static_cast<void>(probe.enqueue(scheduler, producer_id));
+        }
+        const auto probe_run = scheduler.run(0U);
+        require(probe_run.status == RunStatus::time_limit
+                || probe_run.status == RunStatus::completed,
+            "the authentic scheduler completes the raw-frontier cuts at tick zero");
+        probe.verify_complete();
+        result.member_sync_cuts.push_back(capture_member_sync_cut());
+        result.frames.push_back(capture());
+        result.v2_runtime_prepared = true;
+        return result;
+    }
+
     const RegionConeFinalDebugState* final_debug_target { };
     InstructionIndex debug_entry_instruction { };
     if (exercise_debug_token) {
@@ -4297,10 +5165,16 @@ void check_alias_sorted_geometry_oracle()
             require(same_frontier_frame(frontier_runtime->frame, original_frame)
                     && frontier_runtime->alias_certificate_matches(context),
                 "restoring the real frame retains the original exact-count proof");
-            require(std::ranges::count_if(confirmed_counts,
-                        [](const std::uint8_t valid) { return valid != 0U; })
-                    >= 2,
-                "two exact task counts have both been confirmed by checked execution");
+            require(original_task_count < confirmed_counts.size(),
+                "the confirmed geometry interval remains within its task table");
+            const auto confirmed_prefix_end
+                = confirmed_counts.begin()
+                + static_cast<std::ptrdiff_t>(original_task_count + 1U);
+            require(confirmed_prefix_end <= confirmed_counts.end()
+                    && std::ranges::all_of(confirmed_counts.begin(),
+                        confirmed_prefix_end,
+                        [](const std::uint8_t valid) { return valid != 0U; }),
+                "the accepted task interval certifies every shorter geometry prefix");
 
             std::size_t alternate_confirmed_count = confirmed_counts.size();
             std::size_t unknown_task_count = confirmed_counts.size();
@@ -4385,6 +5259,9 @@ void check_alias_sorted_geometry_oracle()
             "each unrelated or selected range stimulus reaches a quiet point");
         const auto frame = capture();
         result.frames.push_back(frame);
+        if (frontier_runtime) {
+            result.member_sync_cuts.push_back(capture_member_sync_cut());
+        }
 
         if (frontier_runtime) {
             const auto dispatches = frontier_runtime->native_member_dispatches;
@@ -4715,6 +5592,52 @@ void check_alias_sorted_geometry_oracle()
         require(proof_selected_trusted_entry,
             "an authentic host geometry proof selects the builtin trusted entry");
     }
+    // Install an ordinary observer only after real private dispatch has seeded
+    // this runtime. The next scheduled stimulus must demote through the host,
+    // rather than reuse its previous sparse entry or synthetic frame state.
+    const auto seeded_dispatches = frontier_runtime
+        ? frontier_runtime->native_member_dispatches : 0U;
+    const auto seeded_selected_passes = frontier_runtime
+        ? frontier_runtime->member_sync_selected_passes : 0U;
+    interpreter.set_signal_change_hook(
+        [&](const SignalId signal, const PackedLogic4& value,
+            const SimulationTick time) {
+            result.observer_callbacks.emplace_back(
+                signal, value.to_msb_string(), time);
+        });
+    const auto observer_run = interpreter.run(5U);
+    require(observer_run.status == RunStatus::completed
+            || observer_run.status == RunStatus::time_limit,
+        "a late observer completes the next ordinary scheduled stimulus");
+    result.observer_frame = capture();
+    require(result.observer_frame[1U].current == observer_input
+            && result.observer_frame[2U].current == observer_input
+            && !result.observer_callbacks.empty(),
+        "the late observer sees the correct producer and ranged-reader update");
+    if (frontier_runtime) {
+        require(seeded_dispatches != 0U
+                && frontier_runtime->native_member_dispatches
+                    == seeded_dispatches
+                && frontier_runtime->member_sync_selected_passes
+                    == seeded_selected_passes,
+            "a late ordinary observer cannot reuse a seeded private sparse dispatch");
+        for (const auto process : { producer_id, reader_id }) {
+            const auto& state = implementation.processes.at(process);
+            require(state.waiting_on_static && !state.queued
+                    && state.status == ProcessStatus::waiting
+                    && (state.frontier_debug_target == nullptr
+                        || state.frontier_debug_runtime_generation
+                            != implementation.region_runtime_generation),
+                "ordinary observed completion cannot retain a current-generation native debug token");
+        }
+        require(frontier_runtime->runtime_generation
+                    != implementation.region_runtime_generation
+                && (component
+                        >= implementation.region_frontier_runtime_by_component.size()
+                    || implementation.region_frontier_runtime_by_component[component]
+                        != frontier_runtime),
+            "observer policy recertification retires the pinned runtime generation before ordinary completion");
+    }
     return result;
 }
 
@@ -4738,16 +5661,83 @@ void check_internal_range_v2_readiness(
     ScopedEnvironment profile_enabled { "FSIM_PROFILE_SV_WAVES", "1" };
     const auto compiled = run_internal_range_readiness_case(
         std::make_shared<FrontierOnlyProvider>(provider), &process_jit, true);
-    require(checked.checked_programs_absent && compiled.v2_runtime_prepared,
-        "the differential pair uses ordinary checked execution and authentic V2 dispatch");
+    TemporaryCacheDirectory full_control_cache;
+    fsim::compiler::LlvmJitOptions full_control_options;
+    full_control_options.debug_instrumentation = false;
+    full_control_options.cache_directory = full_control_cache.path();
+    fsim::compiler::LlvmJit full_control_jit { full_control_options };
+    const auto full_control = run_internal_range_readiness_case(
+        std::make_shared<FrontierOnlyProvider>(provider),
+        &full_control_jit, true, true);
+    const auto raw_prefix = run_internal_range_readiness_case(
+        std::make_shared<FrontierOnlyProvider>(provider), &process_jit,
+        false, false, RawActivationProbeKind::prefix_reentry,
+        "_raw_prefix");
+    const auto raw_duplicate = run_internal_range_readiness_case(
+        std::make_shared<FrontierOnlyProvider>(provider), &process_jit,
+        false, false, RawActivationProbeKind::duplicate_outside_prefix,
+        "_raw_duplicate");
+    const auto raw_map = run_internal_range_readiness_case(
+        std::make_shared<FrontierOnlyProvider>(provider), &process_jit,
+        false, false, RawActivationProbeKind::corrupted_member_map_after_seed,
+        "_raw_map");
+    require(checked.checked_programs_absent && compiled.v2_runtime_prepared
+            && full_control.v2_runtime_prepared
+            && raw_prefix.v2_runtime_prepared
+            && raw_duplicate.v2_runtime_prepared
+            && raw_map.v2_runtime_prepared,
+        "checked, selected, full-sync, and raw-frontier probes use authentic prepared runtimes");
     require(checked.frames.size() == compiled.frames.size(),
         "the checked and native routes capture the same scheduler cuts");
-    for (std::size_t frame = 0U; frame < checked.frames.size(); ++frame) {
-        for (std::size_t signal = 0U; signal < checked.frames[frame].size();
-             ++signal) {
-            require(same_alias_signal_state(checked.frames[frame][signal],
-                        compiled.frames[frame][signal]),
-                "checked and native range routes preserve current/LAST/stored, owner, event, and transaction metadata");
+    require(compiled.member_sync_cuts.size() == full_control.member_sync_cuts.size()
+            && !compiled.member_sync_cuts.empty(),
+        "selected and full controls capture every real scheduler cut");
+    const auto& selected_start = compiled.member_sync_cuts.front();
+    const auto& selected_final = compiled.member_sync_cuts.back();
+    const auto& full_final = full_control.member_sync_cuts.back();
+    const auto first_native_cut = std::ranges::find_if(
+        compiled.member_sync_cuts, [](const MemberSyncCut& cut) {
+            return cut.native_dispatches != 0U;
+        });
+    require((selected_start.native_dispatches != 0U
+                || selected_start.selected_passes == 0U)
+            && first_native_cut != compiled.member_sync_cuts.end()
+            && first_native_cut->full_passes != 0U
+            && first_native_cut->full_members
+                >= first_native_cut->members.size(),
+        "the first native cut has completed full synchronization, with no selected use before native work");
+    require(selected_final.descriptor_shapes_entries != 0U
+            && full_final.descriptor_shapes_entries != 0U,
+        "the two authentic builtin controls execute the independently certified shape entry");
+    require(selected_final.selected_passes != 0U
+            && selected_final.selected_members != 0U
+            && selected_final.selected_members
+                < selected_final.selected_total_members,
+        "the exact builtin entry and initialized workset select a strict subset of members");
+    require(full_final.full_passes != 0U
+            && full_final.selected_passes == 0U
+            && full_final.selected_members == 0U
+            && full_final.selected_total_members == 0U,
+        "disabling only workset availability keeps the same entry on full synchronization");
+    for (std::size_t cut = 0U; cut < compiled.member_sync_cuts.size(); ++cut) {
+        require(same_member_sync_cut(compiled.member_sync_cuts[cut],
+                    full_control.member_sync_cuts[cut]),
+            "selected and conservative synchronization preserve exact member, process/debug, key, task, and readiness state at every scheduler cut");
+    }
+    for (const auto* const native : { &compiled, &full_control }) {
+        require(checked.observer_callbacks == native->observer_callbacks
+                && std::ranges::equal(checked.observer_frame,
+                    native->observer_frame, same_alias_signal_state),
+            "late-observer demotion preserves checked callback order, values, signal metadata, and event timing");
+        require(checked.frames.size() == native->frames.size(),
+            "checked, selected, and full routes capture the same scheduler cuts");
+        for (std::size_t frame = 0U; frame < checked.frames.size(); ++frame) {
+            for (std::size_t signal = 0U;
+                 signal < checked.frames[frame].size(); ++signal) {
+                require(same_alias_signal_state(checked.frames[frame][signal],
+                            native->frames[frame][signal]),
+                    "checked, selected, and full routes preserve signal planes, metadata, and event timing");
+            }
         }
     }
 }
@@ -4807,7 +5797,8 @@ void check_alias_sorted_geometry_checked_fallback(
             && std::ranges::any_of(
                 std::span { runtime.alias_candidate_ranges }.subspan(13U),
                 [&runtime](const FrontierAliasRange& range) {
-                    return range.address == &runtime.frame;
+                    return range.address
+                        == reinterpret_cast<std::uintptr_t>(&runtime.frame);
                 }),
         "the candidate inventory records the plane/frame overlap as data");
     const auto proof_failures_before = runtime.alias_sorted_proof_failures;
@@ -4977,8 +5968,59 @@ struct PartialBoundaryPublicationRun final {
     std::array<AliasSignalState, 3U> startup;
     std::array<AliasSignalState, 3U> updated;
     std::uint64_t native_dispatch_delta { };
+    std::uint64_t selected_sync_pass_delta { };
+    std::uint64_t full_sync_pass_delta { };
+    std::uint64_t boundary_sync_eligible_delta { };
+    std::uint64_t boundary_sync_conservative_delta { };
     bool runtime_prepared { };
     bool runtime_retained { };
+    std::size_t timing_report_count { };
+    std::size_t callback_deposit_count { };
+    std::size_t private_boundary_callback_count { };
+    std::size_t forced_full_private_callback_count { };
+    std::size_t output_pending_callback_count { };
+    std::optional<PackedLogic4> outside_reader_value;
+    std::optional<InstructionIndex> outside_reader_pc;
+    std::optional<ProcessStatus> outside_reader_status;
+    std::optional<std::uint32_t> outside_reader_generation;
+    std::optional<bool> outside_reader_waiting_on_static;
+    std::optional<bool> outside_reader_queued;
+    std::size_t outside_reader_resume_count { };
+};
+
+enum class OutsideBoundaryReaderExecutor : std::uint8_t {
+    none,
+    builtin,
+    unsealed_adapter,
+};
+
+class UnsealedBoundaryReaderExecutor final : public ProcessExecutor {
+public:
+    UnsealedBoundaryReaderExecutor(
+        std::unique_ptr<ProcessExecutor> delegate,
+        std::size_t& resume_count) noexcept
+        : delegate_ { std::move(delegate) }
+        , resume_count_ { resume_count }
+    {
+    }
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext& context,
+        const InstructionIndex start_instruction) override
+    {
+        ++resume_count_;
+        return delegate_->resume(context, start_instruction);
+    }
+
+    [[nodiscard]] const ProcessExecutorProgramBinding*
+    program_access_binding() const noexcept override
+    {
+        return delegate_->program_access_binding();
+    }
+
+private:
+    std::unique_ptr<ProcessExecutor> delegate_;
+    std::size_t& resume_count_;
 };
 
 [[nodiscard]] PartialBoundaryPublicationRun
@@ -4987,7 +6029,12 @@ run_partial_boundary_publication_case(
     fsim::compiler::LlvmJit* const process_jit,
     const std::uint32_t signal_width,
     const std::uint32_t slice_offset,
-    const std::uint32_t slice_width)
+    const std::uint32_t slice_width,
+    const bool install_timing_callback = false,
+    const std::string_view process_name_suffix = { },
+    const bool force_member_sync_workset_unavailable = false,
+    const OutsideBoundaryReaderExecutor outside_reader_executor
+        = OutsideBoundaryReaderExecutor::none)
 {
     constexpr SignalId input_id = 0U;
     constexpr SignalId internal_id = 1U;
@@ -4995,26 +6042,35 @@ run_partial_boundary_publication_case(
     constexpr ProcessId producer_id = 0U;
     constexpr ProcessId reader_id = 1U;
     constexpr ProcessId clock_id = 2U;
+    constexpr ProcessId outside_reader_id = 3U;
     constexpr SimulationTick stimulus_time = 1U;
 
     require(signal_width != 0U && slice_width != 0U
             && slice_offset <= signal_width
             && slice_width <= signal_width - slice_offset
-            && ((provider == nullptr) == (process_jit == nullptr)),
+            && (provider == nullptr || process_jit != nullptr)
+            && (outside_reader_executor
+                    == OutsideBoundaryReaderExecutor::none
+                || process_jit != nullptr),
         "the observed slice case has a paired route and in-bounds output range");
-    const std::array<std::uint32_t, 3U> signal_widths {
-        signal_width, signal_width, signal_width };
-    const std::array<ValueKind, 3U> signal_kinds {
-        ValueKind::logic4, ValueKind::logic4, ValueKind::logic4 };
-    const std::array<ResolutionKind, 3U> signal_resolutions {
-        ResolutionKind::sv_wire, ResolutionKind::sv_wire,
-        ResolutionKind::sv_wire };
+    std::vector<std::uint32_t> signal_widths(3U, signal_width);
+    std::vector<ValueKind> signal_kinds(3U, ValueKind::logic4);
+    std::vector<ResolutionKind> signal_resolutions(
+        3U, ResolutionKind::sv_wire);
     const auto changed_source
         = make_partial_boundary_source(signal_width, slice_offset, slice_width);
     const auto changed_slice
         = changed_source.extract_bits(slice_offset, slice_width);
+    const std::string process_suffix { process_name_suffix };
     std::array<std::optional<Process>, 2U> registered_processes;
+    std::optional<Process> registered_outside_reader;
     Interpreter interpreter;
+    std::size_t timing_report_count { };
+    std::size_t callback_deposit_count { };
+    std::size_t private_boundary_callback_count { };
+    std::size_t forced_full_private_callback_count { };
+    std::size_t output_pending_callback_count { };
+    std::size_t outside_reader_resume_count { };
     const auto input = interpreter.add_signal({ "slice_host.input",
         PackedLogic4 { signal_width, Logic4::zero }, ResolutionKind::sv_wire });
     const auto internal = interpreter.add_signal({ "slice_host.internal",
@@ -5023,7 +6079,20 @@ run_partial_boundary_publication_case(
         PackedLogic4 { signal_width, Logic4::zero }, ResolutionKind::sv_wire });
     require(input == input_id && internal == internal_id && output == output_id,
         "the observed slice case keeps dense source, private, and output IDs");
-    static_cast<void>(interpreter.signal_value(output));
+    std::optional<SignalId> outside_reader_value_id;
+    if (outside_reader_executor != OutsideBoundaryReaderExecutor::none) {
+        outside_reader_value_id = interpreter.add_signal({
+            "slice_host.outside_reader_value",
+            PackedLogic4 { signal_width, Logic4::zero },
+            ResolutionKind::sv_wire });
+        require(*outside_reader_value_id == 3U,
+            "the outside reader owns a separate observed-value signal");
+        signal_widths.push_back(signal_width);
+        signal_kinds.push_back(ValueKind::logic4);
+        signal_resolutions.push_back(ResolutionKind::sv_wire);
+    }
+    const PackedLogic4& output_value_reference
+        = interpreter.signal_value(output);
 
     const auto add_member = [&](Process process) {
         const auto id = process.id;
@@ -5058,7 +6127,7 @@ run_partial_boundary_publication_case(
     Process producer;
     producer.id = producer_id;
     producer.name = "slice_host_producer_"
-        + std::to_string(signal_width);
+        + std::to_string(signal_width) + process_suffix;
     producer.scheduling_domain = ProcessSchedulingDomain::systemverilog;
     producer.register_count = 1U;
     producer.register_value_kinds = { ValueKind::logic4 };
@@ -5076,27 +6145,40 @@ run_partial_boundary_publication_case(
     Process reader;
     reader.id = reader_id;
     reader.name = "slice_host_reader_"
-        + std::to_string(signal_width);
+        + std::to_string(signal_width) + process_suffix;
     reader.scheduling_domain = ProcessSchedulingDomain::systemverilog;
-    reader.register_count = 2U;
-    reader.register_value_kinds.assign(2U, ValueKind::logic4);
+    reader.register_count = slice_offset == 0U && slice_width == signal_width
+        ? 1U
+        : 2U;
+    reader.register_value_kinds.assign(reader.register_count, ValueKind::logic4);
     reader.static_sensitivity = { { internal, EdgeKind::any } };
     reader.driver_regions = {
         { output, slice_offset, slice_width, false },
     };
-    reader.operations = {
-        ReadSignal { 0U, internal },
-        Extract { 1U, 0U, slice_offset, slice_width },
-        WriteUpdateSlice { output, 1U, slice_offset,
-            SignalUpdateDomain::systemverilog_active },
-        WaitSensitivity { },
-        Jump { 0U },
-    };
+    if (slice_offset == 0U && slice_width == signal_width) {
+        reader.operations = {
+            ReadSignal { 0U, internal },
+            WriteUpdate { output, 0U,
+                SignalUpdateDomain::systemverilog_active },
+            WaitSensitivity { },
+            Jump { 0U },
+        };
+    } else {
+        reader.operations = {
+            ReadSignal { 0U, internal },
+            Extract { 1U, 0U, slice_offset, slice_width },
+            WriteUpdateSlice { output, 1U, slice_offset,
+                SignalUpdateDomain::systemverilog_active },
+            WaitSensitivity { },
+            Jump { 0U },
+        };
+    }
     add_member(std::move(reader));
 
     Process clock;
     clock.id = clock_id;
-    clock.name = "slice_host_clock_" + std::to_string(signal_width);
+    clock.name = "slice_host_clock_" + std::to_string(signal_width)
+        + process_suffix;
     clock.scheduling_domain = ProcessSchedulingDomain::systemverilog;
     clock.register_count = 1U;
     clock.register_value_kinds = { ValueKind::logic4 };
@@ -5111,6 +6193,67 @@ run_partial_boundary_publication_case(
     };
     require(interpreter.add_process(std::move(clock)) == clock_id,
         "the timed input writer remains outside the V2 component");
+    if (outside_reader_executor != OutsideBoundaryReaderExecutor::none) {
+        require(outside_reader_value_id.has_value() && process_jit != nullptr,
+            "the outside reader has its own signal and compiled executor");
+        Process outside_reader;
+        outside_reader.id = outside_reader_id;
+        outside_reader.name = "slice_host_outside_reader_"
+            + std::to_string(signal_width) + process_suffix;
+        outside_reader.scheduling_domain = ProcessSchedulingDomain::generic;
+        outside_reader.register_count = 1U;
+        outside_reader.register_value_kinds = { ValueKind::logic4 };
+        outside_reader.static_sensitivity = { { output, EdgeKind::any } };
+        outside_reader.driver_regions = {
+            { *outside_reader_value_id, 0U, 0U, true },
+        };
+        outside_reader.operations = {
+            ReadSignal { 0U, output },
+            WriteBlocking { *outside_reader_value_id, 0U },
+            WaitSensitivity { },
+            Jump { 0U },
+        };
+        auto& registered = registered_outside_reader.emplace(
+            std::move(outside_reader));
+        require(interpreter.add_process(registered) == outside_reader_id,
+            "the generic outside reader remains separate from the SV kernel");
+        const auto name = registered.name;
+        process_jit->add_process(name, registered,
+            signal_widths, signal_kinds);
+        const auto handle = process_jit->lookup(name);
+        require(static_cast<bool>(handle),
+            "LLVM retains the generic outside boundary reader");
+        std::unique_ptr<ProcessExecutor> executor
+            = std::make_unique<fsim::app::application_detail::
+                LlvmProcessExecutor>(*process_jit, handle, registered,
+                    signal_widths, signal_kinds, signal_resolutions,
+                    std::shared_ptr<const ProcessSignalRemap> { },
+                    outside_reader_id);
+        const auto* const binding = executor->program_access_binding();
+        require(binding != nullptr && binding->valid(),
+            "the outside reader preserves an exact program-access binding");
+        if (outside_reader_executor
+            == OutsideBoundaryReaderExecutor::unsealed_adapter) {
+            executor = std::make_unique<UnsealedBoundaryReaderExecutor>(
+                std::move(executor), outside_reader_resume_count);
+        }
+        interpreter.set_process_executor(outside_reader_id,
+            std::move(executor));
+    }
+    if (install_timing_callback) {
+        ModuleTimingCheck check;
+        check.id = 0U;
+        check.identity = "runtime:partial-boundary-timing-check";
+        check.kind = ModuleTimingCheckKind::setup;
+        check.reference.terminal = { output, slice_offset, 1U };
+        check.reference.edge = ModulePathEdge::posedge;
+        ModuleTimingEvent data_event;
+        data_event.terminal = { input, slice_offset, 1U };
+        check.data = std::move(data_event);
+        check.limits = { 2 };
+        static_cast<void>(interpreter.add_module_timing_check(
+            std::move(check)));
+    }
     if (provider) {
         interpreter.set_region_kernel_backend_provider(provider);
     }
@@ -5119,6 +6262,94 @@ run_partial_boundary_publication_case(
     require(startup_result.status == RunStatus::time_limit
             || startup_result.status == RunStatus::completed,
         "normal startup settles before the partial boundary stimulus");
+    if (install_timing_callback) {
+        interpreter.set_report_hook(
+            [&](const ProcessId,
+                const std::string_view message,
+                const AssertionSeverity severity,
+                const SourceLocation&,
+                const SimulationTick time,
+                const std::uint64_t) {
+                require(message == "Verilog specify timing-check violation"
+                        && severity == AssertionSeverity::error
+                        && time == stimulus_time,
+                    "the output timing check reports during the partial publication");
+                ++timing_report_count;
+                if (provider) {
+                    auto& implementation
+                        = OwnedDriverDemotionTestAccess::implementation(
+                            interpreter);
+                    const auto component
+                        = implementation.region_component_by_process.at(
+                            producer_id);
+                    if (component
+                        < implementation.region_frontier_runtime_by_component
+                              .size()) {
+                        const auto& runtime
+                            = implementation.region_frontier_runtime_by_component
+                                  .at(component);
+                        if (runtime && runtime->backend
+                            && runtime->backend->executor) {
+                            const auto pending_slot
+                                = runtime->boundary_callback_started_slot;
+                            if (pending_slot
+                                != std::numeric_limits<std::uint32_t>::max()) {
+                                ++private_boundary_callback_count;
+                                if (runtime->member_sync_private_entry
+                                    && runtime->member_sync_force_full) {
+                                    ++forced_full_private_callback_count;
+                                }
+                                const auto& frame = runtime->frame;
+                                const auto& pending_writes
+                                    = runtime->pending_writes;
+                                const auto& layout
+                                    = runtime->backend->executor->layout();
+                                if (pending_slot >= frame.pending_write_capacity
+                                    || pending_slot >= pending_writes.size()
+                                    || frame.current_pending_write != pending_slot) {
+                                    std::cerr
+                                        << "Timing callback pending state: runtime="
+                                        << runtime.get()
+                                        << " slot=" << pending_slot
+                                        << " active_count="
+                                        << frame.pending_write_count
+                                        << " capacity="
+                                        << frame.pending_write_capacity
+                                        << " current_slot="
+                                        << frame.current_pending_write
+                                        << '\n';
+                                }
+                                if (pending_slot < frame.pending_write_capacity
+                                    && pending_slot < pending_writes.size()
+                                    && frame.pending_write_capacity
+                                        == pending_writes.size()
+                                    && frame.pending_writes == pending_writes.data()
+                                    && frame.current_pending_write
+                                        == pending_slot) {
+                                    const auto& pending
+                                        = pending_writes[pending_slot];
+                                    constexpr auto required_flags
+                                        = pending_active | pending_value_ready
+                                        | pending_key_assigned
+                                        | pending_boundary_target;
+                                    if ((pending.flags & required_flags)
+                                            == required_flags
+                                        && pending.signal_slot
+                                            < layout.signal_slot_count
+                                        && layout.signals[pending.signal_slot]
+                                                .signal_id == output) {
+                                        ++output_pending_callback_count;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                ++callback_deposit_count;
+                interpreter.deposit_signal(input,
+                    PackedLogic4 { signal_width, Logic4::zero });
+            });
+    }
 
     auto& implementation
         = OwnedDriverDemotionTestAccess::implementation(interpreter);
@@ -5189,6 +6420,19 @@ run_partial_boundary_publication_case(
                 && output_binding->width == slice_width
                 && output_binding->signal_width == signal_width,
             "the observed output retains its exact source slice and full target width");
+        if (outside_reader_executor != OutsideBoundaryReaderExecutor::none) {
+            const auto& fanout = implementation.static_fanout_for(output);
+            require(implementation.region_component_by_process.size()
+                        > outside_reader_id
+                    && implementation.region_component_by_process.at(
+                        outside_reader_id) != component
+                    && std::ranges::any_of(fanout,
+                        [](const auto& sensitivity) {
+                            return sensitivity.process == outside_reader_id
+                                && sensitivity.edge == EdgeKind::any;
+                        }),
+                "the generic reader is an exact static boundary fanout outside the two-member kernel");
+        }
         require(layout.write_site_count != 0U && layout.write_sites != nullptr
                 && layout.signal_slot_count != 0U
                 && layout.signals != nullptr,
@@ -5220,6 +6464,9 @@ run_partial_boundary_publication_case(
                 == implementation.region_runtime_generation;
         require(runtime_prepared,
             "the native boundary runtime remains valid after normal startup");
+        if (force_member_sync_workset_unavailable) {
+            runtime->member_sync_workset_available = false;
+        }
         generation = implementation.region_runtime_generation;
     } else {
         runtime_prepared
@@ -5236,6 +6483,15 @@ run_partial_boundary_publication_case(
 
     const auto before_dispatches
         = runtime ? runtime->native_member_dispatches : 0U;
+    const auto before_selected_sync_passes
+        = runtime ? runtime->member_sync_selected_passes : 0U;
+    const auto before_full_sync_passes
+        = runtime ? runtime->member_sync_full_passes : 0U;
+    const auto before_boundary_sync_eligible
+        = implementation.systemverilog_wave_profile_boundary_sync_eligible;
+    const auto before_boundary_sync_conservative
+        = implementation.systemverilog_wave_profile_boundary_sync_conservative;
+    const bool initially_seeded = runtime && runtime->scheduler_state_seeded;
     const auto run_result = interpreter.run(stimulus_time);
     require(run_result.status == RunStatus::time_limit
             || run_result.status == RunStatus::completed,
@@ -5243,9 +6499,21 @@ run_partial_boundary_publication_case(
     auto updated = capture();
     bool runtime_retained { };
     std::uint64_t native_dispatch_delta { };
+    std::uint64_t selected_sync_pass_delta { };
+    std::uint64_t full_sync_pass_delta { };
+    std::uint64_t boundary_sync_eligible_delta
+        = implementation.systemverilog_wave_profile_boundary_sync_eligible
+            - before_boundary_sync_eligible;
+    std::uint64_t boundary_sync_conservative_delta
+        = implementation.systemverilog_wave_profile_boundary_sync_conservative
+            - before_boundary_sync_conservative;
     if (runtime) {
         native_dispatch_delta
             = runtime->native_member_dispatches - before_dispatches;
+        selected_sync_pass_delta = runtime->member_sync_selected_passes
+            - before_selected_sync_passes;
+        full_sync_pass_delta = runtime->member_sync_full_passes
+            - before_full_sync_passes;
         runtime_retained
             = !runtime->invalidated
             && implementation.region_frontier_runtime_by_component.at(component).get()
@@ -5256,8 +6524,59 @@ run_partial_boundary_publication_case(
             && runtime->frame.committed_signal_count == 0U
             && runtime->frame.scheduler_task_cursor
                 == runtime->frame.scheduler_task_count;
-        require(native_dispatch_delta >= 2U && runtime_retained,
-            "native V2 dispatches both real members and retires the partial commit without invalidation");
+        if (install_timing_callback) {
+            require(native_dispatch_delta != 0U
+                    && boundary_sync_conservative_delta != 0U,
+                "the matching timing terminal keeps native boundary publication on full sync");
+        } else if (outside_reader_executor
+                   == OutsideBoundaryReaderExecutor::unsealed_adapter) {
+            require(native_dispatch_delta >= 2U && runtime_retained
+                    && boundary_sync_conservative_delta != 0U
+                    && full_sync_pass_delta != 0U,
+                "an unsealed outside reader keeps the private boundary on conservative full sync");
+        } else if (force_member_sync_workset_unavailable) {
+            require(native_dispatch_delta >= 2U && runtime_retained
+                    && boundary_sync_conservative_delta != 0U
+                    && full_sync_pass_delta != 0U,
+                "an unavailable private workset forces a checked full-sync boundary continuation");
+        } else if (signal_width <= 64U) {
+            require(native_dispatch_delta >= 2U && runtime_retained
+                    && selected_sync_pass_delta != 0U
+                    && boundary_sync_eligible_delta != 0U,
+                "a certified narrow boundary publication retains selected member synchronization");
+        } else {
+            require(native_dispatch_delta >= 2U && runtime_retained
+                    && selected_sync_pass_delta != 0U
+                    && boundary_sync_conservative_delta != 0U
+                    && full_sync_pass_delta >= (initially_seeded ? 1U : 2U),
+                "wide boundary publication keeps conservative full synchronization");
+        }
+    }
+
+    if (install_timing_callback) {
+        const PackedLogic4 zero { signal_width, Logic4::zero };
+        auto expected_output = startup[2U].current;
+        expected_output.insert_bits(
+            PackedLogic4 { slice_width, Logic4::zero }, slice_offset);
+        require(timing_report_count == 1U && callback_deposit_count == 1U,
+            "the matching output check invokes its report hook exactly once");
+        require(updated[0U].current == zero && updated[0U].stored == zero
+                && updated[1U].current == zero && updated[1U].stored == zero
+                && updated[2U].current == expected_output
+                && updated[2U].stored == expected_output
+                && output_value_reference == expected_output,
+            "the callback deposit to input P propagates through the native component "
+            "and boundary output");
+        return { std::move(startup), std::move(updated), native_dispatch_delta,
+            selected_sync_pass_delta, full_sync_pass_delta,
+            boundary_sync_eligible_delta, boundary_sync_conservative_delta,
+            runtime_prepared, runtime_retained,
+            timing_report_count, callback_deposit_count,
+            private_boundary_callback_count,
+            forced_full_private_callback_count,
+            output_pending_callback_count, std::nullopt, std::nullopt,
+            std::nullopt, std::nullopt, std::nullopt, std::nullopt,
+            outside_reader_resume_count };
     }
 
     auto expected_current = startup[2U].current;
@@ -5291,10 +6610,43 @@ run_partial_boundary_publication_case(
                 == before_output.value_revision + 1U
             && after_output.stamp.origin.process_domain
                 == ProcessSchedulingDomain::systemverilog
-            && after_output.stamp.origin.phase == SchedulerPhase::active,
-        "the original boundary driver changes only the slice and preserves full-width history and metadata");
+            && after_output.stamp.origin.phase == SchedulerPhase::active
+            && output_value_reference == after_output.current,
+        "the original boundary driver changes only the slice and preserves full-width "
+        "history, metadata, and the observed live value reference");
+    std::optional<PackedLogic4> outside_reader_value;
+    std::optional<InstructionIndex> outside_reader_pc;
+    std::optional<ProcessStatus> outside_reader_status;
+    std::optional<std::uint32_t> outside_reader_generation;
+    std::optional<bool> outside_reader_waiting_on_static;
+    std::optional<bool> outside_reader_queued;
+    if (outside_reader_executor != OutsideBoundaryReaderExecutor::none) {
+        require(outside_reader_value_id.has_value(),
+            "the outside reader has a checked readback signal");
+        outside_reader_value = interpreter.signal_value(
+            *outside_reader_value_id);
+        const auto* const state
+            = implementation.processes.full_state_if_present(
+                outside_reader_id);
+        require(state != nullptr,
+            "the outside reader retains its ordinary ProcessState");
+        outside_reader_pc = state->pc;
+        outside_reader_status = state->status;
+        outside_reader_generation = state->generation;
+        outside_reader_waiting_on_static = state->waiting_on_static;
+        outside_reader_queued = state->queued;
+    }
     return { std::move(startup), std::move(updated), native_dispatch_delta,
-        runtime_prepared, runtime_retained };
+        selected_sync_pass_delta, full_sync_pass_delta,
+        boundary_sync_eligible_delta, boundary_sync_conservative_delta,
+        runtime_prepared, runtime_retained,
+        timing_report_count, callback_deposit_count,
+        private_boundary_callback_count,
+        forced_full_private_callback_count,
+        output_pending_callback_count, std::move(outside_reader_value),
+        outside_reader_pc, outside_reader_status, outside_reader_generation,
+        outside_reader_waiting_on_static, outside_reader_queued,
+        outside_reader_resume_count };
 }
 
 void check_partial_boundary_staged_event_slice_publication(
@@ -5305,8 +6657,11 @@ void check_partial_boundary_staged_event_slice_publication(
 {
     for (const auto& [signal_width, offset, slice_width] : {
              std::array<std::uint32_t, 3U> { 8U, 3U, 1U },
+             std::array<std::uint32_t, 3U> { 8U, 0U, 8U },
              std::array<std::uint32_t, 3U> { 129U, 32U, 65U },
          }) {
+        const auto geometry_suffix = "_geometry_" + std::to_string(offset)
+            + "_" + std::to_string(slice_width);
         PartialBoundaryPublicationRun checked;
         {
             ScopedEnvironment region_disabled {
@@ -5321,25 +6676,62 @@ void check_partial_boundary_staged_event_slice_publication(
                 "FSIM_ENABLE_SV_REGION_KERNEL", "1" };
             ScopedEnvironment wave_enabled {
                 "FSIM_ENABLE_SV_LOCAL_WAVE", "1" };
+            ScopedEnvironment profile_enabled { "FSIM_PROFILE_SV_WAVES", "1" };
             return run_partial_boundary_publication_case(
                 std::make_shared<FrontierOnlyProvider>(provider), &process_jit,
-                signal_width, offset, slice_width);
+                signal_width, offset, slice_width, false,
+                geometry_suffix + "_candidate");
         }();
         const auto unoptimized = [&]() {
             ScopedEnvironment region_enabled {
                 "FSIM_ENABLE_SV_REGION_KERNEL", "1" };
             ScopedEnvironment wave_enabled {
                 "FSIM_ENABLE_SV_LOCAL_WAVE", "1" };
+            ScopedEnvironment profile_enabled { "FSIM_PROFILE_SV_WAVES", "1" };
             return run_partial_boundary_publication_case(
                 std::make_shared<FrontierOnlyProvider>(o0_provider),
-                &o0_process_jit, signal_width, offset, slice_width);
+                &o0_process_jit, signal_width, offset, slice_width, false,
+                geometry_suffix + "_o0");
         }();
         require(checked.runtime_prepared && optimized.runtime_prepared
                 && unoptimized.runtime_prepared
                 && optimized.runtime_retained && unoptimized.runtime_retained
                 && optimized.native_dispatch_delta >= 2U
                 && unoptimized.native_dispatch_delta >= 2U,
-            "both LLVM levels retain authentic V2 dispatch through partial boundary publication");
+            "both LLVM levels retain authentic V2 dispatch through boundary publication");
+        if (signal_width <= 64U) {
+            const auto unavailable = [&]() {
+                ScopedEnvironment region_enabled {
+                    "FSIM_ENABLE_SV_REGION_KERNEL", "1" };
+                ScopedEnvironment wave_enabled {
+                    "FSIM_ENABLE_SV_LOCAL_WAVE", "1" };
+                ScopedEnvironment profile_enabled {
+                    "FSIM_PROFILE_SV_WAVES", "1" };
+                return run_partial_boundary_publication_case(
+                    std::make_shared<FrontierOnlyProvider>(provider),
+                    &process_jit, signal_width, offset, slice_width, false,
+                    geometry_suffix + "_workset_unavailable", true);
+            }();
+            require(unavailable.runtime_prepared
+                    && unavailable.runtime_retained
+                    && unavailable.native_dispatch_delta >= 2U
+                    && unavailable.boundary_sync_conservative_delta != 0U
+                    && unavailable.full_sync_pass_delta
+                        > optimized.full_sync_pass_delta,
+                "the same private entry falls back to full sync when its workset is unavailable");
+            require(same_alias_signal_state(checked.updated[0U],
+                        unavailable.updated[0U])
+                    && same_alias_signal_state(checked.updated[1U],
+                        unavailable.updated[1U])
+                    && same_alias_signal_state(checked.updated[2U],
+                        unavailable.updated[2U]),
+                "the workset-unavailable full-sync control preserves checked signal state");
+        }
+        if (signal_width <= 64U) {
+            require(optimized.boundary_sync_eligible_delta != 0U
+                    && unoptimized.boundary_sync_eligible_delta != 0U,
+                "both LLVM levels hit the bounded known-effects boundary admission");
+        }
         for (const auto* const compiled : { &optimized, &unoptimized }) {
             require(same_alias_signal_state(checked.startup[0U],
                         compiled->startup[0U])
@@ -5353,8 +6745,938 @@ void check_partial_boundary_staged_event_slice_publication(
                         compiled->updated[1U])
                     && same_alias_signal_state(checked.updated[2U],
                         compiled->updated[2U]),
-                "checked and O0/O2 routes preserve full signal roles, LAST, owner, event, and transaction state");
+                "checked and O0/O2 routes preserve full signal roles, LAST, owner, "
+                "event, and transaction state");
         }
+    }
+}
+
+void check_boundary_sync_outside_reader_marker(
+    const std::shared_ptr<RegionKernelBackendProvider>& provider,
+    fsim::compiler::LlvmJit& process_jit)
+{
+    constexpr std::uint32_t signal_width = 8U;
+    constexpr std::uint32_t slice_offset = 3U;
+    constexpr std::uint32_t slice_width = 1U;
+    const auto run = [&](
+        const std::shared_ptr<RegionKernelBackendProvider>& selected_provider,
+        const OutsideBoundaryReaderExecutor reader_executor,
+        const std::string_view suffix) {
+        ScopedEnvironment profile_enabled { "FSIM_PROFILE_SV_WAVES", "1" };
+        return run_partial_boundary_publication_case(selected_provider,
+            &process_jit, signal_width, slice_offset, slice_width, false,
+            suffix, false, reader_executor);
+    };
+
+    PartialBoundaryPublicationRun checked;
+    {
+        ScopedEnvironment region_disabled {
+            "FSIM_ENABLE_SV_REGION_KERNEL", "0" };
+        ScopedEnvironment wave_disabled {
+            "FSIM_ENABLE_SV_LOCAL_WAVE", "0" };
+        checked = run(nullptr, OutsideBoundaryReaderExecutor::builtin,
+            "_outside_reader_checked");
+    }
+    const auto unsealed = [&]() {
+        ScopedEnvironment region_enabled {
+            "FSIM_ENABLE_SV_REGION_KERNEL", "1" };
+        ScopedEnvironment wave_enabled {
+            "FSIM_ENABLE_SV_LOCAL_WAVE", "1" };
+        return run(std::make_shared<FrontierOnlyProvider>(provider),
+            OutsideBoundaryReaderExecutor::unsealed_adapter,
+            "_outside_reader_unsealed");
+    }();
+    const auto builtin = [&]() {
+        ScopedEnvironment region_enabled {
+            "FSIM_ENABLE_SV_REGION_KERNEL", "1" };
+        ScopedEnvironment wave_enabled {
+            "FSIM_ENABLE_SV_LOCAL_WAVE", "1" };
+        return run(std::make_shared<FrontierOnlyProvider>(provider),
+            OutsideBoundaryReaderExecutor::builtin,
+            "_outside_reader_builtin");
+    }();
+
+    const PackedLogic4 expected_value = checked.updated[2U].current;
+    require(checked.runtime_prepared && checked.native_dispatch_delta == 0U
+            && unsealed.runtime_prepared
+            && builtin.runtime_prepared
+            && unsealed.runtime_retained && builtin.runtime_retained
+            && unsealed.native_dispatch_delta >= 2U
+            && builtin.native_dispatch_delta >= 2U,
+        "the matched reader cases keep the checked route and authentic private boundary entry");
+    require(unsealed.boundary_sync_conservative_delta != 0U
+            && unsealed.boundary_sync_eligible_delta == 0U
+            && unsealed.full_sync_pass_delta != 0U
+            && builtin.boundary_sync_eligible_delta != 0U
+            && builtin.boundary_sync_conservative_delta == 0U
+            && builtin.selected_sync_pass_delta != 0U,
+        "only the sealed builtin reader admits the selected boundary synchronization path");
+    require(checked.outside_reader_value == expected_value
+            && unsealed.outside_reader_value == expected_value
+            && builtin.outside_reader_value == expected_value
+            && unsealed.outside_reader_resume_count >= 2U
+            && checked.outside_reader_pc == unsealed.outside_reader_pc
+            && checked.outside_reader_pc == builtin.outside_reader_pc
+            && checked.outside_reader_status == unsealed.outside_reader_status
+            && checked.outside_reader_status == builtin.outside_reader_status
+            && checked.outside_reader_generation
+                == unsealed.outside_reader_generation
+            && checked.outside_reader_generation
+                == builtin.outside_reader_generation
+            && checked.outside_reader_waiting_on_static == true
+            && checked.outside_reader_waiting_on_static
+                == unsealed.outside_reader_waiting_on_static
+            && checked.outside_reader_waiting_on_static
+                == builtin.outside_reader_waiting_on_static
+            && checked.outside_reader_queued == false
+            && checked.outside_reader_queued == unsealed.outside_reader_queued
+            && checked.outside_reader_queued == builtin.outside_reader_queued,
+        "the outside reader consumes the changed value and ends in identical ordinary scheduler state");
+    for (std::size_t index = 0U; index < checked.updated.size(); ++index) {
+        require(same_alias_signal_state(checked.startup[index],
+                    unsealed.startup[index])
+                && same_alias_signal_state(checked.startup[index],
+                    builtin.startup[index])
+                && same_alias_signal_state(checked.updated[index],
+                    unsealed.updated[index])
+                && same_alias_signal_state(checked.updated[index],
+                    builtin.updated[index]),
+            "checked, custom-reader, and builtin-reader runs preserve exact source, private, and boundary state");
+    }
+}
+
+class UnsealedBoundaryWriterExecutor final
+    : public ProcessExecutor
+    , public RegionKernelParkedExecutor {
+public:
+    explicit UnsealedBoundaryWriterExecutor(
+        std::unique_ptr<ProcessExecutor> delegate) noexcept
+        : delegate_ { std::move(delegate) }
+    {
+    }
+
+    [[nodiscard]] ProcessResumeResult resume(
+        ProcessExecutionContext& context,
+        const InstructionIndex start_instruction) override
+    {
+        return delegate_->resume(context, start_instruction);
+    }
+
+    [[nodiscard]] std::size_t resume_cohort(
+        const std::span<ProcessCohortResumeEntry> entries) override
+    {
+        return delegate_->resume_cohort(entries);
+    }
+
+    [[nodiscard]] std::size_t resume_ordered_cohort(
+        const std::span<ProcessCohortResumeEntry> entries) override
+    {
+        return delegate_->resume_ordered_cohort(entries);
+    }
+
+    [[nodiscard]] bool cohort_manages_process_state() const noexcept override
+    {
+        return delegate_->cohort_manages_process_state();
+    }
+
+    [[nodiscard]] const void* cohort_domain() const noexcept override
+    {
+        return delegate_->cohort_domain();
+    }
+
+    [[nodiscard]] const ProcessExecutorProgramBinding*
+    program_access_binding() const noexcept override
+    {
+        return delegate_->program_access_binding();
+    }
+
+    [[nodiscard]] bool region_kernel_equivalent() const noexcept override
+    {
+        return delegate_->region_kernel_equivalent();
+    }
+
+    [[nodiscard]] bool
+    region_kernel_completion_has_no_persistent_registers() const noexcept
+        override
+    {
+        return delegate_->region_kernel_completion_has_no_persistent_registers();
+    }
+
+    [[nodiscard]] bool region_kernel_completion_is_parked_native(
+        const ProcessId process,
+        const InstructionIndex wait_instruction,
+        const InstructionIndex jump_instruction,
+        const std::span<const ProcessExecutor::RegionRegisterBinding> bindings,
+        const std::size_t activation_register_count) const noexcept override
+    {
+        const auto* const parked
+            = dynamic_cast<const RegionKernelParkedExecutor*>(delegate_.get());
+        return parked != nullptr
+            && parked->region_kernel_completion_is_parked_native(process,
+                wait_instruction, jump_instruction, bindings,
+                activation_register_count);
+    }
+
+private:
+    std::unique_ptr<ProcessExecutor> delegate_;
+};
+
+[[nodiscard]] bool same_boundary_process_semantics(
+    const MemberSyncProcessCut& left,
+    const MemberSyncProcessCut& right) noexcept
+{
+    return left.process == right.process
+        && left.pc == right.pc
+        && left.wait_timeout_origin == right.wait_timeout_origin
+        && left.static_trigger_mask == right.static_trigger_mask
+        && left.execution_phase == right.execution_phase
+        && left.status == right.status
+        && left.suspended_status == right.suspended_status
+        && left.generation == right.generation
+        && left.queued == right.queued
+        && left.waiting_on_static == right.waiting_on_static
+        && left.waiting_on_signal == right.waiting_on_signal
+        && left.suspended == right.suspended
+        && left.suspended_wake == right.suspended_wake
+        && left.halted == right.halted
+        && left.killed == right.killed
+        && left.current_source == right.current_source
+        && left.current_scope == right.current_scope;
+}
+
+struct MultiOwnerSliceBoundaryRun final {
+    std::array<AliasSignalState, 4U> startup_signals;
+    std::array<AliasSignalState, 4U> updated_signals;
+    std::array<MemberSyncProcessCut, 4U> startup_processes;
+    std::array<MemberSyncProcessCut, 4U> updated_processes;
+    std::uint64_t native_dispatch_delta { };
+    std::uint64_t selected_sync_pass_delta { };
+    std::uint64_t full_sync_pass_delta { };
+    std::uint64_t boundary_sync_eligible_delta { };
+    std::uint64_t boundary_sync_conservative_delta { };
+    std::uint64_t unsealed_current_writer_reject_delta { };
+    bool runtime_prepared { };
+    bool runtime_retained { };
+    bool exact_a4_disjoint_layout { };
+    bool no_a4_boundary_target { };
+    bool exact_writer_inventory { };
+};
+
+[[nodiscard]] MultiOwnerSliceBoundaryRun run_multiowner_slice_boundary_case(
+    const std::shared_ptr<RegionKernelBackendProvider>& provider,
+    fsim::compiler::LlvmJit* const process_jit,
+    const bool unseal_high_writer,
+    const std::string_view process_name_suffix,
+    const bool overlapping_conflict = false)
+{
+    constexpr SignalId input_id = 0U;
+    constexpr SignalId internal_id = 1U;
+    constexpr SignalId boundary_id = 2U;
+    constexpr ProcessId producer_id = 0U;
+    constexpr ProcessId low_writer_id = 1U;
+    constexpr ProcessId high_writer_id = 2U;
+    constexpr ProcessId clock_id = 3U;
+    constexpr std::uint32_t signal_width = 8U;
+    constexpr SimulationTick stimulus_time = 1U;
+    const auto changed_source
+        = PackedLogic4::from_msb_string("10100101");
+    const std::uint32_t low_source_offset { 0U };
+    const std::uint32_t high_source_offset { 4U };
+    const std::uint32_t low_output_offset { 0U };
+    const std::uint32_t high_output_offset = overlapping_conflict ? 0U : 4U;
+    constexpr std::uint32_t slice_width = 4U;
+
+    require((provider == nullptr) == (process_jit == nullptr)
+            && (!unseal_high_writer || provider != nullptr),
+        "the multiowner slice case pairs each native provider with its process JIT");
+    const std::array<std::uint32_t, 3U> signal_widths {
+        signal_width, signal_width, signal_width };
+    const std::array<ValueKind, 3U> signal_kinds {
+        ValueKind::logic4, ValueKind::logic4, ValueKind::logic4 };
+    const std::array<ResolutionKind, 3U> signal_resolutions {
+        ResolutionKind::sv_wire, ResolutionKind::sv_wire,
+        ResolutionKind::sv_wire };
+    std::array<std::optional<Process>, 3U> registered_members;
+    Interpreter interpreter;
+    const auto input = interpreter.add_signal({
+        "multiowner_slice.input", PackedLogic4 { signal_width, Logic4::zero },
+        ResolutionKind::sv_wire });
+    const auto internal = interpreter.add_signal({
+        "multiowner_slice.internal",
+        PackedLogic4 { signal_width, Logic4::zero }, ResolutionKind::sv_wire });
+    const auto boundary = interpreter.add_signal({
+        "multiowner_slice.boundary",
+        PackedLogic4 { signal_width, Logic4::zero }, ResolutionKind::sv_wire });
+    require(input == input_id && internal == internal_id
+            && boundary == boundary_id,
+        "the two-owner case keeps dense input, private, and boundary signal IDs");
+
+    const auto add_native_member = [&](Process process) {
+        const auto id = process.id;
+        require(id < registered_members.size(),
+            "only producer and both slice owners belong to the private component");
+        auto& registered = registered_members[id].emplace(std::move(process));
+        const auto name = registered.name;
+        require(interpreter.add_process(registered) == id,
+            "the multiowner component retains canonical process IDs");
+        if (process_jit == nullptr) {
+            return;
+        }
+        process_jit->add_process(name, registered,
+            signal_widths, signal_kinds);
+        const auto handle = process_jit->lookup(name);
+        require(static_cast<bool>(handle),
+            "LLVM retains every real member in the multiowner component");
+        std::unique_ptr<ProcessExecutor> executor
+            = std::make_unique<fsim::app::application_detail::LlvmProcessExecutor>(
+                *process_jit, handle, registered, signal_widths,
+                signal_kinds, signal_resolutions,
+                std::shared_ptr<const ProcessSignalRemap> { }, id);
+        const auto* const binding = executor->program_access_binding();
+        require(binding != nullptr && binding->valid()
+                && executor->region_kernel_equivalent()
+                && executor->cohort_manages_process_state()
+                && executor->region_kernel_completion_has_no_persistent_registers(),
+            "the native process executors satisfy the actual V2 member contract");
+        if (unseal_high_writer && id == high_writer_id) {
+            require(dynamic_cast<const fsim::runtime::simir::detail::BuiltinProcessExecutorCapability*>(
+                        executor.get()) != nullptr,
+                "the negative control begins with the real sealed builtin writer");
+            executor = std::make_unique<UnsealedBoundaryWriterExecutor>(
+                std::move(executor));
+            require(executor->program_access_binding() == binding
+                    && executor->program_access_binding()->valid()
+                    && executor->region_kernel_equivalent()
+                    && executor->cohort_manages_process_state()
+                    && !dynamic_cast<const fsim::runtime::simir::detail::BuiltinProcessExecutorCapability*>(
+                        executor.get()),
+                "the delegating writer keeps the exact binding and V2 behavior but loses the private builtin seal");
+        }
+        interpreter.set_process_executor(id, std::move(executor));
+    };
+
+    Process producer;
+    producer.id = producer_id;
+    producer.name = "multiowner_slice_producer_"
+        + std::string { process_name_suffix };
+    producer.scheduling_domain = ProcessSchedulingDomain::systemverilog;
+    producer.register_count = 1U;
+    producer.register_value_kinds = { ValueKind::logic4 };
+    producer.static_sensitivity = { { input, EdgeKind::any } };
+    producer.driver_regions = { { internal, 0U, 0U, true } };
+    producer.operations = {
+        ReadSignal { 0U, input },
+        WriteUpdate { internal, 0U,
+            SignalUpdateDomain::systemverilog_active },
+        WaitSensitivity { },
+        Jump { 0U },
+    };
+    add_native_member(std::move(producer));
+
+    Process low_writer;
+    low_writer.id = low_writer_id;
+    low_writer.name = "multiowner_slice_low_writer_"
+        + std::string { process_name_suffix };
+    low_writer.scheduling_domain = ProcessSchedulingDomain::systemverilog;
+    low_writer.register_count = 2U;
+    low_writer.register_value_kinds = {
+        ValueKind::logic4, ValueKind::logic4 };
+    low_writer.static_sensitivity = { { internal, EdgeKind::any } };
+    low_writer.driver_regions = {
+        { boundary, low_output_offset, slice_width, false },
+    };
+    low_writer.operations = {
+        ReadSignal { 0U, internal },
+        Extract { 1U, 0U, low_source_offset, slice_width },
+        WriteUpdateSlice { boundary, 1U, low_output_offset,
+            SignalUpdateDomain::systemverilog_active },
+        WaitSensitivity { },
+        Jump { 0U },
+    };
+    add_native_member(std::move(low_writer));
+
+    Process high_writer;
+    high_writer.id = high_writer_id;
+    high_writer.name = "multiowner_slice_high_writer_"
+        + std::string { process_name_suffix };
+    high_writer.scheduling_domain = ProcessSchedulingDomain::systemverilog;
+    high_writer.register_count = 2U;
+    high_writer.register_value_kinds = {
+        ValueKind::logic4, ValueKind::logic4 };
+    high_writer.static_sensitivity = { { internal, EdgeKind::any } };
+    high_writer.driver_regions = {
+        { boundary, high_output_offset, slice_width, false },
+    };
+    high_writer.operations = {
+        ReadSignal { 0U, internal },
+        Extract { 1U, 0U, high_source_offset, slice_width },
+        WriteUpdateSlice { boundary, 1U, high_output_offset,
+            SignalUpdateDomain::systemverilog_active },
+        WaitSensitivity { },
+        Jump { 0U },
+    };
+    add_native_member(std::move(high_writer));
+
+    Process clock;
+    clock.id = clock_id;
+    clock.name = "multiowner_slice_clock_"
+        + std::string { process_name_suffix };
+    clock.scheduling_domain = ProcessSchedulingDomain::systemverilog;
+    clock.register_count = 1U;
+    clock.register_value_kinds = { ValueKind::logic4 };
+    clock.driver_regions = { { input, 0U, 0U, true } };
+    clock.operations = {
+        LoadConstant { 0U, PackedLogic4 { signal_width, Logic4::zero } },
+        WriteBlocking { input, 0U },
+        WaitFor { stimulus_time },
+        LoadConstant { 0U, changed_source },
+        WriteBlocking { input, 0U },
+        Halt { },
+    };
+    require(interpreter.add_process(std::move(clock)) == clock_id,
+        "the timed input source remains outside the private three-member component");
+    if (provider != nullptr) {
+        interpreter.set_region_kernel_backend_provider(provider);
+    }
+
+    auto& implementation
+        = OwnedDriverDemotionTestAccess::implementation(interpreter);
+    const auto detached_signal_state = [&](const SignalId signal,
+                                           const ProcessId owner) {
+        auto state = capture_boundary_signal_state(
+            implementation, signal, owner);
+        const auto detach = [](const PackedLogic4& value) {
+            PackedLogic4 result { value.width(), Logic4::zero };
+            for (std::size_t bit = 0U; bit < value.width(); ++bit) {
+                result.set(bit, value.get(bit));
+            }
+            return result;
+        };
+        state.current = detach(state.current);
+        state.last = detach(state.last);
+        state.stored = detach(state.stored);
+        if (state.boundary_owner_value) {
+            state.boundary_owner_value = detach(*state.boundary_owner_value);
+        }
+        return state;
+    };
+    const auto capture_signals = [&]() {
+        // Parity snapshots must not retain read pins on writable role planes.
+        return std::array<AliasSignalState, 4U> {
+            detached_signal_state(input, clock_id),
+            detached_signal_state(internal, producer_id),
+            detached_signal_state(boundary, low_writer_id),
+            detached_signal_state(boundary, high_writer_id),
+        };
+    };
+    const auto capture_processes = [&]() {
+        std::array<MemberSyncProcessCut, 4U> result;
+        for (ProcessId id = 0U; id <= clock_id; ++id) {
+            const auto* const state
+                = implementation.processes.full_state_if_present(id);
+            require(state != nullptr,
+                "each member and stimulus retains its ordinary ProcessState");
+            auto& cut = result[id];
+            const auto& cold = state->cold();
+            cut.process = id;
+            cut.pc = state->pc;
+            cut.wait_timeout_origin = state->wait_timeout_origin;
+            cut.static_trigger_mask = state->static_trigger_mask;
+            cut.execution_phase = state->execution_phase;
+            cut.status = state->status;
+            cut.suspended_status = state->suspended_status;
+            cut.generation = state->generation;
+            cut.queued = state->queued;
+            cut.waiting_on_static = state->waiting_on_static;
+            cut.waiting_on_signal = state->waiting_on_signal;
+            cut.suspended = state->suspended;
+            cut.suspended_wake = state->suspended_wake;
+            cut.halted = state->halted;
+            cut.killed = state->killed;
+            cut.current_source = cold.current_source;
+            cut.current_scope = cold.current_scope;
+        }
+        return result;
+    };
+
+    interpreter.start();
+    const auto startup_result = interpreter.run(0U);
+    require(startup_result.status == RunStatus::time_limit
+            || startup_result.status == RunStatus::completed,
+        "initial processes settle before the multiowner slice stimulus");
+    MultiOwnerSliceBoundaryRun result;
+    result.startup_signals = capture_signals();
+    result.startup_processes = capture_processes();
+
+    const auto& signal = implementation.signals.at(boundary);
+    const auto& drivers = implementation.driver_values.at(boundary);
+    const std::array<ProcessId, 2U> expected_owners {
+        low_writer_id, high_writer_id };
+    result.exact_writer_inventory
+        = implementation.signal_writer_counts.at(boundary)
+                == expected_owners.size()
+            && drivers.size() == expected_owners.size()
+            && std::ranges::all_of(expected_owners,
+                [&](const ProcessId owner) {
+                    const auto* const record = drivers.find(owner);
+                    return record != nullptr
+                        && record->strength == DriveStrength { }
+                        && !record->scalar_regions;
+                })
+            && implementation.signal_container_aliases.at(boundary).empty()
+            && !implementation.signal_container_element_aliases.at(boundary)
+            && !implementation.signal_container_aggregate_aliases.at(boundary)
+            && signal.value_kind == ValueKind::logic4
+            && signal.resolution == ResolutionKind::sv_wire
+            && signal.initial_value.width() == signal_width
+            && !signal.event_variable && !signal.has_implicit_driver
+            && !signal.has_charge_strength;
+
+    std::shared_ptr<RuntimeImplementation::RegionFrontierComponentRuntime>
+        runtime_pin;
+    RuntimeImplementation::RegionFrontierComponentRuntime* runtime { };
+    std::size_t component { std::numeric_limits<std::size_t>::max() };
+    std::uint64_t runtime_generation { };
+    std::uint64_t dispatches_before { };
+    std::uint64_t selected_before { };
+    std::uint64_t full_before { };
+    std::uint64_t eligible_before { };
+    std::uint64_t conservative_before { };
+    const auto unsealed_reason = static_cast<std::size_t>(
+        FrontierBoundarySyncRejectReason::unsealed_current_writer);
+    const auto unsealed_rejects_before
+        = implementation.systemverilog_wave_profile_boundary_sync_first_rejects.at(
+            unsealed_reason);
+    if (provider != nullptr) {
+        component = implementation.region_component_by_process.at(low_writer_id);
+        require(component == implementation.region_component_by_process.at(high_writer_id)
+                && component == implementation.region_component_by_process.at(producer_id)
+                && component < implementation.region_frontier_runtime_by_component.size(),
+            "producer and both exact slice owners share one authentic V2 component");
+        runtime_pin
+            = implementation.region_frontier_runtime_by_component.at(component);
+        runtime = runtime_pin.get();
+        require(runtime != nullptr && !runtime->invalidated
+                && runtime->backend != nullptr
+                && runtime->authoritative_state != nullptr
+                && runtime->authoritative_state->valid()
+                && runtime->backend->kernel.members.size() == 3U,
+            "the builtin candidate prepares a live three-member native boundary entry");
+        bool has_producer { };
+        bool has_low_writer { };
+        bool has_high_writer { };
+        for (const auto& member : runtime->backend->kernel.members) {
+            has_producer |= member.process == producer_id;
+            has_low_writer |= member.process == low_writer_id;
+            has_high_writer |= member.process == high_writer_id;
+        }
+        require(has_producer && has_low_writer && has_high_writer,
+            "the exact native entry contains the producer and both boundary owners");
+        const auto& layout = runtime->authoritative_state->values().layout();
+        if (overlapping_conflict) {
+            const bool resolved_or_unseeded = !layout.contains(boundary)
+                || layout.signal(boundary).storage_class
+                    == SignalDriverStorageClass::resolved_table;
+            result.no_a4_boundary_target = resolved_or_unseeded
+                && !runtime->authoritative_state->values()
+                    .packed_signal_slots_bound(boundary);
+            require(result.exact_writer_inventory
+                    && result.no_a4_boundary_target,
+                "overlapping owner ranges have no packed A4 boundary target slot");
+        } else {
+            require(layout.contains(boundary),
+                "the disjoint boundary has its exact A4 owner target");
+            const auto& layout_signal = layout.signal(boundary);
+            const auto layout_owners = layout.owners(boundary);
+            const auto low_mask
+                = layout.owner_mask_words(boundary, low_writer_id);
+            const auto high_mask
+                = layout.owner_mask_words(boundary, high_writer_id);
+            result.exact_a4_disjoint_layout
+                = layout_signal.width == signal_width
+                && layout_signal.storage_class
+                    == SignalDriverStorageClass::disjoint_owner
+                && layout_signal.owner_count == expected_owners.size()
+                && layout_owners.size() == expected_owners.size()
+                && layout_owners[0U].process == low_writer_id
+                && layout_owners[1U].process == high_writer_id
+                && low_mask.size() == 1U
+                && low_mask[0U] == UINT64_C(0x0f)
+                && high_mask.size() == 1U
+                && high_mask[0U] == UINT64_C(0xf0)
+                && runtime->authoritative_state->values()
+                    .packed_slots_bound()
+                && runtime->authoritative_state->values()
+                    .packed_signal_slots_bound(boundary)
+                && runtime->authoritative_state->values()
+                    .packed_owner_slot_bound(boundary, low_writer_id)
+                && runtime->authoritative_state->values()
+                    .packed_owner_slot_bound(boundary, high_writer_id);
+            require(result.exact_writer_inventory
+                    && result.exact_a4_disjoint_layout,
+                "the current 8-bit A4 layout matches both default-strength sliced owners exactly");
+        }
+        runtime_generation = implementation.region_runtime_generation;
+        dispatches_before = runtime->native_member_dispatches;
+        selected_before = runtime->member_sync_selected_passes;
+        full_before = runtime->member_sync_full_passes;
+        eligible_before
+            = implementation.systemverilog_wave_profile_boundary_sync_eligible;
+        conservative_before
+            = implementation.systemverilog_wave_profile_boundary_sync_conservative;
+    }
+
+    const auto run_result = interpreter.run(stimulus_time);
+    require(run_result.status == RunStatus::time_limit
+            || run_result.status == RunStatus::completed,
+        "the source update reaches a normal scheduler quiet point");
+    result.updated_signals = capture_signals();
+    result.updated_processes = capture_processes();
+    if (runtime != nullptr) {
+        result.runtime_prepared = true;
+        result.native_dispatch_delta
+            = runtime->native_member_dispatches - dispatches_before;
+        result.selected_sync_pass_delta
+            = runtime->member_sync_selected_passes - selected_before;
+        result.full_sync_pass_delta
+            = runtime->member_sync_full_passes - full_before;
+        result.boundary_sync_eligible_delta
+            = implementation.systemverilog_wave_profile_boundary_sync_eligible
+                - eligible_before;
+        result.boundary_sync_conservative_delta
+            = implementation.systemverilog_wave_profile_boundary_sync_conservative
+                - conservative_before;
+        result.unsealed_current_writer_reject_delta
+            = implementation.systemverilog_wave_profile_boundary_sync_first_rejects.at(
+                unsealed_reason) - unsealed_rejects_before;
+        result.runtime_retained
+            = runtime_pin != nullptr
+            && implementation.region_frontier_runtime_by_component.at(component)
+                == runtime_pin
+            && runtime_pin.get() == runtime
+            && implementation.region_runtime_generation == runtime_generation
+            && !runtime_pin->invalidated
+            && runtime_pin->frame.pending_write_count == 0U
+            && runtime_pin->frame.staged_event_count == 0U
+            && runtime_pin->frame.committed_signal_count == 0U
+            && runtime_pin->frame.scheduler_task_cursor
+                == runtime_pin->frame.scheduler_task_count;
+    }
+    return result;
+}
+
+void check_multiowner_slice_boundary_selected_sync(
+    const std::shared_ptr<RegionKernelBackendProvider>& provider,
+    fsim::compiler::LlvmJit& process_jit,
+    const std::shared_ptr<RegionKernelBackendProvider>& o0_provider,
+    fsim::compiler::LlvmJit& o0_process_jit)
+{
+    const auto checked = [&]() {
+        ScopedEnvironment region_disabled {
+            "FSIM_ENABLE_SV_REGION_KERNEL", "0" };
+        ScopedEnvironment wave_disabled {
+            "FSIM_ENABLE_SV_LOCAL_WAVE", "0" };
+        ScopedEnvironment disjoint_disabled {
+            "FSIM_ENABLE_A4_WIDE_DISJOINT_OWNER_COMMIT", "0" };
+        return run_multiowner_slice_boundary_case(nullptr, nullptr, false,
+            "_checked");
+    }();
+    const auto optimized = [&]() {
+        ScopedEnvironment region_enabled {
+            "FSIM_ENABLE_SV_REGION_KERNEL", "1" };
+        ScopedEnvironment wave_enabled {
+            "FSIM_ENABLE_SV_LOCAL_WAVE", "1" };
+        ScopedEnvironment disjoint_enabled {
+            "FSIM_ENABLE_A4_WIDE_DISJOINT_OWNER_COMMIT", "1" };
+        ScopedEnvironment profile_enabled { "FSIM_PROFILE_SV_WAVES", "1" };
+        return run_multiowner_slice_boundary_case(
+            std::make_shared<FrontierOnlyProvider>(provider), &process_jit,
+            false, "_candidate_o2");
+    }();
+    const auto unoptimized = [&]() {
+        ScopedEnvironment region_enabled {
+            "FSIM_ENABLE_SV_REGION_KERNEL", "1" };
+        ScopedEnvironment wave_enabled {
+            "FSIM_ENABLE_SV_LOCAL_WAVE", "1" };
+        ScopedEnvironment disjoint_enabled {
+            "FSIM_ENABLE_A4_WIDE_DISJOINT_OWNER_COMMIT", "1" };
+        ScopedEnvironment profile_enabled { "FSIM_PROFILE_SV_WAVES", "1" };
+        return run_multiowner_slice_boundary_case(
+            std::make_shared<FrontierOnlyProvider>(o0_provider),
+            &o0_process_jit, false, "_candidate_o0");
+    }();
+    const auto unsealed = [&]() {
+        ScopedEnvironment region_enabled {
+            "FSIM_ENABLE_SV_REGION_KERNEL", "1" };
+        ScopedEnvironment wave_enabled {
+            "FSIM_ENABLE_SV_LOCAL_WAVE", "1" };
+        ScopedEnvironment disjoint_enabled {
+            "FSIM_ENABLE_A4_WIDE_DISJOINT_OWNER_COMMIT", "1" };
+        ScopedEnvironment profile_enabled { "FSIM_PROFILE_SV_WAVES", "1" };
+        return run_multiowner_slice_boundary_case(
+            std::make_shared<FrontierOnlyProvider>(provider), &process_jit,
+            true, "_unsealed_high_writer");
+    }();
+
+    const auto overlap_checked = [&]() {
+        ScopedEnvironment region_disabled {
+            "FSIM_ENABLE_SV_REGION_KERNEL", "0" };
+        ScopedEnvironment wave_disabled {
+            "FSIM_ENABLE_SV_LOCAL_WAVE", "0" };
+        ScopedEnvironment disjoint_disabled {
+            "FSIM_ENABLE_A4_WIDE_DISJOINT_OWNER_COMMIT", "0" };
+        return run_multiowner_slice_boundary_case(nullptr, nullptr, false,
+            "_overlap_checked", true);
+    }();
+    const auto overlap_candidate = [&]() {
+        ScopedEnvironment region_enabled {
+            "FSIM_ENABLE_SV_REGION_KERNEL", "1" };
+        ScopedEnvironment wave_enabled {
+            "FSIM_ENABLE_SV_LOCAL_WAVE", "1" };
+        ScopedEnvironment disjoint_enabled {
+            "FSIM_ENABLE_A4_WIDE_DISJOINT_OWNER_COMMIT", "1" };
+        ScopedEnvironment profile_enabled { "FSIM_PROFILE_SV_WAVES", "1" };
+        return run_multiowner_slice_boundary_case(
+            std::make_shared<FrontierOnlyProvider>(provider), &process_jit,
+            false, "_overlap_candidate", true);
+    }();
+
+    const auto overlap_unoptimized = [&]() {
+        ScopedEnvironment region_enabled {
+            "FSIM_ENABLE_SV_REGION_KERNEL", "1" };
+        ScopedEnvironment wave_enabled {
+            "FSIM_ENABLE_SV_LOCAL_WAVE", "1" };
+        ScopedEnvironment disjoint_enabled {
+            "FSIM_ENABLE_A4_WIDE_DISJOINT_OWNER_COMMIT", "1" };
+        ScopedEnvironment profile_enabled { "FSIM_PROFILE_SV_WAVES", "1" };
+        return run_multiowner_slice_boundary_case(
+            std::make_shared<FrontierOnlyProvider>(o0_provider),
+            &o0_process_jit, false, "_overlap_candidate_o0", true);
+    }();
+
+    const auto expected_output
+        = PackedLogic4::from_msb_string("10100101");
+    require(optimized.runtime_prepared && unoptimized.runtime_prepared
+            && optimized.runtime_retained && unoptimized.runtime_retained
+            && optimized.exact_writer_inventory
+            && unoptimized.exact_writer_inventory
+            && optimized.exact_a4_disjoint_layout
+            && unoptimized.exact_a4_disjoint_layout
+            && optimized.native_dispatch_delta != 0U
+            && unoptimized.native_dispatch_delta != 0U,
+        "O0 and O2 reach the same authenticated three-member disjoint-owner boundary entry");
+    require(optimized.boundary_sync_eligible_delta != 0U
+            && unoptimized.boundary_sync_eligible_delta != 0U
+            && optimized.selected_sync_pass_delta != 0U
+            && unoptimized.selected_sync_pass_delta != 0U,
+        "the sealed multiowner slices admit boundary publication and selected member synchronization at both LLVM levels");
+    require(unsealed.runtime_prepared && unsealed.runtime_retained
+            && unsealed.exact_writer_inventory
+            && unsealed.exact_a4_disjoint_layout
+            && unsealed.native_dispatch_delta != 0U
+            && unsealed.boundary_sync_conservative_delta != 0U
+            && unsealed.full_sync_pass_delta != 0U
+            && unsealed.unsealed_current_writer_reject_delta != 0U,
+        "the identical native candidate keeps full synchronization when its actual high-slice writer is an unsealed binding-preserving wrapper");
+    require(checked.updated_signals[0U].current == expected_output
+            && checked.updated_signals[1U].current == expected_output
+            && checked.updated_signals[2U].current == expected_output
+            && checked.updated_signals[3U].current == expected_output,
+        "the checked route publishes the expected source, private, and merged boundary values");
+    for (std::size_t index = 0U; index < checked.updated_signals.size(); ++index) {
+        for (const auto* const compiled : { &optimized, &unoptimized, &unsealed }) {
+            require(same_alias_signal_state(checked.startup_signals[index],
+                        compiled->startup_signals[index])
+                    && same_alias_signal_state(checked.updated_signals[index],
+                        compiled->updated_signals[index]),
+                "checked, O0, O2, and unsealed full-sync runs preserve exact current, previous, stored, transaction, and raw-owner state");
+        }
+    }
+    for (std::size_t index = 0U; index < checked.updated_processes.size(); ++index) {
+        for (const auto* const compiled : { &optimized, &unoptimized, &unsealed }) {
+            require(same_boundary_process_semantics(
+                        checked.startup_processes[index],
+                        compiled->startup_processes[index])
+                    && same_boundary_process_semantics(
+                        checked.updated_processes[index],
+                        compiled->updated_processes[index]),
+                "checked and native routes preserve each owner, producer, and timed source ProcessState");
+        }
+    }
+    for (const auto process : { 0U, 1U, 2U }) {
+        require(checked.updated_processes[process].waiting_on_static
+                && !checked.updated_processes[process].queued,
+            "both slice owners and their producer return to the exact static-wait boundary");
+    }
+    require(checked.updated_processes[3U].halted
+            && !checked.updated_processes[3U].queued,
+        "the external timed source completes without remaining scheduler work");
+    const auto overlap_expected
+        = PackedLogic4::from_msb_string("ZZZZXXXX");
+    require(overlap_candidate.runtime_prepared
+            && overlap_unoptimized.runtime_prepared
+            && overlap_candidate.runtime_retained
+            && overlap_unoptimized.runtime_retained
+            && overlap_candidate.exact_writer_inventory
+            && overlap_unoptimized.exact_writer_inventory
+            && overlap_candidate.no_a4_boundary_target
+            && overlap_unoptimized.no_a4_boundary_target
+            && !overlap_candidate.exact_a4_disjoint_layout
+            && !overlap_unoptimized.exact_a4_disjoint_layout
+            && overlap_candidate.native_dispatch_delta != 0U
+            && overlap_unoptimized.native_dispatch_delta != 0U
+            && overlap_candidate.boundary_sync_eligible_delta != 0U
+            && overlap_unoptimized.boundary_sync_eligible_delta != 0U
+            && overlap_candidate.selected_sync_pass_delta != 0U
+            && overlap_unoptimized.selected_sync_pass_delta != 0U
+            && overlap_candidate.boundary_sync_conservative_delta == 0U
+            && overlap_unoptimized.boundary_sync_conservative_delta == 0U
+            && overlap_checked.updated_signals[2U].current == overlap_expected
+            && overlap_candidate.updated_signals[2U].current == overlap_expected
+            && overlap_unoptimized.updated_signals[2U].current == overlap_expected,
+        "O0 and O2 resolve overlapping opposite-nibble owners to ZZZZXXXX with selected synchronization and no packed A4 boundary target");
+    for (std::size_t index = 0U; index < overlap_checked.updated_signals.size(); ++index) {
+        require(same_alias_signal_state(overlap_checked.startup_signals[index],
+                    overlap_candidate.startup_signals[index])
+                && same_alias_signal_state(overlap_checked.updated_signals[index],
+                    overlap_candidate.updated_signals[index])
+                && same_alias_signal_state(overlap_checked.startup_signals[index],
+                    overlap_unoptimized.startup_signals[index])
+                && same_alias_signal_state(overlap_checked.updated_signals[index],
+                    overlap_unoptimized.updated_signals[index]),
+            "checked, O0, and O2 overlapping-owner runs preserve exact signal and transaction state");
+    }
+    for (std::size_t index = 0U; index < overlap_checked.updated_processes.size(); ++index) {
+        require(same_boundary_process_semantics(
+                    overlap_checked.startup_processes[index],
+                    overlap_candidate.startup_processes[index])
+                && same_boundary_process_semantics(
+                    overlap_checked.updated_processes[index],
+                    overlap_candidate.updated_processes[index])
+                && same_boundary_process_semantics(
+                    overlap_checked.startup_processes[index],
+                    overlap_unoptimized.startup_processes[index])
+                && same_boundary_process_semantics(
+                    overlap_checked.updated_processes[index],
+                    overlap_unoptimized.updated_processes[index]),
+            "checked, O0, and O2 overlapping-owner runs preserve exact process state");
+    }
+}
+
+void check_partial_boundary_timing_callback_full_sync_fallback(
+    const std::shared_ptr<RegionKernelBackendProvider>& provider,
+    fsim::compiler::LlvmJit& process_jit,
+    const std::shared_ptr<RegionKernelBackendProvider>& o0_provider,
+    fsim::compiler::LlvmJit& o0_process_jit)
+{
+    constexpr std::uint32_t signal_width = 8U;
+    constexpr std::uint32_t slice_offset = 3U;
+    constexpr std::uint32_t slice_width = 1U;
+    const auto run = [&](const auto& selected_provider,
+                         fsim::compiler::LlvmJit* const selected_jit,
+                         const bool timing_callback) {
+        ScopedEnvironment profile_enabled { "FSIM_PROFILE_SV_WAVES", "1" };
+        return run_partial_boundary_publication_case(selected_provider,
+            selected_jit, signal_width, slice_offset, slice_width,
+            timing_callback, timing_callback ? "_timing_callback" : "_control");
+    };
+
+    PartialBoundaryPublicationRun baseline;
+    PartialBoundaryPublicationRun checked;
+    {
+        ScopedEnvironment region_disabled {
+            "FSIM_ENABLE_SV_REGION_KERNEL", "0" };
+        ScopedEnvironment wave_disabled {
+            "FSIM_ENABLE_SV_LOCAL_WAVE", "0" };
+        checked = run(nullptr, nullptr, true);
+    }
+    {
+        ScopedEnvironment region_enabled {
+            "FSIM_ENABLE_SV_REGION_KERNEL", "1" };
+        ScopedEnvironment wave_enabled {
+            "FSIM_ENABLE_SV_LOCAL_WAVE", "1" };
+        baseline = run(std::make_shared<FrontierOnlyProvider>(provider),
+            &process_jit, false);
+    }
+    const auto optimized = [&]() {
+        ScopedEnvironment region_enabled {
+            "FSIM_ENABLE_SV_REGION_KERNEL", "1" };
+        ScopedEnvironment wave_enabled {
+            "FSIM_ENABLE_SV_LOCAL_WAVE", "1" };
+        return run(std::make_shared<FrontierOnlyProvider>(provider),
+            &process_jit, true);
+    }();
+    const auto unoptimized = [&]() {
+        ScopedEnvironment region_enabled {
+            "FSIM_ENABLE_SV_REGION_KERNEL", "1" };
+        ScopedEnvironment wave_enabled {
+            "FSIM_ENABLE_SV_LOCAL_WAVE", "1" };
+        return run(std::make_shared<FrontierOnlyProvider>(o0_provider),
+            &o0_process_jit, true);
+    }();
+
+    require(baseline.runtime_prepared && baseline.runtime_retained
+            && baseline.native_dispatch_delta >= 2U,
+        "the control run retains authentic V2 dispatch without callback effects");
+    require(baseline.timing_report_count == 0U
+            && baseline.callback_deposit_count == 0U
+            && checked.timing_report_count == 1U
+            && checked.callback_deposit_count == 1U
+            && optimized.timing_report_count == checked.timing_report_count
+            && optimized.callback_deposit_count == checked.callback_deposit_count
+            && unoptimized.timing_report_count == checked.timing_report_count
+            && unoptimized.callback_deposit_count == checked.callback_deposit_count,
+        "only a real matched timing violation invokes the input-deposit hook");
+    require(checked.private_boundary_callback_count == 0U
+            && checked.forced_full_private_callback_count == 0U
+            && checked.output_pending_callback_count == 0U,
+        "the checked reference has no private frontier callback state");
+    for (const auto* const compiled : { &optimized, &unoptimized }) {
+        if (compiled->private_boundary_callback_count != 1U
+            || compiled->forced_full_private_callback_count != 1U
+            || compiled->output_pending_callback_count != 1U) {
+            std::cerr << "Timing callback state: private="
+                      << compiled->private_boundary_callback_count
+                      << " forced_full="
+                      << compiled->forced_full_private_callback_count
+                      << " output_pending="
+                      << compiled->output_pending_callback_count
+                      << " runtime_retained=" << compiled->runtime_retained
+                      << " native_dispatches=" << compiled->native_dispatch_delta
+                      << " full_sync=" << compiled->full_sync_pass_delta
+                      << " selected_sync=" << compiled->selected_sync_pass_delta
+                      << '\n';
+        }
+        require(compiled->private_boundary_callback_count == 1U
+                && compiled->forced_full_private_callback_count == 1U
+                && compiled->output_pending_callback_count == 1U,
+            "the report hook runs inside one private forced-full boundary callback for output Y");
+    }
+    require(optimized.runtime_prepared && unoptimized.runtime_prepared
+            && optimized.native_dispatch_delta != 0U
+            && unoptimized.native_dispatch_delta != 0U,
+        "both LLVM routes enter the prepared native boundary before callback effects");
+    for (const auto* const compiled : { &optimized, &unoptimized }) {
+        const bool conservative_sync_or_checked_fallback
+            = !compiled->runtime_retained
+            || compiled->full_sync_pass_delta > baseline.full_sync_pass_delta;
+        require(conservative_sync_or_checked_fallback,
+            "unknown report-hook effects keep a full member sync or fall back "
+            "to checked execution");
+        require(same_alias_signal_state(checked.startup[0U],
+                    compiled->startup[0U])
+                && same_alias_signal_state(checked.startup[1U],
+                    compiled->startup[1U])
+                && same_alias_signal_state(checked.startup[2U],
+                    compiled->startup[2U])
+                && same_alias_signal_state(checked.updated[0U],
+                    compiled->updated[0U])
+                && same_alias_signal_state(checked.updated[1U],
+                    compiled->updated[1U])
+                && same_alias_signal_state(checked.updated[2U],
+                    compiled->updated[2U]),
+            "checked and O0/O2 callback routes preserve values, LAST, owner, "
+            "event, and transaction state");
     }
 }
 
@@ -5798,9 +8120,17 @@ int main()
             MalformedFrontierLayoutKind::swapped_member_processes,
             "out-of-order layout ProcessIds decline before frontier frame publication");
         {
+            auto frontier_only_provider
+                = std::make_shared<FrontierOnlyProvider>(provider);
+            NativeBoundaryFixture cache_reuse_fixture {
+                1U, std::move(frontier_only_provider) };
+            cache_reuse_fixture.check_cache_recertification_operation_sharing();
+        }
+        {
             NativeBoundaryFixture receipt_fixture { 1U, provider, true, true };
         }
         check_successful_boundary_commit_acknowledges_once(provider);
+        check_boundary_scan_unsorted_fallback_and_invalid_rows(provider);
         check_direct_partial_boundary_commit_matches_checked_reference(provider);
         check_direct_partial_boundary_fallback_consumes_once(provider);
         check_alias_boundary_commit_reentry_matches_checked_reference(provider);
@@ -5838,8 +8168,14 @@ int main()
         check_internal_range_v2_readiness(o0_provider, o0_process_jit);
         check_partial_boundary_staged_event_slice_publication(
             provider, process_jit, o0_provider, o0_process_jit);
+        check_multiowner_slice_boundary_selected_sync(
+            provider, process_jit, o0_provider, o0_process_jit);
+        check_boundary_sync_outside_reader_marker(provider, process_jit);
+        check_partial_boundary_timing_callback_full_sync_fallback(
+            provider, process_jit, o0_provider, o0_process_jit);
         check_internal_commit_event_budget_prefix(
             provider, process_jit, o0_provider, o0_process_jit);
+        run_native_frontier_canonical_values_tests();
         std::cout << "Native frontier boundary tests passed\n";
         return 0;
     } catch (const std::exception& exception) {

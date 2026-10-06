@@ -2208,7 +2208,7 @@ void Interpreter::Impl::queue_next_delta(
                 scheduled.owner->remove_dynamic_wait(state);
                 scheduled.owner->execute(scheduled.process);
             }>(ProcessQueueTask { this, id });
-    if (process.program().scheduling_domain()
+    if (processes.scheduling_domain(id)
         == ProcessSchedulingDomain::systemverilog) {
         if (origin.process_domain
             == ProcessSchedulingDomain::systemverilog) {

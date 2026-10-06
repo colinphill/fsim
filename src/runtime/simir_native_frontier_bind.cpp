@@ -7,6 +7,7 @@ namespace {
 
 [[nodiscard]] bool bind_writable_role(
     const AuthoritativeSignalPlanes::FrontierWriteLease& lease,
+    const std::size_t writable_ordinal,
     const SignalId signal,
     const ProcessId process,
     const PackedPlaneRole role,
@@ -16,7 +17,8 @@ namespace {
 {
     std::array<std::span<std::uint64_t>, 4U> words;
     const auto plane_count = region_frontier_required_plane_count_v2(kind);
-    if (plane_count == 0U || !lease.plane_words(signal, role, process, words)) {
+    if (plane_count == 0U || !lease.plane_words_at(
+            writable_ordinal, signal, role, process, words)) {
         return false;
     }
     for (std::size_t plane = 0U; plane < words.size(); ++plane) {
@@ -192,6 +194,17 @@ bool Interpreter::Impl::RegionFrontierComponentRuntime::
     bind_frame_planes_and_metadata(
         AuthoritativeSignalPlanes::FrontierWriteLease& lease) noexcept
 {
+    clear_canonical_values_binding_receipt();
+    begin_alias_bind_attempt();
+    struct AliasBindProofExit final {
+        RegionFrontierComponentRuntime& runtime;
+        bool receipt_issued { };
+
+        ~AliasBindProofExit()
+        {
+            runtime.finish_alias_bind_proof(receipt_issued);
+        }
+    } alias_bind_proof_exit { *this };
     if (owner == nullptr || !frame_initialized || invalidated
         || !lease.active() || !backend || !backend->executor
         || !authoritative_state || !authoritative_state->valid()
@@ -234,6 +247,8 @@ bool Interpreter::Impl::RegionFrontierComponentRuntime::
     // no signal effects, and the caller must not invoke the entry on failure.
     // All boundary borrows expire at the next checked callback: this helper
     // must run again before another generated entry can read those pointers.
+    begin_alias_bind_proof(*backend, layout, lease);
+    std::size_t alias_plane_tuple_index { 13U };
     std::size_t internal_index { };
     for (std::size_t slot = 0U; slot < planes.size(); ++slot) {
         const auto& descriptor = layout.signals[slot];
@@ -266,7 +281,8 @@ bool Interpreter::Impl::RegionFrontierComponentRuntime::
             return false;
         }
 
-        RegionFrontierPlaneV2 bound;
+        auto& bound = planes[slot];
+        bound = { };
         bound.signal_id = descriptor.signal_id;
         bound.owner_process_id = descriptor.owner_process_id;
         bound.value_kind = descriptor.value_kind;
@@ -289,19 +305,19 @@ bool Interpreter::Impl::RegionFrontierComponentRuntime::
                 || signal_id >= owner->signal_event_scheduling_stamps.size()
                 || signal_id >= owner->signal_transactions.size()
                 || signal_id >= owner->signal_value_revisions.size()
-                || !bind_writable_role(lease, signal_id,
+                || !bind_writable_role(lease, internal_index, signal_id,
                     descriptor.owner_process_id, PackedPlaneRole::current,
                     descriptor.value_kind, descriptor.word_count,
                     bound.current_planes)
-                || !bind_writable_role(lease, signal_id,
+                || !bind_writable_role(lease, internal_index, signal_id,
                     descriptor.owner_process_id, PackedPlaneRole::previous,
                     descriptor.value_kind, descriptor.word_count,
                     bound.previous_planes)
-                || !bind_writable_role(lease, signal_id,
+                || !bind_writable_role(lease, internal_index, signal_id,
                     descriptor.owner_process_id, PackedPlaneRole::stored,
                     descriptor.value_kind, descriptor.word_count,
                     bound.stored_planes)
-                || !bind_writable_role(lease, signal_id,
+                || !bind_writable_role(lease, internal_index, signal_id,
                     descriptor.owner_process_id, PackedPlaneRole::owner,
                     descriptor.value_kind, descriptor.word_count,
                     bound.owner_planes)) {
@@ -336,9 +352,14 @@ bool Interpreter::Impl::RegionFrontierComponentRuntime::
                 || signal_id >= owner->direct_signal_materialization_pending.size()) {
                 return false;
             }
-            std::array<std::span<const std::uint64_t>, 4U> boundary;
+            const bool direct_materialization_pending
+                = owner->direct_signal_materialization_pending[signal_id] != 0U;
+            auto boundary = direct_materialization_pending
+                ? std::array<std::span<const std::uint64_t>, 4U> { }
+                : AuthoritativeSignalPlanes::borrow_packed_value_planes(
+                    signal.initial_value);
             const auto plane_count = descriptor.plane_count;
-            if (owner->direct_signal_materialization_pending[signal_id] != 0U) {
+            if (direct_materialization_pending) {
                 if (signal_id >= owner->direct_wide_signal_offsets.size()) {
                     return false;
                 }
@@ -374,17 +395,6 @@ bool Interpreter::Impl::RegionFrontierComponentRuntime::
                         owner->direct_wide_signal_logic9_plane3 }.subspan(
                         offset, descriptor.word_count);
                 }
-            } else if (plane_count == 2U) {
-                boundary[0U] = signal.initial_value.aval_words();
-                boundary[1U] = signal.initial_value.bval_words();
-            } else if (plane_count == 4U) {
-                for (std::size_t plane_index = 0U;
-                     plane_index < plane_count; ++plane_index) {
-                    boundary[plane_index]
-                        = signal.initial_value.logic9_plane_words(plane_index);
-                }
-            } else {
-                return false;
             }
             if (!region_frontier_plane_words_canonical_v2(
                     descriptor.value_kind, descriptor.width,
@@ -399,13 +409,25 @@ bool Interpreter::Impl::RegionFrontierComponentRuntime::
         } else {
             return false;
         }
-        if (!region_frontier_plane_bindings_valid_v2(bound)) {
-            return false;
-        }
-        planes[slot] = bound;
+        // Every accepted branch above proves the descriptor shape while it
+        // binds the planes: internal roles have exact extents, boundary spans
+        // are canonical before their pointers are copied, and `bound = {}`
+        // leaves absent planes null.
         port_planes[slot] = &planes[slot];
+        compare_bound_alias_plane_ranges(
+            slot, bound, alias_plane_tuple_index);
     }
-    return internal_index == metadata.size();
+    if (internal_index != metadata.size()) {
+        return false;
+    }
+    const bool receipt_issued
+        = backend && issue_canonical_values_binding_receipt(
+            *backend, layout, lease);
+    if (receipt_issued) {
+        issue_descriptor_shapes_binding_receipt(*backend, layout);
+    }
+    alias_bind_proof_exit.receipt_issued = receipt_issued;
+    return true;
 }
 
 } // namespace fsim::runtime::simir

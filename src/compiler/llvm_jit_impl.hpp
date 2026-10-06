@@ -188,6 +188,27 @@ struct LlvmJit::Impl {
         NativeProcess* function { };
         ProcessInfo info;
         std::string symbol;
+        // Last immutable service table proven to satisfy this entry's
+        // callback requirements. Executors pass one static table, so the
+        // per-resume callback scan runs once per table.
+        mutable std::atomic<const fsim_jit_services_v2*>
+            validated_services { nullptr };
+
+        NativeEntry(NativeProcess* const entry_function,
+            ProcessInfo entry_info, std::string entry_symbol)
+            : function(entry_function)
+            , info(std::move(entry_info))
+            , symbol(std::move(entry_symbol))
+        {
+        }
+        NativeEntry(NativeEntry&& other) noexcept
+            : function(other.function)
+            , info(std::move(other.info))
+            , symbol(std::move(other.symbol))
+            , validated_services(other.validated_services.load(
+                  std::memory_order_relaxed))
+        {
+        }
     };
 
     [[nodiscard]] std::size_t resume_ordered_prevalidated_members(

@@ -660,6 +660,28 @@ PackedLogic4 value_for(const std::size_t width,
         : PackedLogic4::from_msb_string(text);
 }
 
+bool bulk_plane_borrow_matches_accessors(const PackedLogic4& value)
+{
+    const auto borrowed
+        = AuthoritativeSignalPlanes::borrow_packed_value_planes(value);
+    const auto active_plane_count = value.is_logic9() ? 4U : 2U;
+    for (std::size_t plane = 0U; plane < borrowed.size(); ++plane) {
+        std::span<const std::uint64_t> expected;
+        if (plane < active_plane_count) {
+            expected = value.is_logic9()
+                ? value.logic9_plane_words(plane)
+                : plane == 0U ? value.aval_words() : value.bval_words();
+        }
+        if (borrowed[plane].size() != expected.size()
+            || (!expected.empty()
+                && borrowed[plane].data() != expected.data())
+            || !std::ranges::equal(borrowed[plane], expected)) {
+            return false;
+        }
+    }
+    return true;
+}
+
 Process disjoint_slice_writer(const ProcessId id,
     const SignalId input,
     const SignalId output,
@@ -1113,6 +1135,8 @@ void exercise_width(const std::uint32_t width, const ValueKind kind)
         "wide versioned A4 slots bind all four roles");
     require(values->requires_prewrite_unbind(),
         "wide versioned bindings require the ordinary-writer detach barrier");
+    require(bulk_plane_borrow_matches_accessors(current),
+        "bulk borrow matches every live wide Logic4/Logic9 plane at its offset");
 
     begin_allocation_count();
     std::array<std::optional<PackedLogic4>, 4U> retained {
@@ -1146,6 +1170,9 @@ void exercise_width(const std::uint32_t width, const ValueKind kind)
             && values->stored(2U) == new_stored
             && values->owner_value(2U, 1U) == new_owner,
         "pinned publication replaces all four live role versions coherently");
+    require(bulk_plane_borrow_matches_accessors(current)
+            && bulk_plane_borrow_matches_accessors(*retained[0U]),
+        "a fresh borrow follows publication while a retained snapshot stays old");
     require(retained[0U] == old_current
             && retained[1U] == old_previous
             && retained[2U] == old_stored
@@ -7990,6 +8017,7 @@ void exercise_frontier_write_lease()
     const auto old_stored = value_for(width, ValueKind::logic4, 6U);
     const auto next_current = value_for(width, ValueKind::logic4, 7U);
     const auto next_stored = value_for(width, ValueKind::logic4, 8U);
+    const auto cow_current = value_for(width, ValueKind::logic4, 9U);
     values.seed_signal(input, boundary_current, boundary_previous,
         boundary_stored);
     values.seed_signal(output, old_current, old_previous, old_stored);
@@ -8087,7 +8115,30 @@ void exercise_frontier_write_lease()
     reassigned = std::move(moved);
     require(!lease.active() && !moved.active() && reassigned.active(),
         "lease moves transfer the exclusive role locks exactly once");
+    std::array<std::span<std::uint64_t>, 4U> moved_from_planes { };
+    std::array<std::span<const std::uint64_t>, 4U>
+        moved_from_current_planes { };
+    require(!lease.plane_words(output, PackedPlaneRole::current, owner,
+                moved_from_planes)
+            && std::ranges::all_of(moved_from_planes,
+                [](const auto plane) { return plane.empty(); })
+            && !moved.current_plane_words(output, moved_from_current_planes)
+            && std::ranges::all_of(moved_from_current_planes,
+                [](const auto plane) { return plane.empty(); }),
+        "moved-from leases cannot expose transferred captured blocks");
     reassigned.release();
+    std::array<std::span<std::uint64_t>, 4U> released_planes { };
+    std::array<std::span<const std::uint64_t>, 4U>
+        released_current_planes { };
+    require(!reassigned.plane_words(output, PackedPlaneRole::current, owner,
+                released_planes)
+            && std::ranges::all_of(released_planes,
+                [](const auto plane) { return plane.empty(); })
+            && !reassigned.current_plane_words(output,
+                released_current_planes)
+            && std::ranges::all_of(released_current_planes,
+                [](const auto plane) { return plane.empty(); }),
+        "released leases do not expose captured role blocks");
     require(!reassigned.active() && values.revision() == generation
             && values.current(output) == old_current
             && values.previous(output) == old_previous
@@ -8135,6 +8186,195 @@ void exercise_frontier_write_lease()
                 writable_signals, final_probe)
             && final_probe.active(),
         "changed lease release leaves no role lock stranded");
+    std::array<std::span<std::uint64_t>, 4U> old_generation_planes { };
+    require(final_probe.plane_words(output, PackedPlaneRole::current, owner,
+                old_generation_planes),
+        "the final lease captures the current role before release");
+    const auto* const old_current_words
+        = old_generation_planes[0U].data();
+    final_probe.release();
+
+    const auto retained_old_current = values.plane_read_lease(
+        output, PackedPlaneRole::current);
+    require(static_cast<bool>(retained_old_current)
+            && retained_old_current.plane_words(0U).data()
+                == old_current_words
+            && lease_matches(retained_old_current, next_current),
+        "the released lease's role block remains owned by its snapshot");
+    const auto old_revision = values.revision();
+    values.mirror_visible(output, next_current, cow_current);
+    require(values.revision() == old_revision + 1U
+            && values.current(output) == cow_current
+            && lease_matches(retained_old_current, next_current),
+        "pinned current publication replaces the cell without changing its old snapshot");
+
+    require(values.try_acquire_frontier_write_lease(values.revision(),
+                writable_signals, final_probe)
+            && final_probe.active(),
+        "the same lease object reacquires after a COW generation change");
+    std::array<std::span<std::uint64_t>, 4U> new_generation_planes { };
+    require(final_probe.plane_words(output, PackedPlaneRole::current, owner,
+                new_generation_planes)
+            && new_generation_planes[0U].data() != old_current_words
+            && std::ranges::equal(new_generation_planes[0U],
+                cow_current.aval_words())
+            && std::ranges::equal(new_generation_planes[1U],
+                cow_current.bval_words()),
+        "reacquired lease reads the replacement block, not its old capture");
+    final_probe.release();
+}
+
+void exercise_frontier_write_lease_ordinals()
+{
+    constexpr auto width = std::uint32_t { 8U };
+    constexpr auto input = SignalId { 0U };
+    constexpr auto first_output = SignalId { 1U };
+    constexpr auto second_output = SignalId { 2U };
+    constexpr auto first_owner = ProcessId { 0U };
+    constexpr auto second_owner = ProcessId { 1U };
+    const auto graph = graph_for(width, ValueKind::logic4);
+    const std::array<SignalId, 3U> component_signals {
+        input, first_output, second_output
+    };
+    const std::array<SignalId, 0U> no_partial_certificates { };
+    const std::array<SignalId, 2U> alias_certificates {
+        first_output, second_output
+    };
+    const auto layout = SignalDriverLayout::build(graph, component_signals,
+        no_partial_certificates, alias_certificates);
+    AuthoritativeSignalPlanes values { layout };
+
+    const auto input_value = value_for(width, ValueKind::logic4, 0U);
+    const auto first_current = value_for(width, ValueKind::logic4, 1U);
+    const auto first_previous = value_for(width, ValueKind::logic4, 2U);
+    const auto first_stored = value_for(width, ValueKind::logic4, 3U);
+    const auto second_current = value_for(width, ValueKind::logic4, 4U);
+    const auto second_previous = value_for(width, ValueKind::logic4, 5U);
+    const auto second_stored = value_for(width, ValueKind::logic4, 6U);
+    values.seed_signal(input, input_value, input_value, input_value);
+    values.seed_signal(first_output, first_current, first_previous,
+        first_stored);
+    values.seed_owner(first_output, first_owner, first_stored);
+    values.seed_signal(second_output, second_current, second_previous,
+        second_stored);
+    values.seed_owner(second_output, second_owner, second_stored);
+
+    auto first_live_current = first_current;
+    auto first_live_previous = first_previous;
+    auto first_live_stored = first_stored;
+    values.stage_packed_signal_slots(first_output, first_live_current,
+        first_live_previous, first_live_stored);
+    values.stage_packed_owner_stored_alias(first_output, first_owner);
+    auto second_live_current = second_current;
+    auto second_live_previous = second_previous;
+    auto second_live_stored = second_stored;
+    values.stage_packed_signal_slots(second_output, second_live_current,
+        second_live_previous, second_live_stored);
+    values.stage_packed_owner_stored_alias(second_output, second_owner);
+    require(values.bind_packed_slots() == 6U,
+        "ordinal fixture binds both whole single-owner outputs");
+
+    const std::array<AuthoritativeSignalPlanes::FrontierWriteBinding, 2U>
+        writable_signals { {
+            { second_output, second_owner },
+            { first_output, first_owner },
+        } };
+    const auto generation = values.revision();
+    std::array<std::size_t, 2U> layout_indices { };
+    AuthoritativeSignalPlanes::FrontierWriteLease lease;
+    std::array<std::size_t, 1U> short_indices { };
+    require(!values.try_acquire_frontier_write_lease(generation,
+                writable_signals, lease, short_indices)
+            && !lease.active() && values.revision() == generation,
+        "ordinal lease rejects a short nonempty index span before locking");
+    std::array<std::size_t, 3U> long_indices { };
+    require(!values.try_acquire_frontier_write_lease(generation,
+                writable_signals, lease, long_indices)
+            && !lease.active() && values.revision() == generation,
+        "ordinal lease rejects a long nonempty index span before locking");
+
+    require(values.try_acquire_frontier_write_lease(generation,
+                writable_signals, lease, layout_indices)
+            && lease.active()
+            && layout_indices[0U] < layout.signal_ids().size()
+            && layout_indices[1U] < layout.signal_ids().size()
+            && layout.signal_ids()[layout_indices[0U]] == second_output
+            && layout.signal_ids()[layout_indices[1U]] == first_output,
+        "ordinal lease records validated layout indices in binding order");
+
+    std::array<std::span<std::uint64_t>, 4U> first_planes { };
+    std::array<std::span<std::uint64_t>, 4U> second_planes { };
+    require(lease.plane_words_at(0U, second_output,
+                PackedPlaneRole::current, second_owner, second_planes)
+            && std::ranges::equal(second_planes[0U],
+                second_current.aval_words())
+            && lease.plane_words_at(1U, first_output,
+                PackedPlaneRole::previous, first_owner, first_planes)
+            && std::ranges::equal(first_planes[0U],
+                first_previous.aval_words()),
+        "ordinal views preserve arbitrary binding order and select roles");
+
+    std::array<std::span<std::uint64_t>, 4U> rejected_planes { };
+    require(!lease.plane_words_at(2U, first_output,
+                PackedPlaneRole::current, first_owner, rejected_planes)
+            && std::ranges::all_of(rejected_planes,
+                [](const auto plane) { return plane.empty(); })
+            && !lease.plane_words_at(0U, first_output,
+                PackedPlaneRole::current, first_owner, rejected_planes)
+            && std::ranges::all_of(rejected_planes,
+                [](const auto plane) { return plane.empty(); })
+            && !lease.plane_words_at(0U, second_output,
+                PackedPlaneRole::current, first_owner, rejected_planes)
+            && std::ranges::all_of(rejected_planes,
+                [](const auto plane) { return plane.empty(); }),
+        "ordinal views reject out-of-range, wrong-signal, and wrong-owner requests");
+
+    const auto saved_first_index = layout_indices[0U];
+    // Deliberately corrupt the caller-owned scratch to verify both cached
+    // index guards fail closed if the input is changed unexpectedly.
+    layout_indices[0U] = layout.signal_ids().size();
+    require(!lease.plane_words_at(0U, second_output,
+                PackedPlaneRole::current, second_owner, rejected_planes)
+            && std::ranges::all_of(rejected_planes,
+                [](const auto plane) { return plane.empty(); }),
+        "ordinal lookup rejects an out-of-range cached index");
+    layout_indices[0U] = saved_first_index;
+    layout_indices[0U] = layout_indices[1U];
+    require(!lease.plane_words_at(0U, second_output,
+                PackedPlaneRole::current, second_owner, rejected_planes)
+            && std::ranges::all_of(rejected_planes,
+                [](const auto plane) { return plane.empty(); }),
+        "ordinal lookup rejects a cached index that names another signal");
+    layout_indices[0U] = saved_first_index;
+    require(!lease.plane_words_at(0U, second_output,
+                static_cast<PackedPlaneRole>(255U), second_owner,
+                rejected_planes)
+            && std::ranges::all_of(rejected_planes,
+                [](const auto plane) { return plane.empty(); }),
+        "ordinal lookup rejects invalid role values");
+
+    AuthoritativeSignalPlanes::FrontierWriteLease moved { std::move(lease) };
+    require(!lease.active() && moved.active()
+            && !lease.plane_words_at(0U, second_output,
+                PackedPlaneRole::current, second_owner, rejected_planes)
+            && moved.plane_words_at(0U, second_output,
+                PackedPlaneRole::current, second_owner, second_planes),
+        "moving a lease transfers its borrowed ordinal span");
+    moved.release();
+    require(!moved.active()
+            && !moved.plane_words_at(0U, second_output,
+                PackedPlaneRole::current, second_owner, rejected_planes)
+            && std::ranges::all_of(rejected_planes,
+                [](const auto plane) { return plane.empty(); })
+            && values.revision() == generation,
+        "release clears the retained ordinal span without changing state");
+
+    require(values.try_acquire_frontier_write_lease(generation,
+                writable_signals, moved, layout_indices)
+            && moved.plane_words_at(0U, second_output,
+                PackedPlaneRole::current, second_owner, second_planes),
+        "the released lease object reacquires with the caller-owned index span");
+    moved.release();
 }
 
 void exercise_frontier_write_lease_narrow(const std::uint32_t width)
@@ -8171,6 +8411,8 @@ void exercise_frontier_write_lease_narrow(const std::uint32_t width)
             && values.packed_signal_slots_bound(output)
             && values.packed_owner_slot_bound(output, owner),
         "default narrow A4 remains unversioned with all four roles bound");
+    require(bulk_plane_borrow_matches_accessors(live_current),
+        "bulk borrow preserves the unversioned narrow Logic4 fallback");
 
     const std::array<AuthoritativeSignalPlanes::FrontierWriteBinding, 1U>
         writable_signals { {
@@ -8439,6 +8681,8 @@ void exercise_frontier_write_lease_logic9(
             && values.packed_owner_slot_bound(output, owner)
             && values.requires_prewrite_unbind() == (width > 64U),
         "Logic9 lease fixture binds the exact owner-role topology");
+    require(bulk_plane_borrow_matches_accessors(live_current),
+        "bulk borrow matches all four versioned or unversioned Logic9 planes");
 
     const std::array<AuthoritativeSignalPlanes::FrontierWriteBinding, 1U>
         writable_signals { {
@@ -8497,19 +8741,28 @@ void exercise_frontier_write_lease_logic9(
         }
     }
 
+    std::array<std::size_t, 1U> writable_layout_indices { };
     begin_allocation_count();
     const auto allocated = values.try_acquire_frontier_write_lease(
-        generation, writable_signals, lease);
+        generation, writable_signals, lease, writable_layout_indices);
+    std::array<std::span<std::uint64_t>, 4U> allocation_probe_planes { };
+    const auto ordinal_query_allocated = allocated
+        && lease.plane_words_at(0U, output, PackedPlaneRole::current,
+            owner, allocation_probe_planes);
     if (allocated) {
         lease.release();
     }
     const auto allocation_count = end_allocation_count();
-    require(allocated && allocation_count == 0U
-            && values.revision() == generation,
-        "Logic9 lease acquire/release is allocation-free after binding");
+    require(allocated && ordinal_query_allocated
+            && allocation_count == 0U
+            && values.revision() == generation
+            && writable_layout_indices[0U] < layout.signal_ids().size()
+            && writable_layout_indices[0U] != 0U
+            && layout.signal_ids()[writable_layout_indices[0U]] == output,
+        "Logic9 ordinal acquire/query/release is allocation-free and caches a nonzero index");
 
     require(values.try_acquire_frontier_write_lease(
-                generation, writable_signals, lease)
+                generation, writable_signals, lease, writable_layout_indices)
             && lease.active(),
         "Logic9 lease retries after stale, duplicate, and pinned declines");
     AuthoritativeSignalPlanes::FrontierWriteLease busy;
@@ -8536,14 +8789,14 @@ void exercise_frontier_write_lease_logic9(
     std::array<std::span<std::uint64_t>, 4U> previous_planes { };
     std::array<std::span<std::uint64_t>, 4U> stored_planes { };
     std::array<std::span<std::uint64_t>, 4U> owner_planes { };
-    require(lease.plane_words(output, PackedPlaneRole::current, owner,
-                current_planes)
-            && lease.plane_words(output, PackedPlaneRole::previous, owner,
-                previous_planes)
-            && lease.plane_words(output, PackedPlaneRole::stored, owner,
-                stored_planes)
-            && lease.plane_words(output, PackedPlaneRole::owner, owner,
-                owner_planes)
+    require(lease.plane_words_at(0U, output, PackedPlaneRole::current,
+                owner, current_planes)
+            && lease.plane_words_at(0U, output, PackedPlaneRole::previous,
+                owner, previous_planes)
+            && lease.plane_words_at(0U, output, PackedPlaneRole::stored,
+                owner, stored_planes)
+            && lease.plane_words_at(0U, output, PackedPlaneRole::owner,
+                owner, owner_planes)
             && current_planes[2U].size() == (width + 63U) / 64U
             && current_planes[3U].size() == (width + 63U) / 64U
             && previous_planes[2U].size() == (width + 63U) / 64U
@@ -8827,6 +9080,7 @@ int main()
         exercise_narrow_single_owner_default_and_checked_policies();
         exercise_owner_only_publication_preserves_untouched_roles();
         exercise_frontier_write_lease();
+        exercise_frontier_write_lease_ordinals();
         exercise_frontier_write_lease_narrow(1U);
         exercise_frontier_write_lease_narrow(64U);
         exercise_frontier_write_lease_separate_owner(65U);

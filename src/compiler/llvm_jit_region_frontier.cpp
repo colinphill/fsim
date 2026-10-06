@@ -8,6 +8,7 @@
 #include "llvm_jit_region_frontier_private_access.hpp"
 #include "llvm_jit_region_frontier_test_access.hpp"
 #include "native_cache_schema.hpp"
+#include "llvm/region_frontier_initial_slot_validation.hpp"
 #include "llvm/region_frontier_codegen_v2.hpp"
 #include "llvm/region_frontier_kernel_plan.hpp"
 #include "fsim/compiler/object_cache.hpp"
@@ -256,7 +257,7 @@ void dump_and_report_raw_frontier_ir_if_enabled(
     const std::string_view immutable_design_identity)
 {
     CacheKeyBuilder key;
-    key.add("kind", "fsim-native-region-frontier-shared-body-v3");
+    key.add("kind", "fsim-native-region-frontier-shared-body-v6");
     key.add("shared-body-identity", shared_identity);
     key.add("frontier-abi", std::to_string(
         runtime::simir::kRegionFrontierAbiVersionV2));
@@ -264,7 +265,10 @@ void dump_and_report_raw_frontier_ir_if_enabled(
         runtime::simir::kRegionFrontierValuePlaneContractV2));
     key.add("native-object-schema", llvm_detail::kNativeObjectCacheSchema);
     key.add("shared-body-codegen",
-        "literal-physical-binding-v1;alias-prevalidated-geometry-v1");
+        "literal-physical-binding-v1;alias-prevalidated-geometry-v1;"
+        "canonical-values-prevalidated-v1;"
+        "descriptor-shapes-prevalidated-v1;"
+        "initial-slot-validation-helper-v1");
     key.add("llvm-version", LlvmJit::llvm_version());
     key.add("host", LlvmJit::native_host_identity(
         options.optimization).fingerprint);
@@ -277,6 +281,8 @@ void dump_and_report_raw_frontier_ir_if_enabled(
     key.add("direct-read", options.require_direct_read_signals
         ? "required" : "optional");
     key.add("immutable-design", immutable_design_identity);
+    key.add("initial-slot-validation-helper",
+        llvm_detail::kInitialSlotValidationHelperSymbol);
     key.add("backend-tier-policy", llvm_detail::kBackendTierPolicy);
     return key.finish();
 }
@@ -307,7 +313,7 @@ void dump_and_report_raw_frontier_ir_if_enabled(
     const llvm_detail::LlvmBackendTier backend_tier)
 {
     CacheKeyBuilder key;
-    key.add("kind", "fsim-native-frontier-shared-body-object-v3");
+    key.add("kind", "fsim-native-frontier-shared-body-object-v6");
     key.add("body-semantics", semantic_key);
     key.add("native-object-schema", llvm_detail::kNativeObjectCacheSchema);
     key.add("backend-tier", backend_tier
@@ -320,10 +326,12 @@ void dump_and_report_raw_frontier_ir_if_enabled(
     const std::string_view body_semantic_key)
 {
     CacheKeyBuilder key;
-    key.add("kind", "fsim-native-region-frontier-exact-wrapper-v3");
+    key.add("kind", "fsim-native-region-frontier-exact-wrapper-v6");
     key.add("frontier-plan", plan.cache_identity());
     key.add("body-semantics", body_semantic_key);
-    key.add("wrapper-codegen", "checked-trusted-alias-thunks-v1");
+    key.add("wrapper-codegen",
+        "checked-alias-canonical-alias-and-canonical-thunks-v2;"
+        "descriptor-shape-alias-and-canonical-thunk-v1");
     return key.finish();
 }
 
@@ -333,7 +341,7 @@ void dump_and_report_raw_frontier_ir_if_enabled(
     const llvm_detail::LlvmBackendTier backend_tier)
 {
     CacheKeyBuilder key;
-    key.add("kind", "fsim-native-frontier-exact-wrapper-object-v3");
+    key.add("kind", "fsim-native-frontier-exact-wrapper-object-v6");
     key.add("exact-wrapper", wrapper_semantic_key);
     key.add("shared-body-object", body_object_key);
     key.add("native-object-schema", llvm_detail::kNativeObjectCacheSchema);
@@ -345,14 +353,14 @@ void dump_and_report_raw_frontier_ir_if_enabled(
 [[nodiscard]] std::string body_symbol_for(
     const std::string_view body_semantic_key)
 {
-    return "fsim_region_frontier_shared_body_v3_"
+    return "fsim_region_frontier_shared_body_v6_"
         + std::string { body_semantic_key };
 }
 
 [[nodiscard]] std::string wrapper_symbol_for(
     const std::string_view wrapper_semantic_key)
 {
-    return "fsim_region_frontier_exact_wrapper_v3_"
+    return "fsim_region_frontier_exact_wrapper_v6_"
         + std::string { wrapper_semantic_key };
 }
 
@@ -361,6 +369,27 @@ void dump_and_report_raw_frontier_ir_if_enabled(
 {
     return wrapper_symbol_for(wrapper_semantic_key)
         + "_trusted_alias_prevalidated";
+}
+
+[[nodiscard]] std::string canonical_values_wrapper_symbol_for(
+    const std::string_view wrapper_semantic_key)
+{
+    return wrapper_symbol_for(wrapper_semantic_key)
+        + "_trusted_canonical_values_prevalidated";
+}
+
+[[nodiscard]] std::string alias_and_canonical_values_wrapper_symbol_for(
+    const std::string_view wrapper_semantic_key)
+{
+    return wrapper_symbol_for(wrapper_semantic_key)
+        + "_trusted_alias_and_canonical_values_prevalidated";
+}
+
+[[nodiscard]] std::string descriptor_shapes_wrapper_symbol_for(
+    const std::string_view wrapper_semantic_key)
+{
+    return wrapper_symbol_for(wrapper_semantic_key)
+        + "_trusted_alias_canonical_descriptor_shapes_prevalidated";
 }
 
 [[nodiscard]] LlvmJitCacheStatistics cache_statistics_delta(
@@ -404,6 +433,10 @@ struct FrontierExactWrapperOwner final {
     llvm::orc::ResourceTrackerSP resource_tracker;
     runtime::simir::RegionFrontierStepEntryV2 entry { };
     runtime::simir::RegionFrontierStepEntryV2 trusted_entry { };
+    runtime::simir::RegionFrontierStepEntryV2 canonical_values_entry { };
+    runtime::simir::RegionFrontierStepEntryV2
+        alias_and_canonical_values_entry { };
+    runtime::simir::RegionFrontierStepEntryV2 descriptor_shapes_entry { };
     std::uint64_t wrapper_address { };
     LlvmJitCacheStatistics cache_statistics { };
 };
@@ -562,6 +595,10 @@ struct LlvmRegionFrontierExecutor::Impl {
     std::shared_ptr<FrontierExactWrapperOwner> exact_wrapper;
     runtime::simir::RegionFrontierStepEntryV2 entry { };
     runtime::simir::RegionFrontierStepEntryV2 trusted_entry { };
+    runtime::simir::RegionFrontierStepEntryV2 canonical_values_entry { };
+    runtime::simir::RegionFrontierStepEntryV2
+        alias_and_canonical_values_entry { };
+    runtime::simir::RegionFrontierStepEntryV2 descriptor_shapes_entry { };
     LlvmJitCacheStatistics body_cache_statistics { };
     LlvmJitCacheStatistics wrapper_cache_statistics { };
     LlvmJitCacheStatistics materialization_cache_statistics { };
@@ -619,6 +656,7 @@ LlvmRegionFrontierExecutor::prepare(
             planner_rejection_site_line, &rejected_sensitivity);
         return nullptr;
     }
+    plan->report_codegen_storage_profile("prepared");
 
     options.require_direct_update_slots = true;
     options.require_direct_read_signals = true;
@@ -674,7 +712,7 @@ LlvmRegionFrontierExecutor::materialize(
                     auto thread_safe_module = context_owner.withContextDo(
                         [&](llvm::LLVMContext* const context) {
                             auto module = std::make_unique<llvm::Module>(
-                                "fsim-region-frontier-shared-body-v2",
+                                "fsim-region-frontier-shared-body-v6",
                                 *context);
                             module->setDataLayout(
                                 native.jit->getDataLayout());
@@ -818,7 +856,8 @@ LlvmRegionFrontierExecutor::materialize(
                         llvm::orc::ResourceTrackerSP { });
                     llvm::orc::ExecutorAddr body_address;
                     using SharedBodyEntry = std::uint32_t (*) (
-                        runtime::simir::RegionFrontierFrameV2*, void*, bool);
+                        runtime::simir::RegionFrontierFrameV2*, void*, bool,
+                        bool);
                     SharedBodyEntry body_entry { };
                     try {
                         body_address = llvm_detail::unwrap(
@@ -904,7 +943,7 @@ LlvmRegionFrontierExecutor::materialize(
                     auto thread_safe_module = context_owner.withContextDo(
                         [&](llvm::LLVMContext* const context) {
                             auto module = std::make_unique<llvm::Module>(
-                                "fsim-region-frontier-exact-wrapper-v2",
+                                "fsim-region-frontier-exact-wrapper-v6",
                                 *context);
                             module->setDataLayout(
                                 native.jit->getDataLayout());
@@ -914,6 +953,15 @@ LlvmRegionFrontierExecutor::materialize(
                                 = wrapper_symbol_for(wrapper_semantics);
                             const auto trusted_wrapper_symbol
                                 = trusted_wrapper_symbol_for(
+                                    wrapper_semantics);
+                            const auto canonical_values_wrapper_symbol
+                                = canonical_values_wrapper_symbol_for(
+                                    wrapper_semantics);
+                            const auto alias_and_canonical_wrapper_symbol
+                                = alias_and_canonical_values_wrapper_symbol_for(
+                                    wrapper_semantics);
+                            const auto descriptor_shapes_wrapper_symbol
+                                = descriptor_shapes_wrapper_symbol_for(
                                     wrapper_semantics);
                             if (runtime::simir::scratch::
                                     emit_region_frontier_entry_thunk_v2(
@@ -932,6 +980,37 @@ LlvmRegionFrontierExecutor::materialize(
                                     == nullptr) {
                                     throw LlvmJitError(
                                         "exact frontier emitted no trusted entry thunk");
+                                }
+                                if (runtime::simir::scratch::
+                                        emit_region_frontier_entry_thunk_v2(
+                                            *module,
+                                            canonical_values_wrapper_symbol,
+                                            body_owner->body_symbol,
+                                            state->plan.layout(), false, true)
+                                    == nullptr) {
+                                    throw LlvmJitError(
+                                        "exact frontier emitted no canonical-values entry thunk");
+                                }
+                                if (runtime::simir::scratch::
+                                        emit_region_frontier_entry_thunk_v2(
+                                            *module,
+                                            alias_and_canonical_wrapper_symbol,
+                                            body_owner->body_symbol,
+                                            state->plan.layout(), true, true)
+                                    == nullptr) {
+                                    throw LlvmJitError(
+                                        "exact frontier emitted no combined trusted entry thunk");
+                                }
+                                if (runtime::simir::scratch::
+                                        emit_region_frontier_entry_thunk_v2(
+                                            *module,
+                                            descriptor_shapes_wrapper_symbol,
+                                            body_owner->body_symbol,
+                                            state->plan.layout(), true, true,
+                                            true)
+                                    == nullptr) {
+                                    throw LlvmJitError(
+                                        "exact frontier emitted no descriptor-shape entry thunk");
                                 }
                             }
                             llvm_detail::apply_jit_module_no_unwind_contract(
@@ -1038,6 +1117,10 @@ LlvmRegionFrontierExecutor::materialize(
                     }
                     llvm::orc::ExecutorAddr wrapper_address;
                     llvm::orc::ExecutorAddr trusted_wrapper_address;
+                    llvm::orc::ExecutorAddr canonical_values_wrapper_address;
+                    llvm::orc::ExecutorAddr
+                        alias_and_canonical_wrapper_address;
+                    llvm::orc::ExecutorAddr descriptor_shapes_wrapper_address;
                     try {
                         wrapper_address = llvm_detail::unwrap(
                             native.jit->lookup(
@@ -1062,6 +1145,48 @@ LlvmRegionFrontierExecutor::materialize(
                             if (wrapper->trusted_entry == nullptr) {
                                 throw LlvmJitError(
                                     "LLVM returned a null trusted frontier wrapper");
+                            }
+                            canonical_values_wrapper_address
+                                = llvm_detail::unwrap(
+                                    native.jit->lookup(
+                                        canonical_values_wrapper_symbol_for(
+                                            wrapper_semantics)),
+                                    "cannot materialize canonical-values native frontier wrapper");
+                            wrapper->canonical_values_entry
+                                = canonical_values_wrapper_address.template toPtr<
+                                    std::remove_pointer_t<
+                                        runtime::simir::RegionFrontierStepEntryV2>>();
+                            if (wrapper->canonical_values_entry == nullptr) {
+                                throw LlvmJitError(
+                                    "LLVM returned a null canonical-values frontier wrapper");
+                            }
+                            alias_and_canonical_wrapper_address
+                                = llvm_detail::unwrap(
+                                    native.jit->lookup(
+                                        alias_and_canonical_values_wrapper_symbol_for(
+                                            wrapper_semantics)),
+                                    "cannot materialize combined native frontier wrapper");
+                            wrapper->alias_and_canonical_values_entry
+                                = alias_and_canonical_wrapper_address.template toPtr<
+                                    std::remove_pointer_t<
+                                        runtime::simir::RegionFrontierStepEntryV2>>();
+                            if (wrapper->alias_and_canonical_values_entry == nullptr) {
+                                throw LlvmJitError(
+                                    "LLVM returned a null combined frontier wrapper");
+                            }
+                            descriptor_shapes_wrapper_address
+                                = llvm_detail::unwrap(
+                                    native.jit->lookup(
+                                        descriptor_shapes_wrapper_symbol_for(
+                                            wrapper_semantics)),
+                                    "cannot materialize descriptor-shape frontier wrapper");
+                            wrapper->descriptor_shapes_entry
+                                = descriptor_shapes_wrapper_address.template toPtr<
+                                    std::remove_pointer_t<
+                                        runtime::simir::RegionFrontierStepEntryV2>>();
+                            if (wrapper->descriptor_shapes_entry == nullptr) {
+                                throw LlvmJitError(
+                                    "LLVM returned a null descriptor-shape frontier wrapper");
                             }
                         }
                     } catch (...) {
@@ -1092,6 +1217,12 @@ LlvmRegionFrontierExecutor::materialize(
         }
         state->entry = exact_wrapper->entry;
         state->trusted_entry = exact_wrapper->trusted_entry;
+        state->canonical_values_entry
+            = exact_wrapper->canonical_values_entry;
+        state->alias_and_canonical_values_entry
+            = exact_wrapper->alias_and_canonical_values_entry;
+        state->descriptor_shapes_entry
+            = exact_wrapper->descriptor_shapes_entry;
         state->materialization_cache_statistics
             = state->body_cache_statistics;
         add_cache_statistics(state->materialization_cache_statistics,
@@ -1308,6 +1439,9 @@ LlvmRegionFrontierExecutor::materialize(
             state->body_cache_statistics,
             state->wrapper_cache_statistics);
     }
+    state->plan.report_codegen_storage_profile("materialized");
+    state->plan.release_codegen_storage();
+    state->plan.report_codegen_storage_profile("released");
     return std::unique_ptr<LlvmRegionFrontierExecutor> {
         new LlvmRegionFrontierExecutor(std::move(state)) };
 }
@@ -1365,6 +1499,33 @@ RegionFrontierPrivateAccess::trusted_entry(
 {
     return executor.impl_ != nullptr
         ? executor.impl_->trusted_entry
+        : nullptr;
+}
+
+runtime::simir::RegionFrontierStepEntryV2
+RegionFrontierPrivateAccess::canonical_values_entry(
+    const LlvmRegionFrontierExecutor& executor) noexcept
+{
+    return executor.impl_ != nullptr
+        ? executor.impl_->canonical_values_entry
+        : nullptr;
+}
+
+runtime::simir::RegionFrontierStepEntryV2
+RegionFrontierPrivateAccess::alias_and_canonical_values_entry(
+    const LlvmRegionFrontierExecutor& executor) noexcept
+{
+    return executor.impl_ != nullptr
+        ? executor.impl_->alias_and_canonical_values_entry
+        : nullptr;
+}
+
+runtime::simir::RegionFrontierStepEntryV2
+RegionFrontierPrivateAccess::descriptor_shapes_entry(
+    const LlvmRegionFrontierExecutor& executor) noexcept
+{
+    return executor.impl_ != nullptr
+        ? executor.impl_->descriptor_shapes_entry
         : nullptr;
 }
 

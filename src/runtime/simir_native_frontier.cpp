@@ -99,11 +99,10 @@ template <typename Range>
             > std::numeric_limits<std::uint64_t>::digits) {
         return false;
     } else {
-        if (range.bytes != 0U && range.address == nullptr) {
+        if (range.bytes != 0U && range.address == 0U) {
             return false;
         }
-        begin = static_cast<std::uint64_t>(
-            reinterpret_cast<std::uintptr_t>(range.address));
+        begin = static_cast<std::uint64_t>(range.address);
         const auto byte_count = static_cast<std::uint64_t>(range.bytes);
         if (byte_count > std::numeric_limits<std::uint64_t>::max() - begin) {
             return false;
@@ -294,10 +293,268 @@ struct FrontierWorkspaceSize final {
 
 } // namespace
 
+void Interpreter::Impl::RegionFrontierComponentRuntime::
+    clear_alias_bind_proof() noexcept
+{
+    alias_bind_proof = { };
+}
+
+void Interpreter::Impl::RegionFrontierComponentRuntime::
+    begin_alias_bind_attempt() noexcept
+{
+    clear_alias_bind_proof();
+    if (alias_bind_serial_exhausted) {
+        return;
+    }
+    if (alias_bind_serial == std::numeric_limits<std::uint64_t>::max()) {
+        alias_bind_serial_exhausted = true;
+        return;
+    }
+    alias_bind_proof.serial = ++alias_bind_serial;
+}
+
+void Interpreter::Impl::RegionFrontierComponentRuntime::
+    begin_alias_bind_proof(
+        const RegionFrontierBackendEntry& backend_entry,
+        const RegionFrontierLayoutV2& layout,
+        const AuthoritativeSignalPlanes::FrontierWriteLease& lease) noexcept
+{
+    auto& proof = alias_bind_proof;
+    if (proof.serial == 0U || alias_bind_serial_exhausted
+        || !alias_certificate_storage_available || !alias_certificate_valid
+        || !alias_certificate_pending_backing.valid || owner == nullptr
+        || invalidated || !frame_initialized || !lease.active()
+        || backend.get() != &backend_entry || !backend_entry.executor
+        || !authoritative_state || !authoritative_state->valid()
+        || runtime_generation == 0U
+        || runtime_generation != owner->region_runtime_generation
+        || authoritative_state->generation() != runtime_generation
+        || !owner->region_graph
+        || !owner->region_graph->component_epochs_current(component)
+        || alias_certificate_context.owner != owner
+        || alias_certificate_context.component != component
+        || alias_certificate_context.backend != &backend_entry
+        || alias_certificate_context.executor != backend_entry.executor.get()
+        || alias_certificate_context.layout != &layout
+        || alias_certificate_context.frame != &frame
+        || alias_certificate_context.runtime_generation != runtime_generation
+        || alias_certificate_context.frame_runtime_generation
+            != frame.runtime_generation
+        || alias_certificate_context.bound_runtime_generation
+            != frame.bound_runtime_generation
+        || alias_certificate_context.certificate_generation
+            != layout.certificate_generation
+        || alias_certificate_context.component_generation
+            != layout.component_generation
+        || alias_certificate_context.execution_mode != execution_mode
+        || alias_certificate_ranges.size() < 13U) {
+        proof = { };
+        return;
+    }
+
+    proof.backend = &backend_entry;
+    proof.executor = backend_entry.executor.get();
+    proof.layout = &layout;
+    proof.frame = &frame;
+    proof.state = authoritative_state.get();
+    proof.lease = &lease;
+    proof.runtime_generation = runtime_generation;
+    proof.state_revision = authoritative_state->values().revision();
+    proof.valid = true;
+    proof.plane_ranges_match_certificate = true;
+}
+
+void Interpreter::Impl::RegionFrontierComponentRuntime::
+    compare_bound_alias_plane_ranges(
+        const std::size_t slot,
+        const RegionFrontierPlaneV2& plane,
+        std::size_t& tuple_index) noexcept
+{
+    auto& proof = alias_bind_proof;
+    if (!proof.valid || !proof.plane_ranges_match_certificate) {
+        return;
+    }
+    const auto mismatch = [this, &proof]() noexcept {
+        if (proof.plane_ranges_match_certificate) {
+            ++alias_bind_proof_plane_misses;
+        }
+        proof.plane_ranges_match_certificate = false;
+    };
+    std::size_t plane_bytes { };
+    if (!frontier_alias_byte_extent<std::uint64_t>(
+            plane.word_count, plane_bytes)) {
+        mismatch();
+        return;
+    }
+    const auto compare = [this, &proof, &tuple_index, plane_bytes](
+                             const void* const address,
+                             const std::uint64_t alias_tag) noexcept {
+        if (!proof.plane_ranges_match_certificate) {
+            return;
+        }
+        if (tuple_index >= alias_certificate_ranges.size()) {
+            if (proof.plane_ranges_match_certificate) {
+                ++alias_bind_proof_plane_misses;
+            }
+            proof.plane_ranges_match_certificate = false;
+            return;
+        }
+        const RegionFrontierAliasRange current {
+            address == nullptr ? 0U
+                               : reinterpret_cast<std::uintptr_t>(address),
+            plane_bytes, alias_tag };
+        std::uint64_t begin { };
+        std::uint64_t end { };
+        if (!frontier_alias_interval(current, begin, end)
+            || current != alias_certificate_ranges[tuple_index]) {
+            if (proof.plane_ranges_match_certificate) {
+                ++alias_bind_proof_plane_misses;
+            }
+            proof.plane_ranges_match_certificate = false;
+            return;
+        }
+        ++tuple_index;
+    };
+    constexpr auto internal_flag = static_cast<std::uint32_t>(
+        RegionFrontierPlaneFlagsV2::certified_internal_single_owner);
+    constexpr auto boundary_flag = static_cast<std::uint32_t>(
+        RegionFrontierPlaneFlagsV2::read_only_boundary_port);
+    if (plane.flags == internal_flag) {
+        for (std::size_t value_plane = 0U;
+             value_plane < plane.plane_count; ++value_plane) {
+            const auto alias_key = static_cast<std::uint64_t>(slot)
+                    * UINT64_C(4)
+                + static_cast<std::uint64_t>(value_plane) + UINT64_C(1);
+            const auto stored_alias_tag = alias_key * UINT64_C(2);
+            const auto owner_alias_tag = stored_alias_tag + UINT64_C(1);
+            compare(plane.current_planes[value_plane], 0U);
+            compare(plane.previous_planes[value_plane], 0U);
+            compare(plane.stored_planes[value_plane], stored_alias_tag);
+            compare(plane.owner_planes[value_plane], owner_alias_tag);
+        }
+    } else if (plane.flags == boundary_flag) {
+        for (std::size_t value_plane = 0U;
+             value_plane < plane.plane_count; ++value_plane) {
+            compare(plane.boundary_planes[value_plane], 0U);
+        }
+    } else {
+        mismatch();
+    }
+}
+
+void Interpreter::Impl::RegionFrontierComponentRuntime::
+    finish_alias_bind_proof(const bool receipt_issued) noexcept
+{
+    if (!receipt_issued || !alias_bind_proof.valid
+        || alias_bind_proof.lease == nullptr
+        || !alias_bind_proof.lease->active()) {
+        clear_alias_bind_proof();
+    }
+}
+
+bool Interpreter::Impl::RegionFrontierComponentRuntime::
+    alias_certificate_frame_ranges_match() const noexcept
+{
+    constexpr std::size_t frame_range_count = 13U;
+    if (alias_certificate_ranges.size() < frame_range_count
+        || frame.scheduler_task_capacity != scheduler_task_capacity
+        || frame.scheduler_task_capacity != scheduler_tasks.size()
+        || frame.scheduler_task_count > frame.scheduler_task_capacity) {
+        return false;
+    }
+    const auto matches = [this](const std::size_t index,
+                                const void* const address,
+                                const std::size_t bytes,
+                                const bool compare_extent = true) noexcept {
+        if (index >= alias_certificate_ranges.size()
+            || (bytes != 0U && address == nullptr)) {
+            return false;
+        }
+        const RegionFrontierAliasRange current {
+            address == nullptr ? 0U
+                               : reinterpret_cast<std::uintptr_t>(address),
+            bytes, 0U };
+        std::uint64_t begin { };
+        std::uint64_t end { };
+        const auto& certified = alias_certificate_ranges[index];
+        return frontier_alias_interval(current, begin, end)
+            && current.address == certified.address
+            && current.alias_tag == certified.alias_tag
+            && (!compare_extent || current.bytes == certified.bytes);
+    };
+    const auto extent_matches = [&matches](
+                                    const std::size_t index,
+                                    const void* const address,
+                                    const std::size_t count,
+                                    const std::size_t element_size,
+                                    const bool compare_extent = true) noexcept {
+        if (count != 0U
+            && element_size
+                > std::numeric_limits<std::size_t>::max() / count) {
+            return false;
+        }
+        return matches(index, address, count * element_size,
+            compare_extent);
+    };
+
+    return matches(0U, &frame, sizeof(frame))
+        && extent_matches(1U, frame.ready_words,
+            frame.readiness_word_count, sizeof(*frame.ready_words))
+        && extent_matches(2U, frame.members,
+            frame.member_count, sizeof(*frame.members))
+        && extent_matches(3U, frame.scheduler_tasks,
+            frame.scheduler_task_count, sizeof(*frame.scheduler_tasks),
+            false)
+        && extent_matches(4U, frame.planes,
+            frame.signal_slot_count, sizeof(*frame.planes))
+        && extent_matches(5U, frame.metadata,
+            frame.metadata_count, sizeof(*frame.metadata))
+        && extent_matches(6U, frame.fanout_edges,
+            frame.fanout_edge_count, sizeof(*frame.fanout_edges))
+        && extent_matches(7U, frame.port_planes,
+            frame.signal_slot_count, sizeof(*frame.port_planes))
+        && extent_matches(8U, frame.pending_writes,
+            frame.pending_write_capacity, sizeof(*frame.pending_writes))
+        && extent_matches(9U, frame.staged_events,
+            frame.staged_event_capacity, sizeof(*frame.staged_events))
+        && extent_matches(10U, frame.committed_signals,
+            frame.committed_signal_capacity,
+            sizeof(*frame.committed_signals))
+        && matches(11U, frame.native_frontier_member_dispatches,
+            frame.native_frontier_member_dispatches == nullptr
+                ? 0U : sizeof(*frame.native_frontier_member_dispatches))
+        && matches(12U, frame.stop_requested,
+            frame.stop_requested == nullptr
+                ? 0U : sizeof(*frame.stop_requested));
+}
+
+bool Interpreter::Impl::RegionFrontierComponentRuntime::
+    alias_certificate_pending_backing_matches_receipt() const noexcept
+{
+    if (!alias_certificate_pending_backing.valid
+        || !canonical_values_binding_receipt.valid) {
+        return false;
+    }
+    const auto address = [](const auto* const pointer) noexcept {
+        return pointer == nullptr ? std::uintptr_t { }
+                                 : reinterpret_cast<std::uintptr_t>(pointer);
+    };
+    const auto& certified = alias_certificate_pending_backing;
+    const auto& receipt = canonical_values_binding_receipt;
+    return address(receipt.pending_plane_words) == certified.words_address
+        && receipt.pending_plane_word_count == certified.word_count
+        && address(receipt.pending_plane_offsets) == certified.offsets_address
+        && receipt.pending_plane_offset_count == certified.offset_count
+        && address(receipt.writable_signals)
+            == certified.writable_signals_address
+        && receipt.writable_signal_count == certified.writable_signal_count;
+}
+
 bool Interpreter::Impl::RegionFrontierComponentRuntime::
     collect_alias_certificate_ranges(
         const RegionFrontierLayoutV2& layout) noexcept
 {
+    ++alias_full_collector_calls;
     if (!alias_certificate_storage_available || owner == nullptr
         || !frame_initialized || invalidated || !backend
         || !backend->executor || execution_mode
@@ -360,7 +617,10 @@ bool Interpreter::Impl::RegionFrontierComponentRuntime::
             || (bytes != 0U && address == nullptr)) {
             return false;
         }
-        alias_candidate_ranges[cursor++] = { address, bytes, alias_tag };
+        alias_candidate_ranges[cursor++] = {
+            address == nullptr ? 0U
+                               : reinterpret_cast<std::uintptr_t>(address),
+            bytes, alias_tag };
         return true;
     };
     const auto append_extent = [&](const void* const address,
@@ -503,6 +763,315 @@ bool Interpreter::Impl::RegionFrontierComponentRuntime::
     return cursor == alias_candidate_ranges.size();
 }
 
+void Interpreter::Impl::RegionFrontierComponentRuntime::
+    prepare_descriptor_shapes_storage_certificate(
+        const RegionFrontierLayoutV2& layout) noexcept
+{
+    descriptor_shapes_storage_certificate = { };
+    if (!backend || !backend->executor || !frame_initialized || invalidated
+        || execution_mode
+            != RegionFrontierExecutionModeV2::systemverilog_active) {
+        return;
+    }
+    const auto* const capability
+        = dynamic_cast<const detail::RegionFrontierDescriptorShapesEntryCapability*>(
+            backend->executor.get());
+    if (capability == nullptr) {
+        return;
+    }
+    const auto view = capability->descriptor_shapes_entry();
+    if (view.entry == nullptr || view.layout != &layout) {
+        return;
+    }
+
+    // Preparation has validated each site and assigned its shape constants
+    // and payload pointers. The sealed producer preserves those shapes and
+    // pointers; host callbacks change only dynamic flags, keys and values.
+    auto& certificate = descriptor_shapes_storage_certificate;
+    certificate.backend = backend.get();
+    certificate.executor = backend->executor.get();
+    certificate.layout = &layout;
+    certificate.write_sites = layout.write_sites;
+    certificate.pending_writes = pending_writes.data();
+    certificate.pending_plane_words = pending_plane_words.data();
+    certificate.pending_plane_offsets = pending_plane_offsets.data();
+    certificate.entry = view.entry;
+    certificate.pending_write_count = pending_writes.size();
+    certificate.pending_plane_word_count = pending_plane_words.size();
+    certificate.pending_plane_offset_count = pending_plane_offsets.size();
+    certificate.write_site_count = layout.write_site_count;
+    certificate.runtime_generation = runtime_generation;
+    certificate.certificate_generation = layout.certificate_generation;
+    certificate.component_generation = layout.component_generation;
+}
+
+bool Interpreter::Impl::RegionFrontierComponentRuntime::
+    descriptor_shapes_storage_matches(
+        const RegionFrontierBackendEntry& backend_entry,
+        const RegionFrontierLayoutV2& layout) const noexcept
+{
+    const auto& certificate = descriptor_shapes_storage_certificate;
+    return certificate.entry != nullptr
+        && certificate.backend == &backend_entry
+        && backend.get() == &backend_entry && backend_entry.executor
+        && certificate.executor == backend_entry.executor.get()
+        && certificate.layout == &layout
+        && certificate.write_sites == layout.write_sites
+        && certificate.write_site_count == layout.write_site_count
+        && certificate.pending_writes == pending_writes.data()
+        && certificate.pending_write_count == pending_writes.size()
+        && certificate.pending_plane_words == pending_plane_words.data()
+        && certificate.pending_plane_word_count == pending_plane_words.size()
+        && certificate.pending_plane_offsets == pending_plane_offsets.data()
+        && certificate.pending_plane_offset_count == pending_plane_offsets.size()
+        && frame.pending_writes == pending_writes.data()
+        && frame.pending_write_capacity == pending_writes.size()
+        && layout.pending_write_capacity == pending_writes.size()
+        && layout.pending_write_capacity == pending_plane_offsets.size()
+        && certificate.runtime_generation == runtime_generation
+        && certificate.certificate_generation == layout.certificate_generation
+        && certificate.component_generation == layout.component_generation;
+}
+
+void Interpreter::Impl::RegionFrontierComponentRuntime::
+    issue_descriptor_shapes_binding_receipt(
+        const RegionFrontierBackendEntry& backend_entry,
+        const RegionFrontierLayoutV2& layout) noexcept
+{
+    descriptor_shapes_binding_receipt = { };
+    // The complete binding snapshot is shared; the new authority is minted
+    // separately and never follows merely from canonical-value success.
+    if (canonical_values_binding_receipt.valid
+        && !alias_bind_serial_exhausted && alias_bind_serial != 0U
+        && descriptor_shapes_storage_matches(backend_entry, layout)) {
+        descriptor_shapes_binding_receipt.entry
+            = descriptor_shapes_storage_certificate.entry;
+        descriptor_shapes_binding_receipt.bind_serial = alias_bind_serial;
+    }
+}
+
+void Interpreter::Impl::RegionFrontierComponentRuntime::
+    clear_canonical_values_binding_receipt() noexcept
+{
+    canonical_values_binding_receipt = { };
+    descriptor_shapes_binding_receipt = { };
+}
+
+bool Interpreter::Impl::RegionFrontierComponentRuntime::
+    issue_canonical_values_binding_receipt(
+        const RegionFrontierBackendEntry& backend_entry,
+        const RegionFrontierLayoutV2& layout,
+        const AuthoritativeSignalPlanes::FrontierWriteLease& lease) noexcept
+{
+    // This is called only after the complete per-call binder succeeds. The
+    // binder has checked every boundary plane's canonical words and bound each
+    // internal role from the active A4 lease. Pending buffers are allocated
+    // from the immutable write-site recipe at preparation; the only generated
+    // writer applies Logic4/Logic9 canonical lowering and masks word tails.
+    // The receipt is deliberately independent of the alias-range certificate.
+    clear_canonical_values_binding_receipt();
+    if (owner == nullptr || backend.get() != &backend_entry
+        || !backend_entry.executor
+        || &backend_entry.executor->layout() != &layout
+        || !lease.active() || invalidated || !frame_initialized
+        || execution_mode
+            != RegionFrontierExecutionModeV2::systemverilog_active
+        || layout.execution_mode
+            != RegionFrontierExecutionModeV2::systemverilog_active
+        || !authoritative_state || !authoritative_state->valid()
+        || authoritative_state->generation() != runtime_generation
+        || runtime_generation == 0U
+        || runtime_generation != owner->region_runtime_generation
+        || !owner->region_graph
+        || !owner->region_graph->component_epochs_current(component)
+        || component >= owner->region_authoritative_state_by_component.size()
+        || owner->region_authoritative_state_by_component[component]
+            != authoritative_state
+        || frame.staged_event_count != 0U) {
+        return false;
+    }
+
+    auto& receipt = canonical_values_binding_receipt;
+    receipt.owner = owner;
+    receipt.component = component;
+    receipt.backend = &backend_entry;
+    receipt.executor = backend_entry.executor.get();
+    receipt.layout = &layout;
+    receipt.authoritative_state = authoritative_state.get();
+    receipt.ready_words = frame.ready_words;
+    receipt.members = frame.members;
+    receipt.scheduler_tasks = frame.scheduler_tasks;
+    receipt.planes = frame.planes;
+    receipt.metadata = frame.metadata;
+    receipt.fanout_edges = frame.fanout_edges;
+    receipt.port_planes = frame.port_planes;
+    receipt.pending_writes = frame.pending_writes;
+    receipt.staged_events = frame.staged_events;
+    receipt.committed_signals = frame.committed_signals;
+    receipt.native_frontier_member_dispatches
+        = frame.native_frontier_member_dispatches;
+    receipt.stop_requested = frame.stop_requested;
+    receipt.pending_plane_words = pending_plane_words.data();
+    receipt.pending_plane_offsets = pending_plane_offsets.data();
+    receipt.writable_signals = writable_signals.data();
+    receipt.lease = &lease;
+    receipt.bind_serial = alias_bind_proof.valid
+        ? alias_bind_proof.serial : 0U;
+    receipt.pending_plane_word_count = pending_plane_words.size();
+    receipt.pending_plane_offset_count = pending_plane_offsets.size();
+    receipt.writable_signal_count = writable_signals.size();
+    receipt.runtime_generation = runtime_generation;
+    receipt.certificate_generation = layout.certificate_generation;
+    receipt.component_generation = layout.component_generation;
+    receipt.authoritative_revision
+        = authoritative_state->values().revision();
+    receipt.member_count = frame.member_count;
+    receipt.scheduler_task_capacity = frame.scheduler_task_capacity;
+    receipt.readiness_word_count = frame.readiness_word_count;
+    receipt.signal_slot_count = frame.signal_slot_count;
+    receipt.metadata_count = frame.metadata_count;
+    receipt.fanout_edge_count = frame.fanout_edge_count;
+    receipt.pending_write_capacity = frame.pending_write_capacity;
+    receipt.staged_event_capacity = frame.staged_event_capacity;
+    receipt.committed_signal_capacity = frame.committed_signal_capacity;
+    receipt.valid = true;
+    return true;
+}
+
+bool Interpreter::Impl::RegionFrontierComponentRuntime::
+    consume_canonical_values_binding_receipt(
+        const RegionFrontierBackendEntry& backend_entry,
+        const RegionFrontierLayoutV2& layout,
+        const RegionFrontierStepEntryV2 canonical_values_entry,
+        const RegionFrontierStepEntryV2 alias_and_canonical_values_entry,
+        const AuthoritativeSignalPlanes::FrontierWriteLease& lease,
+        const RegionFrontierStepEntryV2 descriptor_shapes_entry,
+        bool* const descriptor_shapes_binding_valid) noexcept
+{
+    if (descriptor_shapes_binding_valid != nullptr) {
+        *descriptor_shapes_binding_valid = false;
+    }
+    const auto& receipt = canonical_values_binding_receipt;
+    const bool matched = receipt.valid
+        && (canonical_values_entry != nullptr
+            || alias_and_canonical_values_entry != nullptr)
+        && owner != nullptr && owner == receipt.owner
+        && component == receipt.component
+        && backend.get() == &backend_entry
+        && receipt.backend == &backend_entry
+        && backend_entry.executor
+        && backend_entry.executor.get() == receipt.executor
+        && &backend_entry.executor->layout() == &layout
+        && receipt.layout == &layout
+        && lease.active() && !invalidated && frame_initialized
+        && execution_mode
+            == RegionFrontierExecutionModeV2::systemverilog_active
+        && layout.execution_mode
+            == RegionFrontierExecutionModeV2::systemverilog_active
+        && authoritative_state
+        && authoritative_state.get() == receipt.authoritative_state
+        && authoritative_state->valid()
+        && authoritative_state->generation() == runtime_generation
+        && authoritative_state->values().revision()
+            == receipt.authoritative_revision
+        && receipt.lease == &lease
+        && receipt.bind_serial
+            == (alias_bind_proof.valid ? alias_bind_proof.serial : 0U)
+        && runtime_generation == receipt.runtime_generation
+        && runtime_generation != 0U
+        && runtime_generation == owner->region_runtime_generation
+        && component < owner->region_authoritative_state_by_component.size()
+        && owner->region_authoritative_state_by_component[component]
+            == authoritative_state
+        && owner->region_graph
+        && owner->region_graph->component_epochs_current(component)
+        && layout.certificate_generation == receipt.certificate_generation
+        && layout.component_generation == receipt.component_generation
+        && frame.runtime_generation == receipt.runtime_generation
+        && frame.bound_runtime_generation == receipt.runtime_generation
+        && frame.certificate_generation == receipt.certificate_generation
+        && frame.component_generation == receipt.component_generation
+        && frame.staged_event_count == 0U
+        && frame.ready_words == receipt.ready_words
+        && frame.members == receipt.members
+        && frame.scheduler_tasks == receipt.scheduler_tasks
+        && frame.planes == receipt.planes
+        && frame.metadata == receipt.metadata
+        && frame.fanout_edges == receipt.fanout_edges
+        && frame.port_planes == receipt.port_planes
+        && frame.pending_writes == receipt.pending_writes
+        && frame.staged_events == receipt.staged_events
+        && frame.committed_signals == receipt.committed_signals
+        && frame.native_frontier_member_dispatches
+            == receipt.native_frontier_member_dispatches
+        && frame.stop_requested == receipt.stop_requested
+        && pending_plane_words.data() == receipt.pending_plane_words
+        && pending_plane_offsets.data() == receipt.pending_plane_offsets
+        && writable_signals.data() == receipt.writable_signals
+        && pending_plane_words.size() == receipt.pending_plane_word_count
+        && pending_plane_offsets.size() == receipt.pending_plane_offset_count
+        && writable_signals.size() == receipt.writable_signal_count
+        && frame.member_count == receipt.member_count
+        && frame.scheduler_task_capacity
+            == receipt.scheduler_task_capacity
+        && frame.readiness_word_count == receipt.readiness_word_count
+        && frame.signal_slot_count == receipt.signal_slot_count
+        && frame.metadata_count == receipt.metadata_count
+        && frame.fanout_edge_count == receipt.fanout_edge_count
+        && frame.pending_write_capacity == receipt.pending_write_capacity
+        && frame.staged_event_capacity == receipt.staged_event_capacity
+        && frame.committed_signal_capacity
+            == receipt.committed_signal_capacity
+        && frame.ready_words == ready_words.data()
+        && frame.members == members.data()
+        && frame.scheduler_tasks == scheduler_tasks.data()
+        && frame.planes == planes.data()
+        && frame.metadata == (metadata.empty() ? nullptr : metadata.data())
+        && frame.fanout_edges
+            == (fanout_edges.empty() ? nullptr : fanout_edges.data())
+        && frame.port_planes == port_planes.data()
+        && frame.pending_writes == pending_writes.data()
+        && frame.staged_events == staged_events.data()
+        && frame.committed_signals == committed_signals.data();
+    if (descriptor_shapes_binding_valid != nullptr) {
+        *descriptor_shapes_binding_valid = matched
+            && descriptor_shapes_entry != nullptr
+            && descriptor_shapes_entry == descriptor_shapes_binding_receipt.entry
+            && descriptor_shapes_entry
+                == descriptor_shapes_storage_certificate.entry
+            && !alias_bind_serial_exhausted
+            && descriptor_shapes_binding_receipt.bind_serial != 0U
+            && descriptor_shapes_binding_receipt.bind_serial == alias_bind_serial
+            && descriptor_shapes_storage_matches(backend_entry, layout);
+    }
+    const auto consumed_serial = receipt.bind_serial;
+    const bool bind_proof_matches = matched
+        && alias_bind_proof.valid
+        && alias_bind_proof.serial == consumed_serial
+        && alias_bind_proof.lease == &lease
+        && alias_bind_proof.backend == &backend_entry
+        && alias_bind_proof.executor == backend_entry.executor.get()
+        && alias_bind_proof.layout == &layout
+        && alias_bind_proof.frame == &frame
+        && alias_bind_proof.state == authoritative_state.get()
+        && alias_bind_proof.runtime_generation == runtime_generation
+        && alias_bind_proof.state_revision
+            == receipt.authoritative_revision
+        && alias_bind_proof.lease->active();
+    const bool pending_backing_matches
+        = bind_proof_matches
+        && alias_certificate_pending_backing_matches_receipt();
+    clear_canonical_values_binding_receipt();
+    if (bind_proof_matches) {
+        alias_bind_proof.receipt_consumed = true;
+        alias_bind_proof.pending_backing_matches_certificate
+            = pending_backing_matches;
+    } else {
+        clear_alias_bind_proof();
+    }
+    return matched;
+}
+
 bool Interpreter::Impl::RegionFrontierComponentRuntime::
     prove_alias_geometry_sorted() noexcept
 {
@@ -556,7 +1125,8 @@ bool Interpreter::Impl::RegionFrontierComponentRuntime::
         return reject();
     }
     const RegionFrontierAliasRange scratch_range {
-        alias_sorted_indices.data(), data_range_count * sizeof(std::size_t), 0U
+        reinterpret_cast<std::uintptr_t>(alias_sorted_indices.data()),
+        data_range_count * sizeof(std::size_t), 0U
     };
     std::uint64_t scratch_begin { };
     std::uint64_t scratch_end { };
@@ -693,12 +1263,15 @@ void Interpreter::Impl::RegionFrontierComponentRuntime::
     std::fprintf(stderr,
         "fsim-profile: sv-frontier-alias-miss component=%zu reason=%s "
         "tuple_index=%zu other_tuple_index=%zu context_mask=%u "
-        "old_address=%p new_address=%p "
+        "old_address=0x%llx new_address=0x%llx "
         "old_bytes=%zu new_bytes=%zu old_tag=%llu new_tag=%llu "
         "cached_task_bytes=%zu actual_task_count=%u "
         "cached_runtime_generation=%llu runtime_generation=%llu\n",
         component, names[static_cast<std::size_t>(reason)], tuple_index,
-        other_tuple_index, context_mask, before.address, after.address, before.bytes, after.bytes,
+        other_tuple_index, context_mask,
+        static_cast<unsigned long long>(before.address),
+        static_cast<unsigned long long>(after.address),
+        before.bytes, after.bytes,
         static_cast<unsigned long long>(before.alias_tag),
         static_cast<unsigned long long>(after.alias_tag), old_task_bytes,
         frame.scheduler_task_count,
@@ -745,8 +1318,14 @@ bool Interpreter::Impl::RegionFrontierComponentRuntime::
 
 bool Interpreter::Impl::RegionFrontierComponentRuntime::
     alias_certificate_matches(
-        const RegionFrontierAliasCertificateContext& context) noexcept
+        const RegionFrontierAliasCertificateContext& context,
+        const bool builtin_alias_and_canonical_route) noexcept
 {
+    if (builtin_alias_and_canonical_route) {
+        ++alias_bind_proof_attempts;
+    }
+    const auto bind_proof = alias_bind_proof;
+    clear_alias_bind_proof();
     if (!alias_certificate_storage_available || !alias_certificate_valid) {
         record_alias_certificate_miss(RegionFrontierAliasMissReason::unprimed);
         clear_alias_certificate();
@@ -779,6 +1358,50 @@ bool Interpreter::Impl::RegionFrontierComponentRuntime::
             std::numeric_limits<std::size_t>::max(), context_mask);
         clear_alias_certificate();
         return false;
+    }
+    const auto task_count
+        = static_cast<std::size_t>(frame.scheduler_task_count);
+    const bool exact_task_count_confirmed
+        = task_count < alias_certificate_task_count_valid.size()
+        && alias_certificate_task_count_valid[task_count] != 0U;
+    const bool bind_proof_context_matches
+        = builtin_alias_and_canonical_route
+        && bind_proof.valid
+        && bind_proof.serial != 0U
+        && bind_proof.serial == alias_bind_serial
+        && !alias_bind_serial_exhausted
+        && bind_proof.receipt_consumed
+        && bind_proof.pending_backing_matches_certificate
+        && bind_proof.plane_ranges_match_certificate
+        && bind_proof.backend == context.backend
+        && bind_proof.executor == context.executor
+        && bind_proof.layout == context.layout
+        && bind_proof.frame == context.frame
+        && !invalidated
+        && authoritative_state
+        && authoritative_state->valid()
+        && bind_proof.state == authoritative_state.get()
+        && bind_proof.runtime_generation == runtime_generation
+        && bind_proof.lease != nullptr
+        && bind_proof.lease->active()
+        && bind_proof.state_revision
+            == authoritative_state->values().revision()
+        && frame.staged_event_count == 0U
+        && alias_certificate_frame_ranges_match();
+    const bool bind_proof_reusable
+        = bind_proof_context_matches
+        && bind_proof.pending_backing_matches_certificate
+        && bind_proof.plane_ranges_match_certificate
+        && exact_task_count_confirmed;
+    if (bind_proof_reusable) {
+        ++alias_bind_proof_reuse_hits;
+        return true;
+    }
+    if (bind_proof_context_matches
+        && bind_proof.pending_backing_matches_certificate
+        && bind_proof.plane_ranges_match_certificate
+        && !exact_task_count_confirmed) {
+        ++alias_bind_proof_unconfirmed_task_count_misses;
     }
     if (!collect_alias_certificate_ranges(*context.layout)
         || alias_candidate_ranges.size() != alias_certificate_ranges.size()) {
@@ -829,8 +1452,6 @@ bool Interpreter::Impl::RegionFrontierComponentRuntime::
         return false;
     }
 
-    const auto task_count
-        = static_cast<std::size_t>(frame.scheduler_task_count);
     if (task_count >= alias_certificate_task_count_valid.size()
         || alias_certificate_task_count_valid[task_count] == 0U) {
         // This is an unconfirmed exact count key, not proof that the byte
@@ -905,8 +1526,27 @@ bool Interpreter::Impl::RegionFrontierComponentRuntime::
             return false;
         }
     }
-    alias_certificate_task_count_valid[
-        alias_certificate_pending_task_count] = 1U;
+    // For an unchanged task-buffer pointer and unchanged peer ranges, a valid
+    // interval of N scheduler tasks also proves every shorter prefix. This
+    // bitmap authorizes geometry reuse only; emitted task, cursor, and key
+    // validation remains responsible for scheduler semantics.
+    for (std::size_t task_count = 0U;
+         task_count <= alias_certificate_pending_task_count; ++task_count) {
+        alias_certificate_task_count_valid[task_count] = 1U;
+    }
+    const auto address = [](const auto* const pointer) noexcept {
+        return pointer == nullptr ? std::uintptr_t { }
+                                 : reinterpret_cast<std::uintptr_t>(pointer);
+    };
+    alias_certificate_pending_backing = {
+        address(pending_plane_words.data()),
+        pending_plane_words.size(),
+        address(pending_plane_offsets.data()),
+        pending_plane_offsets.size(),
+        address(writable_signals.data()),
+        writable_signals.size(),
+        true,
+    };
     alias_certificate_pending_confirmation = false;
     alias_certificate_valid = true;
     return true;
@@ -915,8 +1555,10 @@ bool Interpreter::Impl::RegionFrontierComponentRuntime::
 void Interpreter::Impl::RegionFrontierComponentRuntime::
     clear_alias_certificate() noexcept
 {
+    clear_alias_bind_proof();
     alias_certificate_task_count_valid.fill(0U);
     alias_certificate_pending_task_count = 0U;
+    alias_certificate_pending_backing = { };
     alias_certificate_valid = false;
     alias_certificate_pending_confirmation = false;
     alias_certificate_context = { };
@@ -1378,6 +2020,8 @@ bool Interpreter::Impl::preflight_region_frontier_component_layout(
         || !workspace_size.add<std::size_t>(
             generic_mode ? layout.member_count : 0U)
         || !workspace_size.add<std::size_t>(
+            systemverilog_mode ? layout.member_count : 0U)
+        || !workspace_size.add<std::size_t>(
             generic_mode ? layout.member_count : 0U)
         || !workspace_size.add<std::uint64_t>(
             generic_mode ? layout.readiness_word_count : 0U)
@@ -1391,6 +2035,7 @@ bool Interpreter::Impl::preflight_region_frontier_component_layout(
             generic_mode ? layout.member_count : 0U)
         || !workspace_size.add<AuthoritativeSignalPlanes::FrontierWriteBinding>(
             writable_signal_count)
+        || !workspace_size.add<std::size_t>(writable_signal_count)
         || !workspace_size.add<std::size_t>(layout.pending_write_capacity)
         || !workspace_size.add<std::uint64_t>(pending_plane_word_capacity)
         || !workspace_size.add<SystemVerilogCompactBatchMember>(event_capacity)
@@ -1730,6 +2375,8 @@ bool Interpreter::Impl::prepare_region_frontier_component(
         || !workspace_size.add<std::size_t>(
             generic_mode ? layout.member_count : 0U)
         || !workspace_size.add<std::size_t>(
+            systemverilog_mode ? layout.member_count : 0U)
+        || !workspace_size.add<std::size_t>(
             generic_mode ? layout.member_count : 0U)
         || !workspace_size.add<std::uint64_t>(
             generic_mode ? layout.readiness_word_count : 0U)
@@ -1745,6 +2392,7 @@ bool Interpreter::Impl::prepare_region_frontier_component(
             generic_mode ? layout.member_count : 0U)
         || !workspace_size.add<AuthoritativeSignalPlanes::FrontierWriteBinding>(
             writable_signals.size())
+        || !workspace_size.add<std::size_t>(writable_signals.size())
         || !workspace_size.add<std::size_t>(
             layout.pending_write_capacity)
         || !workspace_size.add<std::uint64_t>(pending_plane_word_capacity)
@@ -1760,6 +2408,31 @@ bool Interpreter::Impl::prepare_region_frontier_component(
 
     runtime.ready_words.assign(layout.readiness_word_count, 0U);
     runtime.members.resize(layout.member_count);
+    runtime.member_sync_workset_available = false;
+    if (!generic_mode) {
+        try {
+            if (!runtime.member_sync_workset.initialize(layout)) {
+                return reject("member-sync-topology-invalid");
+            }
+            runtime.member_sync_workset_available = true;
+        } catch (const std::bad_alloc&) {
+            // Optional selected synchronization must not make native runtime
+            // construction depend on another allocation. Restore an empty
+            // journal before any queue import hook can attempt to mark it.
+            runtime.member_sync_workset = FrontierMemberSyncWorkset { };
+        } catch (const std::length_error&) {
+            runtime.member_sync_workset = FrontierMemberSyncWorkset { };
+        }
+    }
+    if (systemverilog_wave_profile_enabled) {
+        std::fprintf(stderr,
+            "[fsim frontier-member-sync-workspace] component=%zu "
+            "available=%u retained_capacity_bytes=%zu "
+            "bytes_scope=retained-workset-vectors-only\n",
+            component,
+            static_cast<unsigned>(runtime.member_sync_workset_available),
+            runtime.member_sync_workset.retained_capacity_bytes());
+    }
     runtime.scheduler_tasks.resize(
         RegionFrontierComponentRuntime::scheduler_task_capacity);
     runtime.original_scheduler_tasks.resize(
@@ -1769,6 +2442,7 @@ bool Interpreter::Impl::prepare_region_frontier_component(
     runtime.generic_snapshot_plane_offsets.clear();
     runtime.generic_snapshot_words.clear();
     runtime.generic_member_task_indices.clear();
+    runtime.raw_activation_summary.clear();
     runtime.generic_ticket_member_offsets.clear();
     runtime.generic_queued_ready_words.clear();
     runtime.generic_queued_members.clear();
@@ -1834,6 +2508,10 @@ bool Interpreter::Impl::prepare_region_frontier_component(
                 }
             }
         }
+    } else if (systemverilog_mode) {
+        runtime.raw_activation_summary.resize(
+            layout.member_count,
+            std::numeric_limits<std::size_t>::max());
     }
     if (layout.fanout_edge_count != 0U) {
         runtime.fanout_edges.assign(layout.fanout_edges,
@@ -1848,6 +2526,7 @@ bool Interpreter::Impl::prepare_region_frontier_component(
         std::numeric_limits<std::size_t>::max());
     runtime.writable_signals.assign(
         writable_signals.begin(), writable_signals.end());
+    runtime.writable_layout_indices.resize(writable_signals.size());
     runtime.compact_members.resize(event_capacity);
     runtime.issued_sequences.resize(event_capacity);
 
@@ -2115,6 +2794,7 @@ bool Interpreter::Impl::prepare_region_frontier_component(
     frame.current_member = kInvalidFrontierIndex;
     frame.current_pending_write = kInvalidFrontierIndex;
     runtime.frame_initialized = true;
+    runtime.prepare_descriptor_shapes_storage_certificate(layout);
 
     runtime.alias_certificate_storage_available = false;
     runtime.clear_alias_certificate();

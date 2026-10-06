@@ -267,6 +267,11 @@ struct BuiltProject {
     /// Immutable opt-in capability. Disabled builds do not create coverage
     /// inventories, counters, callbacks, or runtime-operation checks.
     bool code_coverage_enabled { };
+    /// Opt-in A2 combinational cone fusion for this in-memory consumer. Set
+    /// only when no observer outside SimIR processes (trace output, debugger,
+    /// coverage) can inspect hidden internal nets; hidden nets are still
+    /// materialized before any runtime observation.
+    bool cone_fusion { };
     /// Validated file inputs awaiting the design digest assigned at publication.
     std::vector<std::shared_ptr<const SdfSessionPublication>>
         sdf_session_publications { };
@@ -1036,6 +1041,11 @@ public:
     /// text. Reserved output controls still prepare full observation.
     void set_builtin_stdout_output();
     void set_report_hook(ReportHook hook);
+    /// Install a report sink that only formats the supplied message and
+    /// metadata, without inspecting simulation state. Unlike
+    /// set_report_hook(), reports reach it without a full signal-observation
+    /// barrier.
+    void set_trusted_text_report_hook(ReportHook hook);
     void set_concurrent_assertion_hook(ConcurrentAssertionHook hook);
     void set_vhdl_psl_attempt_hook(VhdlPslAttemptHook hook);
     [[nodiscard]] std::uint64_t add_uvm_activity_hook(UvmActivityHook hook);

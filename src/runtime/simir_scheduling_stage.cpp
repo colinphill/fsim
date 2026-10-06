@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <chrono>
 #include <exception>
 #include <limits>
 #include <new>
@@ -2349,11 +2350,27 @@ void Interpreter::Impl::dispatch_systemverilog_update(
     if (invalidate_local_wave_bank) {
         owner.invalidate_region_local_wave_signal(signal);
     }
+    const auto profile_start = owner.commit_signal_profile_enabled
+        ? std::chrono::steady_clock::now()
+        : std::chrono::steady_clock::time_point { };
     if (offset) {
         owner.commit_driver_slice(
             process, signal, std::move(value), *offset, origin, false);
     } else {
         owner.commit_driver(process, signal, std::move(value), origin, false);
+    }
+    if (owner.commit_signal_profile_enabled) {
+        const auto elapsed = std::chrono::duration_cast<
+            std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - profile_start);
+        auto& rows = owner.commit_signal_profile_rows;
+        if (signal >= rows.size()) {
+            rows.resize(static_cast<std::size_t>(signal) + 1U);
+        }
+        auto& row = rows[signal];
+        ++row.calls;
+        row.slice_calls += offset ? 1U : 0U;
+        row.nanoseconds += static_cast<std::uint64_t>(elapsed.count());
     }
     retire.cancel = false;
 }

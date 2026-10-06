@@ -222,6 +222,15 @@ public:
             ProcessId owner,
             std::array<std::span<std::uint64_t>, 4U>& planes) const noexcept;
 
+        /// Resolve one binding by its acquisition-time ordinal. The caller
+        /// must keep the optional layout-index span passed to acquisition
+        /// alive and unchanged until this lease is released.
+        [[nodiscard]] bool plane_words_at(std::size_t writable_ordinal,
+            SignalId signal,
+            PackedPlaneRole role,
+            ProcessId owner,
+            std::array<std::span<std::uint64_t>, 4U>& planes) const noexcept;
+
         /// Record one committed signal whose authoritative plane state
         /// changed. Repeated commits may mark the same signal more than once.
         void note_value_change(SignalId signal) noexcept;
@@ -231,8 +240,16 @@ public:
     private:
         friend class AuthoritativeSignalPlanes;
 
+        [[nodiscard]] bool plane_words_for_index(SignalId signal,
+            std::size_t signal_index,
+            PackedPlaneRole role,
+            ProcessId owner,
+            std::array<std::span<std::uint64_t>, 4U>& planes)
+            const noexcept;
+
         AuthoritativeSignalPlanes* owner_ { };
         std::span<const FrontierWriteBinding> writable_signals_;
+        std::span<const std::size_t> writable_layout_indices_;
         std::array<std::shared_ptr<PackedLogic4PlaneBlock>, 4U> blocks_;
         std::array<PackedLogic4PlaneBlock*, 4U> locked_ { };
         std::uint64_t captured_generation_ { };
@@ -536,6 +553,13 @@ public:
         PackedPlaneRole role,
         ProcessId owner = ProcessId { }) const noexcept;
 
+    /// Borrow every value plane during externally serialized access. A live
+    /// versioned value loads its backing block once; no read pin is retained.
+    /// The spans expire at the next publication, just like aval_words() and
+    /// bval_words(). Reborrow after a callback that may publish signal values.
+    [[nodiscard]] static std::array<std::span<const std::uint64_t>, 4U>
+    borrow_packed_value_planes(const PackedLogic4& value) noexcept;
+
     /// Copy a wide Logic4 role into a unique owning destination without
     /// allocating or retaining an A4 plane pin. False leaves the destination
     /// unchanged, including when its storage is shared, external, or has a
@@ -553,10 +577,16 @@ public:
     /// read pin, unsupported kind, unresolved owner shape, or missing slot
     /// declines before mutation. A narrow lease is exclusive and synchronous:
     /// no other state mutation or callback may run until it is released.
+    /// The optional layout-index output span may be empty for compatibility.
+    /// When supplied, it must have one element per writable binding. A
+    /// successful acquisition fills it in binding order and retains the span
+    /// until release; the caller must keep it alive and unchanged for that
+    /// duration. Its contents are usable only after success.
     [[nodiscard]] bool try_acquire_frontier_write_lease(
         std::uint64_t expected_generation,
         std::span<const FrontierWriteBinding> writable_signals,
-        FrontierWriteLease& lease) noexcept;
+        FrontierWriteLease& lease,
+        std::span<std::size_t> writable_layout_indices = { }) noexcept;
 
     [[nodiscard]] const SignalDriverLayout& layout() const noexcept
     {

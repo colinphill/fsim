@@ -184,11 +184,13 @@ void exercise_wide_committed_state_observation()
     next_previous.set(63U, Logic4::one);
     next_previous.set(127U, Logic4::z);
     const auto initial_generation = values.revision();
-    AuthoritativeSignalPlanes::FrontierWriteLease lease;
     const std::array<AuthoritativeSignalPlanes::FrontierWriteBinding, 1U>
         writable { { { signal_id, process_id } } };
+    std::array<std::size_t, 1U> writable_layout_indices { };
+    AuthoritativeSignalPlanes::FrontierWriteLease lease;
     require(values.try_acquire_frontier_write_lease(
-                initial_generation, writable, lease)
+                initial_generation, writable, lease,
+                writable_layout_indices)
             && lease.active(),
         "wide sync fixture acquires the real A4 frontier write lease");
     copy_value_to_role(lease, signal_id, process_id,

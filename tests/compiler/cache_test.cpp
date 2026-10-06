@@ -442,10 +442,10 @@ int main() {
     assert(absent.prune(no_limits, prune, error));
     assert(prune == fsim::compiler::ObjectCachePruneResult{});
 
-    // A v267 namespace entry cannot satisfy the current native-object key.
+    // A v268 namespace entry cannot satisfy the current native-object key.
     CacheKeyBuilder legacy_native;
     const auto legacy_native_key = legacy_native
-        .add("llvm-object-schema", "fsim-llvm-native-object-v267")
+        .add("llvm-object-schema", "fsim-llvm-native-object-v268")
         .add("process-identity", "legacy-namespace-fixture")
         .finish();
     CacheKeyBuilder current_native;

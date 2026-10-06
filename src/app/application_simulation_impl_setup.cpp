@@ -3,6 +3,33 @@
 
 namespace fsim::app {
 
+namespace {
+
+std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
+    BuiltProject& built, const std::uint64_t max_deltas)
+{
+    const runtime::SchedulerOptions options { max_deltas, 32 };
+    if (built.cone_fusion
+        && std::getenv("FSIM_DISABLE_CONE_FUSION") == nullptr) {
+        const auto plan = built.design.plan_cone_fusion();
+        if (std::getenv("FSIM_PROFILE_PHASES") != nullptr) {
+            std::cerr << "fsim-profile: cone-fusion disabled=" << plan.disabled
+                      << " reason=" << plan.disabled_reason
+                      << " candidates=" << plan.candidate_processes
+                      << " cones=" << plan.cones.size()
+                      << " dormant=" << plan.dormant.size()
+                      << " internal_nets=" << plan.internal_nets << '\n';
+        }
+        if (!plan.disabled && !plan.cones.empty()) {
+            return std::move(built.design).create_interpreter(
+                options, built.seed, plan);
+        }
+    }
+    return std::move(built.design).create_interpreter(options, built.seed);
+}
+
+} // namespace
+
 Simulation::Impl::Impl(
     BuiltProject project,
     const std::uint64_t max_deltas,
@@ -94,9 +121,7 @@ Simulation::Impl::Impl(
           built.compiled_systemverilog_class_specializations,
           built.systemverilog_hir,
           class_heap)
-    , interpreter(std::move(built.design).create_interpreter(
-          runtime::SchedulerOptions { max_deltas, 32 },
-          built.seed))
+    , interpreter(create_simulation_interpreter(built, max_deltas))
 {
     class_hir_execution.set_runtime_services(
         [this](const auto handle, const auto identity, auto& actuals,
@@ -1324,7 +1349,11 @@ Simulation::Impl::Impl(
             }
         };
     interpreter->set_output_hook(interpreter_output_hook);
-    interpreter->set_report_hook(
+    // The interpreter-level hook filters on app-owned state only, so it is a
+    // trusted text sink; it prepares observation itself before any user hook
+    // that may inspect simulation state.
+    runtime::simir::InterpreterProgramAccess::set_trusted_text_report_hook(
+        *interpreter,
         [this](
             const runtime::simir::ProcessId process,
             const std::string_view message,
@@ -1348,6 +1377,9 @@ Simulation::Impl::Impl(
                 return;
             }
             if (report_hook) {
+                if (!trusted_text_report_hook) {
+                    interpreter->prepare_output_callback_observation();
+                }
                 report_hook(
                     process,
                     message,

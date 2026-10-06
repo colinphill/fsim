@@ -467,9 +467,14 @@ void validate_native_activation_v2(
     const bool require_direct_read_signals,
     const bool direct_backing_prevalidated = false,
     const std::optional<std::span<const JitDirectReadInstanceBinding>> bindings
-        = std::nullopt)
+        = std::nullopt,
+    const bool services_prevalidated = false)
 {
-    validate_native_service_callbacks(info, runtime);
+    if (services_prevalidated) {
+        validate_runtime_instance_v2(runtime);
+    } else {
+        validate_native_service_callbacks(info, runtime);
+    }
     if (info.requires_direct_read_signals != require_direct_read_signals) {
         throw LlvmJitError(
             "JIT direct-read requirement does not match its native entry");
@@ -2224,11 +2229,18 @@ JitResumeStatus LlvmJit::resume_impl(
     }
     const auto& entry
         = *static_cast<const Impl::NativeEntry*>(process.entry_);
+    const bool services_validated = runtime.services != nullptr
+        && entry.validated_services.load(std::memory_order_acquire)
+            == runtime.services;
     validate_native_activation_v2(
         entry.info, runtime, frame, result,
         impl_->options.require_direct_update_slots,
         entry.info.requires_direct_read_signals,
-        direct_backing_prevalidated);
+        direct_backing_prevalidated, std::nullopt, services_validated);
+    if (!services_validated) {
+        entry.validated_services.store(
+            runtime.services, std::memory_order_release);
+    }
     const auto terminal_result =
         [&](const std::uint32_t status) -> JitResumeStatus {
         result.status = status;

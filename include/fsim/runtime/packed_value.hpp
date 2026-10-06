@@ -523,6 +523,18 @@ private:
     }
     void initialize_storage_from(const PackedLogic4& other,
         std::shared_ptr<WideStorage> wide) noexcept;
+    /// True when this value owns ordinary inline words: no live A4 plane
+    /// backing, no pinned snapshot, and a width that fits InlineStorage.
+    /// Copies, moves and destruction of such values need no out-of-line work.
+    [[nodiscard]] bool plain_inline_storage() const noexcept
+    {
+        return (width_and_logic9_ & plane_backing_mask) == 0U
+            && uses_inline_storage();
+    }
+    void copy_construct_slow(const PackedLogic4& other);
+    void move_construct_slow(PackedLogic4&& other) noexcept;
+    PackedLogic4& copy_assign_slow(const PackedLogic4& other);
+    PackedLogic4& move_assign_slow(PackedLogic4&& other) noexcept;
 
     /// Overwrite an already-owned wide Logic4 value without detaching or
     /// allocating. Returns false without mutation if the value is shared,
@@ -615,6 +627,53 @@ private:
     ValueStorage storage_;
     bool plane_snapshot_ { };
 };
+
+inline PackedLogic4::PackedLogic4(const PackedLogic4& other)
+    : width_and_logic9_(other.width_and_logic9_ & ~plane_backing_mask)
+{
+    if (other.plain_inline_storage()) {
+        std::construct_at(&storage_.inline_value, other.storage_.inline_value);
+        return;
+    }
+    copy_construct_slow(other);
+}
+
+inline PackedLogic4::PackedLogic4(PackedLogic4&& other) noexcept
+    : width_and_logic9_(other.width_and_logic9_ & ~plane_backing_mask)
+{
+    if (other.plain_inline_storage()) {
+        std::construct_at(&storage_.inline_value, other.storage_.inline_value);
+        return;
+    }
+    move_construct_slow(std::move(other));
+}
+
+inline PackedLogic4& PackedLogic4::operator=(const PackedLogic4& other)
+{
+    if (plain_inline_storage() && other.plain_inline_storage()) {
+        width_and_logic9_ = other.width_and_logic9_;
+        storage_.inline_value = other.storage_.inline_value;
+        return *this;
+    }
+    return copy_assign_slow(other);
+}
+
+inline PackedLogic4& PackedLogic4::operator=(PackedLogic4&& other) noexcept
+{
+    if (plain_inline_storage() && other.plain_inline_storage()) {
+        width_and_logic9_ = other.width_and_logic9_;
+        storage_.inline_value = other.storage_.inline_value;
+        return *this;
+    }
+    return move_assign_slow(std::move(other));
+}
+
+inline PackedLogic4::~PackedLogic4()
+{
+    if (!plain_inline_storage()) {
+        destroy_active_storage();
+    }
+}
 
 /// Preferred name for the common packed transport value. PackedLogic4 remains
 /// available because the existing public vertical-slice API used that name;

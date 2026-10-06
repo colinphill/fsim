@@ -675,11 +675,78 @@ ElaboratedDesign::create_interpreter(
     return interpreter;
 }
 
+std::unique_ptr<runtime::simir::Interpreter>
+ElaboratedDesign::create_interpreter(
+    const runtime::SchedulerOptions options,
+    const std::uint64_t seed,
+    const ConeFusionPlan& plan) &&
+{
+    auto interpreter = std::make_unique<runtime::simir::Interpreter>(options, seed);
+    interpreter->reserve_process_capacity(process_count());
+    populate_interpreter(interpreter.get(), false,
+        process_rows_ ? nullptr : &processes_, &plan);
+    process_rows_.reset();
+    std::vector<runtime::simir::FusedConeRuntimeSpec> specs;
+    specs.reserve(plan.cones.size());
+    for (const auto& cone : plan.cones) {
+        runtime::simir::FusedConeRuntimeSpec spec;
+        spec.members = cone.members;
+        spec.sink = cone.sink;
+        spec.internal_signals = cone.internal_signals;
+        spec.boundary_inputs = cone.boundary_inputs;
+        specs.push_back(std::move(spec));
+    }
+    // populate_interpreter recorded each sink's original program.
+    for (std::size_t index = 0U; index < specs.size(); ++index) {
+        specs[index].sink_original
+            = std::move(fused_sink_originals_[index]);
+    }
+    fused_sink_originals_.clear();
+    runtime::simir::InterpreterProgramAccess::install_fused_cones(
+        *interpreter, std::move(specs), plan.dormant);
+    return interpreter;
+}
+
 void ElaboratedDesign::populate_interpreter(
     runtime::simir::Interpreter* const interpreter,
     const bool validation_only,
-    std::vector<runtime::simir::Process>* const consumed_processes) const
+    std::vector<runtime::simir::Process>* const consumed_processes,
+    const ConeFusionPlan* const plan) const
 {
+    // Fused-cone substitutions: the sink runs the fused body, dormant members
+    // keep their original programs without sensitivity or initialization.
+    std::unordered_map<runtime::simir::ProcessId, std::size_t> fused_by_sink;
+    std::vector<std::uint8_t> dormant;
+    if (plan != nullptr) {
+        fused_sink_originals_.assign(plan->cones.size(), { });
+        for (std::size_t index = 0U; index < plan->cones.size(); ++index) {
+            fused_by_sink.emplace(plan->cones[index].sink, index);
+        }
+        dormant.assign(process_count(), 0U);
+        for (const auto process : plan->dormant) {
+            dormant.at(process) = 1U;
+        }
+    }
+    const auto substitute = [&](const runtime::simir::ProcessId id,
+                                const auto& materialize)
+        -> std::optional<runtime::simir::Process> {
+        if (plan == nullptr) {
+            return std::nullopt;
+        }
+        if (const auto found = fused_by_sink.find(id);
+            found != fused_by_sink.end()) {
+            fused_sink_originals_[found->second] = materialize();
+            return plan->cones[found->second].fused;
+        }
+        if (id < dormant.size() && dormant[id] != 0U) {
+            auto process = materialize();
+            process.static_sensitivity.clear();
+            process.static_trigger_regions = { };
+            process.initialize = false;
+            return process;
+        }
+        return std::nullopt;
+    };
     if (interpreter == nullptr) {
         throw std::invalid_argument("cannot populate a null SimIR interpreter");
     }
@@ -713,6 +780,15 @@ void ElaboratedDesign::populate_interpreter(
             }
             const auto& common
                 = process_rows_->templates[row.template_id];
+            if (!validation_only) {
+                if (auto replacement = substitute(row.instance.id, [&] {
+                        return runtime::simir::ProcessProgramView {
+                            *common, row.instance }.materialize();
+                    })) {
+                    (void)interpreter->add_process(std::move(*replacement));
+                    continue;
+                }
+            }
             if (validation_only) {
                 (void)runtime::simir::InterpreterProgramAccess::validate_program(
                     *interpreter, common, row.instance);
@@ -723,6 +799,11 @@ void ElaboratedDesign::populate_interpreter(
         }
     } else if (consumed_processes != nullptr) {
         for (auto& process : *consumed_processes) {
+            if (auto replacement = substitute(process.id,
+                    [&] { return process; })) {
+                (void)interpreter->add_process(std::move(*replacement));
+                continue;
+            }
             (void)interpreter->add_process(std::move(process));
         }
         std::vector<runtime::simir::Process> { }.swap(
@@ -731,6 +812,9 @@ void ElaboratedDesign::populate_interpreter(
         for (const auto& process : processes_) {
             if (validation_only) {
                 (void)interpreter->validate_process(process);
+            } else if (auto replacement = substitute(process.id,
+                           [&] { return process; })) {
+                (void)interpreter->add_process(std::move(*replacement));
             } else {
                 (void)interpreter->add_process(process);
             }

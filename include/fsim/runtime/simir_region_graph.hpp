@@ -16,6 +16,7 @@ namespace fsim::runtime::simir {
 
 namespace region_graph_detail {
 class RegionGraphProgramBuilder;
+struct RegionGraphStorageCensusAccess;
 }
 
 /// Capabilities requested by an observer, not an assertion that storage may
@@ -626,6 +627,7 @@ public:
 
 private:
     friend class region_graph_detail::RegionGraphProgramBuilder;
+    friend struct region_graph_detail::RegionGraphStorageCensusAccess;
 
     std::vector<RegionProcessNode> processes_;
     std::vector<RegionSignalNode> signals_;

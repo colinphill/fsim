@@ -3,6 +3,7 @@
 #include "fsim/app/application.hpp"
 #include "application_direct_read_map_cache.hpp"
 #include "../runtime/simir_process_program.hpp"
+#include "../runtime/simir_builtin_process_executor_capability.hpp"
 
 #include "tcl.hpp"
 
@@ -497,7 +498,8 @@ private:
 
 class LlvmProcessExecutor final
     : public runtime::simir::ProcessExecutor
-    , public runtime::simir::RegionKernelParkedExecutor {
+    , public runtime::simir::RegionKernelParkedExecutor
+    , public runtime::simir::detail::BuiltinProcessExecutorCapability {
 public:
     using SignalRemap = runtime::simir::ProcessSignalRemap;
 
@@ -1387,7 +1389,8 @@ private:
     std::uint32_t dense_signal_remap_base_ { };
     runtime::simir::ProcessId generated_process_ { };
     compiler::JitProcessFrameLayout layout_;
-    compiler::JitProcessFrameLayout required_direct_read_layout_;
+    std::uint64_t required_direct_read_layout_id_low_ { };
+    std::uint64_t required_direct_read_layout_id_high_ { };
     std::shared_ptr<FrameStorage> storage_;
     std::shared_ptr<FrameStorage> native_region_completion_storage_;
     std::span<const runtime::simir::ProcessExecutor::RegionRegisterBinding>

@@ -204,6 +204,7 @@ docs/sdf.md
 docs/simplification-disposition.md
 docs/simplification-gate-migration.md
 docs/simplification-implementation-plan.md
+docs/simulation-engine-v4-plan.md
 docs/simulation-performance-architecture.md
 docs/systemc-subset.md
 docs/systemverilog-2023.md
@@ -868,8 +869,11 @@ src/compiler/llvm/logic9_word_lowering.cpp
 src/compiler/llvm/logic9_word_lowering.hpp
 src/compiler/llvm/region_frontier_codegen.hpp
 src/compiler/llvm/region_frontier_codegen_v2.hpp
+src/compiler/llvm/region_frontier_initial_slot_validation.cpp
+src/compiler/llvm/region_frontier_initial_slot_validation.hpp
 src/compiler/llvm/region_frontier_kernel_plan.cpp
 src/compiler/llvm/region_frontier_kernel_plan.hpp
+src/compiler/llvm/region_frontier_planner_storage_profile.hpp
 src/compiler/llvm_jit.cpp
 src/compiler/llvm_jit_cache_key.cpp
 src/compiler/llvm_jit_cache_key_internal.hpp
@@ -941,6 +945,7 @@ src/elaboration/coverage_memory_toggle.cpp
 src/elaboration/coverage_points.cpp
 src/elaboration/elaborate.cpp
 src/elaboration/elaborated_design.cpp
+src/elaboration/elaborated_design_cone_fusion.cpp
 src/elaboration/elaborated_design_process_access.hpp
 src/elaboration/elaboration_constants.cpp
 src/elaboration/elaboration_targets.cpp
@@ -1179,7 +1184,9 @@ src/runtime/sdf_vital_timing_checks.cpp
 src/runtime/simir.cpp
 src/runtime/simir_a4_signal_state.cpp
 src/runtime/simir_a4_signal_state.hpp
+src/runtime/simir_allocator_arena_statistics.hpp
 src/runtime/simir_arithmetic.cpp
+src/runtime/simir_builtin_process_executor_capability.hpp
 src/runtime/simir_callable_context.cpp
 src/runtime/simir_cohort_snapshot_pool.hpp
 src/runtime/simir_container_algorithms.cpp
@@ -1203,6 +1210,8 @@ src/runtime/simir_file_scanning.cpp
 src/runtime/simir_files.cpp
 src/runtime/simir_fork.cpp
 src/runtime/simir_format.cpp
+src/runtime/simir_frontier_member_sync_workset.hpp
+src/runtime/simir_fused_cone.cpp
 src/runtime/simir_fused_static_graph.cpp
 src/runtime/simir_generic_projected_region.cpp
 src/runtime/simir_internal.hpp
@@ -1218,6 +1227,7 @@ src/runtime/simir_native_frontier_fallback.cpp
 src/runtime/simir_native_frontier_generic.cpp
 src/runtime/simir_native_frontier_generic_stage.cpp
 src/runtime/simir_native_frontier_issue.cpp
+src/runtime/simir_native_frontier_member_sync.cpp
 src/runtime/simir_native_frontier_sync.cpp
 src/runtime/simir_operation_list_sharing.hpp
 src/runtime/simir_owned_driver.cpp
@@ -1236,6 +1246,7 @@ src/runtime/simir_region_graph_driver_class.hpp
 src/runtime/simir_region_graph_program_access.hpp
 src/runtime/simir_region_graph_runtime.cpp
 src/runtime/simir_region_kernel_backend.cpp
+src/runtime/simir_region_metadata_census.hpp
 src/runtime/simir_region_program.cpp
 src/runtime/simir_sampled_values.cpp
 src/runtime/simir_scheduling.cpp
@@ -1246,6 +1257,7 @@ src/runtime/simir_signal_attributes.hpp
 src/runtime/simir_signal_storage.hpp
 src/runtime/simir_slab_page_advice.hpp
 src/runtime/simir_state.cpp
+src/runtime/simir_storage_census_internal.hpp
 src/runtime/simir_string_methods.cpp
 src/runtime/simir_synchronization.cpp
 src/runtime/simir_systemverilog_wave.cpp
@@ -1464,6 +1476,7 @@ tests/app/code_coverage_metrics_equivalence_test.cpp
 tests/app/code_coverage_region_admission_test.cpp
 tests/app/compiled_cache_source_mappings_test.cpp
 tests/app/compiled_hir_cache_application_test.cpp
+tests/app/cone_fusion_test.cpp
 tests/app/connected_remap_direct_application_test.cpp
 tests/app/coverage_application_test.cpp
 tests/app/coverage_command_test.cpp
@@ -2186,6 +2199,7 @@ tests/runtime/runtime_generic_update_allocation_failure_main.cpp
 tests/runtime/runtime_generic_update_region_tests.cpp
 tests/runtime/runtime_native_frontier_adapter_tests.cpp
 tests/runtime/runtime_native_frontier_boundary_tests.cpp
+tests/runtime/runtime_native_frontier_canonical_values_tests.cpp
 tests/runtime/runtime_native_frontier_logic9_sync_tests.cmake
 tests/runtime/runtime_native_frontier_logic9_sync_tests.cpp
 tests/runtime/runtime_native_frontier_wide_sync_tests.cpp
@@ -2198,6 +2212,7 @@ tests/runtime/runtime_private_region_tests.cpp
 tests/runtime/runtime_process_storage_tests.cpp
 tests/runtime/runtime_region_activation_failure_tests.cpp
 tests/runtime/runtime_region_graph_observation_tests.cpp
+tests/runtime/runtime_region_graph_read_range_tests.cpp
 tests/runtime/runtime_region_graph_tests.cpp
 tests/runtime/runtime_scalar_text_tests.cpp
 tests/runtime/runtime_scheduler_generic_compact_ticket_failure_tests.cpp

@@ -10,6 +10,15 @@ namespace fsim::compiler::llvm_detail {
 struct RegionFrontierPrivateAccess final {
     [[nodiscard]] static runtime::simir::RegionFrontierStepEntryV2
     trusted_entry(const LlvmRegionFrontierExecutor& executor) noexcept;
+    [[nodiscard]] static runtime::simir::RegionFrontierStepEntryV2
+    canonical_values_entry(
+        const LlvmRegionFrontierExecutor& executor) noexcept;
+    [[nodiscard]] static runtime::simir::RegionFrontierStepEntryV2
+    alias_and_canonical_values_entry(
+        const LlvmRegionFrontierExecutor& executor) noexcept;
+    [[nodiscard]] static runtime::simir::RegionFrontierStepEntryV2
+    descriptor_shapes_entry(
+        const LlvmRegionFrontierExecutor& executor) noexcept;
 };
 
 } // namespace fsim::compiler::llvm_detail
