@@ -7,7 +7,9 @@
 #define FSIM_DESIGN_ARTIFACT_CODEC_SEMANTIC
 #define FSIM_DESIGN_ARTIFACT_CODEC_SV_HIR
 #define FSIM_DESIGN_ARTIFACT_CODEC_VHDL_HIR
+#include "../runtime/simir_operation_list_sharing.hpp"
 #include "fsim/app/design_artifact.hpp"
+#include "fsim/semantic/hierarchy_path.hpp"
 #include "fsim/support/sha256.hpp"
 
 #include "../diagnostic/artifact_identity.hpp"
@@ -1224,6 +1226,15 @@ namespace codec_detail {
             runtime_string_table_ = enabled;
         }
 
+        // With an external hierarchy path table, a new string-table entry
+        // that spells one of its paths is written as that path's ID, so shared
+        // bodies keep no hierarchy paths on the wire.
+        void set_runtime_path_strings(
+            const semantic::HierarchyPathTable* paths) noexcept
+        {
+            runtime_path_strings_ = paths;
+        }
+
         void set_runtime_process_layout_sharing(
             const bool enabled) noexcept
         {
@@ -1333,8 +1344,36 @@ namespace codec_detail {
                 std::same_as<Value, frontend::SourceName>) {
                 write(value.str());
             } else if constexpr (std::same_as<Value, std::string>) {
-                u64(value.size());
-                raw(value);
+                // Plain strings (source names, type spellings, value
+                // spellings) repeat across signals and processes: with the
+                // runtime string table, 0 introduces a new string and n
+                // refers to string n - 1.
+                const auto found = runtime_string_table_
+                    ? plain_string_ids_.find(std::string_view { value })
+                    : plain_string_ids_.end();
+                if (found != plain_string_ids_.end()) {
+                    u64(found->second + 1U);
+                } else {
+                    std::optional<semantic::HierarchyPathId> path;
+                    if (runtime_string_table_) {
+                        plain_string_ids_.emplace(value,
+                            static_cast<std::uint64_t>(plain_string_ids_.size()));
+                        u64(0U);
+                        if (runtime_path_strings_ != nullptr) {
+                            // 0 introduces spelled text; n is path n - 1.
+                            if (!value.empty()) {
+                                path = runtime_path_strings_->find(value);
+                            }
+                            u64(path ? std::uint64_t { path->value() } + 1U
+                                     : 0U);
+                        }
+                    }
+                    // No early return: write() keeps nesting-depth state.
+                    if (!path) {
+                        u64(value.size());
+                        raw(value);
+                    }
+                }
             } else if constexpr (std::same_as<Value, std::filesystem::path>) {
                 write(value.generic_string());
             } else if constexpr (std::same_as<Value, runtime::PackedLogic4>) {
@@ -1551,20 +1590,31 @@ namespace codec_detail {
             u64(body_id);
             write(definition);
             if (definition) {
+                // A shared body keeps its canonical debug scopes: instances
+                // remap them (below), so they are written verbatim.
                 u64(operations.size());
                 for (std::size_t index = 0;
                      index < operations.size(); ++index) {
-                    write_operation_for_runtime_state(
-                        operations.data()[index]);
+                    write(operations.data()[index]);
                 }
             }
 
-            const auto overrides
-                = operations.instance_operation_overrides();
-            u64(overrides.size());
-            for (const auto& [index, operation] : overrides) {
+            using Share = runtime::simir::operation_list_detail::ShareAccess;
+            const auto indices = Share::instance_override_indices(operations);
+            u64(indices.size());
+            for (const auto index : indices) {
                 u64(index);
-                write_operation_for_runtime_state(operation);
+                write_operation_for_runtime_state(operations.expanded(index));
+            }
+            // Debug-scope remaps: the instance scope is a hierarchy path,
+            // projected like the others.
+            const auto scopes = Share::debug_scope_count(operations);
+            u64(scopes);
+            for (std::size_t index = 0; index < scopes; ++index) {
+                write(Share::debug_scope_canonical(operations, index));
+                write(runtime_path_projection_
+                        ? runtime::simir::InternedString { }
+                        : Share::debug_scope_instance(operations, index));
             }
         }
 
@@ -1631,6 +1681,16 @@ namespace codec_detail {
         bool runtime_string_table_ { };
         // Keys view interned storage, which lives as long as the process.
         std::unordered_map<std::string_view, std::uint64_t> string_ids_;
+        struct PlainStringHash {
+            using is_transparent = void;
+            std::size_t operator()(const std::string_view text) const noexcept
+            {
+                return std::hash<std::string_view> { }(text);
+            }
+        };
+        std::unordered_map<std::string, std::uint64_t, PlainStringHash,
+            std::equal_to<>> plain_string_ids_;
+        const semantic::HierarchyPathTable* runtime_path_strings_ { };
         std::ostream* output_ { };
         support::Sha256* checksum_ { };
         std::array<char, 64 * 1024> buffer_ { };
@@ -1681,6 +1741,13 @@ namespace codec_detail {
         void set_runtime_string_table(const bool enabled) noexcept
         {
             runtime_string_table_ = enabled;
+        }
+
+        // Mirrors Writer::set_runtime_path_strings.
+        void set_runtime_path_strings(
+            const semantic::HierarchyPathTable* paths) noexcept
+        {
+            runtime_path_strings_ = paths;
         }
 
         // This format is enabled only after the runtime-state schema check.
@@ -1814,13 +1881,56 @@ namespace codec_detail {
                     value = std::move(decoded);
                     return true;
                 } else if constexpr (std::same_as<Value, std::string>) {
+                    if (runtime_string_table_) {
+                        std::uint64_t reference { };
+                        if (!u64(reference)) {
+                            return false;
+                        }
+                        if (reference != 0U) {
+                            if (reference > plain_strings_.size()) {
+                                return fail("design state string reference is invalid");
+                            }
+                            const auto& text = plain_strings_[reference - 1U];
+                            if (!consume_allocation(text.size(), sizeof(char))) {
+                                return fail("design state string exceeds the payload");
+                            }
+                            value = text;
+                            return true;
+                        }
+                        if (runtime_path_strings_ != nullptr) {
+                            std::uint64_t path { };
+                            if (!u64(path)) {
+                                return false;
+                            }
+                            if (path != 0U) {
+                                if (path > runtime_path_strings_->size()) {
+                                    return fail("design state path reference is invalid");
+                                }
+                                const auto text = runtime_path_strings_->view(
+                                    semantic::HierarchyPathId::from_index(
+                                        static_cast<std::uint32_t>(path - 1U)));
+                                if (!consume_allocation(text.size(), sizeof(char))) {
+                                    return fail("design state string exceeds the payload");
+                                }
+                                value = text;
+                                plain_strings_.push_back(value);
+                                return true;
+                            }
+                        }
+                    }
                     std::uint64_t size { };
                     if (!u64(size) || size > remaining()
                         || !consume_allocation(size, sizeof(char))) {
                         return fail("design state string exceeds the payload");
                     }
                     value.resize(static_cast<std::size_t>(size));
-                    return read_exact(value.data(), value.size());
+                    if (!read_exact(value.data(), value.size())) {
+                        return false;
+                    }
+                    if (runtime_string_table_) {
+                        plain_strings_.push_back(value);
+                    }
+                    return true;
                 } else if constexpr (std::same_as<Value, std::filesystem::path>) {
                     std::string spelling;
                     if (!read(spelling)) {
@@ -2304,6 +2414,27 @@ namespace codec_detail {
                 previous_index = index;
                 has_previous_index = true;
             }
+            std::uint64_t scope_count { };
+            if (!u64(scope_count)
+                || scope_count > static_cast<std::uint64_t>(remaining()) / 2U
+                || !consume_allocation(scope_count,
+                    2U * sizeof(runtime::simir::InternedString))) {
+                return fail(
+                    "design state debug-scope remaps exceed the payload");
+            }
+            std::vector<std::pair<runtime::simir::InternedString,
+                runtime::simir::InternedString>> scopes;
+            scopes.reserve(static_cast<std::size_t>(scope_count));
+            for (std::uint64_t scope = 0; scope < scope_count; ++scope) {
+                auto& entry = scopes.emplace_back();
+                if (!read(entry.first) || !read(entry.second)) {
+                    return false;
+                }
+            }
+            if (!runtime::simir::operation_list_detail::ShareAccess::
+                    set_debug_scopes(value, std::move(scopes))) {
+                return fail("design state debug-scope remaps are not canonical");
+            }
             return true;
         }
 
@@ -2396,6 +2527,8 @@ namespace codec_detail {
         bool runtime_process_layout_sharing_ { };
         bool runtime_string_table_ { };
         std::vector<runtime::simir::InternedString> strings_;
+        std::vector<std::string> plain_strings_;
+        const semantic::HierarchyPathTable* runtime_path_strings_ { };
         std::vector<runtime::simir::OperationList> operation_bodies_;
         std::vector<runtime::simir::CopyOnWriteVector<
             runtime::simir::ValueKind>> register_value_kind_bodies_;

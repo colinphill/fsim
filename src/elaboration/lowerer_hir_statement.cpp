@@ -2205,8 +2205,10 @@ bool Lowerer::lower_hir_statement(
             && assignment_value_expression->systemverilog->kind
                 == semantic::sv::ExpressionKind::call
             && assignment_value_expression->systemverilog->text == "?:";
+        static const bool trace_generated_assignments
+            = std::getenv("FSIM_HIR_TRACE_GENERATED_ASSIGNMENT") != nullptr;
         const bool trace_generated_assignment
-            = std::getenv("FSIM_HIR_TRACE_GENERATED_ASSIGNMENT") != nullptr
+            = trace_generated_assignments
             && signal_assignment && indexed_target
             && ((span.begin.line == 197 && xor_value)
                 || conditional_value);

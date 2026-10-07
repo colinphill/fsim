@@ -1,0 +1,47 @@
+{
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "name": "fsim-mimalloc-3.5.3-source",
+  "documentNamespace": "https://fsim.dev/spdx/mimalloc-3.5.3/3b4a15153a59905995f7070296ed604bb5ccc00cabb8b93446931aff77224d47",
+  "creationInfo": {
+    "created": "2026-10-07T00:00:00Z",
+    "creators": [
+      "Tool: fsim mimalloc provenance harness"
+    ]
+  },
+  "packages": [
+    {
+      "name": "mimalloc",
+      "SPDXID": "SPDXRef-Package-mimalloc-3.5.3",
+      "versionInfo": "3.5.3",
+      "supplier": "Organization: Microsoft Corporation",
+      "downloadLocation": "https://github.com/microsoft/mimalloc/archive/refs/tags/v3.5.3.tar.gz",
+      "filesAnalyzed": false,
+      "checksums": [
+        {
+          "algorithm": "SHA256",
+          "checksumValue": "3b4a15153a59905995f7070296ed604bb5ccc00cabb8b93446931aff77224d47"
+        }
+      ],
+      "sourceInfo": "Unmodified upstream release archive of tag v3.5.3 (commit d4881d338125e1cb7c47ba4cfb398d6f7c0c8d45)",
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "Copyright (c) 2018-2025 Microsoft Corporation, Daan Leijen",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:github/microsoft/mimalloc@v3.5.3"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-mimalloc-3.5.3"
+    }
+  ]
+}

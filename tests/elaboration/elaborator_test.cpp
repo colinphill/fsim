@@ -37,6 +37,12 @@ void test_process_program_ownership_transfer()
 int main()
 {
     using namespace fsim::tests::elaboration;
+    // These tests check per-statement lowering, so constant drivers keep one
+    // process each unless the caller chose otherwise;
+    // test_generated_constant_driver_merge covers the merged form.
+    if (std::getenv("FSIM_MERGE_CONSTANT_DRIVERS") == nullptr) {
+        set_merge_constant_drivers(false);
+    }
     const auto* selected = std::getenv("FSIM_ELABORATION_TEST");
     std::size_t executed { };
     const auto run = [&](const std::string_view name, const auto function) {

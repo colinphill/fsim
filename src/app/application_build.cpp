@@ -889,10 +889,13 @@ std::optional<BuiltProject> build_checked_project(
 
     // Keep the sorted runtime path snapshots alive across both DesignIR
     // projection passes. The elaborated design is immutable at this boundary.
+    std::optional<ScopedPhaseProfile> design_ir_phase;
+    design_ir_phase.emplace("design_ir_build");
     const auto runtime_paths
         = make_runtime_path_views(*elaborated.design);
     auto design_ir = build_design_ir(
         *checked, *elaborated.design, runtime_paths);
+    design_ir_phase.emplace("design_ir_checks");
     if (!design_ir.valid(checked->semantics)) {
         throw std::logic_error { "constructed an internally invalid DesignIR" };
     }
@@ -900,6 +903,7 @@ std::optional<BuiltProject> build_checked_project(
             design_ir, *elaborated.design, runtime_paths)) {
         throw std::logic_error { "constructed an incomplete DesignIR projection" };
     }
+    design_ir_phase.emplace("specialization_keys");
     if (!elaborated.design->rebind_path_table(
             design_ir.hierarchy_paths())) {
         throw std::logic_error { "constructed inconsistent hierarchy paths" };
@@ -913,6 +917,7 @@ std::optional<BuiltProject> build_checked_project(
     if (!specialization_cache_keys) {
         return std::nullopt;
     }
+    design_ir_phase.reset();
     const auto selected_seed = config.project.random_seed
         ? entropy_seed()
         : config.project.seed;

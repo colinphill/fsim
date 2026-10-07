@@ -5,6 +5,9 @@
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
 
+#include <cstdlib>
+#include <stdexcept>
+
 
 namespace fsim::tests::elaboration {
 
@@ -32,6 +35,21 @@ semantic::CompiledDesign compile_test_design(frontend::ParsedDesign parsed)
     };
     semantic::refresh_compiled_design_metadata(compiled);
     return compiled;
+}
+
+void set_merge_constant_drivers(const bool enabled)
+{
+    const char* value = enabled ? "1" : "0";
+#if defined(_WIN32)
+    const auto status = ::_putenv_s("FSIM_MERGE_CONSTANT_DRIVERS", value);
+#else
+    const auto status = ::setenv("FSIM_MERGE_CONSTANT_DRIVERS", value, 1);
+#endif
+    if (status != 0) {
+        throw std::runtime_error {
+            "failed to set FSIM_MERGE_CONSTANT_DRIVERS"
+        };
+    }
 }
 
 fsim::elaboration::ElaborationResult compile_and_elaborate(

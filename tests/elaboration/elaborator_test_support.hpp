@@ -23,6 +23,9 @@ namespace fsim::tests::elaboration {
 [[nodiscard]] semantic::CompiledDesign compile_test_design(
     frontend::ParsedDesign parsed);
 
+// Sets FSIM_MERGE_CONSTANT_DRIVERS for later elaborations.
+void set_merge_constant_drivers(bool enabled);
+
 [[nodiscard]] fsim::elaboration::ElaborationResult compile_and_elaborate(
     frontend::ParsedDesign parsed,
     std::span<const fsim::elaboration::Root> roots,

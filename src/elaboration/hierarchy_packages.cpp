@@ -15358,6 +15358,30 @@ bool HierarchyBuilder::validate_compiled_vhdl_physical_type_units(
     return valid;
 }
 
+bool HierarchyBuilder::clean_vhdl_validation(const semantic::UnitId unit,
+    const semantic::vhdl::Unit* const entity,
+    const std::vector<semantic::SpecializedHirActualIdentity>& actuals,
+    const bool declarations) const
+{
+    const auto found = clean_vhdl_validations_.find(unit.value());
+    return found != clean_vhdl_validations_.end()
+        && std::ranges::any_of(found->second, [&](const auto& clean) {
+               return clean.entity == entity
+                   && clean.declarations == declarations
+                   && clean.actuals == actuals;
+           });
+}
+
+void HierarchyBuilder::record_clean_vhdl_validation(
+    const semantic::UnitId unit,
+    const semantic::vhdl::Unit* const entity,
+    const std::vector<semantic::SpecializedHirActualIdentity>& actuals,
+    const bool declarations)
+{
+    clean_vhdl_validations_[unit.value()].push_back(
+        CleanVhdlValidation { entity, actuals, declarations });
+}
+
 bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
     const semantic::vhdl::Unit* entity,
     const semantic::vhdl::Unit& architecture,
@@ -19281,40 +19305,52 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
             path, specialized));
 
 
-    const auto context_visibility_valid
-        = validate_compiled_vhdl_context_visibility(
-            entity, architecture, specialized);
+    // Another instance with the same actuals already validated cleanly.
+    if (!clean_vhdl_validation(architecture.id, entity, actuals, true)) {
+        const auto diagnostics_before = diagnostics_.size();
+        const auto context_visibility_valid
+            = validate_compiled_vhdl_context_visibility(
+                entity, architecture, specialized);
 
-    const auto selected_package_names_valid
-        = validate_compiled_vhdl_selected_package_names(
-            entity, architecture, specialized);
-    if (!vhdl_types_validated) {
-        for (const auto& issue : validate_vhdl_hir_types(
-                 *specialized, *entity, architecture)) {
-            report(
-                issue.code,
-                issue.message,
-                compiled_source_span(*compiled_, issue.source));
+        const auto selected_package_names_valid
+            = validate_compiled_vhdl_selected_package_names(
+                entity, architecture, specialized);
+        bool types_clean = vhdl_types_validated
+            && clean_vhdl_validation(architecture.id, entity, actuals, false);
+        if (!vhdl_types_validated) {
+            const auto issues = validate_vhdl_hir_types(
+                *specialized, *entity, architecture);
+            for (const auto& issue : issues) {
+                report(
+                    issue.code,
+                    issue.message,
+                    compiled_source_span(*compiled_, issue.source));
+            }
+            types_clean = issues.empty();
         }
-    }
-    const auto subtype_declarations_valid
-        = validate_compiled_vhdl_subtype_declarations(
-            entity, architecture, specialized);
-    const auto access_type_declarations_valid
-        = validate_compiled_vhdl_access_type_declarations(
-            entity, architecture, specialized);
-    const auto object_composite_types_valid
-        = validate_compiled_vhdl_object_composite_types(
-            entity, architecture, specialized);
-    const auto physical_type_units_valid
-        = validate_compiled_vhdl_physical_type_units(
-            entity, architecture, specialized);
-    if (!context_visibility_valid || !selected_package_names_valid
-        || !subtype_declarations_valid
-        || !access_type_declarations_valid
-        || !object_composite_types_valid
-        || !physical_type_units_valid) {
-        return false;
+        const auto subtype_declarations_valid
+            = validate_compiled_vhdl_subtype_declarations(
+                entity, architecture, specialized);
+        const auto access_type_declarations_valid
+            = validate_compiled_vhdl_access_type_declarations(
+                entity, architecture, specialized);
+        const auto object_composite_types_valid
+            = validate_compiled_vhdl_object_composite_types(
+                entity, architecture, specialized);
+        const auto physical_type_units_valid
+            = validate_compiled_vhdl_physical_type_units(
+                entity, architecture, specialized);
+        if (!context_visibility_valid || !selected_package_names_valid
+            || !subtype_declarations_valid
+            || !access_type_declarations_valid
+            || !object_composite_types_valid
+            || !physical_type_units_valid) {
+            return false;
+        }
+        if (types_clean && diagnostics_.size() == diagnostics_before) {
+            record_clean_vhdl_validation(
+                architecture.id, entity, actuals, true);
+        }
     }
 
     validate_compiled_vhdl_instantiated_package_cycles(
@@ -19831,15 +19867,22 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
                 compiled_source_span(*compiled_, record.source));
             return false;
         }
-        if (target_entity != nullptr) {
-            for (const auto& issue : validate_vhdl_hir_types(
+        if (target_entity != nullptr
+            && !clean_vhdl_validation(child->identity->id, target_entity,
+                child_actuals, false)) {
+            const auto issues = validate_vhdl_hir_types(
                 *child_interface_specialization,
                 *target_entity,
-                *child->vhdl)) {
+                *child->vhdl);
+            for (const auto& issue : issues) {
                 report(
                     issue.code,
                     issue.message,
                     compiled_source_span(*compiled_, issue.source));
+            }
+            if (issues.empty()) {
+                record_clean_vhdl_validation(child->identity->id,
+                    target_entity, child_actuals, false);
             }
         }
 

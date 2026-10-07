@@ -141,6 +141,7 @@ cmake/CreateDeterministicArchive.cmake
 cmake/CurrentEvidenceOwners.cmake
 cmake/FsimDebugFootprint.cmake
 cmake/FsimDependencies.cmake
+cmake/FsimMimalloc.cmake
 cmake/FsimNativePlugin.cmake
 cmake/FsimScv.cmake
 cmake/FsimSourcePackage.cmake
@@ -2487,6 +2488,12 @@ third_party/isocline/src/tty_esc.c
 third_party/isocline/src/undo.c
 third_party/isocline/src/undo.h
 third_party/isocline/src/wcwidth.c
+third_party/mimalloc-3.5.3/LICENSE
+third_party/mimalloc-3.5.3/NOTICE
+third_party/mimalloc-3.5.3/README.md
+third_party/mimalloc-3.5.3/SOURCE_MANIFEST.txt
+third_party/mimalloc-3.5.3/mimalloc-3.5.3.spdx.json
+third_party/mimalloc-3.5.3/mimalloc-3.5.3.tar.gz
 third_party/scv-2.0.1/LICENSE
 third_party/scv-2.0.1/NOTICE
 third_party/scv-2.0.1/PATCHES.txt

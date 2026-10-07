@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_builder_internal.hpp"
+#include "../runtime/simir_operation_list_sharing.hpp"
 #include "specialization_cache.hpp"
 #include "lowerer_internal.hpp"
 #include "../diagnostic/thread_cpu_clock.hpp"
@@ -27,43 +28,76 @@ bool same_optional_range(
             == std::tie(right->left, right->right, right->descending));
 }
 
-bool same_concurrent_signal_layout(
-    const SignalInfo& left,
-    const SignalInfo& right,
-    const Signal& left_runtime,
-    const Signal& right_runtime)
+/// A plain Verilog variable or net: reading one is the same operation as
+/// reading the other once width, range, signedness and kind agree.
+[[nodiscard]] bool plain_verilog_value(const SignalInfo& signal)
 {
-    if (left.width != right.width || left.type_name != right.type_name
-        || left.nominal_type != right.nominal_type
-        || left.source_domain != right.source_domain
-        || left.resolution != right.resolution
-        || left.is_signed != right.is_signed
+    return (signal.type_name == "reg" || signal.type_name == "wire")
+        && (signal.systemverilog_net_type.empty()
+            || signal.systemverilog_net_type == "wire");
+}
+
+bool same_vhdl_array_metadata(
+    const VhdlArrayMetadata& a, const VhdlArrayMetadata& b);
+
+// Element and member type layouts compare field by field; source spans are
+// provenance. Access and physical element types are not compared.
+bool same_packed_type_metadata(
+    const PackedTypeMetadata& left, const PackedTypeMetadata& right)
+{
+    if (left.domain != right.domain || left.spelling != right.spelling
         || left.systemverilog_scalar != right.systemverilog_scalar
         || left.systemverilog_net_type != right.systemverilog_net_type
+        || left.systemverilog_resolution_function
+            != right.systemverilog_resolution_function
         || !same_optional_range(left.packed_range, right.packed_range)
+        || left.is_signed != right.is_signed
+        || left.named_type != right.named_type
         || !same_optional_range(left.integer_range, right.integer_range)
         || !same_optional_range(
-            left.enumeration_range, right.enumeration_range)
+            left.integer_base_range, right.integer_base_range)
+        || left.vhdl_integer_storage_width
+            != right.vhdl_integer_storage_width
+        || left.nominal_type != right.nominal_type
+        || left.vhdl_type_declaration != right.vhdl_type_declaration
+        || left.vhdl_resolution_function != right.vhdl_resolution_function
         || left.enumeration_literals != right.enumeration_literals
+        || !same_optional_range(
+            left.enumeration_range, right.enumeration_range)
+        || !same_optional_range(
+            left.enumeration_base_range, right.enumeration_base_range)
         || static_cast<bool>(left.vhdl_array)
             != static_cast<bool>(right.vhdl_array)
         || left.vhdl_access || right.vhdl_access
         || left.vhdl_physical || right.vhdl_physical
-        || !left.packed_members.empty() || !right.packed_members.empty()
-        || !left.vhdl_mode_view_bindings.empty()
-        || !right.vhdl_mode_view_bindings.empty()
-        || left_runtime.value_kind != right_runtime.value_kind
-        || left_runtime.resolution != right_runtime.resolution
-        || left_runtime.initial_value.width()
-            != right_runtime.initial_value.width()) {
+        || left.packed_aggregate != right.packed_aggregate
+        || left.packed_members.size() != right.packed_members.size()) {
         return false;
     }
-    if (!left.vhdl_array) {
-        return true;
+    if (left.vhdl_array
+        && !same_vhdl_array_metadata(*left.vhdl_array, *right.vhdl_array)) {
+        return false;
     }
-    const auto& a = *left.vhdl_array;
-    const auto& b = *right.vhdl_array;
-    if (!a.element_types.empty() || !b.element_types.empty()
+    for (std::size_t index = 0; index < left.packed_members.size(); ++index) {
+        const auto& x = left.packed_members[index];
+        const auto& y = right.packed_members[index];
+        if (x.name != y.name || x.domain != y.domain
+            || x.spelling != y.spelling
+            || !same_optional_range(x.packed_range, y.packed_range)
+            || x.is_signed != y.is_signed || x.lsb_offset != y.lsb_offset
+            || !std::ranges::equal(x.nested_types, y.nested_types,
+                same_packed_type_metadata)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool same_vhdl_array_metadata(
+    const VhdlArrayMetadata& a, const VhdlArrayMetadata& b)
+{
+    if (!std::ranges::equal(a.element_types, b.element_types,
+            same_packed_type_metadata)
         || a.index_subtype != b.index_subtype
         || a.element_spelling != b.element_spelling
         || a.element_named_type != b.element_named_type
@@ -87,6 +121,48 @@ bool same_concurrent_signal_layout(
         }
     }
     return true;
+}
+
+bool same_concurrent_signal_layout(
+    const SignalInfo& left,
+    const SignalInfo& right,
+    const Signal& left_runtime,
+    const Signal& right_runtime,
+    const bool read_only = false)
+{
+    // A read-only role only reads the signal, so `reg` and `wire` (and an
+    // implicit or explicit `wire` net type) lower identically.
+    const bool interchangeable = read_only && plain_verilog_value(left)
+        && plain_verilog_value(right);
+    if (left.width != right.width
+        || (!interchangeable && left.type_name != right.type_name)
+        || left.nominal_type != right.nominal_type
+        || left.source_domain != right.source_domain
+        || left.resolution != right.resolution
+        || left.is_signed != right.is_signed
+        || left.systemverilog_scalar != right.systemverilog_scalar
+        || (!interchangeable
+            && left.systemverilog_net_type != right.systemverilog_net_type)
+        || !same_optional_range(left.packed_range, right.packed_range)
+        || !same_optional_range(left.integer_range, right.integer_range)
+        || !same_optional_range(
+            left.enumeration_range, right.enumeration_range)
+        || left.enumeration_literals != right.enumeration_literals
+        || static_cast<bool>(left.vhdl_array)
+            != static_cast<bool>(right.vhdl_array)
+        || left.vhdl_access || right.vhdl_access
+        || left.vhdl_physical || right.vhdl_physical
+        || !left.packed_members.empty() || !right.packed_members.empty()
+        || !left.vhdl_mode_view_bindings.empty()
+        || !right.vhdl_mode_view_bindings.empty()
+        || left_runtime.value_kind != right_runtime.value_kind
+        || left_runtime.resolution != right_runtime.resolution
+        || left_runtime.initial_value.width()
+            != right_runtime.initial_value.width()) {
+        return false;
+    }
+    return !left.vhdl_array
+        || same_vhdl_array_metadata(*left.vhdl_array, *right.vhdl_array);
 }
 
 // Scalar vhdlconst-v1 identities encode the effective subtype and value.
@@ -268,20 +344,36 @@ bool remap_concurrent_operation(
             }
             accepted = true;
         } else if constexpr (std::is_same_v<Type, ReadSignal>) {
-            accepted = !value.clock && !value.gate
-                && map_signal(value.signal);
+            accepted = map_signal(value.signal)
+                && (!value.clock || map_signal(*value.clock))
+                && (!value.gate || map_signal(*value.gate));
+        } else if constexpr (std::is_same_v<Type, SignalEvent>
+            || std::is_same_v<Type, SignalLastValue>
+            || std::is_same_v<Type, SignalLastEvent>
+            || std::is_same_v<Type, SignalActive>
+            || std::is_same_v<Type, SignalLastActive>
+            || std::is_same_v<Type, SignalDriving>
+            || std::is_same_v<Type, SignalDrivingValue>) {
+            accepted = map_signal(value.signal);
         } else if constexpr (std::is_same_v<Type, WriteBlocking>
             || std::is_same_v<Type, WriteUpdate>
             || std::is_same_v<Type, WriteBlockingSlice>
             || std::is_same_v<Type, WriteUpdateSlice>
             || std::is_same_v<Type, WriteUpdateDynamicPartSlice>
             || std::is_same_v<Type, WriteProjected>
-            || std::is_same_v<Type, WriteProjectedSlice>) {
+            || std::is_same_v<Type, WriteProjectedSlice>
+            || std::is_same_v<Type, WriteProjectedDynamicSlice>
+            || std::is_same_v<Type, WriteProjectedWaveformSlice>
+            || std::is_same_v<Type, WriteProjectedWaveformDynamicSlice>
+            || std::is_same_v<Type, WriteBlockingDynamicSlice>
+            || std::is_same_v<Type, WriteUpdateDynamicSlice>) {
             accepted = map_signal(value.signal);
         } else {
             accepted = std::is_same_v<Type, WaitSensitivity>
                 || std::is_same_v<Type, CopyRegister>
                 || std::is_same_v<Type, IntegerCheck>
+                // A source location, a message and a condition register.
+                || std::is_same_v<Type, Assert>
                 || std::is_same_v<Type, LoadConstant>
                 || std::is_same_v<Type, DynamicInsert>
                 || std::is_same_v<Type, DynamicPartInsert>
@@ -292,6 +384,8 @@ bool remap_concurrent_operation(
                 || std::is_same_v<Type, CallableFramePush>
                 || std::is_same_v<Type, Call>
                 || std::is_same_v<Type, Jump>
+                // Constant drivers end in Halt (no signal or path).
+                || std::is_same_v<Type, Halt>
                 || std::is_same_v<Type, Binary>
                 || std::is_same_v<Type, UnaryNot>
                 || std::is_same_v<Type, LogicalNot>
@@ -436,7 +530,10 @@ make_systemverilog_template_signal_remap(
                 signal_info[source.signal],
                 signal_info[target->second->signal],
                 signals[source.signal],
-                signals[target->second->signal])
+                signals[target->second->signal],
+                source.read_only && !source.writable
+                    && target->second->read_only
+                    && !target->second->writable)
             || !source_signals.insert(source.signal).second
             || !target_signals.insert(target->second->signal).second) {
             return std::nullopt;
@@ -463,16 +560,54 @@ bool remap_systemverilog_template_process(
     }
 
     for (std::size_t index = 0; index < process.operations.size(); ++index) {
-        auto operation = process.operations.expanded(index);
+        // A template's operations all passed remap_concurrent_operation when
+        // it was cached; only signal operands and debug scopes change.
+        const auto& stored = std::as_const(process.operations)[index];
+        const bool remaps = visit_operation([](const auto& value) {
+            using Type = std::decay_t<decltype(value)>;
+            return std::is_same_v<Type, DebugPoint>
+                || std::is_same_v<Type, ReadSignal>
+                || std::is_same_v<Type, WriteBlocking>
+                || std::is_same_v<Type, WriteUpdate>
+                || std::is_same_v<Type, WriteBlockingSlice>
+                || std::is_same_v<Type, WriteUpdateSlice>
+                || std::is_same_v<Type, WriteUpdateDynamicPartSlice>
+                || std::is_same_v<Type, WriteProjected>
+                || std::is_same_v<Type, WriteProjectedSlice>;
+        }, stored);
+        if (!remaps) {
+            continue;
+        }
+        // A debug point without an instruction override is remapped from
+        // its canonical (body) scope: an earlier point of the same scope may
+        // already have remapped it, which expanded() would apply.
+        const bool canonical_point = operation_holds<DebugPoint>(stored)
+            && !runtime::simir::operation_list_detail::ShareAccess::
+                has_instruction_override(process.operations, index);
+        auto operation = canonical_point ? Operation { stored }
+                                         : process.operations.expanded(index);
         bool changed { };
         if (!remap_concurrent_operation(
                 operation, signal_remap, from_hierarchy, to_hierarchy,
                 &changed)) {
             return false;
         }
-        if (changed) {
-            process.operations.replace(index, std::move(operation));
+        if (!changed) {
+            continue;
         }
+        const auto* const point = operation_get_if<DebugPoint>(&operation);
+        const auto* const canonical = operation_get_if<DebugPoint>(&stored);
+        if (canonical_point && point != nullptr
+            && point->kind == canonical->kind
+            && point->source == canonical->source) {
+            // Only the scope differs: remap the body's scope instead of
+            // overriding the operation.
+            runtime::simir::operation_list_detail::ShareAccess::
+                remap_debug_scope(process.operations, canonical->scope,
+                    point->scope);
+            continue;
+        }
+        process.operations.replace(index, std::move(operation));
     }
 
     auto sensitivities = process.static_sensitivity;
@@ -640,11 +775,17 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
     const auto process = process_source
         ? specialized.find_process(*process_source) : std::nullopt;
     const auto selected_generates = specialized.selected_generates();
-    if ((process_source
-            ? !process || process->vhdl == nullptr
-            : !concurrent_source_supported)
-        || (!selected_generates.empty()
-            && generate_relative_discriminator.empty())
+    const bool has_source = process_source
+        ? process && process->vhdl != nullptr
+        : source && source->vhdl != nullptr;
+    if (!has_source) {
+        return lower_ordinary();
+    }
+    // Scalar entries also match other instances whose scalar generics have
+    // equal values; exact entries need an equal overlay, which determines
+    // the lowering completely, so they admit any occurrence.
+    bool scalar = true;
+    if ((!process_source && !concurrent_source_supported)
         || !specialized.vhdl_declarations().empty()
         || !specialized.vhdl_types().empty()
         || !specialized.vhdl_expressions().empty()
@@ -657,9 +798,9 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
         || !specialized.systemverilog_statements().empty()
         || !specialized.systemverilog_processes().empty()
         || !specialized.systemverilog_instances().empty()) {
-        return lower_ordinary();
+        scalar = false;
     }
-    if (!process_source) {
+    if (scalar && !process_source) {
         const auto target = specialized.find_expression(
             *source->vhdl->target);
         const auto value_id = source->vhdl->waveform.empty()
@@ -676,28 +817,30 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
             || !value || value->vhdl == nullptr
             || value->vhdl->kind != semantic::vhdl::ExpressionKind::call
             || !value->vhdl->referenced_name) {
-            return lower_ordinary();
-        }
-        const auto& call_name = *value->vhdl->referenced_name;
-        const auto call_id = call_name.selected
-            ? call_name.selected
-            : call_name.overloads.size() == 1U
-                ? std::optional { call_name.overloads.front() }
-                : std::nullopt;
-        const auto callable = call_id
-            ? specialized.find_declaration(*call_id) : std::nullopt;
-        if (!callable || callable->vhdl == nullptr
-            || !callable->vhdl->callable
-            || !callable->vhdl->callable->function
-            || !callable->vhdl->callable->pure) {
-            return lower_ordinary();
+            scalar = false;
+        } else {
+            const auto& call_name = *value->vhdl->referenced_name;
+            const auto call_id = call_name.selected
+                ? call_name.selected
+                : call_name.overloads.size() == 1U
+                    ? std::optional { call_name.overloads.front() }
+                    : std::nullopt;
+            const auto callable = call_id
+                ? specialized.find_declaration(*call_id) : std::nullopt;
+            scalar = callable && callable->vhdl != nullptr
+                && callable->vhdl->callable
+                && callable->vhdl->callable->function
+                && callable->vhdl->callable->pure;
         }
     }
     for (const auto& actual :
         specialized.specialization().actual_identities) {
+        if (!scalar) {
+            break;
+        }
         const auto formal = specialized.find_declaration(
             actual.declaration);
-        if (!formal || formal->vhdl == nullptr
+        scalar = !(!formal || formal->vhdl == nullptr
             || formal->vhdl->form
                 != semantic::vhdl::DeclarationForm::generic_constant
             || !formal->vhdl->subtype
@@ -707,9 +850,13 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
                     != semantic::vhdl::ValueDomain::boolean)
             || !actual.identity.starts_with("vhdlconst-v1;")
             || actual.vhdl_type || actual.systemverilog_type
-            || actual.vhdl_packed_value) {
-            return lower_ordinary();
-        }
+            || actual.vhdl_packed_value);
+    }
+    // Scalar entries are shared across overlays, so a generated occurrence
+    // needs its generate position; an exact overlay already fixes the
+    // selected generate branches.
+    if (!selected_generates.empty() && generate_relative_discriminator.empty()) {
+        scalar = false;
     }
 
     const auto profile = [&](const SignalId signal) {
@@ -723,15 +870,28 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
                 design_.signal_info_[first], design_.signal_info_[second],
                 design_.signals_[first], design_.signals_[second]);
     };
-    for (const auto& cached : concurrent_process_templates_) {
+    const auto template_key = std::tuple {
+        owner.id.value(), statement.value(),
+        process_source ? process_source->value() + 1U : 0U,
+        std::string { generate_relative_discriminator }
+    };
+    const auto indexed = concurrent_process_template_index_.find(template_key);
+    const auto candidates = indexed == concurrent_process_template_index_.end()
+        ? std::span<const std::size_t> { }
+        : std::span<const std::size_t> { indexed->second };
+    for (const auto candidate : candidates) {
+        const auto& cached = concurrent_process_templates_[candidate];
         if (cached.unit != owner.id || cached.statement != statement
             || cached.process_source != process_source
             || cached.generate_relative_discriminator
                 != generate_relative_discriminator
             || !std::ranges::equal(
                 cached.selected_generates, selected_generates)
-            || !same_concurrent_scalar_actuals(
-                cached.overlay, specialized.specialization())
+            || (cached.exact
+                    ? cached.overlay != specialized.specialization()
+                    : !scalar
+                        || !same_concurrent_scalar_actuals(
+                            cached.overlay, specialized.specialization()))
             || cached.language_standard != owner.standard
             || cached.compatibility_profile
                 != owner.compatibility_profile
@@ -857,8 +1017,27 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
             : concurrent_template_lower_cpu_ns_;
         lower_cpu_ns += static_cast<std::uint64_t>(elapsed->count());
     }
-    const auto cacheable_driver_regions = [&] {
-        if (!lowered || lowered->driver_regions.empty()) {
+    if (!lowered || diagnostics_.size() != diagnostics_before
+        || lowerer.has_generated_processes()
+        || lowered->string_register_count != 0U
+        || lowered->container_register_count != 0U
+        || !lowered->static_trigger_regions.empty()
+        || invocation_after < invocation_before
+        || (process_source
+            && (lowered->static_sensitivity.empty()
+                || !lowered->debug_string_locals.empty()
+                || !lowered->debug_container_locals.empty()
+                || lowered->switch_source || lowered->switch_target
+                || lowered->switch_control))) {
+        return lowered;
+    }
+    // Scalar entries keep the original restrictions; an occurrence they
+    // exclude is stored as an exact entry instead.
+    const auto scalar_admissible = [&] {
+        if (process_source && !lowered->debug_locals.empty()) {
+            return false;
+        }
+        if (lowered->driver_regions.empty()) {
             return false;
         }
         if (!process_source) {
@@ -876,95 +1055,101 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
                 [](const Process::DriverRegion& region) {
                     return region.whole;
                 });
-    }();
-    if (!lowered || diagnostics_.size() != diagnostics_before
-        || lowerer.has_generated_processes()
-        || lowered->string_register_count != 0U
-        || lowered->container_register_count != 0U
-        || !lowered->static_trigger_regions.empty()
-        || !cacheable_driver_regions
-        || invocation_after < invocation_before
-        || (process_source
-            && (lowered->static_sensitivity.empty()
-                || !lowered->debug_locals.empty()
-                || !lowered->debug_string_locals.empty()
-                || !lowered->debug_container_locals.empty()
-                || lowered->switch_source || lowered->switch_target
-                || lowered->switch_control))) {
-        return lowered;
-    }
+    };
     std::map<SignalId, SignalId> formal_signals;
     std::vector<std::pair<semantic::DeclarationId, SignalId>> formals;
     std::vector<bool> read_only_roles;
-    std::set<semantic::DeclarationId> appended_declarations;
-    const auto append_signal_binding = [&](
-        const semantic::DeclarationId declaration_id) {
-        const auto declaration = specialized.find_declaration(
-            declaration_id);
-        if (!declaration || declaration->vhdl == nullptr) {
-            return false;
-        }
-        const auto form = declaration->vhdl->form;
-        if (form != semantic::vhdl::DeclarationForm::port
-            && (generate_relative_discriminator.empty()
-                || form != semantic::vhdl::DeclarationForm::signal)) {
+    // The signals an entry rebinds, and whether every operation, sensitivity
+    // and driver of the lowered process refers only to them.
+    const auto collect_formals = [&](const bool exact) {
+        formal_signals.clear();
+        formals.clear();
+        read_only_roles.clear();
+        std::set<semantic::DeclarationId> appended_declarations;
+        const auto append_signal_binding = [&](
+            const semantic::DeclarationId declaration_id) {
+            const auto declaration = specialized.find_declaration(
+                declaration_id);
+            if (!declaration || declaration->vhdl == nullptr) {
+                return false;
+            }
+            const auto form = declaration->vhdl->form;
+            if (form != semantic::vhdl::DeclarationForm::port
+                && ((!exact && generate_relative_discriminator.empty())
+                    || form != semantic::vhdl::DeclarationForm::signal)) {
+                return true;
+            }
+            const auto signal = lowerer.hir_concurrent_port_signal(
+                declaration_id);
+            if (!signal || !profile(*signal)
+                || !formal_signals.emplace(*signal, *signal).second) {
+                return false;
+            }
+            formals.emplace_back(declaration_id, *signal);
+            read_only_roles.push_back(
+                lowerer.hir_concurrent_signal_read_only(*signal));
             return true;
+        };
+        for (const auto declaration_id : entity.declarations) {
+            const auto declaration = specialized.find_declaration(
+                declaration_id);
+            if (declaration && declaration->vhdl != nullptr
+                && declaration->vhdl->form
+                    == semantic::vhdl::DeclarationForm::port
+                && appended_declarations.insert(declaration_id).second
+                && !append_signal_binding(declaration_id)) {
+                return false;
+            }
         }
-        const auto signal = lowerer.hir_concurrent_port_signal(
-            declaration_id);
-        if (!signal || !profile(*signal)
-            || !formal_signals.emplace(*signal, *signal).second) {
+        for (const auto declaration_id : additional_declarations) {
+            if (appended_declarations.insert(declaration_id).second
+                && !append_signal_binding(declaration_id)) {
+                return false;
+            }
+        }
+        // An exact replay also rebinds the owning unit's own signals.
+        for (const auto declaration_id : exact
+                 ? std::span<const semantic::DeclarationId> {
+                       owner.declarations }
+                 : std::span<const semantic::DeclarationId> { }) {
+            if (appended_declarations.insert(declaration_id).second
+                && !append_signal_binding(declaration_id)) {
+                return false;
+            }
+        }
+        if (formals.empty()) {
             return false;
         }
-        formals.emplace_back(declaration_id, *signal);
-        read_only_roles.push_back(
-            lowerer.hir_concurrent_signal_read_only(*signal));
-        return true;
+        for (std::size_t index = 0; index < lowered->operations.size();
+             ++index) {
+            auto operation = lowered->operations.expanded(index);
+            if (process_source && !exact
+                && (operation_holds<Call>(operation)
+                    || operation_holds<CallableFramePush>(operation)
+                    || operation_holds<CallableFramePop>(operation))) {
+                return false;
+            }
+            if (!remap_concurrent_operation(
+                    operation, formal_signals,
+                    lowered->name, lowered->name)) {
+                return false;
+            }
+        }
+        return std::ranges::all_of(lowered->static_sensitivity,
+                   [&](const Sensitivity& sensitivity) {
+                       return formal_signals.contains(sensitivity.signal);
+                   })
+            && std::ranges::all_of(lowered->driver_regions,
+                [&](const Process::DriverRegion& driver) {
+                    return formal_signals.contains(driver.signal);
+                });
     };
-    for (const auto declaration_id : entity.declarations) {
-        const auto declaration = specialized.find_declaration(
-            declaration_id);
-        if (declaration && declaration->vhdl != nullptr
-            && declaration->vhdl->form
-                == semantic::vhdl::DeclarationForm::port
-            && appended_declarations.insert(declaration_id).second
-            && !append_signal_binding(declaration_id)) {
+    bool exact = false;
+    if (!(scalar && scalar_admissible() && collect_formals(false))) {
+        if (!collect_formals(true)) {
             return lowered;
         }
-    }
-    for (const auto declaration_id : additional_declarations) {
-        if (appended_declarations.insert(declaration_id).second
-            && !append_signal_binding(declaration_id)) {
-            return lowered;
-        }
-    }
-    if (formals.empty()) {
-        return lowered;
-    }
-    for (std::size_t index = 0; index < lowered->operations.size();
-         ++index) {
-        auto operation = lowered->operations.expanded(index);
-        if (process_source
-            && (operation_holds<Call>(operation)
-                || operation_holds<CallableFramePush>(operation)
-                || operation_holds<CallableFramePop>(operation))) {
-            return lowered;
-        }
-        if (!remap_concurrent_operation(
-                operation, formal_signals,
-                lowered->name, lowered->name)) {
-            return lowered;
-        }
-    }
-    for (const auto& sensitivity : lowered->static_sensitivity) {
-        if (!formal_signals.contains(sensitivity.signal)) {
-            return lowered;
-        }
-    }
-    for (const auto& driver : lowered->driver_regions) {
-        if (!formal_signals.contains(driver.signal)) {
-            return lowered;
-        }
+        exact = true;
     }
     lowered->language_standard = owner.standard;
     lowered->compatibility_profile = owner.compatibility_profile;
@@ -973,6 +1158,8 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
     ProcessInstanceProgram instance {
         ProcessProgramView { *lowered }
     };
+    concurrent_process_template_index_[template_key].push_back(
+        concurrent_process_templates_.size());
     concurrent_process_templates_.push_back(ConcurrentProcessTemplate {
         owner.id, statement, specialized.specialization(),
         owner.standard, owner.compatibility_profile,
@@ -982,7 +1169,8 @@ HierarchyBuilder::lower_cached_vhdl_occurrence(
         std::move(read_only_roles), process_source,
         std::string { generate_relative_discriminator },
         std::vector<semantic::DeclarationId>(
-            selected_generates.begin(), selected_generates.end())
+            selected_generates.begin(), selected_generates.end()),
+        exact
     });
     return VhdlProcessOccurrence {
         std::move(common), std::move(instance)
@@ -1057,13 +1245,14 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
     }
 
     using TemplateKey = SystemVerilogConcurrentProcessTemplateKey;
-    const TemplateKey key { unit.id, statement, source_language };
-    const auto cached_templates
-        = systemverilog_concurrent_process_templates_.find(key);
+    const auto overlay = overlay_class(specialized);
+    const TemplateKey key { unit.id, statement, source_language, overlay };
+    const auto cached_templates = overlay == no_overlay_class
+        ? systemverilog_concurrent_process_templates_.end()
+        : systemverilog_concurrent_process_templates_.find(key);
     bool matching_overlay { };
     if (cached_templates
         != systemverilog_concurrent_process_templates_.end()) {
-        const auto overlay = overlay_class(specialized);
         for (const auto& cached : cached_templates->second) {
             if (overlay == no_overlay_class || cached.overlay_class != overlay
                 || cached.language_standard != unit.standard
@@ -1305,7 +1494,7 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
             common, instance, std::move(signal_roles)
         });
     systemverilog_concurrent_process_templates_[key].back().overlay_class
-        = overlay_class(specialized);
+        = overlay;
     return SystemVerilogConcurrentProcessOccurrence {
         std::move(common), std::move(instance)
     };
@@ -1840,8 +2029,14 @@ HierarchyBuilder::HierarchyBuilder(
               : std::vector<std::string>{}),
       search_libraries_(
           search_libraries.begin(), search_libraries.end()) {
-    lowering_census_enabled_
-        = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
+    // FSIM_PROFILE_LOWERING=0 keeps phase profiles free of census timing.
+    const char* lowering_profile = std::getenv("FSIM_PROFILE_LOWERING");
+    lowering_census_enabled_ = lowering_profile != nullptr
+        ? std::string_view { lowering_profile } != "0"
+        : std::getenv("FSIM_PROFILE_PHASES") != nullptr;
+    const char* merge_setting = std::getenv("FSIM_MERGE_CONSTANT_DRIVERS");
+    merge_constant_drivers_ = merge_setting == nullptr
+        || std::string_view { merge_setting } != "0";
     for (const auto& binding : bindings) {
         if (!bindings_.emplace(binding.instance, &binding).second) {
             report(

@@ -311,8 +311,10 @@ std::string replace_inline_table(
     const std::string_view payload,
     const std::string_view replacement_table)
 {
-    constexpr std::size_t kBindingLengthOffset = 13U;
-    constexpr std::size_t kBindingBytesOffset = 21U;
+    // Magic, schema and path mode precede the binding; as a string-table
+    // entry it starts with reference 0, then its length.
+    constexpr std::size_t kBindingLengthOffset = 21U;
+    constexpr std::size_t kBindingBytesOffset = 29U;
     const auto old_size = static_cast<std::size_t>(
         read_u64(payload, kBindingLengthOffset));
     assert(kBindingBytesOffset + old_size <= payload.size());
@@ -731,23 +733,28 @@ void test_required_empty_and_bad_reference_rejections()
     const auto valid
         = codec::serialize_runtime_path_state(state, nullptr, diagnostics);
     assert(valid);
-    constexpr std::size_t kBindingLengthOffset = 13U;
-    constexpr std::size_t kBindingBytesOffset = 21U;
+    // Magic, schema and path mode precede the binding; as a string-table
+    // entry it starts with reference 0, then its length.
+    constexpr std::size_t kBindingLengthOffset = 21U;
+    constexpr std::size_t kBindingBytesOffset = 29U;
     const auto binding_size = static_cast<std::size_t>(
         read_u64(*valid, kBindingLengthOffset));
     const auto first_reference = kBindingBytesOffset + binding_size + 8U;
     assert(first_reference + 4U <= valid->size());
     const auto path_count = static_cast<std::size_t>(read_u64(
         *valid, kBindingBytesOffset + binding_size));
+    // The cleared top path is a new string-table entry: reference 0, then
+    // its length.
     const auto state_offset = first_reference + path_count * 4U;
-    assert(state_offset + 8U <= valid->size());
+    assert(state_offset + 16U <= valid->size());
     assert(read_u64(*valid, state_offset) == 0U);
+    assert(read_u64(*valid, state_offset + 8U) == 0U);
 
-    auto nonempty_placeholder = valid->substr(0U, state_offset);
-    nonempty_placeholder.resize(state_offset + 9U);
-    write_u64(nonempty_placeholder, state_offset, 1U);
-    nonempty_placeholder[state_offset + 8U] = 'x';
-    nonempty_placeholder.append(valid->substr(state_offset + 8U));
+    auto nonempty_placeholder = valid->substr(0U, state_offset + 8U);
+    nonempty_placeholder.resize(state_offset + 17U);
+    write_u64(nonempty_placeholder, state_offset + 8U, 1U);
+    nonempty_placeholder[state_offset + 16U] = 'x';
+    nonempty_placeholder.append(valid->substr(state_offset + 16U));
     assert(!codec::deserialize_runtime_path_state(
         nonempty_placeholder, "runtime-nonempty-placeholder", nullptr,
         diagnostics));
@@ -808,8 +815,10 @@ void test_decode_allocation_budget_is_bounded()
         = codec::serialize_runtime_path_state(state, nullptr, diagnostics);
     assert(valid);
 
-    constexpr std::size_t kBindingLengthOffset = 13U;
-    constexpr std::size_t kBindingBytesOffset = 21U;
+    // Magic, schema and path mode precede the binding; as a string-table
+    // entry it starts with reference 0, then its length.
+    constexpr std::size_t kBindingLengthOffset = 21U;
+    constexpr std::size_t kBindingBytesOffset = 29U;
     const auto binding_size = static_cast<std::size_t>(
         read_u64(*valid, kBindingLengthOffset));
     const auto path_count_offset = kBindingBytesOffset + binding_size;
@@ -818,16 +827,21 @@ void test_decode_allocation_budget_is_bounded()
     const auto state_offset = path_count_offset + 8U + path_count * 4U;
 
     auto signal_info_count_offset = state_offset;
-    const auto top_size = static_cast<std::size_t>(
-        read_u64(*valid, signal_info_count_offset));
-    signal_info_count_offset += 8U + top_size;
+    // A string is a table reference; reference 0 adds a length and bytes.
+    const auto skip_string = [&] {
+        const auto reference = read_u64(*valid, signal_info_count_offset);
+        signal_info_count_offset += 8U;
+        if (reference == 0U) {
+            signal_info_count_offset += 8U + static_cast<std::size_t>(
+                read_u64(*valid, signal_info_count_offset));
+        }
+    };
+    skip_string();
     const auto root_count = static_cast<std::size_t>(
         read_u64(*valid, signal_info_count_offset));
     signal_info_count_offset += 8U;
     for (std::size_t index = 0U; index < root_count; ++index) {
-        const auto root_size = static_cast<std::size_t>(
-            read_u64(*valid, signal_info_count_offset));
-        signal_info_count_offset += 8U + root_size;
+        skip_string();
     }
     assert(signal_info_count_offset + 8U <= valid->size());
 

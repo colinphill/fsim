@@ -82,20 +82,94 @@ void add_package_dependency(const Model& model,
     }
 }
 
+// Position by id of the records in one HIR vector, for the first record with
+// each id (as std::ranges::find would return).
+class RecordIndex {
+public:
+    template <typename Record>
+    void build(const std::vector<Record>& records)
+    {
+        data_ = records.data();
+        size_ = records.size();
+        for (std::size_t position = 0; position < records.size(); ++position) {
+            const auto& id = records[position].id;
+            if (!id.valid()) {
+                continue;
+            }
+            if (id.value() >= positions_.size()) {
+                positions_.resize(std::size_t { id.value() } + 1U, absent);
+            }
+            if (positions_[id.value()] == absent) {
+                positions_[id.value()] = static_cast<std::uint32_t>(position);
+            }
+        }
+    }
+
+    /// Nullopt when the index does not describe `records`.
+    template <typename Record, typename Id>
+    [[nodiscard]] std::optional<const Record*> find(
+        const std::vector<Record>& records, const Id id) const
+    {
+        if (records.data() != data_ || records.size() != size_) {
+            return std::nullopt;
+        }
+        if (!id.valid() || id.value() >= positions_.size()
+            || positions_[id.value()] == absent) {
+            return static_cast<const Record*>(nullptr);
+        }
+        const auto& record = records[positions_[id.value()]];
+        if (record.id != id) {
+            return std::nullopt;
+        }
+        return &record;
+    }
+
+private:
+    static constexpr std::uint32_t absent
+        = std::numeric_limits<std::uint32_t>::max();
+    const void* data_ { };
+    std::size_t size_ { };
+    std::vector<std::uint32_t> positions_;
+};
+
+// normalize_compiled_design() changes HIR record contents but never adds,
+// removes or reorders records or changes their ids, so it indexes them once;
+// a linear search per lookup made normalization quadratic.
+struct NormalizationIndexes {
+    RecordIndex systemverilog_declarations;
+    RecordIndex vhdl_declarations;
+    RecordIndex systemverilog_expressions;
+    RecordIndex vhdl_expressions;
+};
+thread_local const NormalizationIndexes* normalization_indexes = nullptr;
+
+template <typename Record, typename Id>
+const Record* find_record(const std::vector<Record>& records, const Id id,
+    const RecordIndex* const index)
+{
+    if (index != nullptr) {
+        if (const auto found = index->find(records, id)) {
+            return *found;
+        }
+    }
+    const auto found = std::ranges::find(records, id, &Record::id);
+    return found == records.end() ? nullptr : &*found;
+}
+
 const sv::Declaration* find_declaration(
     const sv::Hir& hir, const DeclarationId id)
 {
-    const auto found = std::ranges::find(
-        hir.declarations(), id, &sv::Declaration::id);
-    return found == hir.declarations().end() ? nullptr : &*found;
+    return find_record(hir.declarations(), id,
+        normalization_indexes == nullptr
+            ? nullptr : &normalization_indexes->systemverilog_declarations);
 }
 
 const vhdl::Declaration* find_declaration(
     const vhdl::Hir& hir, const DeclarationId id)
 {
-    const auto found = std::ranges::find(
-        hir.declarations(), id, &vhdl::Declaration::id);
-    return found == hir.declarations().end() ? nullptr : &*found;
+    return find_record(hir.declarations(), id,
+        normalization_indexes == nullptr
+            ? nullptr : &normalization_indexes->vhdl_declarations);
 }
 
 void classify(const CompiledDesign& design, const DeclarationId id,
@@ -187,9 +261,13 @@ template <typename Expression>
 const Expression* expression_for(
     const std::vector<Expression>& expressions, const ExpressionId id)
 {
-    const auto found = std::ranges::find(
-        expressions, id, &Expression::id);
-    return found == expressions.end() ? nullptr : &*found;
+    const RecordIndex* index = nullptr;
+    if (normalization_indexes != nullptr) {
+        index = std::is_same_v<Expression, sv::Expression>
+            ? &normalization_indexes->systemverilog_expressions
+            : &normalization_indexes->vhdl_expressions;
+    }
+    return find_record(expressions, id, index);
 }
 
 enum class ConstantKind : std::uint8_t {
@@ -1665,6 +1743,27 @@ bool annotate_classes(CompiledDesign& design)
 
 bool normalize_compiled_design(CompiledDesign& design) noexcept
 {
+    std::optional<NormalizationIndexes> indexes;
+    try {
+        indexes.emplace();
+        indexes->systemverilog_declarations.build(
+            design.systemverilog_hir.declarations());
+        indexes->vhdl_declarations.build(design.vhdl_hir.declarations());
+        indexes->systemverilog_expressions.build(
+            design.systemverilog_hir.expressions());
+        indexes->vhdl_expressions.build(design.vhdl_hir.expressions());
+    } catch (...) {
+        indexes.reset();
+    }
+    struct ActiveIndexes {
+        explicit ActiveIndexes(const NormalizationIndexes* active) noexcept
+        {
+            normalization_indexes = active;
+        }
+        ~ActiveIndexes() { normalization_indexes = nullptr; }
+        ActiveIndexes(const ActiveIndexes&) = delete;
+        ActiveIndexes& operator=(const ActiveIndexes&) = delete;
+    } active { indexes ? &*indexes : nullptr };
     if (!design.valid()
         || !annotate_expressions(
             design, design.systemverilog_hir.mutable_expressions())

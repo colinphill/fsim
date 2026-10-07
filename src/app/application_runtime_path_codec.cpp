@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_runtime_path_codec.hpp"
+#include "../runtime/simir_operation_list_sharing.hpp"
 
 #include "application_design_artifact_codec_internal.hpp"
 #include "application_hierarchy_path_codec.hpp"
+#include "application_phase_profile.hpp"
 
 #include "fsim/support/sha256.hpp"
 
@@ -47,6 +49,8 @@ struct RuntimeStatePathWireDto {
 struct PreparedRuntimeState {
     std::uint8_t path_mode { };
     std::string path_binding;
+    // External mode: string-table entries that spell a path become its ID.
+    const Paths* external_paths { };
     RuntimeStatePathWireDto dto;
 };
 
@@ -183,8 +187,11 @@ bool visit_runtime_paths(
         if (!visit(process.name, false)) {
             return false;
         }
-        for (std::size_t index = 0;
-            index < process.operations.size(); ++index) {
+        // Paths live in instance overrides and debug-scope remaps; the
+        // shared body (and its canonical scopes) is stored verbatim.
+        using Share = runtime::simir::operation_list_detail::ShareAccess;
+        for (const auto index :
+            Share::instance_override_indices(process.operations)) {
             // Only coverage and debug operations carry paths; test the kind
             // on the stored operation before expanding instance fields.
             if (const auto& stored = std::as_const(process.operations)[index];
@@ -237,6 +244,13 @@ bool visit_runtime_paths(
                 if (has_path && changed) {
                     process.operations.replace(index, std::move(operation));
                 }
+            }
+        }
+        for (std::size_t scope = 0;
+             scope < Share::debug_scope_count(process.operations); ++scope) {
+            if (!visit(Share::debug_scope_instance(process.operations, scope),
+                    true)) {
+                return false;
             }
         }
     }
@@ -500,10 +514,13 @@ process_table_from_design(
             return std::nullopt;
         }
 
+        std::optional<application_detail::ScopedPhaseProfile> stage;
+        stage.emplace("runtime_encode_collect");
         PreparedRuntimeState prepared;
         prepared.path_mode = external_paths == nullptr
             ? kInlinePathMode
             : kExternalPathMode;
+        prepared.external_paths = external_paths;
         semantic::HierarchyPathTable::Builder source_builder;
         auto& ids = prepared.dto.path_ids;
         std::optional<std::string> path_error;
@@ -540,6 +557,7 @@ process_table_from_design(
             return std::nullopt;
         }
 
+        stage.emplace("runtime_encode_table");
         Paths path_table;
         if (external_paths == nullptr) {
             path_table = std::move(source_builder).freeze();
@@ -579,6 +597,7 @@ process_table_from_design(
         } else {
             prepared.path_binding = std::move(payload->digest);
         }
+        stage.emplace("runtime_encode_project");
         prepared.dto.state = copy_runtime_state_without_processes(state);
         // Path projection clears process names and path-bearing operations in
         // the wire DTO. Keep the design's immutable runtime rows untouched.
@@ -627,9 +646,11 @@ void write_prepared_runtime_state(
     writer.write(kSchema);
     writer.write(prepared.path_mode);
     writer.write(prepared.path_binding);
+    writer.set_runtime_path_strings(prepared.external_paths);
     writer.write(prepared.dto.path_ids);
     writer.write(prepared.dto.state);
     writer.write(prepared.dto.process_table);
+    writer.set_runtime_path_strings(nullptr);
 }
 
 template <typename ReaderType>
@@ -723,8 +744,12 @@ std::optional<DecodedRuntimeProgramState> read_runtime_state(
     RuntimeStatePathWireDto dto;
     std::shared_ptr<elaboration::detail::RuntimeProcessProgramTable>
         mutable_process_table;
-    if (!reader.read(dto.path_ids) || !reader.read(dto.state)
-        || !reader.read(mutable_process_table)) {
+    // External IDs are canonical (checked above).
+    reader.set_runtime_path_strings(external_paths);
+    const bool read = reader.read(dto.path_ids) && reader.read(dto.state)
+        && reader.read(mutable_process_table);
+    reader.set_runtime_path_strings(nullptr);
+    if (!read) {
         report_error(diagnostics, reader.failure(), source_name);
         return std::nullopt;
     }

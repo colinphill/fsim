@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_phase_profile.hpp"
 #include "application_workspace_internal.hpp"
 #include "application_workspace_selection.hpp"
 
@@ -75,7 +76,10 @@ int handle_workspace_elaborate(const cli::Invocation& invocation, const project:
     if (!resolve_workspace_tops(selected_config, *catalogs, diagnostics)) {
         return 1;
     }
-    auto selection = select_workspace_design(selected_config, store, *catalogs, diagnostics);
+    auto selection = [&] {
+        ScopedPhaseProfile selection_phase { "workspace_selection" };
+        return select_workspace_design(selected_config, store, *catalogs, diagnostics);
+    }();
     if (!selection || !validate_workspace_dependencies(selection->catalogs, diagnostics)) {
         return 1;
     }

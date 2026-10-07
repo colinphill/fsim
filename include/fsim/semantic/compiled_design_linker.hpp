@@ -85,6 +85,20 @@ struct CompiledUdpIdentity {
     std::span<const CompiledUdpIdentity> udp_identities,
     std::span<const std::string> supporting_libraries = {});
 
+/// One object's selection for extract_compiled_object_set().
+struct CompiledObjectSelection {
+    std::span<const UnitId> units;
+    std::span<const std::string> class_identities;
+    std::span<const CompiledUdpIdentity> udp_identities;
+};
+
+/// extract_compiled_objects() for several objects of one design. The input
+/// design's structure is checked once rather than once per object.
+[[nodiscard]] std::vector<CompiledLinkResult> extract_compiled_object_set(
+    const CompiledDesign& design,
+    std::span<const CompiledObjectSelection> selections,
+    std::span<const std::string> supporting_libraries = {});
+
 /// Project every logical library except the named libraries into a
 /// self-contained bundle. This is used when decoded compiled libraries must
 /// replace compatibility-only syntax sidecars in a combined workspace.

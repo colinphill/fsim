@@ -30,9 +30,24 @@ candidate `.local-artifacts/v4cand-p1-10071004`) against the HEAD control:
 | Mixed | v4 | 1.13 | 2.85 | **3.30** | **7.27** |
 | Mixed | HEAD | 1.23 | 3.20 | 20.85 | 25.33 |
 
-Phase 1 exits with these numbers. D6 (about 5.6 s and 4.6 s totals) is still open:
-Verilog needs about 0.8 s more and mixed about 2.7 s. The older table below records the
-2026-10-06 state.
+Phase 1 exits with these numbers. D6 (about 5.6 s and 4.6 s totals) is still open.
+**D6 throughput criterion met.** Two paired campaigns after the D6 work (§4) each time
+xsim in the same session:
+
+| Campaign | Mixed fsim / xsim | Speedup | Verilog fsim / xsim | Speedup |
+|---|---:|---:|---:|---:|
+| `v4-d6a-pair-1007` | 4.73 s / 15.62 s | 3.31× | 4.59 s / 19.54 s | 4.26× |
+| `v4-d6b-pair-1007` | 4.82 s / 15.10 s | 3.13× | 4.94 s / 18.63 s | 3.77× |
+
+The xsim figures are the preflight's single samples; the fsim figures are medians of 7
+pairs.
+- **Same-session comparison.** The second campaign ran on a slower VM: the HEAD control
+  took 5–7% longer. Comparing against xsim timed in the same session removes that drift.
+- **Earlier targets.** The 5.6 s and 4.6 s targets assumed 16.9 s and 13.8 s for xsim;
+  the campaigns measure 15.1–19.5 s.
+- **Open.** D6's second clause (simulation within 2× of a 2-state cycle-based reference)
+  is unmeasured: no such reference (for example Verilator) is installed here. The wider
+  corpus is not assembled yet. The older table below records the 2026-10-06 state.
 
 ### 2026-10-06 (late) state
 
@@ -90,6 +105,207 @@ per completed phase).
 | D5 whole-design fallback | done (planner disables the kernel with a reason) | `elaborated_design_static_kernel.cpp` |
 
 ## 4. Log
+
+### 2026-10-07: D6 qualification (`v4-d6b-pair-1007`)
+
+Frozen candidate `.local-artifacts/v4cand-d6b-1007` (the state of this commit). The full
+suite fails only the control's 37 tests, and both kernel transcripts are identical to the
+reference engine's.
+
+| Case | Compile | Elaborate | Setup + simulation | Total | HEAD control | xsim |
+|---|---:|---:|---:|---:|---:|---:|
+| Verilog | 0.29 | 1.95 | 2.65 | **4.94** | 31.84 | 18.63 |
+| Mixed | 0.54 | 1.49 | 2.75 | **4.82** | 26.06 | 15.10 |
+
+Preflight, the absolute targets and the anti-slowdown guard passed. Against the control,
+the paired ratios are 0.155 (Verilog) and 0.186 (mixed); `v4-d6a` gave 0.151 and 0.194.
+The lazy codegen threshold costs Verilog a little and gains mixed more.
+
+### 2026-10-07: paired D6 measurement, kernel dispatch and commit trims
+
+**Paired campaign `v4-d6a-pair-1007`** (7 pairs, CPU 9, frozen candidate
+`.local-artifacts/v4cand-d6a-1007`: mimalloc, two-state VHDL code, the fast dispatch
+below). Preflight and the anti-slowdown guard passed.
+
+| Case | Compile | Elaborate | Setup + simulation | Total | HEAD control |
+|---|---:|---:|---:|---:|---:|
+| Verilog | 0.29 | 1.90 | 2.40 | **4.58** | 30.36 |
+| Mixed | 0.53 | 1.44 | 2.75 | **4.72** | 24.33 |
+
+Verilog meets D6 (about 5.6 s). Mixed was 0.12 s over its 4.6 s, so these followed:
+- **Fast dispatch.**
+  - An ordinary member run touched the roughly 600-byte member record first, and that
+    load was a cache miss (47% of `run`).
+  - A compact `FastRun` record per member now holds the entry, bindings, program and
+    body. It is refreshed after every other run, and anything unusual takes the old
+    path.
+  - Mixed simulate cycles fell 5.7% (14.20G to 13.39G). The rounds' vectors also keep
+    their capacity (no allocation per round).
+- **Commit records.** `commit_round` reads a 64-byte `CommitSlot` per slot (arena
+  location, before-image, touched flag) instead of the slot record, and skips the
+  `last_writer` store for single-writer slots. Cycles fell 2.3%.
+- **Round order.** Rounds of more than 32 members are ordered through a member bitmap
+  instead of a comparison sort. Cycles fell 1.9%.
+- **Lazy codegen threshold** went from 256 to 1024 runs. Mixed simulate needs 2.3% fewer
+  cycles, Verilog 1.2% more; Verilog has the margin.
+- **Measured but not kept.**
+  - Continuing two-state handovers in the KIR interpreter instead of compiling full code
+    on the first one halved the single-template compiles (95 to 42) but cost 1.6% more
+    cycles.
+  - Zeroing 'U' literals that inserts overwrite completely made more templates two-state,
+    but they then handed over more often: 0.8% more instructions.
+
+### 2026-10-07: two-state VHDL code, simplifying IR builder
+
+`e2e.py`, interleaved with the frozen build `.local-artifacts/v4ref-mimalloc-1007`
+(mimalloc, before these two changes):
+
+| Case | Build | Compile | Elaborate | Simulate | Total |
+|---|---|---:|---:|---:|---:|
+| Mixed | reference | 0.49 | 1.40 | 3.33 | 5.21 |
+| Mixed | current | 0.50 | 1.41 | 3.16 | **5.07** |
+| Verilog | reference | 0.40 | 1.92 | 2.63 | 4.95 |
+| Verilog | current | 0.41 | 1.90 | 2.60 | **4.91** |
+
+Parity holds on both designs: transcripts are identical, and mixed matches earlier builds
+byte for byte. `FSIM_KERNEL_VERIFY` found no mismatch in five minutes of the mixed run.
+- **Simplifying IR builder.** The emitter builds with `InstSimplifyFolder`, so `x | 0`,
+  `x & ~0` and constant branches fold as they are created; the cold tier runs no clean-up
+  passes. Eager cold codegen went from about 0.48 s to 0.45 s, with mixed simulate about
+  0.04 s faster.
+- **Two-state VHDL code.**
+  - An upper-bound experiment that drops the X plane and 'U' mask in VHDL templates
+    (unsound, but its transcript was identical) took mixed simulate from 3.27 s to 2.77 s.
+  - In the real version, every VHDL template, except those with X- or U-carrying
+    literals, compiles to two-state code that assumes every register's X plane and 'U'
+    mask are zero.
+  - An instruction whose result has X or 'U' bits (a load, a helper result, a generic
+    operation) stores them and hands over to the template's full-semantics code at the
+    next instruction (frame status 4, the instruction in `reserved`).
+  - The full code is compiled on first need, with those instructions as entries. Both
+    versions come from the same KIR, so the state is consistent.
+  - A member runs two-state code only while its registers are known. The kernel rechecks
+    after other runs and clears the planes of registers that are not live at entry.
+  - A member that keeps meeting X or 'U' values switches to the full code: more than 15
+    handovers covering at least an eighth of its two-state runs, or 64 runs with unknown
+    registers.
+  - Mixed simulate went from 3.26 s to 3.04 s (`FSIM_STATIC_KERNEL_TWO_STATE=0` versus on).
+- **What did not work.** Resuming the reference evaluator after a guard (a SimIR
+  operation) gave wrong values. The specializer fuses a wide `ReadSignal` into a KIR load,
+  so the SimIR register it fills never exists in compiled state. Continuing in compiled
+  full code at the KIR level avoids that.
+
+### 2026-10-07: mimalloc, more exact VHDL templates, lazy cold codegen
+
+Measured with `e2e.py` (medians of 3), parity identical on both designs, and the mixed
+transcripts byte-identical to earlier builds.
+
+| Case | Compile | Elaborate | Simulate | Total |
+|---|---:|---:|---:|---:|
+| Verilog | 0.40 | 1.84 | 2.47 | **4.71** |
+| Mixed | 0.49 | 1.43 | 3.40 | **5.32** |
+
+- **Allocator.** The owner asked about mimalloc and chose to vendor it.
+  - Source: `third_party/mimalloc-3.5.3`, the unmodified upstream release archive with a
+    manifest, SBOM and supply-chain rows. `cmake/FsimMimalloc.cmake` verifies and
+    extracts it.
+  - The `fsim` executable links mimalloc's `static.c` as its C and C++ allocator.
+    `FSIM_MIMALLOC` controls it, and it is off for sanitizer and allocation-profiling
+    builds.
+  - On Windows a DLL with the upstream redirection module does the same. That path has
+    not been built or run on a Windows host.
+  - The glibc `hugetlb` re-exec in `main.cpp` is removed.
+  - Preload A/B in fresh workspaces:
+
+    | Allocator | Verilog | Mixed |
+    |---|---:|---:|
+    | glibc with `hugetlb` | 5.49 s | 5.69 s |
+    | mimalloc 2.1.7 with large OS pages | 4.85 s | 5.45 s |
+    | mimalloc 3.5.3 | 4.77 s | 5.18 s |
+
+  - mimalloc 3.5.3 gains the same with or without large OS pages, so Windows needs no
+    special privilege.
+  - The extra glibc tunables (`mmap_threshold`, `trim_threshold`, `top_pad`) gained only
+    about 0.03 s.
+- **Exact VHDL templates, second step.**
+  - Scalar entries keep their original restrictions. Any occurrence they exclude
+    (variables, calls, partial drivers, unit processes in architectures with if-generates)
+    is stored as an exact entry.
+  - The remap now maps clock and gate reads, signal attribute queries (`'event`,
+    `'last_value` and the like), projected and dynamic slice writes, and `Assert`.
+  - VHDL process lowering went from 0.20 s to 0.11 s of CPU (61 of 170 replay), and mixed
+    elaboration from 1.76 s to 1.64 s before mimalloc.
+- **Lazy cold codegen.**
+  - Cold member templates are compiled once they have run `FSIM_STATIC_KERNEL_LAZY_RUNS`
+    times (default 256; 0 compiles everything at once), in batches of 32. Until then they
+    run on the KIR interpreter, which is about 3× slower than native code.
+  - Mixed codegen went from 0.53 s to 0.28 s (286 templates in 11 batches) and simulate
+    by about 0.07 s; Verilog is unchanged.
+  - Thresholds: 64 gave no gain, 256 and 1000 gained about 0.07 s, 4000 lost.
+- **Measured but not changed.**
+  - Static warm and hot tiers for more member templates: no gain on mixed at hot
+    thresholds of 8192 or 2048.
+  - Word loops instead of `memcpy`/`memcmp` in `commit_round`: neutral, because the cost
+    is memory access to the slots.
+  - Element port actuals (`a => S(gi)`) are copied by processes that add a delta the LRM
+    does not have (about 2.4M mixed runs). Aliasing them would change elaboration
+    semantics, so it is not done.
+
+### 2026-10-07: D6 work after Phase 1 (compile, elaboration, runtime state)
+
+End-to-end harness `r37-analysis/tools/e2e.py` (fixture roots, fresh workspaces, CPU 9,
+static kernel, medians of 3). The frozen Phase 1 binary measured 6.48 s (Verilog) and
+7.88 s (mixed) in the same harness.
+
+| Case | Compile | Elaborate | Simulate | Total |
+|---|---:|---:|---:|---:|
+| Verilog | 0.47 | 2.10 | 2.66 | **5.23** |
+| Mixed | 0.60 | 1.76 | 3.51 | **5.87** |
+
+Both kernel transcripts match the reference engine (`kernel_parity.py`), and the mixed
+transcripts are byte-identical to those of the build before the template changes. The
+full suite fails only the control's 37 tests.
+- **Compile.**
+  - Per-object source mappings no longer re-normalize every source span's file name.
+  - The workspace checks the design's structure once for all its objects (new
+    `extract_compiled_object_set`).
+  - `normalize_compiled_design` indexes HIR records by ID instead of searching linearly.
+  - Span interning remembers canonicalized source paths while one model is built. The
+    fixture roots reach the sources through a symbolic link, so each span cost several
+    `readlink` calls.
+  - Fixture VHDL compile went from 0.88 s to 0.50 s, Verilog compile from 0.84 s to 0.47 s.
+    The compiled HIR objects are byte-identical.
+- **VHDL validation memo.** Type and declaration validation is a pure function of the
+  unit, its entity and the specialization actuals. Combinations that validated without a
+  diagnostic are skipped when another instance repeats them. Mixed elaboration went from
+  2.88 s to 2.33 s.
+- **Exact VHDL templates.**
+  - An occurrence whose specialization overlay equals a cached one's replays the cached
+    process, including generated concurrent statements, any statement kind, processes
+    with calls and local variables, and the unit's own signals.
+  - Signal layouts now compare array element types structurally.
+  - Templates are indexed by unit, statement, process and generate position.
+  - Mixed elaboration went from 2.16 s to 1.76 s. 2,245 of 2,989 exact occurrences replay.
+- **Constant-driver merge.** Each instance's constant generated drivers become one process
+  (`FSIM_MERGE_CONSTANT_DRIVERS=0` keeps one each). Verilog went from 2.43 s to 2.35 s
+  elaborate and from 2.87 s to 2.70 s simulate. The reference engine loses its compact
+  startup writes; the owner accepted that, since it will be replaced. Elaboration tests
+  that check per-statement shapes run with the merge off, and a new test covers the
+  merged form.
+- **Runtime state schema 76.**
+  - Shared operation bodies are written verbatim.
+  - Instances store override indices and debug-scope remaps.
+  - Plain strings use a table.
+  - With an external path table, any string-table entry that spells a hierarchy path is
+    written as its path ID, so payloads carry no paths.
+- **Profiling switches.** `FSIM_PROFILE_LOWERING=0` keeps the lowering census out of phase
+  profiles; the census otherwise still follows `FSIM_PROFILE_PHASES`.
+- **Remaining mixed costs** (simulate 3.5 s):
+  - setup: decode 0.13 s, KIR compile 0.18 s, cold codegen 0.52 s;
+  - run: about 2.65 s, with 10.8M combinational and 6.8M sequential member runs;
+  - `commit_round` with its small `memcpy`/`memcmp` is about 11%;
+  - about 1.3M helper or generic calls (container writes from the testbench,
+    `dynamic_part_select`, 256-bit generic inserts).
 
 ### 2026-10-07: local registers, heap huge pages, host and planner trims
 
@@ -1151,11 +1367,18 @@ boundary traffic.
 
 ## 6. Next steps (in order)
 
-Phase 1 is met (paired run above). The remaining goal is D6: totals of about 5.6 s
-(Verilog) and 4.6 s (mixed), which means cutting compile + elaborate + simulate by about
-13% and 37%.
+The D6 throughput criterion is met on both throughput cases (§2). Next:
+1. Record a 2-state cycle-based reference (D6's second clause) once one is available.
+2. Assemble the wider corpus (plan Phase 0).
+3. Qualify the Windows mimalloc path (redirect DLL) on a Windows host.
+4. Widen the mixed margin (3.1–3.3× xsim):
+   - VHDL instance elaboration;
+   - the workspace selection's second object load;
+   - the kernel's per-write commit cost.
 
-Measured state (2026-10-07, `rep.py`, CPU 9, Verilog):
+The older notes below describe the state before the D6 work.
+
+Measured state (2026-10-07, `rep.py`, CPU 9, Verilog, before the D6 work):
 
 | Item | Time |
 |---|---:|

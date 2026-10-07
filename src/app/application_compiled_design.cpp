@@ -7,6 +7,9 @@
 
 #include <boost/pfr/core.hpp>
 
+#include <string_view>
+#include <unordered_set>
+
 namespace fsim::app::application_detail {
 namespace {
 
@@ -1084,7 +1087,12 @@ compiled_cache_source_mappings(
             });
         }
     }
+    // Spans repeat a few file names; a name already handled adds nothing.
+    std::unordered_set<std::string_view> span_names;
     for (const auto& span : checked.semantics.source_spans()) {
+        if (!span_names.insert(span.logical_name).second) {
+            continue;
+        }
         const auto path = support::path_from_utf8(span.logical_name);
         if (support::path_is_portably_absolute(path)) {
             const auto& file = checked.semantics.source_files().at(

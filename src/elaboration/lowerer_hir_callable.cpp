@@ -29,8 +29,12 @@ namespace {
 
     bool profile_expression_resolution_cache() noexcept
     {
-        static const bool enabled
-            = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
+        static const bool enabled = [] {
+            const char* lowering = std::getenv("FSIM_PROFILE_LOWERING");
+            return lowering != nullptr
+                ? std::string_view { lowering } != "0"
+                : std::getenv("FSIM_PROFILE_PHASES") != nullptr;
+        }();
         return enabled;
     }
 

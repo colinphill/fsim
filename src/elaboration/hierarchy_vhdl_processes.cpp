@@ -81,6 +81,21 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
         return true;
     };
 
+    // Signals a generated occurrence may name: the architecture's and the
+    // generate region's.
+    const auto generated_signal_declarations
+        = [&](const VhdlHirMaterialization& materialization) {
+              std::vector<semantic::DeclarationId> declarations;
+              declarations.reserve(architecture.declarations.size()
+                  + materialization.signal_declarations.size());
+              declarations.insert(declarations.end(),
+                  architecture.declarations.begin(),
+                  architecture.declarations.end());
+              declarations.insert(declarations.end(),
+                  materialization.signal_declarations.begin(),
+                  materialization.signal_declarations.end());
+              return declarations;
+          };
     for (auto& materialization : materializations) {
         Lowerer generated_lowerer {
             design_,
@@ -142,16 +157,54 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                 return false;
             }
             record_lowering_census(vhdl_generated_concurrent_occurrences_);
+            const auto guard = materialization.region->kind
+                    == semantic::vhdl::GenerateKind::block
+                ? materialization.region->condition
+                : std::nullopt;
+            if (!guard) {
+                // Instances with equal specializations repeat these
+                // statements; the template cache replays them.
+                auto occurrence = lower_cached_vhdl_occurrence(
+                    entity, architecture, materialization.specialization,
+                    generated_lowerer, statement_id, materialization.path,
+                    concurrent_order++, std::nullopt,
+                    materialization.generate_relative_discriminator,
+                    generated_signal_declarations(materialization));
+                if (!occurrence) {
+                    report("FSIM-ELAB-HIR-001",
+                        "compiled generated VHDL concurrent statement "
+                        "could not be lowered from HIR",
+                        compiled_source_span(
+                            *compiled_, statement_source));
+                    return false;
+                }
+                if (occurrence->instance) {
+                    auto& instance = *occurrence->instance;
+                    canonicalize_process_operations(
+                        occurrence->common, instance);
+                    specialization.processes.push_back(instance.id);
+                    design_.append_process_instance_record(
+                        std::move(occurrence->common), std::move(instance));
+                } else {
+                    auto& process_instance = *occurrence->process;
+                    process_instance.language_standard = architecture.standard;
+                    process_instance.compatibility_profile
+                        = architecture.compatibility_profile;
+                    canonicalize_process_operations(process_instance);
+                    specialization.processes.push_back(process_instance.id);
+                    design_.append_process_record(
+                        std::move(process_instance));
+                }
+                append_generated_processes(generated_lowerer, architecture);
+                continue;
+            }
             auto lowered = generated_lowerer
                                .lower_hir_concurrent_statement(
                                    statement_id,
                                    frontend::Language::Vhdl2008,
                                    materialization.path,
                                    concurrent_order++,
-                                   materialization.region->kind
-                                           == semantic::vhdl::GenerateKind::block
-                                       ? materialization.region->condition
-                                       : std::nullopt);
+                                   guard);
             if (!lowered) {
                 report("FSIM-ELAB-HIR-001",
                     "compiled generated VHDL concurrent statement "
@@ -181,22 +234,12 @@ bool HierarchyBuilder::lower_compiled_vhdl_generated_processes(
                 return false;
             }
             record_lowering_census(vhdl_generated_process_lower_requests_);
-            std::vector<semantic::DeclarationId> signal_declarations;
-            signal_declarations.reserve(
-                architecture.declarations.size()
-                + materialization.signal_declarations.size());
-            signal_declarations.insert(signal_declarations.end(),
-                architecture.declarations.begin(),
-                architecture.declarations.end());
-            signal_declarations.insert(signal_declarations.end(),
-                materialization.signal_declarations.begin(),
-                materialization.signal_declarations.end());
             auto lowered = lower_cached_vhdl_occurrence(
                 entity, architecture, materialization.specialization,
                 generated_lowerer, semantic::StatementId { },
                 materialization.path, concurrent_order++, process_id,
                 materialization.generate_relative_discriminator,
-                signal_declarations);
+                generated_signal_declarations(materialization));
             if (!lowered) {
                 report("FSIM-ELAB-HIR-001",
                     "compiled generated VHDL process could not be "

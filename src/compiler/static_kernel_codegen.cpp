@@ -15,6 +15,7 @@
 
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
+#include <llvm/Analysis/InstSimplifyFolder.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LLVMContext.h>
@@ -34,6 +35,7 @@
 #include <limits>
 #include <map>
 #include <mutex>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -131,17 +133,20 @@ class FunctionEmitter {
 public:
     FunctionEmitter(llvm::Module& module, llvm::Function& function,
         const detail::CompiledBody& body, const StaticKernelNativeHelpers& helpers,
-        const bool local_registers)
+        const bool local_registers, const bool two_state,
+        std::vector<std::uint32_t>* const resume_points)
         : context_(module.getContext())
         , function_(function)
         , body_(body)
         , helpers_(helpers)
-        , builder_(context_)
+        , builder_(context_, llvm::InstSimplifyFolder(module.getDataLayout()))
         , i32_(llvm::Type::getInt32Ty(context_))
         , i64_(llvm::Type::getInt64Ty(context_))
         , i8_(llvm::Type::getInt8Ty(context_))
         , ptr_(llvm::PointerType::getUnqual(context_))
         , local_registers_(local_registers)
+        , two_state_(two_state && body.shadow_base != 0U)
+        , resume_points_(resume_points)
     {
     }
 
@@ -176,6 +181,13 @@ public:
         for (const auto resume : body_.resume_entries) {
             leader[std::min(resume, size)] = 1U;
         }
+        // Full code continuing two-state code (see guard_known).
+        const auto continuations = !two_state_ && resume_points_ != nullptr
+            ? std::span<const std::uint32_t> { *resume_points_ }
+            : std::span<const std::uint32_t> { };
+        for (const auto resume : continuations) {
+            leader[std::min(resume, size)] = 1U;
+        }
         blocks_.assign(size + 1U, nullptr);
         for (std::uint32_t at = 0U; at < size; ++at) {
             if (leader[at] != 0U) {
@@ -195,7 +207,19 @@ public:
         }
         arena_ = builder_.CreateLoad(ptr_, frame_field(0U), "arena");
         bindings_ = builder_.CreateLoad(ptr_, frame_field(8U), "bindings");
-        if (body_.resume_entries.empty()) {
+        if (body_.resume_entries.empty() && !continuations.empty()) {
+            // Entered at `reserved` when two-state code stopped there; an
+            // ordinary run passes 0, which is never a continuation.
+            auto* start = builder_.CreateLoad(i32_, frame_field(44U), "resume");
+            auto* targets = builder_.CreateSwitch(start,
+                blocks_[std::min(body_.entry, size)],
+                static_cast<unsigned>(continuations.size()));
+            for (const auto resume : continuations) {
+                targets->addCase(llvm::ConstantInt::get(
+                                     llvm::cast<llvm::IntegerType>(i32_), resume),
+                    blocks_[std::min(resume, size)]);
+            }
+        } else if (body_.resume_entries.empty()) {
             builder_.CreateBr(blocks_[std::min(body_.entry, size)]);
         } else {
             // A behavioral thread resumes at the instruction in `reserved`.
@@ -219,6 +243,8 @@ public:
             }
             last_unknown_ = nullptr;
             insert_unknown_ = nullptr;
+            at_ = at;
+            guarded_unknown_ = nullptr;
             emit_unknown_checks(at);
             const auto result_unknown = unknown_before(at);
             emit_instruction(at);
@@ -494,7 +520,7 @@ private:
         }
         const auto [base, high] = register_address(reg);
         Pair value { builder_.CreateLoad(i64_, base),
-            builder_.CreateLoad(i64_, high) };
+            two_state_ ? constant(0U) : builder_.CreateLoad(i64_, high) };
         cache_[reg] = value;
         return value;
     }
@@ -502,9 +528,63 @@ private:
     void store_register(const std::uint32_t reg, const Pair value)
     {
         const auto [base, high] = register_address(reg);
+        if (two_state_) {
+            // The X plane and 'U' mask stay zero in the register file; a
+            // value with either completes the instruction on the reference
+            // path. A 'U' mask comes only from a load (last_unknown_).
+            builder_.CreateStore(value.a, base);
+            llvm::Value* unknown = tracked(reg) && last_unknown_ != nullptr
+                ? last_unknown_ : constant(0U);
+            guard_known(value.b, unknown, high,
+                tracked(reg) ? register_address(body_.shadow_base + reg).first
+                             : nullptr);
+            guarded_unknown_ = unknown;
+            cache_[reg] = Pair { value.a, constant(0U) };
+            return;
+        }
         builder_.CreateStore(value.a, base);
         builder_.CreateStore(value.b, high);
         cache_[reg] = value;
+    }
+
+    /// Two-state code (see StaticKernelTemplate::two_state) assumes every
+    /// register's X plane and 'U' mask are zero. When the value just stored
+    /// has X bits `x` or 'U' bits `u`, they are stored too (to `x_address`
+    /// and `u_address`) and the template's full code continues after the
+    /// instruction, which has completed.
+    void guard_known(llvm::Value* x, llvm::Value* u, llvm::Value* x_address,
+        llvm::Value* u_address)
+    {
+        const auto zero = [](llvm::Value* value) {
+            const auto* known = llvm::dyn_cast<llvm::ConstantInt>(value);
+            return known != nullptr && known->isZero();
+        };
+        if ((zero(x) && zero(u)) || builder_.GetInsertBlock() == nullptr
+            || builder_.GetInsertBlock()->getTerminator() != nullptr) {
+            return;
+        }
+        auto* deopt = llvm::BasicBlock::Create(context_, "unknown", &function_);
+        auto* next = llvm::BasicBlock::Create(context_, "known", &function_);
+        builder_.CreateCondBr(nonzero(builder_.CreateOr(x, u)), deopt, next);
+        builder_.SetInsertPoint(deopt);
+        if (x_address != nullptr) {
+            builder_.CreateStore(x, x_address);
+        }
+        if (u_address != nullptr) {
+            builder_.CreateStore(u, u_address);
+        }
+        continue_in_full_code();
+        builder_.SetInsertPoint(next);
+    }
+
+    /// Ends two-state code: the full code continues at the next instruction.
+    void continue_in_full_code()
+    {
+        builder_.CreateStore(llvm::ConstantInt::get(i32_, continue_point()),
+            frame_field(44U));
+        builder_.CreateStore(llvm::ConstantInt::get(i32_, 4U),
+            frame_field(40U));
+        builder_.CreateBr(failure_block_);
     }
 
     [[nodiscard]] llvm::Value* binding(const std::uint32_t index,
@@ -1349,12 +1429,24 @@ private:
 
     [[nodiscard]] llvm::Value* unknown_of(const std::uint32_t reg)
     {
-        return tracked(reg) ? load_register(body_.shadow_base + reg).a
-                            : constant(0U);
+        return tracked(reg) && !two_state_
+            ? load_register(body_.shadow_base + reg).a
+            : constant(0U);
     }
 
     void set_unknown(const std::uint32_t reg, llvm::Value* value)
     {
+        if (two_state_) {
+            // The 'U' mask stays zero in the register file; store_register
+            // already checked a load's mask.
+            if (value != guarded_unknown_) {
+                guard_known(constant(0U), value, nullptr,
+                    tracked(reg)
+                        ? register_address(body_.shadow_base + reg).first
+                        : nullptr);
+            }
+            return;
+        }
         if (tracked(reg)) {
             store_register(body_.shadow_base + reg, Pair { value, constant(0U) });
         }
@@ -1369,7 +1461,8 @@ private:
     /// 'U'.
     void emit_unknown_checks(const std::uint32_t at)
     {
-        if ((mode_of(at) & detail::u_check) == 0U
+        // Two-state code holds no 'U'.
+        if (two_state_ || (mode_of(at) & detail::u_check) == 0U
             || builder_.GetInsertBlock()->getTerminator() != nullptr) {
             return;
         }
@@ -1719,6 +1812,11 @@ private:
                 { frame_, registers_, llvm::ConstantInt::get(i32_, at) });
             // The helper reads and writes registers through the pointer.
             cache_.clear();
+            if (two_state_) {
+                // A result with X or 'U' bits continues in the full code
+                // (status 4, see StaticKernel::native_generic).
+                (void)continue_point();
+            }
             check_status();
             break;
         }
@@ -2483,7 +2581,9 @@ private:
     llvm::Function& function_;
     const detail::CompiledBody& body_;
     const StaticKernelNativeHelpers& helpers_;
-    llvm::IRBuilder<> builder_;
+    // Simplifies as it builds (x | 0, x & ~0, constant branches): the cold
+    // tier runs no clean-up passes.
+    llvm::IRBuilder<llvm::InstSimplifyFolder> builder_;
     llvm::Type* i32_;
     llvm::Type* i64_;
     llvm::Type* i8_;
@@ -2491,6 +2591,22 @@ private:
     llvm::Value* frame_ { };
     llvm::Value* registers_ { };
     bool local_registers_ { };
+    /// Records the instruction after the current one as a continuation.
+    std::uint32_t continue_point()
+    {
+        if (resume_points_ != nullptr
+            && std::ranges::find(*resume_points_, at_ + 1U)
+                == resume_points_->end()) {
+            resume_points_->push_back(at_ + 1U);
+        }
+        return at_ + 1U;
+    }
+
+    /// See guard_known.
+    bool two_state_ { };
+    std::vector<std::uint32_t>* resume_points_ { };
+    std::uint32_t at_ { };
+    llvm::Value* guarded_unknown_ { };
     /// Per register: its local slot, or null when it lives in the frame.
     std::vector<llvm::Value*> local_;
     llvm::Value* arena_ { };
@@ -2646,7 +2762,8 @@ private:
             function->addParamAttr(0, llvm::Attribute::NoAlias);
             function->addFnAttr(llvm::Attribute::NoUnwind);
             FunctionEmitter emitter(*module, *function, *templates[index].body,
-                helpers, !templates[index].vhdl);
+                helpers, !templates[index].vhdl, templates[index].two_state,
+                templates[index].resume_points);
             emitter.emit();
         }
         if (std::getenv("FSIM_STATIC_KERNEL_VERIFY") != nullptr

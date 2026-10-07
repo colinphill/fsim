@@ -4,6 +4,8 @@
 #include "fsim/support/path.hpp"
 
 #include <limits>
+#include <string>
+#include <unordered_map>
 #include <system_error>
 #include <utility>
 
@@ -409,7 +411,23 @@ semantic::SourceSpanId intern_semantic_span(
   std::string normalized_physical;
   std::string_view physical = source_physical;
   if (!file) {
-    normalized_physical = normalized_source_name(source_physical);
+    // Canonicalizing costs a system call per path component (more under a
+    // symbolic link), and every span of a file repeats it: remember the
+    // result while one model is being built.
+    thread_local const semantic::Model* cached_model = nullptr;
+    thread_local std::unordered_map<std::string, std::string> normalized;
+    if (cached_model != &model) {
+      normalized.clear();
+      cached_model = &model;
+    }
+    auto found = normalized.find(std::string { source_physical });
+    if (found == normalized.end()) {
+      found = normalized
+                  .emplace(std::string { source_physical },
+                      normalized_source_name(source_physical))
+                  .first;
+    }
+    normalized_physical = found->second;
     physical = normalized_physical;
     file = model.find_source_file(physical);
     if (!file) {

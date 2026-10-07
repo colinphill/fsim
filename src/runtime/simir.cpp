@@ -636,6 +636,137 @@ bool operation_list_detail::ShareAccess::shareable(
         });
 }
 
+std::vector<OperationList::size_type>
+operation_list_detail::ShareAccess::instance_override_indices(
+    const OperationList& operations)
+{
+    std::vector<OperationList::size_type> indices;
+    indices.reserve(operations.debug_overrides_.size()
+        + operations.assert_overrides_.size()
+        + operations.container_object_overrides_.size()
+        + operations.operation_overrides().size()
+        + operations.coverage_hit_overrides_.size());
+    const auto add_overrides = [&indices](const auto& overrides) {
+        for (const auto& override : overrides) {
+            indices.push_back(override.instruction);
+        }
+    };
+    add_overrides(operations.debug_overrides_);
+    add_overrides(operations.assert_overrides_);
+    add_overrides(operations.container_object_overrides_);
+    add_overrides(operations.operation_overrides());
+    add_overrides(operations.coverage_hit_overrides_);
+    if (!operations.signal_remap_.empty()) {
+        for (OperationList::size_type index = 0; index < operations.size();
+             ++index) {
+            bool affected = false;
+            visit_operation(
+                [&](const auto& operation) {
+                    using Type = std::decay_t<decltype(operation)>;
+                    const auto is_remapped = [&](const SignalId signal_id) {
+                        return operations.signal(signal_id) != signal_id;
+                    };
+                    if constexpr (std::is_same_v<Type, ReadSignal>) {
+                        affected = is_remapped(operation.signal)
+                            || (operation.clock
+                                && is_remapped(*operation.clock))
+                            || (operation.gate
+                                && is_remapped(*operation.gate));
+                    } else if constexpr (
+                        std::is_same_v<Type, WriteBlocking>
+                        || std::is_same_v<Type, WriteUpdate>
+                        || std::is_same_v<Type, WriteProjected>
+                        || std::is_same_v<Type, WriteBlockingSlice>
+                        || std::is_same_v<Type, WriteUpdateSlice>
+                        || std::is_same_v<Type, WriteProjectedSlice>
+                        || std::is_same_v<
+                            Type, WriteUpdateDynamicPartSlice>) {
+                        affected = is_remapped(operation.signal);
+                    }
+                },
+                operations.storage()[index]);
+            if (affected) {
+                indices.push_back(index);
+            }
+        }
+    }
+    std::ranges::sort(indices);
+    indices.erase(std::ranges::unique(indices).begin(), indices.end());
+    return indices;
+}
+
+std::size_t operation_list_detail::ShareAccess::debug_scope_count(
+    const OperationList& operations) noexcept
+{
+    return operations.debug_scope_overrides_.size();
+}
+
+const InternedString& operation_list_detail::ShareAccess::debug_scope_canonical(
+    const OperationList& operations, const std::size_t index)
+{
+    return operations.debug_scope_overrides_.at(index).canonical;
+}
+
+const InternedString& operation_list_detail::ShareAccess::debug_scope_instance(
+    const OperationList& operations, const std::size_t index)
+{
+    return operations.debug_scope_overrides_.at(index).instance;
+}
+
+InternedString& operation_list_detail::ShareAccess::debug_scope_instance(
+    OperationList& operations, const std::size_t index)
+{
+    return operations.debug_scope_overrides_.at(index).instance;
+}
+
+bool operation_list_detail::ShareAccess::has_instruction_override(
+    const OperationList& operations, const OperationList::size_type index)
+{
+    const auto has = [&](const auto& overrides) {
+        return std::ranges::any_of(overrides, [&](const auto& override) {
+            return override.instruction == index;
+        });
+    };
+    return has(operations.debug_overrides_)
+        || has(operations.operation_overrides());
+}
+
+void operation_list_detail::ShareAccess::remap_debug_scope(
+    OperationList& operations, const InternedString& canonical,
+    InternedString instance)
+{
+    const auto found = std::ranges::find(operations.debug_scope_overrides_,
+        canonical, &OperationList::DebugScopeOverride::canonical);
+    if (found != operations.debug_scope_overrides_.end()) {
+        found->instance = std::move(instance);
+    } else {
+        operations.debug_scope_overrides_.push_back(
+            { canonical, std::move(instance) });
+    }
+    operations.advance_access_revision();
+}
+
+bool operation_list_detail::ShareAccess::set_debug_scopes(
+    OperationList& operations,
+    std::vector<std::pair<InternedString, InternedString>> scopes)
+{
+    std::vector<OperationList::DebugScopeOverride> overrides;
+    overrides.reserve(scopes.size());
+    for (auto& [canonical, instance] : scopes) {
+        if (canonical.empty()
+            || std::ranges::any_of(overrides,
+                [&](const OperationList::DebugScopeOverride& existing) {
+                    return existing.canonical == canonical;
+                })) {
+            return false;
+        }
+        overrides.push_back({ std::move(canonical), std::move(instance) });
+    }
+    operations.debug_scope_overrides_ = std::move(overrides);
+    operations.advance_access_revision();
+    return true;
+}
+
 template<typename SignalRecord>
 bool operation_list_detail::ShareAccess::share_impl(
     const OperationList& representative, OperationList& candidate,

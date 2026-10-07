@@ -663,7 +663,8 @@ std::string with_overrides(
 {
     constexpr std::size_t kBodyOperationsOffset = 17U;
     const auto operation_count = read_u64(body, 9U);
-    const auto end = body.size() - 8U;
+    // The body ends with its override count and debug-scope remap count.
+    const auto end = body.size() - 16U;
     assert(end > kBodyOperationsOffset);
     assert(operation_count != 0U);
     const auto encoded_operations_size = end - kBodyOperationsOffset;
@@ -678,6 +679,7 @@ std::string with_overrides(
         append_u64(result, index);
         result.append(operation_bytes);
     }
+    append_u64(result, 0U);
     return result;
 }
 

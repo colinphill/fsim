@@ -14,6 +14,11 @@ V3SUP-SQLITE-NOTICE	notice	third_party/sqlite-3.53.4/NOTICE	B188J-C02
 V3SUP-SQLITE-SBOM	sbom	third_party/sqlite-3.53.4/sqlite-3.53.4.spdx.json	B188J-C02
 V3SUP-SQLITE-PROVENANCE	provenance	third_party/sqlite-3.53.4/SOURCE_MANIFEST.txt	B188J-C02
 V3SUP-SQLITE-SOURCE	provenance	third_party/sqlite-3.53.4/sqlite-amalgamation-3530400.zip	B188J-C02
+V3SUP-MIMALLOC-LICENSE	license	third_party/mimalloc-3.5.3/LICENSE	ENGINE-V4-D6
+V3SUP-MIMALLOC-NOTICE	notice	third_party/mimalloc-3.5.3/NOTICE	ENGINE-V4-D6
+V3SUP-MIMALLOC-SBOM	sbom	third_party/mimalloc-3.5.3/mimalloc-3.5.3.spdx.json	ENGINE-V4-D6
+V3SUP-MIMALLOC-PROVENANCE	provenance	third_party/mimalloc-3.5.3/SOURCE_MANIFEST.txt	ENGINE-V4-D6
+V3SUP-MIMALLOC-SOURCE	provenance	third_party/mimalloc-3.5.3/mimalloc-3.5.3.tar.gz	ENGINE-V4-D6
 V3SUP-WINDOWS-TOOLCHAIN-LICENSE	license	third_party/fsim-toolchain-22.1.8-1/LICENSE	WINDOWS-TOOLCHAIN
 V3SUP-WINDOWS-TOOLCHAIN-NOTICE	notice	third_party/fsim-toolchain-22.1.8-1/NOTICE	WINDOWS-TOOLCHAIN
 V3SUP-WINDOWS-TOOLCHAIN-SBOM	sbom	third_party/fsim-toolchain-22.1.8-1/fsim-toolchain-22.1.8-1.spdx.json	WINDOWS-TOOLCHAIN

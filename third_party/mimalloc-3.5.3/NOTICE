@@ -1,0 +1,14 @@
+mimalloc 3.5.3
+
+Copyright (c) 2018-2025 Microsoft Corporation, Daan Leijen.
+Licensed under the MIT License; the adjacent LICENSE file is the upstream
+LICENSE file from the release archive, unmodified.
+
+Upstream project: https://github.com/microsoft/mimalloc
+Release archive:
+https://github.com/microsoft/mimalloc/archive/refs/tags/v3.5.3.tar.gz
+
+fsim compiles the unmodified src/static.c into the fsim executable as its C and
+C++ allocator. On Windows it also uses the upstream prebuilt redirection module
+(bin/mimalloc-redirect.dll and its import library) from the same archive. No
+other part of the archive is built or installed.

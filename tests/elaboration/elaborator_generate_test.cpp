@@ -347,6 +347,84 @@ endmodule
     }
 }
 
+// Each instance's constant generate drivers run as one process.
+void test_generated_constant_driver_merge()
+{
+    const auto parsed = fsim::frontend::parse_text(
+        "generated_constant_driver_merge.v",
+        R"(
+module generated_constant_slice_leaf #(
+  parameter [7:0] VALUE = 8'hA5
+) (
+  output wire [7:0] q
+);
+  genvar part;
+  generate
+    for (part = 0; part < 2; part = part + 1) begin : slices
+      assign q[part * 4 +: 4] = VALUE[part * 4 +: 4];
+    end
+  endgenerate
+endmodule
+
+module generated_constant_slice_top(
+  output wire [7:0] first_value,
+  output wire [7:0] second_value
+);
+  generated_constant_slice_leaf #(.VALUE(8'hA5)) first_leaf(
+    .q(first_value));
+  generated_constant_slice_leaf #(.VALUE(8'h3C)) second_leaf(
+    .q(second_value));
+endmodule
+)",
+        fsim::frontend::Language::Verilog2005);
+    assert(parsed.ok());
+
+    set_merge_constant_drivers(true);
+    const auto elaborated = compile_and_elaborate(
+        parsed.design, "generated_constant_slice_top");
+    set_merge_constant_drivers(false);
+    assert(elaborated.ok());
+    const std::array<std::string_view, 2U> targets {
+        "first_value", "second_value"
+    };
+    const std::array<std::string_view, 2U> expected_values {
+        "10100101", "00111100"
+    };
+    for (std::size_t index = 0U; index < targets.size(); ++index) {
+        const auto signal = elaborated.design->find_signal(targets[index]);
+        assert(signal);
+        std::size_t owners { };
+        for (const auto& process : elaborated.design->processes()) {
+            const auto drives = std::ranges::any_of(process.driver_regions,
+                [&](const auto& region) { return region.signal == *signal; });
+            if (!drives) {
+                continue;
+            }
+            ++owners;
+            assert(process.name.ends_with("_constants"));
+            assert(process.driver_regions.size() == 2U);
+            assert(process.initialize);
+            std::size_t writes { };
+            for (const auto& operation : process.operations) {
+                writes += Simir::operation_holds<Simir::WriteUpdateSlice>(
+                    operation) ? 1U : 0U;
+            }
+            assert(writes == 2U);
+            assert(Simir::operation_holds<Simir::Halt>(
+                process.operations.back()));
+        }
+        assert(owners == 1U);
+    }
+
+    auto interpreter = elaborated.design->create_interpreter();
+    assert(interpreter->run().status == fsim::runtime::RunStatus::completed);
+    for (std::size_t index = 0U; index < targets.size(); ++index) {
+        const auto signal = elaborated.design->find_signal(targets[index]);
+        assert(interpreter->signal_value(*signal).to_msb_string()
+            == expected_values[index]);
+    }
+}
+
 } // namespace
 
 void test_generate_slice_and_case_closure(
@@ -354,6 +432,7 @@ void test_generate_slice_and_case_closure(
 
 void test_generate_elaboration() {
     test_generated_verilog_constant_slice_startup();
+    test_generated_constant_driver_merge();
 auto generated_sv = fsim::frontend::parse_text(
         "generated-mixed.sv",
         R"(

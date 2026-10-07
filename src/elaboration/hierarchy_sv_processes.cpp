@@ -46,6 +46,166 @@ namespace {
 
 } // namespace
 
+namespace {
+
+/// A generated continuous assignment of a constant: it runs once at time 0
+/// and writes its one driver region from constants alone.
+[[nodiscard]] bool constant_continuous_driver(
+    const runtime::simir::ProcessProgramView& view)
+{
+    using namespace runtime::simir;
+    if (!view.static_sensitivity().empty() || !view.initialize()
+        || view.final() || view.observed() || view.reactive()
+        || view.postponed() || view.program_owner()
+        || view.driver_regions().size() != 1U
+        || view.string_register_count() != 0U
+        || view.container_register_count() != 0U
+        || !view.debug_locals().empty() || !view.debug_string_locals().empty()
+        || !view.debug_container_locals().empty()
+        || !view.static_trigger_regions().empty()
+        || view.switch_source() || view.switch_target()
+        || view.switch_control()
+        || view.scheduling_domain() != ProcessSchedulingDomain::systemverilog) {
+        return false;
+    }
+    const auto& operations = view.operations();
+    if (operations.empty()) {
+        return false;
+    }
+    const auto* const halt = operation_get_if<Halt>(
+        &operations[operations.size() - 1U]);
+    if (halt == nullptr || halt->program_exit) {
+        return false;
+    }
+    std::size_t writes { };
+    for (std::size_t index = 0U; index + 1U < operations.size(); ++index) {
+        const bool supported = visit_operation([&](const auto& value) {
+            using Type = std::decay_t<decltype(value)>;
+            if constexpr (std::is_same_v<Type, WriteUpdate>
+                || std::is_same_v<Type, WriteUpdateSlice>) {
+                ++writes;
+                return true;
+            } else {
+                return std::is_same_v<Type, DebugPoint>
+                    || std::is_same_v<Type, LoadConstant>
+                    || std::is_same_v<Type, Concatenate>
+                    || std::is_same_v<Type, Extract>
+                    || std::is_same_v<Type, Insert>
+                    || std::is_same_v<Type, CopyRegister>;
+            }
+        }, operations[index]);
+        if (!supported) {
+            return false;
+        }
+    }
+    return writes == 1U;
+}
+
+/// One process running the constant continuous drivers of a module instance
+/// in order. Each wrote its own driver region once at time 0, which the
+/// merged process does too: the values and the time-0 events are the same,
+/// and only the order among independent time-0 updates (a race) can differ.
+/// Overlapping targets (several drivers of one bit) or differing drive
+/// strengths are not merged.
+[[nodiscard]] std::optional<runtime::simir::Process> merge_constant_drivers(
+    const std::vector<runtime::simir::Process>& drivers)
+{
+    using namespace runtime::simir;
+    if (drivers.size() < 2U) {
+        return std::nullopt;
+    }
+    std::vector<std::tuple<SignalId, std::uint64_t, std::uint64_t>> targets;
+    for (const auto& driver : drivers) {
+        if (!(driver.drive_strength == drivers.front().drive_strength)
+            || driver.language_standard != drivers.front().language_standard
+            || driver.compatibility_profile
+                != drivers.front().compatibility_profile) {
+            return std::nullopt;
+        }
+        const auto& region = driver.driver_regions.front();
+        targets.emplace_back(region.signal,
+            region.whole ? 0U : region.offset,
+            region.whole ? std::numeric_limits<std::uint64_t>::max()
+                         : static_cast<std::uint64_t>(region.offset)
+                    + region.width);
+    }
+    std::ranges::sort(targets);
+    for (std::size_t index = 1U; index < targets.size(); ++index) {
+        if (std::get<0>(targets[index - 1U]) == std::get<0>(targets[index])
+            && std::get<2>(targets[index - 1U])
+                > std::get<1>(targets[index])) {
+            return std::nullopt;
+        }
+    }
+    Process merged;
+    merged.name = drivers.front().name + "_constants";
+    merged.language_standard = drivers.front().language_standard;
+    merged.compatibility_profile = drivers.front().compatibility_profile;
+    merged.drive_strength = drivers.front().drive_strength;
+    merged.scheduling_domain = ProcessSchedulingDomain::systemverilog;
+    merged.initialize = true;
+    std::vector<Operation> operations;
+    std::vector<ValueKind> kinds;
+    bool any_kinds { };
+    RegisterId base { };
+    for (const auto& driver : drivers) {
+        any_kinds = any_kinds || !driver.register_value_kinds.empty();
+    }
+    for (const auto& driver : drivers) {
+        const auto renumber = [&](RegisterId& reg) { reg += base; };
+        for (std::size_t index = 0U; index + 1U < driver.operations.size();
+             ++index) {
+            auto operation = driver.operations.expanded(index);
+            visit_operation([&](auto& value) {
+                using Type = std::decay_t<decltype(value)>;
+                if constexpr (std::is_same_v<Type, LoadConstant>) {
+                    renumber(value.destination);
+                } else if constexpr (std::is_same_v<Type, Concatenate>) {
+                    renumber(value.destination);
+                    for (auto& operand : value.operands) {
+                        renumber(operand);
+                    }
+                } else if constexpr (std::is_same_v<Type, Extract>
+                    || std::is_same_v<Type, CopyRegister>) {
+                    renumber(value.destination);
+                    renumber(value.source);
+                } else if constexpr (std::is_same_v<Type, Insert>) {
+                    renumber(value.destination);
+                    renumber(value.target);
+                    renumber(value.source);
+                } else if constexpr (std::is_same_v<Type, WriteUpdate>
+                    || std::is_same_v<Type, WriteUpdateSlice>) {
+                    renumber(value.source);
+                }
+            }, operation);
+            operations.push_back(std::move(operation));
+        }
+        if (any_kinds) {
+            for (std::size_t reg = 0U; reg < driver.register_count; ++reg) {
+                kinds.push_back(reg < driver.register_value_kinds.size()
+                        ? driver.register_value_kinds[reg]
+                        : ValueKind::logic4);
+            }
+        }
+        base += static_cast<RegisterId>(driver.register_count);
+        merged.driver_regions.push_back(driver.driver_regions.front());
+        // Expression sizing metadata, in program order.
+        for (const auto& profile : driver.expression_profiles) {
+            merged.expression_profiles.push_back(profile);
+        }
+    }
+    operations.push_back(Halt { });
+    merged.register_count = base;
+    merged.operations = OperationList { std::move(operations) };
+    if (any_kinds) {
+        merged.register_value_kinds = CopyOnWriteVector<ValueKind> {
+            std::move(kinds) };
+    }
+    return merged;
+}
+
+} // namespace
+
 bool HierarchyBuilder::lower_compiled_systemverilog_processes(
     const semantic::sv::Unit& unit,
     const semantic::SpecializedHirUnit& specialized,
@@ -281,6 +441,24 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
         design_.append_process_record(std::move(*lowered));
         append_generated_processes(lowerer);
     }
+    // Constant continuous drivers of this instance's generate blocks run as
+    // one process (merge_constant_drivers);
+    // FSIM_MERGE_CONSTANT_DRIVERS=0 keeps one process each.
+    std::vector<runtime::simir::Process> constant_drivers;
+    const auto flush_constant_drivers = [&] {
+        auto merged = merge_constant_drivers(constant_drivers);
+        if (merged) {
+            constant_drivers.clear();
+            constant_drivers.push_back(std::move(*merged));
+        }
+        for (auto& process : constant_drivers) {
+            process.id = static_cast<ProcessId>(design_.process_count());
+            canonicalize_process_operations(process);
+            specialization.processes.push_back(process.id);
+            design_.append_process_record(std::move(process));
+        }
+        constant_drivers.clear();
+    };
     for (std::size_t index = 0U;
         index < generate_occurrences.size(); ++index) {
         const auto& occurrence = generate_occurrences[index];
@@ -347,6 +525,21 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
                     compiled_source_span(
                         *compiled_, statement_source));
                 return false;
+            }
+            // Code coverage counts each statement: keep their processes.
+            if (!program_owner && merge_constant_drivers_
+                && coverage_ == nullptr) {
+                const auto view = lowered->instance
+                    ? ProcessProgramView { *lowered->common, *lowered->instance }
+                    : ProcessProgramView { *lowered->process };
+                if (constant_continuous_driver(view)) {
+                    auto process = view.materialize();
+                    process.language_standard = unit.standard;
+                    process.compatibility_profile = unit.compatibility_profile;
+                    constant_drivers.push_back(std::move(process));
+                    append_generated_processes(generated_lowerer);
+                    continue;
+                }
             }
             if (lowered->instance) {
                 auto& instance = *lowered->instance;
@@ -500,6 +693,7 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             append_generated_processes(generated_lowerer);
         }
     }
+    flush_constant_drivers();
     return true;
 }
 

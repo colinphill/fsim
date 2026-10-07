@@ -40,11 +40,14 @@ include(cmake/FsimUvmSources.cmake)
 include(cmake/FsimSystemCAccellera.cmake)
 include(cmake/FsimScv.cmake)
 include(cmake/FsimSqlite.cmake)
+include(cmake/FsimMimalloc.cmake)
 include(cmake/FsimWindowsRuntime.cmake)
 fsim_configure_windows_toolchain()
 
 option(FSIM_BUILD_TESTS "Build fsim's unit and integration tests" ${BUILD_TESTING})
 option(FSIM_BUILD_FUZZERS "Build Clang/libFuzzer targets" OFF)
+option(FSIM_MIMALLOC
+  "Allocate with the vendored mimalloc in the fsim executable" ON)
 option(
   FSIM_ENABLE_ALLOCATION_PROFILING
   "Build instrumented CLI binaries for linked global new allocation diagnostics; use a separate build from Wall"
@@ -1541,6 +1544,7 @@ if(EXISTS "${PROJECT_SOURCE_DIR}/src/main.cpp")
   add_executable(fsim src/main.cpp)
   fsim_configure_executable(fsim)
   fsim_configure_command_entrypoint(fsim)
+  fsim_use_mimalloc(fsim)
   if(DEFINED FSIM_CLI_LIBRARY)
     target_link_libraries(fsim PRIVATE ${FSIM_CLI_LIBRARY})
   else()

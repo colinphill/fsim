@@ -512,8 +512,9 @@ void Interpreter::Impl::StaticKernel::handle_deopt(const std::uint32_t member_in
     sync_compiled_registers(member_index);
 }
 
-void Interpreter::Impl::StaticKernel::execute_generic(CompiledBody& body,
-    Word* registers, const KInst& inst, const std::uint32_t member_index)
+bool Interpreter::Impl::StaticKernel::execute_generic(CompiledBody& body,
+    Word* registers, const KInst& inst, const std::uint32_t member_index,
+    const bool two_state_code)
 {
     auto& member = members_[member_index];
     const auto& operation = member.operations[inst.x];
@@ -582,10 +583,16 @@ void Interpreter::Impl::StaticKernel::execute_generic(CompiledBody& body,
             if (tracked) {
                 registers[body.shadow_base + index] = { word->unknown, 0U };
             }
+            if (two_state_code
+                && (word->value.b != 0U || word->unknown != 0U)) {
+                // Two-state code cannot continue with this value.
+                return true;
+            }
         } else {
             body.wide_registers[index] = value;
         }
     }
+    return false;
 }
 
 void Interpreter::Impl::StaticKernel::native_generic(
@@ -596,8 +603,13 @@ void Interpreter::Impl::StaticKernel::native_generic(
     try {
         const auto& program = *static_cast<const CompiledBody*>(frame->program);
         kernel.running_position_ = frame->position;
-        kernel.execute_generic(*static_cast<CompiledBody*>(frame->instance),
-            registers, program.code[at], frame->member);
+        if (kernel.execute_generic(*static_cast<CompiledBody*>(frame->instance),
+                registers, program.code[at], frame->member,
+                kernel.two_state_running_)) {
+            // The template's full code continues after the instruction.
+            frame->reserved = at + 1U;
+            frame->status = 4U;
+        }
     } catch (const KernelDeopt& deopt) {
         kernel.pending_deopt_ = deopt;
         frame->status = 2U;

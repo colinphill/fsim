@@ -23,6 +23,7 @@
 #include "simir_container_helpers.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cstring>
 #include <unordered_set>
@@ -475,6 +476,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     for (const auto& member : members_) {
         member_process_.push_back(member.process);
     }
+    fast_runs_.assign(members_.size(), FastRun { });
     for (const auto& region : spec.writer_regions) {
         if (region.signal < signal_count
             && slot_of_signal_[region.signal] != no_slot) {
@@ -1198,7 +1200,15 @@ void Interpreter::Impl::StaticKernel::store_slot_word(
     const std::uint32_t width, const std::uint64_t unknown)
 {
     const auto& slot = slots_[slot_index];
-    auto* base = arena_.data() + slot.offset;
+    store_planes_word(arena_.data() + slot.offset, slot.words, slot.planes,
+        value, offset, width, unknown);
+}
+
+void Interpreter::Impl::StaticKernel::store_planes_word(std::uint64_t* const base,
+    const std::uint32_t words, const std::uint32_t planes, const Word value,
+    const std::uint32_t offset, const std::uint32_t width,
+    const std::uint64_t unknown)
+{
     const bool narrow = offset + width <= 64U;
     const auto field = kernel_word::mask(width) << offset;
     const auto put = [&](std::uint64_t* plane, const std::uint64_t bits) {
@@ -1210,16 +1220,16 @@ void Interpreter::Impl::StaticKernel::store_slot_word(
         copy_bits(plane, offset, std::span<const std::uint64_t> { words, 1U },
             width);
     };
-    if (slot.planes == 4U) {
-        const auto planes = kernel_word::logic9_planes(value, width, unknown);
-        put(base, planes.p0);
-        put(base + slot.words, planes.p1);
-        put(base + 2U * slot.words, planes.p2);
-        put(base + 3U * slot.words, planes.p3);
+    if (planes == 4U) {
+        const auto codes = kernel_word::logic9_planes(value, width, unknown);
+        put(base, codes.p0);
+        put(base + words, codes.p1);
+        put(base + 2U * words, codes.p2);
+        put(base + 3U * words, codes.p3);
         return;
     }
     put(base, value.a);
-    put(base + slot.words, value.b);
+    put(base + words, value.b);
 }
 
 void Interpreter::Impl::StaticKernel::commit_round()
@@ -1227,14 +1237,27 @@ void Interpreter::Impl::StaticKernel::commit_round()
     // VHDL update phase: apply this round's assignments in program order
     // (the last one to an element wins), then report each signal whose
     // value differs from the start of the round exactly once.
-    const auto touch = [&](const std::uint32_t slot_index) {
-        auto& slot = slots_[slot_index];
+    if (commit_slots_.size() != slots_.size()) {
+        commit_slots_.assign(slots_.size(), CommitSlot { });
+        for (std::size_t index = 0U; index < slots_.size(); ++index) {
+            auto& commit = commit_slots_[index];
+            commit.offset = slots_[index].offset;
+            commit.words = slots_[index].words;
+            commit.planes = slots_[index].planes;
+            commit.single_writer = slots_[index].single_writer;
+        }
+    }
+    const auto touch = [&](const std::uint32_t slot_index) -> CommitSlot& {
+        auto& slot = commit_slots_[slot_index];
         if (!slot.touched) {
             slot.touched = true;
             const auto words = static_cast<std::size_t>(slot.planes) * slot.words;
             if (words <= slot.small_before.size()) {
-                std::memcpy(slot.small_before.data(), arena_.data() + slot.offset,
-                    words * sizeof(std::uint64_t));
+                // A few words: a loop, not a library call.
+                const auto* current = arena_.data() + slot.offset;
+                for (std::size_t word = 0U; word < words; ++word) {
+                    slot.small_before[word] = current[word];
+                }
             } else {
                 const auto at = round_before_.size();
                 slot.before = static_cast<std::uint32_t>(at);
@@ -1244,15 +1267,19 @@ void Interpreter::Impl::StaticKernel::commit_round()
             }
             touched_.push_back(slot_index);
         }
+        return slot;
     };
     const auto count = writes_.count;
     for (std::uint32_t index = 0U; index < count; ++index) {
         const auto& item = writes_.data[index];
         if (item.kind == 0U) {
-            touch(item.slot);
-            slots_[item.slot].last_writer = member_process_[item.member];
-            store_slot_word(item.slot, { item.a, item.b }, item.offset,
-                item.width, item.unknown);
+            const auto& slot = touch(item.slot);
+            if (!slot.single_writer) {
+                slots_[item.slot].last_writer = member_process_[item.member];
+            }
+            store_planes_word(arena_.data() + slot.offset, slot.words,
+                slot.planes, { item.a, item.b }, item.offset, item.width,
+                item.unknown);
             continue;
         }
         auto& entry = pending_generic_[item.member];
@@ -1279,17 +1306,27 @@ void Interpreter::Impl::StaticKernel::commit_round()
     writes_.count = 0U;
     pending_generic_.clear();
     for (const auto slot_index : touched_) {
-        auto& slot = slots_[slot_index];
+        auto& slot = commit_slots_[slot_index];
         slot.touched = false;
         const auto words = static_cast<std::size_t>(slot.planes) * slot.words;
         const auto* before = words <= slot.small_before.size()
             ? slot.small_before.data() : round_before_.data() + slot.before;
-        if (!std::equal(before, before + words, arena_.begin() + slot.offset)) {
+        const auto* current = arena_.data() + slot.offset;
+        bool same = true;
+        if (words <= slot.small_before.size()) {
+            for (std::size_t word = 0U; word < words; ++word) {
+                same = same && before[word] == current[word];
+            }
+        } else {
+            same = std::equal(before, before + words, current);
+        }
+        if (!same) {
             if (trace_) {
                 std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now()
                           << " commit "
-                          << impl_.get_signal_cold(slot.signal).name << " = "
-                          << slot_value(slot_index).to_msb_string() << '\n';
+                          << impl_.get_signal_cold(slots_[slot_index].signal).name
+                          << " = " << slot_value(slot_index).to_msb_string()
+                          << '\n';
             }
             slot_changed(slot_index, 0U, before);
         }
@@ -1816,6 +1853,40 @@ void Interpreter::Impl::StaticKernel::schedule(const std::uint32_t member)
 
 void Interpreter::Impl::StaticKernel::run(const std::uint32_t member_index)
 {
+    if (const auto& fast = fast_runs_[member_index]; fast.entry != nullptr) {
+        StaticKernelNativeFrame frame;
+        frame.arena = arena_.data();
+        frame.bindings = fast.bindings;
+        frame.kernel = this;
+        frame.program = fast.program;
+        frame.instance = fast.body;
+        frame.writes = &writes_;
+        frame.containers = container_info_.data();
+        frame.member = member_index;
+        frame.position = 0U;
+        frame.status = 0U;
+        frame.reserved = 0U;
+        two_state_running_ = fast.two_state;
+        const auto status = fast.entry(&frame, fast.body->registers.data());
+        two_state_running_ = false;
+        if (fast.two_state) {
+            ++fast_runs_[member_index].two_state_runs;
+        }
+        if (status == 0U && frame.status == 0U) {
+            return;
+        }
+        auto& member = members_[member_index];
+        finish_native(member.native, *member.compiled, member_index, frame,
+            status, false);
+        refresh_fast_run(member_index);
+        return;
+    }
+    run_member(member_index);
+    refresh_fast_run(member_index);
+}
+
+void Interpreter::Impl::StaticKernel::run_member(const std::uint32_t member_index)
+{
     auto& member = members_[member_index];
     if (trace_) {
         std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now()
@@ -2055,6 +2126,9 @@ void Interpreter::Impl::StaticKernel::sync_compiled_registers(
         }
     }
     member.generic_mode = false;
+    if (member.native.two_state) {
+        member.registers_known = registers_known(body);
+    }
 }
 
 void Interpreter::Impl::StaticKernel::run_generic(const std::uint32_t member_index)
@@ -3162,9 +3236,9 @@ void Interpreter::Impl::StaticKernel::activate_mixed()
             ready_threads_.push_back(thread);
         }
         deferred_threads_.clear();
-        auto deferred = std::move(deferred_targets_);
+        deferred_buffer_.swap(deferred_targets_);
         deferred_targets_.clear();
-        for (const auto& target : deferred) {
+        for (const auto& target : deferred_buffer_) {
             if ((target.id & partition_tag) == 0U) {
                 member_schedule_[target.id].deferred = false;
                 schedule(target.id);
@@ -3172,11 +3246,11 @@ void Interpreter::Impl::StaticKernel::activate_mixed()
                 schedule_target(target);
             }
         }
-        auto round = std::move(next_round_);
+        round_.swap(next_round_);
         next_round_.clear();
-        std::ranges::sort(round);
+        sort_round();
         swap_write_queues();
-        for (const auto member : round) {
+        for (const auto member : round_) {
             member_schedule_[member].round = false;
             run(member);
         }
@@ -3196,6 +3270,32 @@ void Interpreter::Impl::StaticKernel::activate_mixed()
                 || !deferred_threads_.empty())) {
             yield_requested_ = true;
             break;
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::sort_round()
+{
+    // Members run in index order. A round holds each member once, so a large
+    // one sorts through a bitmap of member indices instead of comparisons.
+    if (round_.size() <= 32U) {
+        std::ranges::sort(round_);
+        return;
+    }
+    round_bits_.resize((members_.size() + 63U) / 64U);
+    std::uint32_t first = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t last = 0U;
+    for (const auto member : round_) {
+        round_bits_[member / 64U] |= std::uint64_t { 1 } << (member % 64U);
+        first = std::min(first, member / 64U);
+        last = std::max(last, member / 64U);
+    }
+    round_.clear();
+    for (auto word = first; word <= last; ++word) {
+        for (auto bits = std::exchange(round_bits_[word], 0U); bits != 0U;
+             bits &= bits - 1U) {
+            round_.push_back(word * 64U
+                + static_cast<std::uint32_t>(std::countr_zero(bits)));
         }
     }
 }

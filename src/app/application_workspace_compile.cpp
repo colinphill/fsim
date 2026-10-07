@@ -390,11 +390,17 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
     auto checked = release_compiled_project(std::move(*checked_workspace));
     checked_workspace.reset();
     const auto supporting = supporting_libraries(checked);
+    std::vector<semantic::CompiledObjectSelection> selections;
+    selections.reserve(groups->size());
+    for (const auto& group : *groups) {
+        selections.push_back({ group.units, group.classes, group.primitives });
+    }
+    auto projections = semantic::extract_compiled_object_set(checked, selections, supporting);
     std::vector<workspace::ArtifactRecord> records;
     records.reserve(groups->size());
-    for (const auto& group : *groups) {
-        auto projection = semantic::extract_compiled_objects(checked, group.units,
-            group.classes, group.primitives, supporting);
+    for (std::size_t group_index = 0; group_index < groups->size(); ++group_index) {
+        const auto& group = (*groups)[group_index];
+        auto& projection = projections[group_index];
         if (!projection.ok()) {
             workspace_error(diagnostics, "cannot select compiled object: " + projection.error);
             return 1;

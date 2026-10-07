@@ -207,7 +207,8 @@ const std::vector<std::string> internal_paths {
     if (kernel) {
         const auto plan = project.design.plan_static_kernel();
         require(!plan.disabled, "the fixture must be eligible for the kernel");
-        require(plan.members > 100U && plan.owned_signals > 20U
+        // Constant drivers merge into one process per instance.
+        require(plan.members > 60U && plan.owned_signals > 20U
                 && plan.owned_containers != 0U,
             "the kernel must own the DUT, its memory and its arrays");
     }

@@ -22,15 +22,136 @@ namespace kw = kernel_word;
 void Interpreter::Impl::StaticKernel::run_compiled(const std::uint32_t member_index)
 {
     auto& member = members_[member_index];
-    if (member.native.entry != nullptr) {
+    if (member.native.entry == nullptr
+        && member.native.lazy_template != no_slot) {
+        note_lazy_run(member.native.lazy_template);
+    }
+    if (member.native.entry != nullptr
+        && (!member.native.two_state
+            || (member.registers_known && !member.two_state_off))) {
         run_native(member.native, *member.compiled, member_index);
         return;
     }
-    execute(*member.compiled, member_index);
+    if (member.native.entry == nullptr || !member.native.two_state) {
+        execute(*member.compiled, member_index);
+        return;
+    }
+    // A two-state member with X or 'U' values: full-semantics code once
+    // the member keeps needing it, the interpreter until then.
+    if (member.native.full_entry == nullptr
+        && (member.two_state_off || ++member.unknown_runs >= 64U)) {
+        compile_full_template(member.native.full_template);
+    }
+    if (member.native.full_entry != nullptr) {
+        run_native(member.native, *member.compiled, member_index, true);
+    } else {
+        execute(*member.compiled, member_index);
+    }
+    if (!member.two_state_off) {
+        member.registers_known = registers_known(*member.compiled);
+        if (member.registers_known) {
+            member.unknown_runs = 0U;
+        }
+    }
+}
+
+void Interpreter::Impl::StaticKernel::compile_full_template(
+    const std::uint32_t full_template)
+{
+    if (full_template == no_slot) {
+        return;
+    }
+    auto& full = full_templates_[full_template];
+    if (full.runs != 0U) {
+        return;
+    }
+    full.runs = 1U;
+    const std::array batch { full.code };
+    const auto entries = codegen_->compile(batch, native_helpers_);
+    if (entries.empty() || entries.front() == nullptr) {
+        return;
+    }
+    for (auto* unit : full.units) {
+        unit->full_entry = entries.front();
+    }
+}
+
+bool Interpreter::Impl::StaticKernel::registers_known(
+    CompiledBody& body) noexcept
+{
+    // A register an activation writes before reading holds nothing for the
+    // next one: clear its X plane and 'U' mask instead of checking them.
+    const auto live = [&](const std::size_t reg) {
+        return body.live_at_entry.empty()
+            || (reg / 64U < body.live_at_entry.size()
+                && (body.live_at_entry[reg / 64U] >> (reg % 64U) & 1U) != 0U);
+    };
+    const auto registers = body.shadow_base != 0U
+        ? std::min<std::size_t>(body.shadow_base, body.registers.size())
+        : body.registers.size();
+    bool known = true;
+    for (std::size_t reg = 0U; reg < registers; ++reg) {
+        auto& word = body.registers[reg];
+        const bool tracked = body.shadow_base != 0U
+            && reg < body.tracked.size() && body.tracked[reg] != 0U;
+        auto* unknown = tracked ? &body.registers[body.shadow_base + reg].a
+                                : nullptr;
+        if (word.b == 0U && (unknown == nullptr || *unknown == 0U)) {
+            continue;
+        }
+        if (live(reg)) {
+            known = false;
+            continue;
+        }
+        word.b = 0U;
+        if (unknown != nullptr) {
+            *unknown = 0U;
+        }
+    }
+    for (std::size_t reg = registers; reg < body.registers.size(); ++reg) {
+        known = known && body.registers[reg].b == 0U;
+    }
+    return known;
+}
+
+void Interpreter::Impl::StaticKernel::note_lazy_run(
+    const std::uint32_t lazy_template)
+{
+    auto& lazy = lazy_templates_[lazy_template];
+    if (++lazy.runs == lazy_threshold_) {
+        lazy_pending_.push_back(lazy_template);
+    }
+    // Compile in batches; a waiting template that keeps running does not
+    // wait for the batch to fill.
+    if (!lazy_pending_.empty()
+        && (lazy_pending_.size() >= 32U
+            || lazy.runs >= 4U * lazy_threshold_)) {
+        compile_lazy_templates();
+    }
+}
+
+void Interpreter::Impl::StaticKernel::compile_lazy_templates()
+{
+    std::vector<StaticKernelTemplate> batch;
+    batch.reserve(lazy_pending_.size());
+    for (const auto index : lazy_pending_) {
+        batch.push_back(lazy_templates_[index].code);
+    }
+    const auto entries = codegen_->compile(batch, native_helpers_);
+    for (std::size_t at = 0U; at < entries.size(); ++at) {
+        if (entries[at] == nullptr) {
+            continue;
+        }
+        for (auto* unit : lazy_templates_[lazy_pending_[at]].units) {
+            unit->entry = entries[at];
+            ++native_units_;
+        }
+    }
+    lazy_pending_.clear();
 }
 
 void Interpreter::Impl::StaticKernel::run_native(NativeUnit& unit,
-    CompiledBody& body, const std::uint32_t member)
+    CompiledBody& body, const std::uint32_t member, const bool full)
 {
     profile_native_calls_[4] += profile_ ? 1U : 0U;
     if (profile_) {
@@ -52,7 +173,68 @@ void Interpreter::Impl::StaticKernel::run_native(NativeUnit& unit,
     // reach a suspension, whose operation index comes back in `reserved`.
     frame.reserved = behavioral ? behavioral_entry_ : 0U;
     profile_operations_ += profile_ ? body.code.size() : 0U;
-    const auto status = unit.entry(&frame, body.registers.data());
+    const bool two_state = unit.two_state && !full;
+    two_state_running_ = two_state;
+    const auto status = (full ? unit.full_entry : unit.entry)(
+        &frame, body.registers.data());
+    two_state_running_ = false;
+    if (two_state) {
+        ++fast_runs_[member].two_state_runs;
+    }
+    if (status != 0U || frame.status != 0U) {
+        finish_native(unit, body, member, frame, status, full);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::refresh_fast_run(
+    const std::uint32_t member_index)
+{
+    auto& fast = fast_runs_[member_index];
+    const auto& member = members_[member_index];
+    const auto& unit = member.native;
+    const bool eligible = !trace_ && !profile_ && !verify_ && member.compiled
+        && !member.fresh && !member.generic_mode
+        && member.kind != StaticKernelMemberKind::behavioral
+        && member.partition == no_slot && unit.entry != nullptr
+        && member.compiled->resume_entries.empty()
+        && (!unit.two_state
+            || (member.registers_known && !member.two_state_off));
+    fast.entry = eligible ? unit.entry : nullptr;
+    fast.bindings = unit.bindings.data();
+    fast.program = unit.program;
+    fast.body = eligible ? const_cast<CompiledBody*>(&*member.compiled) : nullptr;
+    fast.two_state = unit.two_state;
+}
+
+void Interpreter::Impl::StaticKernel::finish_native(NativeUnit& unit,
+    CompiledBody& body, const std::uint32_t member,
+    StaticKernelNativeFrame& frame, std::uint32_t status, const bool full)
+{
+    const bool behavioral = !body.resume_entries.empty();
+    const bool two_state = unit.two_state && !full;
+    bool continued = false;
+    if (two_state) {
+        auto& state = members_[member];
+        if (frame.status == 4U) {
+            // An X or 'U' value: the full code continues at `reserved`.
+            if (unit.full_entry == nullptr) {
+                compile_full_template(unit.full_template);
+            }
+            if (unit.full_entry == nullptr) {
+                fail(member, members_[member].body_begin,
+                    "static kernel full code could not be compiled");
+            }
+            // Mostly X or 'U' inputs: two-state code only adds detours.
+            if (++state.two_state_deopts >= 16U
+                && 8U * state.two_state_deopts
+                    >= fast_runs_[member].two_state_runs) {
+                state.two_state_off = true;
+            }
+            frame.status = 0U;
+            status = unit.full_entry(&frame, body.registers.data());
+            continued = true;
+        }
+    }
     if (frame.status == 2U && pending_deopt_) {
         if (behavioral) {
             return;
@@ -60,7 +242,13 @@ void Interpreter::Impl::StaticKernel::run_native(NativeUnit& unit,
         const auto deopt = *pending_deopt_;
         pending_deopt_.reset();
         handle_deopt(frame.member, body, deopt);
+        if (unit.two_state) {
+            members_[member].registers_known = registers_known(body);
+        }
         return;
+    }
+    if (continued) {
+        members_[member].registers_known = registers_known(body);
     }
     if (behavioral && status == 3U && frame.status == 0U) {
         behavioral_suspended_ = frame.reserved;
@@ -472,6 +660,20 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
     const std::size_t hot_threshold = threshold_text != nullptr
         ? static_cast<std::size_t>(std::strtoull(threshold_text, nullptr, 10))
         : 32768U;
+    // VHDL templates run two-state code while their registers hold known
+    // values (FSIM_STATIC_KERNEL_TWO_STATE=0 keeps the full code). A literal
+    // with X or 'U' bits would leave it on every run.
+    const auto unknown_constant = [](const CompiledBody& body) {
+        return std::ranges::any_of(body.code, [](const KInst& inst) {
+            return inst.op == KOp::constant && inst.sub == 0U
+                && (inst.imm_b != 0U
+                    || constant_unknown(inst.offset, inst.aux) != 0U);
+        });
+    };
+    static const bool two_state = [] {
+        const char* text = std::getenv("FSIM_STATIC_KERNEL_TWO_STATE");
+        return text == nullptr || std::string_view { text } != "0";
+    }();
     for (std::size_t index = 0U; index < templates_.size(); ++index) {
         // Instances times size estimates how much run time a template
         // carries; only the heaviest get the slower optimizing backend.
@@ -481,7 +683,17 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
                 size >= 64U && template_units[index] * size >= hot_threshold
                     ? (template_partition[index] != 0U ? 2U : 1U)
                     : 0U),
-            template_vhdl[index] != 0U });
+            template_vhdl[index] != 0U,
+            two_state && template_vhdl[index] != 0U
+                && templates_[index]->shadow_base != 0U
+                && templates_[index]->resume_entries.empty()
+                && !unknown_constant(*templates_[index]) });
+    }
+    continuations_.assign(templates.size(), { });
+    for (std::size_t index = 0U; index < templates.size(); ++index) {
+        if (templates[index].two_state) {
+            templates[index].resume_points = &continuations_[index];
+        }
     }
     StaticKernelNativeHelpers helpers;
     helpers.evaluate = &StaticKernel::native_evaluate;
@@ -519,12 +731,61 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
                       << " example=" << example[index] << '\n';
         }
     }
-    const auto entries = codegen.compile(templates, helpers);
+    // Cold member templates that run rarely (or only at start) would cost
+    // more to compile than to interpret: they are compiled once they have
+    // run FSIM_STATIC_KERNEL_LAZY_RUNS times (0 compiles everything now).
+    static const std::uint32_t lazy_threshold = [] {
+        const char* text = std::getenv("FSIM_STATIC_KERNEL_LAZY_RUNS");
+        return text != nullptr
+            ? static_cast<std::uint32_t>(std::strtoul(text, nullptr, 10))
+            : 1024U;
+    }();
+    lazy_threshold_ = lazy_threshold;
+    native_helpers_ = helpers;
+    std::vector<StaticKernelTemplate> eager;
+    std::vector<std::size_t> eager_of;
+    std::vector<std::uint32_t> lazy_of(templates.size(), no_slot);
+    for (std::size_t index = 0U; index < templates.size(); ++index) {
+        if (lazy_threshold != 0U && templates[index].tier == 0U
+            && template_partition[index] == 0U
+            && templates_[index]->resume_entries.empty()) {
+            lazy_of[index] = static_cast<std::uint32_t>(lazy_templates_.size());
+            lazy_templates_.push_back({ templates[index], { }, 0U });
+            continue;
+        }
+        eager_of.push_back(index);
+        eager.push_back(templates[index]);
+    }
+    std::vector<StaticKernelNativeEntry> entries(templates.size(), nullptr);
+    if (!eager.empty()) {
+        const auto compiled = codegen.compile(eager, helpers);
+        for (std::size_t at = 0U; at < compiled.size(); ++at) {
+            entries[eager_of[at]] = compiled[at];
+        }
+    }
+    std::vector<std::uint32_t> full_of(templates.size(), no_slot);
+    for (std::size_t index = 0U; index < templates.size(); ++index) {
+        if (templates[index].two_state) {
+            full_of[index] = static_cast<std::uint32_t>(full_templates_.size());
+            auto code = templates[index];
+            code.two_state = false;
+            full_templates_.push_back({ code, { }, 0U });
+        }
+    }
+
     for (std::size_t unit = 0U; unit < units.size(); ++unit) {
         const auto index = template_of_unit[unit];
-        if (index < entries.size() && entries[index] != nullptr) {
+        units[unit].native->two_state = templates[index].two_state;
+        if (full_of[index] != no_slot) {
+            units[unit].native->full_template = full_of[index];
+            full_templates_[full_of[index]].units.push_back(units[unit].native);
+        }
+        if (entries[index] != nullptr) {
             units[unit].native->entry = entries[index];
             ++native_units_;
+        } else if (lazy_of[index] != no_slot) {
+            units[unit].native->lazy_template = lazy_of[index];
+            lazy_templates_[lazy_of[index]].units.push_back(units[unit].native);
         }
     }
 }

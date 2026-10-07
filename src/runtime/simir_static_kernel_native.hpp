@@ -148,6 +148,15 @@ struct StaticKernelTemplate {
     /// reference evaluator from the register file, so every register write
     /// must reach it.
     bool vhdl { };
+    /// VHDL template compiled for known values only: every register's X
+    /// plane and 'U' mask must be zero when it starts (the kernel runs it
+    /// only then). An instruction whose result has X or 'U' bits stores
+    /// them and returns 1 with frame status 4 and the next instruction in
+    /// `reserved`; the full code continues there.
+    bool two_state { };
+    /// Two-state code appends the instructions it may continue at; the full
+    /// code of the same template accepts them as entries (in `reserved`).
+    std::vector<std::uint32_t>* resume_points { };
 };
 
 class StaticKernelCodegen {

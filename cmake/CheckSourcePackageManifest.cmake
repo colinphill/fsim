@@ -91,7 +91,8 @@ foreach(FSIM_GENERATED IN ITEMS
 endforeach()
 foreach(FSIM_OWNED IN ITEMS
     docs/workspace-mode.md src/app/application_workspace_store.cpp
-    third_party/sqlite-3.53.4/sqlite-amalgamation-3530400.zip)
+    third_party/sqlite-3.53.4/sqlite-amalgamation-3530400.zip
+    third_party/mimalloc-3.5.3/mimalloc-3.5.3.tar.gz)
   fsim_source_package_is_excluded("${FSIM_OWNED}" FSIM_EXCLUDED)
   if(FSIM_EXCLUDED)
     message(FATAL_ERROR "source-package policy excludes workspace source: ${FSIM_OWNED}")
@@ -151,6 +152,7 @@ foreach(FSIM_REQUIRED IN ITEMS
     packaging/targets/windows-llvm-mingw-llvm22.txt
     packaging/targets/windows-llvm-mingw-no-llvm.txt
     cmake/FsimSqlite.cmake
+    cmake/FsimMimalloc.cmake
     docs/workspace-mode.md
     examples/vertical_slice/README.md
     examples/vertical_slice/counter.vhd
@@ -181,7 +183,13 @@ foreach(FSIM_REQUIRED IN ITEMS
     third_party/sqlite-3.53.4/README.md
     third_party/sqlite-3.53.4/SOURCE_MANIFEST.txt
     third_party/sqlite-3.53.4/sqlite-3.53.4.spdx.json
-    third_party/sqlite-3.53.4/sqlite-amalgamation-3530400.zip)
+    third_party/sqlite-3.53.4/sqlite-amalgamation-3530400.zip
+    third_party/mimalloc-3.5.3/LICENSE
+    third_party/mimalloc-3.5.3/NOTICE
+    third_party/mimalloc-3.5.3/README.md
+    third_party/mimalloc-3.5.3/SOURCE_MANIFEST.txt
+    third_party/mimalloc-3.5.3/mimalloc-3.5.3.spdx.json
+    third_party/mimalloc-3.5.3/mimalloc-3.5.3.tar.gz)
   list(FIND FSIM_MANIFEST_FILES "${FSIM_REQUIRED}" FSIM_REQUIRED_INDEX)
   if(FSIM_REQUIRED_INDEX EQUAL -1)
     message(FATAL_ERROR

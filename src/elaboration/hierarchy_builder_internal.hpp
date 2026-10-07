@@ -1145,7 +1145,17 @@ private:
         // Branch-selected declaration identities distinguish otherwise
         // matching generated occurrences with different selected bodies.
         std::vector<semantic::DeclarationId> selected_generates;
+        // Exact entries match only an equal specialization overlay, which
+        // determines the lowering completely, so they admit any statement
+        // or process whose operations remap.
+        bool exact { };
     };
+    // concurrent_process_templates_ positions by unit, statement, process
+    // and generate-relative discriminator.
+    std::map<std::tuple<std::uint32_t, std::uint32_t, std::uint32_t,
+                 std::string>,
+        std::vector<std::size_t>>
+        concurrent_process_template_index_;
 
     struct SystemVerilogConcurrentProcessTemplate {
         semantic::SpecializedHirOverlay overlay;
@@ -1538,6 +1548,26 @@ private:
     OperationList::Storage operation_scratch_;
     std::vector<ConcurrentProcessTemplate> concurrent_process_templates_;
     bool lowering_census_enabled_ { };
+    bool merge_constant_drivers_ { true };
+    // VHDL validation depends only on the unit, its entity and the
+    // specialization actuals. Combinations that validated without any
+    // diagnostic skip validation when another instance repeats them.
+    struct CleanVhdlValidation {
+        const semantic::vhdl::Unit* entity { };
+        std::vector<semantic::SpecializedHirActualIdentity> actuals;
+        // Type validation alone (interface step) or the full declaration set.
+        bool declarations { };
+    };
+    [[nodiscard]] bool clean_vhdl_validation(semantic::UnitId unit,
+        const semantic::vhdl::Unit* entity,
+        const std::vector<semantic::SpecializedHirActualIdentity>& actuals,
+        bool declarations) const;
+    void record_clean_vhdl_validation(semantic::UnitId unit,
+        const semantic::vhdl::Unit* entity,
+        const std::vector<semantic::SpecializedHirActualIdentity>& actuals,
+        bool declarations);
+    std::unordered_map<std::uint32_t, std::vector<CleanVhdlValidation>>
+        clean_vhdl_validations_;
     std::size_t vhdl_process_lower_requests_ { };
     std::size_t vhdl_process_template_occurrences_ { };
     std::size_t vhdl_process_template_hits_ { };
@@ -1571,10 +1601,13 @@ private:
     std::size_t concurrent_template_hits_ { };
     std::size_t concurrent_template_rejections_ { };
     std::uint64_t concurrent_template_lower_cpu_ns_ { };
+    /// The last element is the overlay class: only templates lowered in the
+    /// same overlay class can be replayed, so lookups never scan the others.
     using SystemVerilogConcurrentProcessTemplateKey = std::tuple<
         semantic::UnitId,
         semantic::StatementId,
-        frontend::Language>;
+        frontend::Language,
+        std::uint32_t>;
     std::map<SystemVerilogConcurrentProcessTemplateKey,
         std::vector<SystemVerilogConcurrentProcessTemplate>>
         systemverilog_concurrent_process_templates_;

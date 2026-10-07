@@ -145,6 +145,14 @@ private:
         StaticKernelNativeEntry entry { };
         const CompiledBody* program { };
         std::vector<std::uint32_t> bindings;
+        /// A lazily compiled template (lazy_templates_) until it has code.
+        std::uint32_t lazy_template { static_kernel_detail::no_slot };
+        /// The code is two-state (StaticKernelTemplate::two_state).
+        bool two_state { };
+        /// Full-semantics code of a two-state template, compiled once one of
+        /// its members needs it (full_templates_).
+        StaticKernelNativeEntry full_entry { };
+        std::uint32_t full_template { static_kernel_detail::no_slot };
     };
 
     struct Member {
@@ -180,6 +188,15 @@ private:
         std::size_t frame_bytes { };
         std::optional<CompiledBody> compiled;
         NativeUnit native;
+        /// Every register's X plane and 'U' mask is zero, so two-state code
+        /// may run; rechecked after any other run.
+        bool registers_known { };
+        /// Handovers to full code (FastRun::two_state_runs counts the runs),
+        /// and runs since the registers were last known; a member that keeps
+        /// meeting X or 'U' values stops running two-state code.
+        std::uint32_t two_state_deopts { };
+        std::uint32_t unknown_runs { };
+        bool two_state_off { };
         std::uint32_t partition_key { static_kernel_detail::no_slot };
         std::uint32_t partition { static_kernel_detail::no_slot };
         std::uint32_t position { };
@@ -253,13 +270,6 @@ private:
         /// No reader, output or edge needs to hear about writes: every reader
         /// runs later in the writers' own partition pass.
         bool silent { };
-        /// VHDL delta mode: written in the current round; `before` indexes
-        /// the round's saved prior value.
-        bool touched { };
-        std::uint32_t before { };
-        /// The round's before-image when it fits (planes * words <= 4);
-        /// larger slots keep it in round_before_.
-        std::array<std::uint64_t, 4> small_before { };
         ProcessId last_writer { };
         /// Every writer is one process, so last_writer never changes.
         bool single_writer { };
@@ -381,6 +391,9 @@ private:
         InstructionIndex instruction);
     /// Stores a Logic4 word into any slot (Logic9 slots get its codes, with
     /// 'U' for the `unknown` elements; Logic4 slots read those as X).
+    void store_planes_word(std::uint64_t* base, std::uint32_t words,
+        std::uint32_t planes, Word value, std::uint32_t offset,
+        std::uint32_t width, std::uint64_t unknown);
     void store_slot_word(std::uint32_t slot, Word value, std::uint32_t offset,
         std::uint32_t width, std::uint64_t unknown = 0U);
     /// VHDL delta mode: compiled execution met an unrepresentable value;
@@ -436,14 +449,17 @@ private:
     void build_schedule_targets();
     [[nodiscard]] bool target_pending(std::uint32_t id) const;
     void run(std::uint32_t member);
+    void run_member(std::uint32_t member);
     void run_generic(std::uint32_t member);
     [[nodiscard]] std::uint32_t step_generic(std::uint32_t member,
         std::uint32_t pc);
     void run_compiled(std::uint32_t member);
     void execute(CompiledBody& body, std::uint32_t member);
     void execute_body(CompiledBody& body, std::uint32_t member);
-    void execute_generic(CompiledBody& body, Word* registers,
-        const static_kernel_detail::KInst& inst, std::uint32_t member);
+    /// Returns whether a two-state caller got a result with X or U bits.
+    bool execute_generic(CompiledBody& body, Word* registers,
+        const static_kernel_detail::KInst& inst, std::uint32_t member,
+        bool two_state_code = false);
     static void native_generic(StaticKernelNativeFrame* frame,
         Word* registers, std::uint32_t at);
     [[nodiscard]] Word evaluate_slow(const CompiledBody& body,
@@ -458,8 +474,36 @@ private:
     void build_partitions(
         const std::vector<std::vector<std::uint32_t>>& successors);
     void build_native(StaticKernelCodegen& codegen);
+    /// Whether every register's X plane and 'U' mask is zero (clearing them
+    /// for registers each activation writes before reading).
+    [[nodiscard]] static bool registers_known(CompiledBody& body) noexcept;
+    /// Counts a run of a lazily compiled template, compiling the templates
+    /// that became frequent once enough of them are waiting.
+    void note_lazy_run(std::uint32_t lazy_template);
+    void compile_lazy_templates();
+    /// Compiles the full-semantics code of a two-state template.
+    void compile_full_template(std::uint32_t full_template);
     void run_native(NativeUnit& unit, CompiledBody& body,
-        std::uint32_t member);
+        std::uint32_t member,
+        bool full = false);
+    /// The part of run_native after the call returns something other than
+    /// 0 with frame status 0.
+    void finish_native(NativeUnit& unit, CompiledBody& body,
+        std::uint32_t member, StaticKernelNativeFrame& frame,
+        std::uint32_t status, bool full);
+    /// What an ordinary run of a member needs, packed so the run does not
+    /// touch the member record: set when the member runs native code with
+    /// no check beyond the call (refresh_fast_run), else `entry` is null.
+    struct FastRun {
+        StaticKernelNativeEntry entry { };
+        const std::uint32_t* bindings { };
+        const void* program { };
+        CompiledBody* body { };
+        bool two_state { };
+        std::uint32_t two_state_runs { };
+    };
+    std::vector<FastRun> fast_runs_;
+    void refresh_fast_run(std::uint32_t member);
     static void native_evaluate(StaticKernelNativeFrame* frame,
         std::uint32_t at, std::uint64_t xa, std::uint64_t xb, std::uint64_t ya,
         std::uint64_t yb, std::uint64_t za, std::uint64_t zb,
@@ -616,7 +660,14 @@ private:
     std::vector<std::uint32_t> written_inputs_;
     bool committing_round_ { };
     std::vector<std::uint32_t> next_round_;
+    /// The round being run (swapped with next_round_ to keep capacity).
+    std::vector<std::uint32_t> round_;
+    /// sort_round's member bitmap, all zero between rounds.
+    std::vector<std::uint64_t> round_bits_;
+    void sort_round();
     std::vector<ScheduleTarget> deferred_targets_;
+    /// Swapped with deferred_targets_ to keep capacity.
+    std::vector<ScheduleTarget> deferred_buffer_;
     std::vector<std::uint32_t> deferred_threads_;
     StaticKernelWriteQueue parked_writes_ { };
     std::vector<StaticKernelWrite> parked_storage_;
@@ -663,6 +714,24 @@ private:
     std::vector<std::unique_ptr<CompiledBody>> templates_;
     /// Owns the generated code.
     std::shared_ptr<StaticKernelCodegen> codegen_;
+    /// Cold member templates are compiled only once they have run
+    /// lazy_threshold_ times; until then their members run interpreted.
+    struct LazyTemplate {
+        StaticKernelTemplate code;
+        std::vector<NativeUnit*> units;
+        std::uint32_t runs { };
+    };
+    std::vector<LazyTemplate> lazy_templates_;
+    /// Two-state templates' full-semantics code, compiled on demand.
+    std::vector<LazyTemplate> full_templates_;
+    /// Per template: the instructions its full code continues two-state
+    /// code at (StaticKernelTemplate::resume_points); sized once.
+    std::vector<std::vector<std::uint32_t>> continuations_;
+    /// The native code running now is two-state.
+    bool two_state_running_ { };
+    std::vector<std::uint32_t> lazy_pending_;
+    std::uint32_t lazy_threshold_ { };
+    StaticKernelNativeHelpers native_helpers_;
     std::exception_ptr native_exception_;
     std::size_t native_units_ { };
     std::uint32_t running_partition_ { static_kernel_detail::no_slot };
@@ -691,6 +760,20 @@ private:
     bool check_inputs_ { };
     std::uint64_t verify_mismatches_ { };
     std::vector<Slot> slots_;
+    /// What a VHDL round's commit needs of each slot, one cache line apiece
+    /// (commit_round touches nothing else for a slot that does not change).
+    struct alignas(64) CommitSlot {
+        std::uint32_t offset { };
+        std::uint32_t words { };
+        std::uint32_t planes { };
+        /// Written in the current round; `before` indexes the round's saved
+        /// prior value when it does not fit `small_before`.
+        bool touched { };
+        bool single_writer { };
+        std::uint32_t before { };
+        std::array<std::uint64_t, 4> small_before { };
+    };
+    std::vector<CommitSlot> commit_slots_;
     std::vector<std::uint32_t> slot_of_signal_;
     std::vector<std::uint32_t> family_of_signal_;
     std::vector<Family> families_;

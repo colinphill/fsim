@@ -52,12 +52,15 @@ foreach(sbom IN ITEMS
     third_party/systemc-3.0.2/systemc-3.0.2.spdx.json
     third_party/scv-2.0.1/scv-2.0.1.spdx.json
     third_party/sqlite-3.53.4/sqlite-3.53.4.spdx.json
+    third_party/mimalloc-3.5.3/mimalloc-3.5.3.spdx.json
     third_party/fsim-toolchain-22.1.8-1/fsim-toolchain-22.1.8-1.spdx.json)
   set(expected_license "Apache-2.0")
   # The first package is the whole component; the rest are its parts.
   set(expected_first_license "")
   if(sbom MATCHES "^third_party/sqlite-")
     set(expected_license "blessing")
+  elseif(sbom MATCHES "^third_party/mimalloc-")
+    set(expected_license "MIT")
   elseif(sbom MATCHES "^third_party/fsim-toolchain-")
     set(expected_license "Apache-2.0 WITH LLVM-exception")
     set(expected_first_license
@@ -106,6 +109,41 @@ foreach(id IN ITEMS V3SUP-SQLITE-LICENSE V3SUP-SQLITE-NOTICE
     message(FATAL_ERROR "workspace SQLite supply-chain row is missing: ${id}")
   endif()
 endforeach()
+foreach(id IN ITEMS V3SUP-MIMALLOC-LICENSE V3SUP-MIMALLOC-NOTICE
+    V3SUP-MIMALLOC-SBOM V3SUP-MIMALLOC-PROVENANCE V3SUP-MIMALLOC-SOURCE)
+  if(NOT id IN_LIST ids)
+    message(FATAL_ERROR "mimalloc supply-chain row is missing: ${id}")
+  endif()
+endforeach()
+include("${FSIM_SOURCE_DIR}/cmake/FsimMimalloc.cmake")
+set(mimalloc_root
+  "${FSIM_SOURCE_DIR}/third_party/mimalloc-${FSIM_MIMALLOC_VERSION}")
+fsim_mimalloc_validate_archive(
+  "${mimalloc_root}/${FSIM_MIMALLOC_ARCHIVE_NAME}")
+file(STRINGS "${mimalloc_root}/SOURCE_MANIFEST.txt" mimalloc_manifest)
+foreach(record IN ITEMS
+    "schema=fsim-mimalloc-source-v1" "name=mimalloc"
+    "version=${FSIM_MIMALLOC_VERSION}" "release_tag=v3.5.3"
+    "release_commit=d4881d338125e1cb7c47ba4cfb398d6f7c0c8d45"
+    "upstream_url=https://github.com/microsoft/mimalloc/archive/refs/tags/v3.5.3.tar.gz"
+    "archive=${FSIM_MIMALLOC_ARCHIVE_NAME}"
+    "archive_size=${FSIM_MIMALLOC_ARCHIVE_SIZE}"
+    "archive_sha256=${FSIM_MIMALLOC_ARCHIVE_SHA256}"
+    "source_root=${FSIM_MIMALLOC_SOURCE_ROOT}"
+    "tree_files=${FSIM_MIMALLOC_TREE_FILES}"
+    "tree_sha256=${FSIM_MIMALLOC_TREE_SHA256}" "license=MIT")
+  if(NOT record IN_LIST mimalloc_manifest)
+    message(FATAL_ERROR "mimalloc provenance omits ${record}")
+  endif()
+endforeach()
+foreach(kind IN ITEMS license notice)
+  string(TOUPPER "${kind}" filename)
+  file(SHA256 "${mimalloc_root}/${filename}" digest)
+  if(NOT "${kind}_sha256=${digest}" IN_LIST mimalloc_manifest)
+    message(FATAL_ERROR "mimalloc ${kind} differs from its recorded identity")
+  endif()
+endforeach()
+
 include("${FSIM_SOURCE_DIR}/cmake/FsimSqlite.cmake")
 set(sqlite_root "${FSIM_SOURCE_DIR}/third_party/sqlite-${FSIM_SQLITE_VERSION}")
 set(sqlite_archive "${sqlite_root}/${FSIM_SQLITE_ARCHIVE_NAME}")
