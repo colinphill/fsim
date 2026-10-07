@@ -640,6 +640,7 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
               << " compiled_members=" << compiled_members_ << '/'
               << members_.size()
               << " operations=" << profile_operations_
+              << " inputs=" << inputs_.size()
               << " input_changes=" << profile_input_changes_
               << " publishes=" << profile_publishes_ << '\n';
     {
@@ -2655,7 +2656,17 @@ bool Interpreter::Impl::StaticKernel::activate()
             }
             if (vhdl_) {
                 commit_round();
-            } else if (writes_.count != 0U) {
+                if (queued_count_ != 0U || !triggered_.empty()
+                    || !trigger_queue_.empty()) {
+                    // One round is one VHDL delta. Resume in the host's next
+                    // delta so host processes see and drive each delta at its
+                    // reference position.
+                    yield_requested_ = true;
+                    break;
+                }
+                continue;
+            }
+            if (writes_.count != 0U) {
                 nonblocking_committed_ = true;
                 commit_pending();
             }

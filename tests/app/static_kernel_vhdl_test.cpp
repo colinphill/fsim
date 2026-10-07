@@ -9,7 +9,9 @@
 // one-delta-delayed clock (one samples a same-delta update, one samples
 // through an adapter), a derived clock, a shared-variable RAM, process
 // variables with initializers, weak Logic9 values, resolved vectors with
-// disjoint concurrent drivers, dynamic slice assignments and an X injection.
+// disjoint concurrent drivers, dynamic slice assignments, an X injection, and
+// a one-delta glitch that the testbench counts and feeds back into the design
+// (each kernel round must be its own host delta).
 #include "fsim/app/application.hpp"
 
 #include <chrono>
@@ -178,7 +180,10 @@ entity vk_dut is
         flags : out std_logic_vector(3 downto 0);
         cnt : out std_logic_vector(3 downto 0);
         late : out std_logic_vector(3 downto 0);
-        late2 : out std_logic_vector(3 downto 0));
+        late2 : out std_logic_vector(3 downto 0);
+        pulse : out std_logic;
+        fb : in std_logic;
+        fbc : out std_logic_vector(3 downto 0));
 end entity vk_dut;
 
 architecture rtl of vk_dut is
@@ -194,8 +199,22 @@ architecture rtl of vk_dut is
   signal late_i : std_logic_vector(3 downto 0);
   signal weak : std_logic;
   signal nib : std_logic_vector(3 downto 0);
+  signal g1, g2 : std_logic := '0';
+  signal fb_r : unsigned(3 downto 0) := (others => '0');
 begin
   m : entity work.vk_mult port map (a => a, b => b, p => prod_i);
+
+  -- A change of a(0) makes pulse rise and fall in consecutive deltas.
+  g1 <= a(0);
+  g2 <= g1;
+  pulse <= g1 xor g2;
+  process(fb)
+  begin
+    if rising_edge(fb) then
+      fb_r <= fb_r + 1;
+    end if;
+  end process;
+  fbc <= std_logic_vector(fb_r);
   mc : entity work.vk_mult
     port map (a => acc_r(3 downto 0), b => "0110", p => pc);
   g_lane : for i in 0 to 3 generate
@@ -278,11 +297,15 @@ module vk_top;
   always #5 clk = ~clk;
   reg rst_n, we;
   reg [3:0] a, b, addr;
-  wire [3:0] prod, slow, flags, cnt, late, late2;
+  wire [3:0] prod, slow, flags, cnt, late, late2, fbc;
+  wire pulse;
+  integer pulses = 0;
+  always @(pulse) pulses = pulses + 1;
   wire [7:0] acc, rd, mix;
   vk_dut dut(.clk(clk), .rst_n(rst_n), .a(a), .b(b), .we(we), .addr(addr),
              .prod(prod), .acc(acc), .rd(rd), .slow(slow), .mix(mix),
-             .flags(flags), .cnt(cnt), .late(late), .late2(late2));
+             .flags(flags), .cnt(cnt), .late(late), .late2(late2),
+             .pulse(pulse), .fb(pulse), .fbc(fbc));
   integer cyc;
   initial begin
     rst_n = 0; we = 0; a = 0; b = 0; addr = 0;
@@ -304,8 +327,8 @@ module vk_top;
     $finish;
   end
   always @(posedge clk)
-    $display("%0t p=%b acc=%h rd=%h slow=%h mix=%h flags=%b cnt=%h late=%h/%h",
-             $time, prod, acc, rd, slow, mix, flags, cnt, late, late2);
+    $display("%0t p=%b acc=%h rd=%h slow=%h mix=%h flags=%b cnt=%h late=%h/%h pulses=%0d fb=%h",
+             $time, prod, acc, rd, slow, mix, flags, cnt, late, late2, pulses, fbc);
 endmodule
 )";
 

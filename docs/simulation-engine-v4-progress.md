@@ -53,7 +53,7 @@ per completed phase).
 |---|---|---|
 | 0 Contract, harness, corpus | contract approved, harness running, baselines recorded | partial: the `FSIM_KERNEL_VERIFY` replay harness and parity scripts exist; contract doc and corpus not yet |
 | 1 Verilog slice | exact parity, simulation ≤3 s, total ≤10 s | parity met; simulation ≈9.8 s and total ≈14.7 s not met |
-| 2 VHDL and mixed | mixed parity, Verilog within 5% of mixed, `rs-vhdl` parity | mixed parity met; Verilog/mixed 1.052 in the paired run (just over 1.05); `rs-vhdl` not checked |
+| 2 VHDL and mixed | mixed parity, Verilog within 5% of mixed, `rs-vhdl` parity | **met** on 2026-10-06 (paired run below): mixed parity; `rs-vhdl` parity on every testbench that elaborates (5 of 8; the other 3 fail elaboration on HEAD too); Verilog/mixed 1.005 |
 | 3 Front-end time | both throughput cases ≤15 s median (paired protocol) | **met** on 2026-10-06 (paired run below): Verilog 13.47 s, mixed 12.80 s |
 
 ## 3. Mapping to the plan
@@ -61,7 +61,7 @@ per completed phase).
 | Plan item | State | Where |
 |---|---|---|
 | §3.2 Verilog: levelized Active evaluation, NBA commit | done | `src/runtime/simir_static_kernel.cpp` |
-| §3.2 VHDL: exact deltas | done (one kernel round = one delta) | same, `vhdl_` mode |
+| §3.2 VHDL: exact deltas | done (one kernel round = one delta, and one host delta at mixed boundaries) | same, `vhdl_` mode |
 | §3.2 VHDL: delta-depth collapsing, as-if | not started | — |
 | §3.3 Supernodes/partitions, dirty bits | Verilog only: per-instance partitions, level buckets | `build_partitions` |
 | §3.4 Narrow native values, 4-state dual-rail | done (KIR) | `simir_static_kernel_ir.hpp`, `simir_kernel_word_ops.hpp` |
@@ -74,6 +74,113 @@ per completed phase).
 | D5 whole-design fallback | done (planner disables the kernel with a reason) | `elaborated_design_static_kernel.cpp` |
 
 ## 4. Log
+
+### 2026-10-06 (night): Phase 2 qualified (paired protocol)
+
+The command is the Phase 3 one, with the frozen candidate `v4cand-phase2-10061746`.
+Evidence: `.local-artifacts/simulation-performance/v4-phase2-qualification-10061753`.
+
+| Case | Control (HEAD) median | Candidate median | Ratio |
+|---|---:|---:|---:|
+| `original_throughput` | 30.88 s | **12.82 s** (compile 0.59, elaborate 3.45, simulate 8.77) | 0.414 |
+| `mixed_throughput` | 25.25 s | **12.76 s** (compile 1.14, elaborate 3.10, simulate 8.52) | 0.503 |
+
+- Verilog/mixed is 1.005 (limit 1.05).
+- The runner's combined absolute verdict passes, and so does its anti-slowdown guard
+  (limit 13.39 s).
+- Both preflights matched Vivado.
+- **Phase 2 exit: met** (mixed parity, `rs-vhdl` parity, Verilog within 5% of mixed).
+
+### 2026-10-06 (night): `rs-vhdl` parity, mixed delta boundaries, element reads
+
+**`rs-vhdl` parity (Phase 2 criterion).**
+- Method: `r37-analysis/tools/rs_vhdl_parity.py`. Each SystemVerilog testbench in
+  `~/vprojects/rs-vhdl/tb` drives the VHDL RTL, compiled in `sim/run_vhdl_sim.tcl` order as
+  VHDL-2008. Each testbench is simulated with and without the kernel (same seed, compiled
+  engine, fresh native cache).
+- Summary: `.local-artifacts/simulation-performance/rs-vhdl-parity/summary.txt`.
+
+| Testbench | Functional transcript | PASS/FAIL | Reference sim | Kernel sim |
+|---|---|---:|---:|---:|
+| `rs_codec_tb` | identical | 75/0 | 39.3 s | 15.2 s |
+| `rs_corrbits_tb` | identical | 9/0 | 5.8 s | 2.8 s |
+| `rs_param_tb` | identical | 336/0 | 250.8 s | 83.3 s |
+| `rs_parlen_tb` | identical | 8/0 | 6.0 s | 2.8 s |
+| `rs_thru_tb` | identical | — | 27.2 s | 8.3 s |
+| `rs_decoder_tb`, `rs_encoder_tb`, `rs_symsize_tb` | do not elaborate, on HEAD (e8ecb67e) too | | | |
+
+- **Elaboration gaps.** These are front-end gaps, outside the engine:
+  - SystemVerilog `fork` around task calls with array arguments;
+  - VHDL-2008 `maximum` in a generate-scoped constant;
+  - a slice assignment inside a for-generate.
+- **Time-0 metavalue warning counts.** Every other line matches, but one location's
+  `to_integer` metavalue warnings come out once more per decoder instance in the kernel
+  (`in_ready`, `rs_decoder_top.vhd:263/265`, all at time 0). Example: rs_param_tb, 40
+  instances, reference 136, kernel 176.
+  - Cause: the testbench's `initial` block (`s_tlast = 0` …) and VHDL initialization
+    both run in delta 0.
+  - The reference runs the decoder's explicit processes, then the testbench, then the
+    concurrent statements, so `in_last` first evaluates with the testbench value. The
+    kernel runs all VHDL initialization together and sees X first, which costs one more
+    `in_ready` evaluation while `wr_bank` is 'U'.
+  - Neither IEEE 1076 nor IEEE 1800 orders VHDL initialization against SystemVerilog
+    `initial` blocks, so this is an undefined race under D4. It is documented in §5.
+
+**Mixed boundaries at their reference delta (plan §3.2).**
+- `activate()` used to run every VHDL round of one activation inside a single host delta.
+  Host processes therefore saw only the last value of each kernel output and could drive
+  kernel inputs only after the kernel had settled.
+- Now each kernel round that leaves more work publishes and yields to the host's next
+  delta, so one kernel round is exactly one host delta.
+- Witness: `tests/app/static_kernel_vhdl_test.cpp` gained a one-delta glitch (`pulse`)
+  that the testbench counts with `always @(pulse)` and feeds back into a VHDL
+  `rising_edge` counter. With the yield removed, the test fails (`pulses=2` instead of 4).
+- Cost on `mixed_throughput`: about 3% more simulation instructions (151.5G to 156.3G) and
+  about 0.3 s of simulation time (8.7 to 9.1 s). Kernel activations rise to 311k, but only
+  21k publish anything.
+  - A conditional yield would recover most of this: yield only when an output changed or
+    the host has work left in the time slot. That needs a scheduler query for "other
+    pending work in this time slot", which is listed in §6.
+  - Packing the input scan into flat arrays did not change the instruction count, so it
+    was reverted.
+- Mixed result lines and HDL reports (17,018) are unchanged.
+
+**Element reads of kernel-owned memories from host code.**
+- Testbench JIT reads of a memory go through `container_read_packed_impl`. In the
+  borrowable case it borrowed the whole object, and `read_container_object_value`
+  rebuilt every element from its element-signal aliases on each read. Kernel memories are
+  element slots, so they have such aliases. Each single-element read therefore cost a
+  pass over the memory: 2.7M reads on Verilog.
+- The borrowable case now reads the selected element with
+  `read_container_object_element` and falls back to the borrow only if that declines.
+- `read_container_object_element` gained the exposed-reference rule of
+  `read_container_object_value`, so both agree.
+- Verilog simulation: 85.9G to 83.7G instructions (−2.6%), transcript byte-identical.
+- `fused_object_borrow_reads` still counts every borrowable read at the point where it is
+  classified, as `fsim.application.wide-file-binary-read-jit` expects.
+
+**Checks on the final binary** (the Phase 2 candidate):
+- Full test suite: the same 37 failures as the HEAD control build (e8ecb67e), and nothing
+  new. `fsim.deterministic-packaging` failed once under `-j10` load and passes on rerun.
+- `rs-vhdl`, all five elaborating testbenches: functional transcripts identical, with the
+  same time-0 warning-count race as above.
+  Summary: `.local-artifacts/simulation-performance/rs-vhdl-parity/summary-final.txt`.
+- Mixed: result lines match, HDL reports 17,018 with identical per-location counts.
+- Frozen candidate: `.local-artifacts/v4cand-phase2-10061746`, made by
+  `r37-analysis/tools/freeze_candidate.sh`.
+
+**Where Verilog simulation time goes** (time-based samples, about 9.9 s):
+
+| Window | Activity |
+|---|---|
+| 0–2.0 s | load the artifact: runtime-state decode, `from_state` region graph, `create_interpreter`, `StaticKernel` construction, `plan_static_kernel` |
+| 2.0–4.0 s | LLVM code generation for 384 kernel templates |
+| 4.0–5.0 s | testbench start: the memory reads fixed above, `RegionGraphProgramBuilder` |
+| 5.0–9.9 s | the run; about 55% of samples are in generated kernel code |
+
+- `--duration N` runs take 23.7 s even at 1 ps, against 10 s for the full run to
+  `$finish`. The time-limit exit path does something expensive. The benchmarks end in
+  `$finish`, so this is noted in §5 rather than chased.
 
 ### 2026-10-06: Phase 3 qualified (paired protocol)
 
@@ -375,21 +482,40 @@ compares SHA-256 of every payload file against the baseline).
 2. **Report order within a delta.** In 50 of about 9.6k reports, metavalue warnings come out
    in a different order inside a single delta. VHDL leaves process order within a delta
    undefined. Counts per location match exactly.
+3. **Time-0 order of VHDL initialization against SystemVerilog `initial` blocks.**
+   `rs-vhdl` testbenches assign their stimulus registers in an `initial` block at time 0.
+   - The reference engine happens to run some VHDL initialization before them and some
+     after.
+   - The kernel runs all VHDL initialization in one round.
+   - The functional transcript is identical. Only time-0 metavalue warning counts at one
+     location differ (one per decoder instance).
+   - Neither LRM orders the two, so this is a race under D4.
+4. **`rs-vhdl` testbenches that do not elaborate** (front end, on HEAD too):
+   `rs_decoder_tb` (`fork` around task calls with array arguments), `rs_encoder_tb` (VHDL
+   `maximum` in a generate-scoped constant), `rs_symsize_tb` (slice assignment in a
+   for-generate).
+5. **Time-limited runs are slow.** `simulate --duration` takes about 24 s on Verilog even
+   for 1 ps (the full run to `$finish` takes 10 s). The cause is in the time-limit exit
+   path. It does not affect the benchmarks.
 
 ## 6. Next steps (in order)
 
-1. **Margin for the Phase 3 qualification** (Verilog median ≈14.7 s):
-   - wide registers in KIR (multiword values without the generic bridge): Verilog has
-     2.65M generic calls; mixed has 1.8M wide reads plus 3M dynamic selects from wide
-     values;
-   - mixed helper traffic: 9.3M evaluate calls (dynamic part selects from Logic9 and wide
-     sources, integer `mod`/`**`, binary op 12, dynamic-index VHDL stores).
-2. **Paired qualification run.** This needs:
-   - frozen control and candidate trees (the build `RUNPATH` is absolute);
-   - Vivado preflight outside the sandbox;
-   - `FSIM_STATIC_KERNEL=1` in the environment (the runner passes it through).
-3. Elaboration: runtime-state serialization (≈0.5 s), constant evaluation (≈0.3 s),
-   process canonicalization (≈0.37 s), lowering (≈0.85 s).
-4. **SystemVerilog calls in the kernel.** Low value: the 18 rejected DUT processes are
-   cold and already share host code.
-5. **VHDL delta-depth collapsing** (plan §3.2).
+1. **Conditional yield at mixed boundaries.** Continue internally when no kernel output
+   changed and the host has nothing else pending in the time slot. This needs a correct
+   "time slot otherwise idle" query from the scheduler and would recover about 0.3 s on
+   mixed.
+2. **Verilog simulation toward Phase 1 (≤3 s).** By wall time, startup is about 2 s,
+   template code generation about 2 s, testbench start about 1 s, and the run about 5 s.
+   - Startup: runtime-state decode, `from_state` region graph and
+     `compute_signal_driver_inventory`, `create_interpreter` validation and driver
+     registration, kernel construction and `plan_static_kernel`.
+   - Code generation: about 2 s for 384 templates at O0. Smaller IR per KIR operation,
+     or interpreting cold templates instead of compiling them.
+   - Run: `slot_changed` and `native_notify` (about 10% of run instructions), host
+     scheduler and commit traffic from testbench processes.
+   - Phase 1 also calls for a v4 behavioral tier for testbench processes (plan §3.5),
+     the long-term home for the host-side costs.
+3. Elaboration: runtime-state serialization (about 0.5 s), constant evaluation (about
+   0.3 s), process canonicalization (about 0.37 s), lowering (about 0.85 s).
+4. **VHDL delta-depth collapsing** (plan §3.2), now constrained by the per-round host
+   yield: collapse only rounds whose outputs no host process reads.

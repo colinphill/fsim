@@ -798,6 +798,9 @@ std::uint32_t LlvmProcessExecutor::container_read_packed_impl(
         const auto fused_object_distance = flags >> 8U;
         const bool fused_object_single_use = (flags & 4U) != 0U;
         const runtime::simir::ContainerValue* borrowed_object { };
+        // A borrowable source is read one element at a time once the index is
+        // known; borrowing the whole object can cost a pass over its elements.
+        auto element_source = invalid_container_object;
         if (fused_object_distance != 0U) {
             if (instruction < fused_object_distance) {
                 throw compiler::LlvmJitError {
@@ -836,17 +839,11 @@ std::uint32_t LlvmProcessExecutor::container_read_packed_impl(
                         "compiled process container-object type mismatch"
                     };
                 }
-                borrowed_object
-                    = state.context->borrow_container_object(
-                        read_object->object);
-                if (borrowed_object != nullptr
-                    && borrowed_object->type != destination.type) {
-                    throw compiler::LlvmJitError {
-                        "compiled process could not materialize a container-object alias"
-                    };
+                element_source = read_object->object;
+                if (profile.enabled) {
+                    ++profile.fused_object_borrow_reads;
                 }
-            }
-            if (borrowed_object == nullptr) {
+            } else {
                 state.executor->alias_container_register(
                     container, read_object->object, *state.context,
                     can_borrow);
@@ -855,8 +852,6 @@ std::uint32_t LlvmProcessExecutor::container_read_packed_impl(
                 // as the source-language snapshot for any later uses.
                 state.executor->materialize_container_object_aliases(
                     *state.context);
-            } else if (profile.enabled) {
-                ++profile.fused_object_borrow_reads;
             }
         }
         const auto& source = *state.executor->container_registers_.at(container);
@@ -949,6 +944,33 @@ std::uint32_t LlvmProcessExecutor::container_read_packed_impl(
                 selected = static_cast<std::size_t>(selected_value);
             } else {
                 selected = static_cast<std::size_t>(index_aval);
+            }
+        }
+        if (element_source != invalid_container_object) {
+            PackedLogic4 value;
+            if (state.context->read_container_object_element(
+                    element_source, selected, value)) {
+                if (value.width() != source.type.element_width) {
+                    throw compiler::LlvmJitError {
+                        "compiled process direct container-element width mismatch"
+                    };
+                }
+                publish(value);
+                return 0;
+            }
+            borrowed_object
+                = state.context->borrow_container_object(element_source);
+            if (borrowed_object != nullptr
+                && borrowed_object->type != source.type) {
+                throw compiler::LlvmJitError {
+                    "compiled process could not materialize a container-object alias"
+                };
+            }
+            if (borrowed_object == nullptr) {
+                state.executor->alias_container_register(
+                    container, element_source, *state.context, true);
+                state.executor->materialize_container_object_aliases(
+                    *state.context);
             }
         }
         if (borrowed_object != nullptr) {

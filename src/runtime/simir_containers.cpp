@@ -992,6 +992,12 @@ bool Interpreter::Impl::read_container_object_element(
         || ordinal >= value.elements.size()) {
         return false;
     }
+    if (id < container_value_reference_exposed.size()
+        && container_value_reference_exposed[id] != 0U) {
+        // As in read_container_object_value: the exposed value is current.
+        result = value.elements[ordinal];
+        return true;
+    }
     if (object.slice_alias) {
         const auto& alias = *object.slice_alias;
         const auto descending = alias.selected_left >= alias.selected_right;
