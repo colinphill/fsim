@@ -114,6 +114,8 @@ public:
 
     void observe(runtime::SimulationTick time, std::uint64_t delta);
     void finish(runtime::SimulationTick time, std::uint64_t delta);
+    /// The design has PSL directives to evaluate.
+    [[nodiscard]] bool active() const noexcept;
     [[nodiscard]] const std::vector<runtime::VhdlPslAttemptSnapshot>&
     attempts() const noexcept;
     [[nodiscard]] std::vector<ConcurrentAssertionCoverage> coverage() const;

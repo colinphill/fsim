@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_simulation_internal.hpp"
+#include "application_phase_profile.hpp"
 #include "../runtime/simir_static_kernel.hpp"
 #if defined(FSIM_HAS_LLVM)
 #include "fsim/compiler/static_kernel_codegen.hpp"
@@ -14,13 +15,21 @@ namespace {
 std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
     BuiltProject& built, const std::uint64_t max_deltas)
 {
+    const application_detail::ScopedPhaseProfile profile {
+        "create_simulation_interpreter"
+    };
     const runtime::SchedulerOptions options { max_deltas, 32 };
     // Engine v4 static kernel (docs/simulation-engine-v4-plan.md); opt-in
     // while Phase 1 is in progress. It has the same observability limits as
     // cone fusion.
     if (built.cone_fusion && std::getenv("FSIM_STATIC_KERNEL") != nullptr
         && std::string_view { std::getenv("FSIM_STATIC_KERNEL") } == "1") {
-        const auto plan = built.design.plan_static_kernel();
+        auto plan = [&] {
+            const application_detail::ScopedPhaseProfile planning {
+                "static_kernel_plan"
+            };
+            return built.design.plan_static_kernel();
+        }();
         if (std::getenv("FSIM_PROFILE_PHASES") != nullptr) {
             std::cerr << "fsim-profile: static-kernel disabled=" << plan.disabled
                       << " reason=" << plan.disabled_reason

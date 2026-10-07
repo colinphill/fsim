@@ -622,6 +622,7 @@ void write_prepared_runtime_state(
     writer.set_runtime_path_projection(true);
     writer.set_runtime_operation_body_sharing(true);
     writer.set_runtime_process_layout_sharing(true);
+    writer.set_runtime_string_table(true);
     writer.raw(kRuntimeMagic);
     writer.write(kSchema);
     writer.write(prepared.path_mode);
@@ -654,6 +655,7 @@ std::optional<DecodedRuntimeProgramState> read_runtime_state(
     }
     reader.set_runtime_operation_body_sharing(true);
     reader.set_runtime_process_layout_sharing(true);
+    reader.set_runtime_string_table(true);
 
     std::uint8_t path_mode { };
     std::string path_binding;
@@ -739,6 +741,9 @@ std::optional<DecodedRuntimeProgramState> read_runtime_state(
 
     std::size_t next_path { };
     std::optional<std::string> reference_error;
+    // Many fields name the same path (a process's debug scopes); intern each
+    // distinct path once.
+    std::vector<runtime::simir::InternedString> interned(path_table->size());
     const bool restored = visit_runtime_paths(
         dto.state, mutable_process_table->rows,
         [&](auto& path, const bool empty_allowed) {
@@ -786,7 +791,16 @@ std::optional<DecodedRuntimeProgramState> read_runtime_state(
                       "aggregate decode allocation budget";
                 return false;
             }
-            assign_path(path, spelling);
+            if constexpr (std::is_same_v<std::remove_cvref_t<decltype(path)>,
+                              runtime::simir::InternedString>) {
+                auto& cached = interned[id->value()];
+                if (cached.empty()) {
+                    cached = spelling;
+                }
+                path = cached;
+            } else {
+                assign_path(path, spelling);
+            }
             return true;
         });
     if (!restored) {

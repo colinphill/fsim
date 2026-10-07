@@ -3164,6 +3164,8 @@ Interpreter::Impl::build_region_runtime_snapshot(
     program_snapshots.reserve(processes.size());
     std::vector<const Process*> programs;
     programs.reserve(processes.size());
+    // Dormant kernel members share one stub body.
+    std::optional<OperationList> dormant_stub_operations;
     std::vector<std::uint8_t> process_access_complete;
     process_access_complete.reserve(processes.size());
     bool access_inventory_complete = true;
@@ -3175,10 +3177,30 @@ Interpreter::Impl::build_region_runtime_snapshot(
         // still consumes the public Process shape. Keep these facades
         // temporary; runtime process state remains compact and materializes a
         // retained facade only when the public accessor is called.
-        program_snapshots.push_back(program.materialize_transient());
+        if (static_kernel && id < fusion_dormant_process.size()
+            && fusion_dormant_process[id] != 0U) {
+            // A static kernel member never runs on the scheduler; its effects
+            // reach the host only through the kernel host process. A stub
+            // keeps process identities dense without materializing it.
+            if (!dormant_stub_operations) {
+                dormant_stub_operations.emplace(
+                    std::vector<Operation> { WaitForever { } });
+            }
+            auto& stub = program_snapshots.emplace_back();
+            stub.id = id;
+            stub.scheduling_domain = program.scheduling_domain();
+            stub.language_standard = program.language_standard();
+            stub.operations = *dormant_stub_operations;
+            stub.initialize = false;
+        } else {
+            program_snapshots.push_back(program.materialize_transient());
+        }
         programs.push_back(&program_snapshots.back());
-        const auto access_complete
-            = process_signal_access_is_complete(id);
+        // An inert kernel member has no executor (its stub accesses nothing).
+        const auto access_complete = (static_kernel
+                                         && id < fusion_dormant_process.size()
+                                         && fusion_dormant_process[id] == 1U)
+            || process_signal_access_is_complete(id);
         access_inventory_complete &= access_complete;
         process_access_complete.push_back(
             static_cast<std::uint8_t>(access_complete));

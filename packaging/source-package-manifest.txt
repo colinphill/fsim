@@ -1267,12 +1267,14 @@ src/runtime/simir_state.cpp
 src/runtime/simir_static_kernel.cpp
 src/runtime/simir_static_kernel.hpp
 src/runtime/simir_static_kernel_analysis.cpp
+src/runtime/simir_static_kernel_behavioral.cpp
 src/runtime/simir_static_kernel_compiled.cpp
 src/runtime/simir_static_kernel_compiled_internal.hpp
 src/runtime/simir_static_kernel_execute.cpp
 src/runtime/simir_static_kernel_ir.hpp
 src/runtime/simir_static_kernel_native.hpp
 src/runtime/simir_static_kernel_native_units.cpp
+src/runtime/simir_static_kernel_specialize.cpp
 src/runtime/simir_static_kernel_state.hpp
 src/runtime/simir_storage_census_internal.hpp
 src/runtime/simir_string_methods.cpp
@@ -1603,6 +1605,7 @@ tests/app/sdf_vital_target_plan_test.cpp
 tests/app/sdf_vital_timing_checks_test.cpp
 tests/app/simplification_benchmark_driver.cpp
 tests/app/specify_application_test.cpp
+tests/app/static_kernel_behavioral_test.cpp
 tests/app/static_kernel_test.cpp
 tests/app/static_kernel_vhdl_test.cpp
 tests/app/stochastic_queue_application_test.cpp

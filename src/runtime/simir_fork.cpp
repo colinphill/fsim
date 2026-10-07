@@ -632,8 +632,13 @@ void Interpreter::Impl::spawn_fork(
             child.cold().fork_group = group_id;
         }
         try {
+            // A child shares its parent's program; without static
+            // sensitivity it adds no fanout entries (the rebuild visits
+            // every process, so avoid it per spawn).
+            const bool sensitive
+                = !child.program().static_sensitivity().empty();
             processes.push_back(std::move(child));
-            static_fanout_dirty = true;
+            static_fanout_dirty = static_fanout_dirty || sensitive;
             register_static_sensitivity_cohort(child_id);
             invalidate_fused_static_cohorts_for_fork(child_id);
         } catch (...) {

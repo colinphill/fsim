@@ -82,12 +82,21 @@ struct Candidate {
     std::uint32_t body_end { };
     std::uint32_t exit_alt { std::numeric_limits<std::uint32_t>::max() };
     std::vector<Sensitivity> sensitivity;
+    /// Behavioral members: signals named by their dynamic waits.
+    std::vector<SignalId> waited;
 };
+
+/// Candidate::kind of a behavioral member (StaticKernelMemberKind).
+constexpr std::uint8_t behavioral_kind = 3U;
 
 } // namespace
 
 StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
 {
+    // A mixed kernel can be refused where a single-language one is not;
+    // the majority language's kernel is planned instead.
+    bool mixed_planned = false;
+    const auto plan_for = [&](const bool allow_mixed) -> StaticKernelPlan {
     StaticKernelPlan plan;
     const auto disable = [&](const char* reason) {
         StaticKernelPlan disabled;
@@ -169,9 +178,17 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         }
         const auto& operations = view.operations();
         const auto count = operations.size();
+        // Stored operations (canonical or overridden) answer every question
+        // below except instance fields, which only ReadContainerObject's
+        // object and signal operands carry; those are expanded or remapped.
         for (std::size_t op = 0U; op < count; ++op) {
-            collect_container_objects(
-                operations.expanded(op), container_uses[index]);
+            const auto& stored = operations[op];
+            if (operation_holds<ReadContainerObject>(stored)) {
+                collect_container_objects(
+                    operations.expanded(op), container_uses[index]);
+            } else {
+                collect_container_objects(stored, container_uses[index]);
+            }
         }
         std::ranges::sort(container_uses[index]);
         container_uses[index].erase(std::unique(container_uses[index].begin(),
@@ -199,7 +216,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         std::optional<std::size_t> wait;
         bool shape_ok = true;
         for (std::size_t op = 0U; op < count; ++op) {
-            if (operation_holds<WaitSensitivity>(operations.expanded(op))) {
+            if (operation_holds<WaitSensitivity>(operations[op])) {
                 if (wait) {
                     shape_ok = false;
                 }
@@ -213,8 +230,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             if (op >= count) {
                 return false;
             }
-            const auto operation = operations.expanded(op);
-            const auto* jump = operation_get_if<Jump>(&operation);
+            const auto* jump = operation_get_if<Jump>(&operations[op]);
             return jump != nullptr && jump->target == 0U;
         };
         // Structural operations excluded from the supported-operation check.
@@ -228,8 +244,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             if (sensitivity.empty()) {
                 std::optional<std::size_t> halt;
                 for (std::size_t op = 0U; op < count && shape_ok; ++op) {
-                    const auto operation = operations.expanded(op);
-                    if (const auto* value = operation_get_if<Halt>(&operation)) {
+                    if (const auto* value = operation_get_if<Halt>(&operations[op])) {
                         shape_ok = !halt && !value->program_exit;
                         halt = op;
                     }
@@ -266,8 +281,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                 structural_a = *wait;
             }
         } else if (sensitivity.empty()) {
-            const auto tail = operations.expanded(count - 1U);
-            const auto* halt = operation_get_if<Halt>(&tail);
+            const auto* halt = operation_get_if<Halt>(&operations[count - 1U]);
             if (wait || halt == nullptr || halt->program_exit) {
                 continue;
             }
@@ -328,7 +342,8 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             if (op == structural_a || op == structural_b) {
                 continue;
             }
-            const auto operation = operations.expanded(op);
+            const auto& operation = operations[op];
+            const bool overridden = &operation != operations.data() + op;
             supported = (vhdl ? static_kernel_vhdl_operation_supported(operation)
                               : static_kernel_operation_supported(operation))
                 && !branch_target_outside(operation, count);
@@ -339,7 +354,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                         if constexpr (std::is_same_v<
                                           std::decay_t<decltype(value.signal)>,
                                           SignalId>) {
-                            supported = value.signal < signal_count;
+                            supported = (overridden ? value.signal
+                                                    : operations.signal(value.signal))
+                                < signal_count;
                         }
                     }
                     if constexpr (std::is_same_v<T, Call>) {
@@ -354,8 +371,108 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         }
         candidates[index] = std::move(member);
     }
-    // A kernel runs in one language mode: VHDL members follow exact delta
-    // semantics, SystemVerilog members the levelized Active-region schedule.
+    // Behavioral members: SystemVerilog testbench processes that run as
+    // resumable kernel threads (plan §3.5). FSIM_STATIC_KERNEL_BEHAVIORAL=0
+    // keeps them on the host.
+    if (const char* behavioral = std::getenv("FSIM_STATIC_KERNEL_BEHAVIORAL");
+        behavioral == nullptr || std::string_view { behavioral } != "0") {
+        for (std::size_t index = 0U; index < process_count; ++index) {
+            const auto& view = views[index];
+            if (candidates[index] || !view.valid()
+                || view.scheduling_domain() != ProcessSchedulingDomain::systemverilog
+                || view.observed() || view.reactive() || view.postponed()
+                || view.final() || !view.initialize()
+                || view.switch_source() || view.switch_target()
+                || view.switch_control() || view.switch_bidirectional()
+                || view.switch_resistive()
+                || view.drive_strength() != DriveStrength { }
+                || !view.static_trigger_regions().empty()
+                || std::ranges::any_of(view.register_value_kinds(),
+                    [](const ValueKind kind) { return kind != ValueKind::logic4; })
+                || std::ranges::any_of(view.static_sensitivity(),
+                    [&](const Sensitivity& entry) {
+                        return entry.signal >= signal_count
+                            || signals_[entry.signal].event_variable;
+                    })) {
+                continue;
+            }
+            const auto& operations = view.operations();
+            const auto count = operations.size();
+            Candidate member;
+            member.process = static_cast<ProcessId>(index);
+            member.kind = behavioral_kind;
+            member.run_at_start = true;
+            member.body_begin = 0U;
+            member.body_end = static_cast<std::uint32_t>(count);
+            member.sensitivity = view.static_sensitivity();
+            bool supported = count != 0U;
+            std::size_t failed_at = count;
+            const char* failed_reason = "";
+            for (std::size_t op = 0U; op < count && supported; ++op) {
+                const auto operation = operations.expanded(op);
+                failed_at = op;
+                if (!static_kernel_behavioral_operation_supported(operation)) {
+                    supported = false;
+                    failed_reason = "operation";
+                    break;
+                }
+                if (branch_target_outside(operation, count)) {
+                    supported = false;
+                    failed_reason = "branch_target";
+                    break;
+                }
+                failed_reason = "operand";
+                visit_operation([&](const auto& value) {
+                    using T = std::decay_t<decltype(value)>;
+                    if constexpr (requires { value.signal; }) {
+                        if constexpr (std::is_same_v<
+                                          std::decay_t<decltype(value.signal)>,
+                                          SignalId>) {
+                            supported = supported && value.signal < signal_count;
+                        }
+                    }
+                    if constexpr (std::is_same_v<T, Call>) {
+                        supported = supported && value.target < count
+                            && value.return_target < count;
+                    } else if constexpr (std::is_same_v<T, Fork>) {
+                        supported = supported
+                            && std::ranges::all_of(value.branches,
+                                [&](const InstructionIndex branch) {
+                                    return branch < count;
+                                });
+                    } else if constexpr (std::is_same_v<T, WaitOn>) {
+                        for (std::size_t entry = 0U;
+                             entry < value.signals.size() && supported; ++entry) {
+                            const auto signal = value.signals[entry];
+                            const auto edge = value.edges.empty()
+                                ? EdgeKind::any : value.edges[entry];
+                            supported = signal < signal_count
+                                && !signals_[signal].event_variable
+                                && (edge == EdgeKind::any
+                                    || ((edge == EdgeKind::posedge
+                                            || edge == EdgeKind::negedge)
+                                        && signals_[signal].initial_value.width()
+                                            == 1U));
+                            if (supported) {
+                                member.waited.push_back(signal);
+                            }
+                        }
+                    }
+                }, operation);
+            }
+            if (supported) {
+                candidates[index] = std::move(member);
+            } else if (std::getenv("FSIM_PROFILE_KERNEL_PLAN") != nullptr) {
+                std::cerr << "fsim-kernel-plan: behavioral rejected process="
+                          << view.name() << " op=" << failed_at
+                          << " reason=" << failed_reason << '\n';
+            }
+        }
+    }
+    // VHDL members follow exact delta semantics, SystemVerilog members the
+    // levelized Active-region schedule. A design with both runs one mixed
+    // kernel that keeps both schedules (FSIM_STATIC_KERNEL_MIXED=0 instead
+    // keeps only the majority language).
     std::size_t vhdl_candidates = 0U;
     std::size_t sv_candidates = 0U;
     for (const auto& candidate : candidates) {
@@ -363,12 +480,25 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             ++(candidate->vhdl ? vhdl_candidates : sv_candidates);
         }
     }
-    const bool vhdl_mode = vhdl_candidates > sv_candidates;
+    const char* mixed_text = std::getenv("FSIM_STATIC_KERNEL_MIXED");
+    const bool mixed = allow_mixed
+        && (mixed_text == nullptr || std::string_view { mixed_text } != "0")
+        && vhdl_candidates != 0U && sv_candidates != 0U;
+    mixed_planned = mixed;
+    const bool vhdl_mode = mixed || vhdl_candidates > sv_candidates;
     for (auto& candidate : candidates) {
-        if (candidate && candidate->vhdl != vhdl_mode) {
+        if (!mixed && candidate && candidate->vhdl != vhdl_mode) {
             candidate.reset();
         }
     }
+    const auto vhdl_written = [&](const SignalId signal) {
+        return std::ranges::all_of(graph_signals[signal].writers,
+            [&](const auto& writer) {
+                return writer.process < process_count
+                    && candidates[writer.process]
+                    && candidates[writer.process]->vhdl;
+            });
+    };
 
     // 2. Alias structure: per-element arrays (leaves plus an optional
     // aggregate proxy) and memories stored as one packed signal are owned
@@ -469,15 +599,27 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             }, operations.expanded(op));
         }
     }
+    // Fork children of a behavioral member run as kernel threads, so their
+    // writes stay inside the kernel like the member's own (only behavioral
+    // members fork).
+    const auto forks_in_kernel = [&](const SignalId signal) {
+        const auto& writers = graph_signals[signal].writers;
+        return !writers.empty()
+            && std::ranges::all_of(writers, [&](const auto& writer) {
+                   return writer.process < process_count
+                       && candidates[writer.process];
+               });
+    };
     const auto basic_ok = [&](const SignalId signal) {
         const auto& node = graph_signals[signal];
         const auto& info = signals_[signal];
         // Members make only zero-delay inertial projected writes, which
         // never leave pending transactions.
-        return !node.dynamic_fork_writers
+        return (!node.dynamic_fork_writers || forks_in_kernel(signal))
             && (vhdl_mode || !node.partial_projected_transactions)
             && host_touched[signal] == 0U
-            && (info.value_kind == ValueKind::logic4 || vhdl_mode)
+            && (info.value_kind == ValueKind::logic4
+                || (vhdl_mode && (!mixed || vhdl_written(signal))))
             && info.systemverilog_scalar == runtime::SystemVerilogScalarKind::None
             && !info.event_variable && !info.implicit_driver
             && !info.charge_strength
@@ -576,18 +718,24 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
     const auto signal_ok = [&](const SignalId signal) {
         return signal < signal_count && basic_ok(signal) && writers_ok(signal);
     };
-    const auto edge_sensitive_member = [&](const SignalId signal) {
+    // Signals some candidate is edge-sensitive to; recomputed for each
+    // fixpoint pass (candidates only drop out between passes).
+    std::vector<std::uint8_t> edge_sensitive(signal_count, 0U);
+    const auto mark_edge_sensitive = [&] {
+        std::ranges::fill(edge_sensitive, 0U);
         for (std::size_t index = 0U; index < process_count; ++index) {
-            if (candidates[index]
-                && std::ranges::any_of(candidates[index]->sensitivity,
-                    [&](const Sensitivity& entry) {
-                        return entry.signal == signal
-                            && entry.edge != EdgeKind::any;
-                    })) {
-                return true;
+            if (!candidates[index]) {
+                continue;
+            }
+            for (const auto& entry : candidates[index]->sensitivity) {
+                if (entry.edge != EdgeKind::any && entry.signal < signal_count) {
+                    edge_sensitive[entry.signal] = 1U;
+                }
             }
         }
-        return false;
+    };
+    const auto edge_sensitive_member = [&](const SignalId signal) {
+        return signal < signal_count && edge_sensitive[signal] != 0U;
     };
 
     std::vector<std::uint8_t> owned(signal_count, 0U);
@@ -616,6 +764,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
     }
     for (bool changed = true; changed;) {
         changed = false;
+        mark_edge_sensitive();
         std::ranges::fill(owned, 0U);
         std::ranges::fill(owned_container, 0U);
         std::ranges::fill(owned_family, 0U);
@@ -627,7 +776,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             }
         }
         for (std::size_t object = 0U; object < object_count; ++object) {
-            if (container_shape_ok[object] == 0U || vhdl_mode
+            if (container_shape_ok[object] == 0U || (vhdl_mode && !mixed)
+                || (mixed && std::ranges::any_of(accessors[object],
+                    [&](const ProcessId process) {
+                        return candidates[process] && candidates[process]->vhdl;
+                    }))
                 || std::ranges::any_of(accessors[object],
                     [&](const ProcessId process) {
                         return !candidates[process];
@@ -672,6 +825,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                         return object >= object_count
                             || owned_container[object] == 0U;
                     })) {
+                if (candidates[index]->kind == behavioral_kind
+                    && std::getenv("FSIM_PROFILE_KERNEL_PLAN") != nullptr) {
+                    std::cerr << "fsim-kernel-plan: behavioral container process="
+                              << views[index].name() << '\n';
+                }
                 candidates[index].reset();
                 changed = true;
             }
@@ -899,7 +1057,19 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                         && candidates[access.process];
                 });
             };
-            if (member_access(node.writers) && member_access(node.readers)) {
+            // SystemVerilog members exchange host signals through the host
+            // as in a SystemVerilog kernel; only VHDL accesses need the
+            // closed kernel.
+            const auto vhdl_access = [&](const auto& accesses) {
+                return std::ranges::any_of(accesses, [&](const auto& access) {
+                    return access.process < process_count
+                        && candidates[access.process]
+                        && candidates[access.process]->vhdl;
+                });
+            };
+            if (member_access(node.writers) && member_access(node.readers)
+                && (!mixed || vhdl_access(node.writers)
+                    || vhdl_access(node.readers))) {
                 if (diagnose) {
                     const auto& info = signals_[signal];
                     std::cerr << "fsim-kernel-plan: vhdl_unowned signal="
@@ -940,6 +1110,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         runtime_member.body_begin = candidate.body_begin;
         runtime_member.body_end = candidate.body_end;
         runtime_member.exit_alt = candidate.exit_alt;
+        runtime_member.vhdl = candidate.vhdl;
         runtime_member.sensitivity = std::move(candidate.sensitivity);
         spec->members.push_back(std::move(runtime_member));
     }
@@ -947,6 +1118,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         return disable("no_members");
     }
     spec->vhdl = vhdl_mode;
+    spec->mixed = mixed;
     std::vector<std::uint8_t> virtual_owned(signal_count, 0U);
     for (std::size_t object = 0U; object < object_count; ++object) {
         if (owned_container[object] == 0U) {
@@ -983,7 +1155,9 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             continue;
         }
         spec->owned_signals.push_back(signal);
-        if (vhdl_mode) {
+        // VHDL writers publish under merged writer regions; SystemVerilog
+        // members of a mixed kernel keep their declared driver regions.
+        if (vhdl_mode && (!mixed || vhdl_written(signal))) {
             const auto width = static_cast<std::uint32_t>(
                 signals_[signal].initial_value.width());
             std::map<ProcessId, std::vector<std::pair<std::uint32_t,
@@ -1022,15 +1196,37 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
     }
     std::vector<std::uint8_t> input(signal_count, 0U);
     std::vector<Sensitivity> host_sensitivity;
+    const auto host_input = [&](const SignalId signal) {
+        if (owned[signal] == 0U && virtual_owned[signal] == 0U
+            && input[signal] == 0U) {
+            input[signal] = 1U;
+            ++plan.boundary_inputs;
+
+            host_sensitivity.push_back({ signal, EdgeKind::any });
+        }
+    };
     for (const auto& entry : spec->members) {
         for (const auto& sensitivity : entry.sensitivity) {
-            if (owned[sensitivity.signal] == 0U
-                && virtual_owned[sensitivity.signal] == 0U
-                && input[sensitivity.signal] == 0U) {
-                input[sensitivity.signal] = 1U;
-                ++plan.boundary_inputs;
-                host_sensitivity.push_back({ sensitivity.signal, EdgeKind::any });
+            host_input(sensitivity.signal);
+        }
+    }
+    // A behavioral thread's dynamic wait on a host signal also needs the
+    // host to activate the kernel when that signal changes.
+    for (const auto& candidate : candidates) {
+        if (candidate && candidate->kind == behavioral_kind) {
+            for (const auto signal : candidate->waited) {
+                host_input(signal);
             }
+        }
+    }
+    for (SignalId signal = 0U; signal < signal_count; ++signal) {
+        const auto& node = graph_signals[signal];
+        if (owned[signal] == 0U && virtual_owned[signal] == 0U
+            && node.writers.empty()
+            && std::ranges::any_of(node.readers, [&](const auto& reader) {
+                   return reader.process < process_count && member[reader.process] != 0U;
+               })) {
+            spec->unwritten_inputs.push_back(signal);
         }
     }
     plan.host = spec->members.front().process;
@@ -1048,7 +1244,13 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
     stub.container_register_count = 0U;
     stub.initialize = true;
     std::vector<Operation> body;
-    body.push_back(WaitSensitivity { });
+    // Without boundary inputs nothing on the host wakes the kernel; it runs at
+    // start and then by its own timers (behavioral delays).
+    if (stub.static_sensitivity.empty()) {
+        body.push_back(WaitForever { });
+    } else {
+        body.push_back(WaitSensitivity { });
+    }
     body.push_back(Jump { 0U });
     body.push_back(Yield { });
     body.push_back(Jump { 0U });
@@ -1059,6 +1261,12 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
     plan.boundary_outputs = spec->boundary_outputs.size();
     plan.owned_containers = spec->containers.size();
     plan.spec = std::move(spec);
+    return plan;
+    };
+    auto plan = plan_for(true);
+    if (plan.disabled && mixed_planned) {
+        plan = plan_for(false);
+    }
     return plan;
 }
 

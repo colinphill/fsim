@@ -28,6 +28,10 @@ enum class StaticKernelMemberKind : std::uint8_t {
     sequential,
     /// Runs once at time zero and halts.
     once,
+    /// A testbench process run as resumable threads (timed and event waits,
+    /// fork/join, calls and runtime-library output);
+    /// FSIM_STATIC_KERNEL_BEHAVIORAL=0 leaves such processes on the host.
+    behavioral,
 };
 
 struct StaticKernelMemberSpec {
@@ -48,6 +52,8 @@ struct StaticKernelMemberSpec {
     /// Combinational members with the same key (their module instance)
     /// compile into one partition program; the maximum means none.
     std::uint32_t partition { std::numeric_limits<std::uint32_t>::max() };
+    /// A VHDL process (delta semantics); otherwise SystemVerilog.
+    bool vhdl { };
 };
 
 /// A kernel-owned aggregate proxy: its value is the concatenation of its
@@ -107,9 +113,18 @@ struct StaticKernelRuntimeSpec {
     /// one VHDL delta cycle (IEEE 1076-2019 14.7.5), and members woken by a
     /// round's events run in the next round.
     bool vhdl { };
+    /// Mixed-language kernel: VHDL members follow delta rounds and
+    /// SystemVerilog members the Active/NBA regions, interleaved as the
+    /// reference scheduler interleaves generic deltas and SystemVerilog
+    /// regions (`vhdl` is also set).
+    bool mixed { };
     /// Writer ranges of owned signals in VHDL mode, merged per process; they
     /// replace the members' declared driver regions for publication.
     std::vector<StaticKernelWriterRegion> writer_regions;
+    /// Host signals members read that no process writes (constant port
+    /// actuals, undriven nets). They stay inputs, but host processes cannot
+    /// change them between kernel rounds.
+    std::vector<SignalId> unwritten_inputs;
 };
 
 /// Operations the kernel evaluates. Structural waits, loop jumps and halts are
@@ -156,6 +171,53 @@ struct StaticKernelRuntimeSpec {
                 || std::is_same_v<T, WriteBlockingDynamicPartSlice>
                 || std::is_same_v<T, ReadContainerObject>
                 || std::is_same_v<T, ContainerRead>;
+        }
+    }, operation);
+}
+
+/// Operations a behavioral member may use: the static set plus waits,
+/// fork/join, calls with automatic frames of packed registers, integer
+/// arithmetic, immediate runtime-library output, string constants and copies,
+/// plusarg queries and $finish. Postponed output and wait timeouts stay on
+/// the host.
+[[nodiscard]] inline bool static_kernel_behavioral_operation_supported(
+    const Operation& operation)
+{
+    if (static_kernel_operation_supported(operation)) {
+        return true;
+    }
+    return visit_operation([](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, WaitOn>) {
+            return !value.signals.empty() && !value.timeout
+                && !value.timeout_result && !value.timeout_origin
+                && (value.edges.empty()
+                    || value.edges.size() == value.signals.size());
+        } else if constexpr (std::is_same_v<T, Halt>) {
+            return !value.program_exit;
+        } else if constexpr (std::is_same_v<T, Display>
+            || std::is_same_v<T, FormatDisplay>
+            || std::is_same_v<T, StringDisplay>
+            || std::is_same_v<T, TimeDisplay>) {
+            return !value.postponed;
+        } else if constexpr (std::is_same_v<T, Fork>) {
+            return !value.branches.empty();
+        } else {
+            return std::is_same_v<T, WaitFor>
+                || std::is_same_v<T, WaitSensitivity>
+                || std::is_same_v<T, WaitForever>
+                || std::is_same_v<T, ForkEnd>
+                || std::is_same_v<T, Stop>
+                || std::is_same_v<T, LoadStringConstant>
+                || std::is_same_v<T, CopyStringRegister>
+                || std::is_same_v<T, PlusArgSelect>
+                || std::is_same_v<T, Call>
+                || std::is_same_v<T, Return>
+                || std::is_same_v<T, CallableFramePush>
+                || std::is_same_v<T, CallableFramePop>
+                || std::is_same_v<T, IntegerUnary>
+                || std::is_same_v<T, IntegerBinary>
+                || std::is_same_v<T, IntegerCheck>;
         }
     }, operation);
 }

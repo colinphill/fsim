@@ -33,8 +33,10 @@ struct InternedStringBucket {
 
 std::array<InternedStringBucket, 64>& interned_string_buckets()
 {
-    static std::array<InternedStringBucket, 64> buckets;
-    return buckets;
+    // Never destroyed: tearing the pool down at exit only frees memory, and
+    // interned strings may outlive static destruction order.
+    static auto* const buckets = new std::array<InternedStringBucket, 64>;
+    return *buckets;
 }
 
 } // namespace

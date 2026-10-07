@@ -13,6 +13,9 @@
 #include "../diagnostic/artifact_identity.hpp"
 #include "../elaboration/elaborated_design_process_access.hpp"
 
+#include <cstdio>
+#include <typeinfo>
+#include <map>
 #include <boost/pfr/core.hpp>
 
 #include <algorithm>
@@ -1214,6 +1217,13 @@ namespace codec_detail {
             runtime_operation_body_sharing_ = enabled;
         }
 
+        // Runtime state: each distinct interned string (source paths, debug
+        // scopes) is written once and referenced by index afterwards.
+        void set_runtime_string_table(const bool enabled) noexcept
+        {
+            runtime_string_table_ = enabled;
+        }
+
         void set_runtime_process_layout_sharing(
             const bool enabled) noexcept
         {
@@ -1222,6 +1232,7 @@ namespace codec_detail {
 
         void raw(std::string_view bytes)
         {
+            total_written_ += bytes.size();
             if (output_ == nullptr && checksum_ == nullptr) {
                 bytes_.append(bytes);
                 return;
@@ -1303,7 +1314,21 @@ namespace codec_detail {
                 raw(std::string_view { bytes.data(), bytes.size() });
             } else if constexpr (
                 std::same_as<Value, runtime::simir::InternedString>) {
-                write(value.str());
+                if (!runtime_string_table_) {
+                    write(value.str());
+                } else {
+                    // 0 introduces a new string; n refers to string n - 1.
+                    const std::string& text = value.str();
+                    const auto [entry, inserted] = string_ids_.try_emplace(
+                        std::string_view { text },
+                        static_cast<std::uint64_t>(string_ids_.size()));
+                    if (inserted) {
+                        u64(0U);
+                        write(text);
+                    } else {
+                        u64(entry->second + 1U);
+                    }
+                }
             } else if constexpr (
                 std::same_as<Value, frontend::SourceName>) {
                 write(value.str());
@@ -1409,15 +1434,24 @@ namespace codec_detail {
         void write_runtime_process_table(
             const elaboration::detail::RuntimeProcessProgramTable& table)
         {
+            static const bool account = std::getenv("FSIM_DEBUG_ARTIFACT_BYTES") != nullptr;
+            const auto table_start = total_written_;
             write(table.templates);
+            const auto templates_end = total_written_;
+            std::size_t operation_bytes = 0U;
+            std::size_t sensitivity_bytes = 0U;
             u64(table.rows.size());
             for (const auto& row : table.rows) {
                 write(row.template_id);
                 const auto& instance = row.instance;
                 write(instance.id);
                 // The name is restored from the ordered path-ID vector.
+                auto mark = total_written_;
                 write(instance.static_sensitivity);
+                sensitivity_bytes += total_written_ - mark;
+                mark = total_written_;
                 write(instance.operations);
+                operation_bytes += total_written_ - mark;
                 write(instance.driver_regions);
                 write(instance.drive_strength);
                 write(instance.switch_source);
@@ -1435,6 +1469,14 @@ namespace codec_detail {
                 write(instance.program_owner);
                 write(instance.postponed);
                 write(instance.final);
+            }
+            if (account) {
+                std::fprintf(stderr,
+                    "fsim-artifact-bytes: process_table=%zu templates=%zu rows=%zu "
+                    "row_operations=%zu row_sensitivity=%zu template_count=%zu\n",
+                    total_written_ - table_start, templates_end - table_start,
+                    table.rows.size(), operation_bytes, sensitivity_bytes,
+                    table.templates.size());
             }
         }
 
@@ -1585,6 +1627,10 @@ namespace codec_detail {
         }
 
         std::string bytes_;
+        std::size_t total_written_ { };
+        bool runtime_string_table_ { };
+        // Keys view interned storage, which lives as long as the process.
+        std::unordered_map<std::string_view, std::uint64_t> string_ids_;
         std::ostream* output_ { };
         support::Sha256* checksum_ { };
         std::array<char, 64 * 1024> buffer_ { };
@@ -1629,6 +1675,12 @@ namespace codec_detail {
         void set_runtime_operation_body_sharing(const bool enabled) noexcept
         {
             runtime_operation_body_sharing_ = enabled;
+        }
+
+        // Enabled only after the runtime-state schema check (see Writer).
+        void set_runtime_string_table(const bool enabled) noexcept
+        {
+            runtime_string_table_ = enabled;
         }
 
         // This format is enabled only after the runtime-state schema check.
@@ -1731,11 +1783,27 @@ namespace codec_detail {
                     return true;
                 } else if constexpr (
                     std::same_as<Value, runtime::simir::InternedString>) {
+                    if (runtime_string_table_) {
+                        std::uint64_t reference { };
+                        if (!u64(reference)) {
+                            return false;
+                        }
+                        if (reference != 0U) {
+                            if (reference > strings_.size()) {
+                                return fail("design state string reference is invalid");
+                            }
+                            value = strings_[reference - 1U];
+                            return true;
+                        }
+                    }
                     std::string decoded;
                     if (!read(decoded)) {
                         return false;
                     }
                     value = std::move(decoded);
+                    if (runtime_string_table_) {
+                        strings_.push_back(value);
+                    }
                     return true;
                 } else if constexpr (
                     std::same_as<Value, frontend::SourceName>) {
@@ -2326,6 +2394,8 @@ namespace codec_detail {
         DecodeBudget* budget_ { };
         bool runtime_operation_body_sharing_ { };
         bool runtime_process_layout_sharing_ { };
+        bool runtime_string_table_ { };
+        std::vector<runtime::simir::InternedString> strings_;
         std::vector<runtime::simir::OperationList> operation_bodies_;
         std::vector<runtime::simir::CopyOnWriteVector<
             runtime::simir::ValueKind>> register_value_kind_bodies_;

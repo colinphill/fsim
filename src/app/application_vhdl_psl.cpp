@@ -1274,6 +1274,11 @@ void VhdlPslExecution::observe(
     impl_->engine.observe(clocks, std::move(values), time, delta);
 }
 
+bool VhdlPslExecution::active() const noexcept
+{
+    return impl_ && !impl_->directive_kinds.empty();
+}
+
 void VhdlPslExecution::finish(
     const runtime::SimulationTick time, const std::uint64_t delta)
 {

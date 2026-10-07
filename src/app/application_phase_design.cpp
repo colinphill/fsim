@@ -966,16 +966,24 @@ std::optional<BuiltProject> load_design_artifact(
                 + support::path_to_utf8(runtime_path));
         return std::nullopt;
     }
+    // The restored design resolves its paths in the canonical table
+    // directly when the table holds them all; otherwise it is remapped.
+    bool canonical_paths_adopted = false;
     auto runtime = [&] {
         application_detail::ScopedPhaseProfile decode_phase {
             "runtime_artifact_decode"
         };
-        return deserialize_runtime_state(runtime_input, *runtime_size,
+        const elaboration::detail::CanonicalHierarchyPaths canonical_paths {
+            hierarchy_paths.payload->paths
+        };
+        auto decoded = deserialize_runtime_state(runtime_input, *runtime_size,
             support::path_to_utf8(runtime_index->artifact),
             hierarchy_paths.payload->paths, diagnostics);
+        canonical_paths_adopted = canonical_paths.adopted();
+        return decoded;
     }();
-    if (runtime && !runtime->remap_path_table(
-                       hierarchy_paths.payload->paths)) {
+    if (runtime && !canonical_paths_adopted
+        && !runtime->remap_path_table(hierarchy_paths.payload->paths)) {
         diagnostics.error("FSIM-ART-0014",
             ".fsimdesign runtime hierarchy paths are absent from the "
             "canonical table");
@@ -1748,7 +1756,12 @@ static int handle_simulate_impl(
                 + metadata->delay_mode + "'");
         return 1;
     }
-    auto built = load_design_artifact(*invocation.design, diagnostics);
+    // The interpreter built for this run validates every process program
+    // as it is populated; the loader's trial population would repeat that.
+    auto built = [&] {
+        const elaboration::detail::DeferredProgramValidation deferred;
+        return load_design_artifact(*invocation.design, diagnostics);
+    }();
     if (!built) {
         return 1;
     }

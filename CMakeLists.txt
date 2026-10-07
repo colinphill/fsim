@@ -809,9 +809,11 @@ add_library(
     src/runtime/simir_fused_cone.cpp
     src/runtime/simir_static_kernel.cpp
     src/runtime/simir_static_kernel_analysis.cpp
+    src/runtime/simir_static_kernel_behavioral.cpp
     src/runtime/simir_static_kernel_compiled.cpp
     src/runtime/simir_static_kernel_execute.cpp
     src/runtime/simir_static_kernel_native_units.cpp
+    src/runtime/simir_static_kernel_specialize.cpp
     src/runtime/simir_fused_static_graph.cpp
     src/runtime/simir_execution_context.cpp
     src/runtime/simir_execution_boundaries.cpp

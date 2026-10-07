@@ -24,11 +24,14 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
+#include <unordered_set>
 #include <cctype>
 #include <cstdlib>
 #include <iostream>
 #include <map>
 #include <span>
+#include <unordered_map>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -118,6 +121,8 @@ Interpreter::Impl::StaticKernel::StaticKernel(
 {
     verify_ = std::getenv("FSIM_KERNEL_VERIFY") != nullptr;
     check_inputs_ = std::getenv("FSIM_KERNEL_CHECK_INPUTS") != nullptr;
+    host_process_ = spec.host;
+    mixed_ = spec.mixed;
     const auto signal_count = impl_.signals.size();
     slot_of_signal_.assign(signal_count, no_slot);
     slots_.reserve(spec.owned_signals.size());
@@ -247,7 +252,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     for (const auto& container : containers_) {
         const auto& type = container.type;
         StaticKernelContainerInfo info;
-        const bool shape = !vhdl_ && type.fixed && !type.associative
+        const bool shape = (!vhdl_ || mixed_) && type.fixed && !type.associative
             && container.element_words == 1U
             && (type.element_kind == ContainerElementKind::Packed
                 || type.element_kind == ContainerElementKind::Scalar);
@@ -305,7 +310,24 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         return inputs_[input_of_signal_[signal]];
     };
 
+    const bool stage_profile = std::getenv("FSIM_PROFILE_PHASES") != nullptr;
+    auto stage_started = std::chrono::steady_clock::now();
+    const auto stage = [&](const char* name) {
+        if (stage_profile) {
+            const auto now = std::chrono::steady_clock::now();
+            std::cerr << "fsim-profile: static-kernel-stage " << name << "_ms="
+                      << std::chrono::duration<double, std::milli>(now - stage_started).count()
+                      << '\n';
+            stage_started = now;
+        }
+    };
+    stage("slots");
+    double expand_seconds = 0.0;
+    std::size_t expanded_ops = 0U;
+    std::unordered_set<const void*> distinct_bodies;
     members_.reserve(spec.members.size());
+    const bool keep_names = profile_ || trace_
+        || std::getenv("FSIM_KERNEL_DUMP") != nullptr;
     for (const auto& member_spec : spec.members) {
         const ProcessProgramView program = member_spec.process == spec.host
             ? ProcessProgramView { spec.host_original }
@@ -316,33 +338,76 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         member.run_at_start = member_spec.run_at_start;
         member.partition_key = member_spec.partition;
         member.body_begin = member_spec.body_begin;
+        member.prologue_end = member_spec.body_begin;
         member.body_end = member_spec.body_end;
         member.exit_alt = member_spec.exit_alt;
-        member.fresh = vhdl_ && member_spec.run_at_start;
-        if (vhdl_) {
+        member.vhdl = vhdl_ && (!mixed_ || member_spec.vhdl);
+        member.fresh = member.vhdl && member_spec.run_at_start;
+        if (member.vhdl) {
             const auto kinds = program.register_value_kinds();
             member.register_kinds.assign(kinds.begin(), kinds.end());
             member.register_kinds.resize(program.register_count(),
                 ValueKind::logic4);
         }
         const auto& operations = program.operations();
+        const auto expand_started = stage_profile ? std::chrono::steady_clock::now()
+                                                  : std::chrono::steady_clock::time_point { };
         member.operations.reserve(operations.size());
         for (std::size_t op = 0U; op < operations.size(); ++op) {
             member.operations.push_back(operations.expanded(op));
         }
+        if (stage_profile) {
+            expand_seconds += std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - expand_started).count();
+            distinct_bodies.insert(operations.body_identity());
+            expanded_ops += operations.size();
+        }
         if (member.body_end > member.operations.size()
-            || member.body_begin > (vhdl_ ? member.operations.size()
-                                          : member.body_end)) {
+            || member.body_begin > (member.vhdl ? member.operations.size()
+                                                : member.body_end)) {
             throw std::invalid_argument("static kernel member body is invalid");
         }
-        if (profile_ || trace_ || std::getenv("FSIM_KERNEL_DUMP") != nullptr) {
+        if (keep_names) {
             profile_names_.push_back(program.name());
         }
         member.registers.assign(program.register_count(), PackedLogic4 { });
         member.container_registers.assign(
             program.container_register_count(), no_container);
         const auto index = static_cast<std::uint32_t>(members_.size());
-        for (const auto& sensitivity : member_spec.sensitivity) {
+        const bool behavioral
+            = member.kind == StaticKernelMemberKind::behavioral;
+        if (behavioral) {
+            // Threads wait on these signals dynamically: kernel slots stay
+            // observable (never silent), host signals become inputs.
+            behavioral_ = true;
+            member.strings.assign(program.string_register_count(), std::string { });
+            member.wait_sensitivity = member_spec.sensitivity;
+            const auto waitable = [&](const SignalId signal) {
+                if (signal >= signal_count || family_of_signal_[signal] != no_slot) {
+                    throw std::invalid_argument(
+                        "static kernel behavioral wait targets an unsupported signal");
+                }
+                if (const auto slot = slot_of_signal_[signal]; slot != no_slot) {
+                    slot_waitable_.resize(slots_.size(), 0U);
+                    slot_waitable_[slot] = 1U;
+                } else {
+                    (void)input_for(signal);
+                }
+            };
+            for (const auto& entry : member.wait_sensitivity) {
+                waitable(entry.signal);
+            }
+            for (const auto& operation : member.operations) {
+                if (const auto* wait = operation_get_if<WaitOn>(&operation)) {
+                    for (const auto signal : wait->signals) {
+                        waitable(signal);
+                    }
+                }
+            }
+        }
+        for (const auto& sensitivity : behavioral
+                 ? std::span<const Sensitivity> { }
+                 : std::span<const Sensitivity> { member_spec.sensitivity }) {
             if (sensitivity.signal >= signal_count) {
                 throw std::invalid_argument(
                     "static kernel sensitivity is invalid");
@@ -392,7 +457,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             }
         }
         for (const auto& region : program.driver_regions()) {
-            if (vhdl_ || region.signal >= signal_count) {
+            if (member.vhdl || region.signal >= signal_count) {
                 continue;
             }
             const auto slot = slot_of_signal_[region.signal];
@@ -418,7 +483,30 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                 region.width == 0U ? slot.width : region.width });
         }
     }
+    {
+        // A slot written by VHDL members publishes in the generic domain.
+        std::vector<std::uint8_t> vhdl_process(impl_.processes.size(), 0U);
+        for (const auto& member : members_) {
+            if (member.vhdl && member.process < vhdl_process.size()) {
+                vhdl_process[member.process] = 1U;
+            }
+        }
+        for (auto& slot : slots_) {
+            slot.vhdl_written = vhdl_ && !mixed_;
+            for (const auto& writer : slot.writers) {
+                if (writer.process < vhdl_process.size()
+                    && vhdl_process[writer.process] != 0U) {
+                    slot.vhdl_written = true;
+                }
+            }
+        }
+    }
     for (auto& slot : slots_) {
+        if (slot.writers.size() == 1U) {
+            slot.last_writer = slot.writers.front().process;
+            slot.single_writer = true;
+            continue;
+        }
         auto writers = slot.writers;
         std::ranges::sort(writers, [](const auto& left, const auto& right) {
             return left.offset < right.offset;
@@ -568,19 +656,44 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             members_[index].level = level++;
         }
     }
+    if (stage_profile) {
+        std::cerr << "fsim-profile: static-kernel-members expand_ms=" << expand_seconds * 1000.0
+                  << " ops=" << expanded_ops << " distinct_bodies=" << distinct_bodies.size()
+                  << " members=" << spec.members.size() << '\n';
+    }
+    stage("members");
     if (std::getenv("FSIM_STATIC_KERNEL_GENERIC") == nullptr) {
         compile_members();
+        stage("compile");
         // VHDL members defer their writes and are not partitioned.
-        if (!vhdl_
+        if ((!vhdl_ || mixed_)
             && std::getenv("FSIM_STATIC_KERNEL_NO_PARTITIONS") == nullptr) {
             build_partitions(successors);
         }
+        stage("partitions");
         if (spec.codegen) {
             codegen_ = spec.codegen;
             build_native(*codegen_);
         }
+        stage("native");
     }
     build_schedule_targets();
+    stage("schedule");
+    for (const auto signal : spec.unwritten_inputs) {
+        if (signal < input_of_signal_.size() && input_of_signal_[signal] != no_slot) {
+            inputs_[input_of_signal_[signal]].unwritten = true;
+        }
+    }
+    for (std::uint32_t index = 0U; index < inputs_.size(); ++index) {
+        if (!inputs_[index].unwritten) {
+            written_inputs_.push_back(index);
+        }
+    }
+    host_boundary_ = std::ranges::any_of(inputs_,
+                         [](const Input& input) { return !input.unwritten; })
+        || std::ranges::any_of(slots_, [](const Slot& slot) { return slot.output; });
+    // Every process is a member and nothing crosses the host boundary.
+    closed_ = !host_boundary_ && impl_.processes.size() == members_.size();
 }
 
 Interpreter::Impl::StaticKernel::~StaticKernel()
@@ -639,10 +752,36 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
               << " templates=" << templates_.size()
               << " compiled_members=" << compiled_members_ << '/'
               << members_.size()
+              << " specialized=" << specialized_members_
+              << " warps=" << profile_warps_
+              << " specialize_ms=" << specialize_seconds_ * 1000.0
+              << " specialize_hits=" << specialize_cache_hits_
               << " operations=" << profile_operations_
               << " inputs=" << inputs_.size()
               << " input_changes=" << profile_input_changes_
               << " publishes=" << profile_publishes_ << '\n';
+    {
+        // Run distribution over templates: the code generation each
+        // threshold of runs would need.
+        std::vector<std::pair<std::uint64_t, std::size_t>> runs;
+        for (const auto& program : templates_) {
+            const auto found = profile_template_runs_.find(program.get());
+            runs.emplace_back(found == profile_template_runs_.end() ? 0U : found->second,
+                program->code.size());
+        }
+        for (const std::uint64_t threshold : { 1ULL, 100ULL, 1000ULL, 10000ULL, 100000ULL }) {
+            std::size_t count = 0U;
+            std::size_t size = 0U;
+            for (const auto& [count_runs, code] : runs) {
+                if (count_runs >= threshold) {
+                    ++count;
+                    size += code;
+                }
+            }
+            std::cerr << "fsim-kernel: templates_run_at_least_" << threshold << "="
+                      << count << " insts=" << size << '\n';
+        }
+    }
     {
         std::vector<std::pair<std::uint64_t, std::string>> generic;
         for (const auto& [key, count] : profile_generic_ops_) {
@@ -717,7 +856,9 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
 void Interpreter::Impl::StaticKernel::fail(const std::uint32_t member,
     const InstructionIndex instruction, const std::string& message) const
 {
-    throw InterpreterError { members_[member].process, instruction, message };
+    const auto& origin = members_[member].origin;
+    throw InterpreterError { members_[member].process,
+        instruction < origin.size() ? origin[instruction] : instruction, message };
 }
 
 PackedLogic4 Interpreter::Impl::StaticKernel::slot_value(
@@ -799,11 +940,21 @@ void Interpreter::Impl::StaticKernel::slot_changed(const std::uint32_t slot_inde
     const std::uint64_t changed_mask, const std::uint64_t* before,
     const std::uint32_t field_offset)
 {
-    auto& slot = slots_[slot_index];
     profile_slot_changes_ += profile_ ? 1U : 0U;
-    for (const auto& target : slot.targets) {
-        schedule_target(target);
+    const auto notify = slot_notify_[slot_index];
+    for (auto index = notify.begin; index < notify.end; ++index) {
+        schedule_target(notify_targets_[index]);
     }
+    if (notify.general) {
+        slot_changed_general(slot_index, changed_mask, before, field_offset);
+    }
+}
+
+void Interpreter::Impl::StaticKernel::slot_changed_general(
+    const std::uint32_t slot_index, const std::uint64_t changed_mask,
+    const std::uint64_t* before, const std::uint32_t field_offset)
+{
+    auto& slot = slots_[slot_index];
     for (const auto& group : slot.ranged) {
         // Scheduling a target that is already pending changes nothing.
         if (target_pending(group.id)) {
@@ -833,13 +984,68 @@ void Interpreter::Impl::StaticKernel::slot_changed(const std::uint32_t slot_inde
             }
         }
     }
-    if (slot.output && !slot.output_pending) {
-        slot.output_pending = true;
-        output_queue_.push_back(slot_index);
+    if (slot.output) {
+        if (!slot.output_pending) {
+            slot.output_pending = true;
+            slot.publish_nba = false;
+            output_queue_.push_back(slot_index);
+        }
+        slot.publish_nba = slot.publish_nba || nonblocking_committed_;
+    }
+    if (slot_index < slot_wait_seen_.size() && slot_waitable_[slot_index] != 0U) {
+        const auto seen = slot_wait_seen_[slot_index];
+        const auto current = slot_edge_bit(slot_index);
+        slot_wait_seen_[slot_index] = current;
+        if (!slot_waiters_[slot_index].empty()) {
+            wake_waiters(slot_waiters_[slot_index], seen, current);
+        }
     }
     if (!slot.edges.empty() && !slot.trigger_pending) {
         slot.trigger_pending = true;
         trigger_queue_.push_back(slot_index);
+    }
+}
+
+// Native code's change notifications live beside slot_changed so the
+// notify-target loop inlines into them.
+void Interpreter::Impl::StaticKernel::native_notify(
+    StaticKernelNativeFrame* frame, const std::uint32_t slot,
+    const std::uint64_t changed)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    kernel.profile_native_calls_[2] += kernel.profile_ ? 1U : 0U;
+    try {
+        kernel.running_position_ = frame->position;
+        // Only a general slot can have several writers.
+        if (kernel.slot_notify_[slot].general) {
+            if (auto& state = kernel.slots_[slot]; !state.single_writer) {
+                state.last_writer = kernel.member_process_[frame->member];
+            }
+        }
+        kernel.slot_changed(slot, changed, nullptr);
+    } catch (...) {
+        kernel.native_exception_ = std::current_exception();
+        frame->status = 1U;
+    }
+}
+
+void Interpreter::Impl::StaticKernel::native_notify_field(
+    StaticKernelNativeFrame* frame, const std::uint32_t slot,
+    const std::uint64_t changed, const std::uint32_t field_offset)
+{
+    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
+    kernel.profile_native_calls_[2] += kernel.profile_ ? 1U : 0U;
+    try {
+        kernel.running_position_ = frame->position;
+        if (kernel.slot_notify_[slot].general) {
+            if (auto& state = kernel.slots_[slot]; !state.single_writer) {
+                state.last_writer = kernel.member_process_[frame->member];
+            }
+        }
+        kernel.slot_changed(slot, changed, nullptr, field_offset);
+    } catch (...) {
+        kernel.native_exception_ = std::current_exception();
+        frame->status = 1U;
     }
 }
 
@@ -993,7 +1199,13 @@ void Interpreter::Impl::StaticKernel::store_slot_word(
 {
     const auto& slot = slots_[slot_index];
     auto* base = arena_.data() + slot.offset;
+    const bool narrow = offset + width <= 64U;
+    const auto field = kernel_word::mask(width) << offset;
     const auto put = [&](std::uint64_t* plane, const std::uint64_t bits) {
+        if (narrow) {
+            *plane = (*plane & ~field) | ((bits << offset) & field);
+            return;
+        }
         const std::uint64_t words[1] = { bits };
         copy_bits(plane, offset, std::span<const std::uint64_t> { words, 1U },
             width);
@@ -1019,10 +1231,17 @@ void Interpreter::Impl::StaticKernel::commit_round()
         auto& slot = slots_[slot_index];
         if (!slot.touched) {
             slot.touched = true;
-            slot.before = static_cast<std::uint32_t>(round_before_.size());
-            round_before_.insert(round_before_.end(),
-                arena_.begin() + slot.offset,
-                arena_.begin() + slot.offset + slot.planes * slot.words);
+            const auto words = static_cast<std::size_t>(slot.planes) * slot.words;
+            if (words <= slot.small_before.size()) {
+                std::memcpy(slot.small_before.data(), arena_.data() + slot.offset,
+                    words * sizeof(std::uint64_t));
+            } else {
+                const auto at = round_before_.size();
+                slot.before = static_cast<std::uint32_t>(at);
+                round_before_.resize(at + words);
+                std::memcpy(round_before_.data() + at, arena_.data() + slot.offset,
+                    words * sizeof(std::uint64_t));
+            }
             touched_.push_back(slot_index);
         }
     };
@@ -1062,9 +1281,10 @@ void Interpreter::Impl::StaticKernel::commit_round()
     for (const auto slot_index : touched_) {
         auto& slot = slots_[slot_index];
         slot.touched = false;
-        const auto* before = round_before_.data() + slot.before;
-        if (!std::equal(before, before + slot.planes * slot.words,
-                arena_.begin() + slot.offset)) {
+        const auto words = static_cast<std::size_t>(slot.planes) * slot.words;
+        const auto* before = words <= slot.small_before.size()
+            ? slot.small_before.data() : round_before_.data() + slot.before;
+        if (!std::equal(before, before + words, arena_.begin() + slot.offset)) {
             if (trace_) {
                 std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now()
                           << " commit "
@@ -1433,15 +1653,20 @@ void Interpreter::Impl::StaticKernel::schedule_target(const ScheduleTarget& targ
 {
     profile_schedules_ += profile_ ? 1U : 0U;
     if ((target.id & partition_tag) != 0U) {
-        const auto partition = target.id & ~partition_tag;
-        if (partition == running_partition_
-            && target.min_position > running_position_) {
+        if (committing_round_) {
+            deferred_targets_.push_back(target);
             return;
         }
-        auto& state = partitions_[partition];
-        if (!state.queued) {
-            state.queued = true;
-            enqueue(state.level, target.id);
+        const auto partition = target.id & ~partition_tag;
+        if (partition == running_partition_
+            && target.min_position >= running_position_) {
+            // Later readers run in this pass; the running member itself does
+            // not wake on its own writes (it is not waiting while it runs).
+            return;
+        }
+        if (partition_queued_[partition] == 0U) {
+            partition_queued_[partition] = 1U;
+            enqueue(partition_level_[partition], target.id);
         }
         return;
     }
@@ -1495,14 +1720,42 @@ void Interpreter::Impl::StaticKernel::build_schedule_targets()
         slot.readers = std::move(ranged);
         slot.targets = std::move(targets);
     }
+    member_schedule_.resize(members_.size());
+    for (std::size_t index = 0U; index < members_.size(); ++index) {
+        const auto& member = members_[index];
+        auto& state = member_schedule_[index];
+        state.partition = member.partition;
+        state.position = member.position;
+        state.level = member.level;
+        state.kind = member.kind;
+        state.vhdl = member.vhdl;
+    }
+    partition_queued_.assign(partitions_.size(), 0U);
+    partition_level_.resize(partitions_.size());
+    for (std::size_t index = 0U; index < partitions_.size(); ++index) {
+        partition_level_[index] = partitions_[index].level;
+    }
+    slot_notify_.resize(slots_.size());
+    notify_targets_.clear();
+    for (std::size_t index = 0U; index < slots_.size(); ++index) {
+        const auto& slot = slots_[index];
+        auto& notify = slot_notify_[index];
+        notify.begin = static_cast<std::uint32_t>(notify_targets_.size());
+        notify_targets_.insert(
+            notify_targets_.end(), slot.targets.begin(), slot.targets.end());
+        notify.end = static_cast<std::uint32_t>(notify_targets_.size());
+        notify.general = !slot.ranged.empty() || slot.output
+            || !slot.edges.empty() || !slot.single_writer
+            || (index < slot_waitable_.size() && slot_waitable_[index] != 0U);
+    }
 }
 
 bool Interpreter::Impl::StaticKernel::target_pending(const std::uint32_t id) const
 {
     if ((id & partition_tag) != 0U) {
-        return partitions_[id & ~partition_tag].queued;
+        return partition_queued_[id & ~partition_tag] != 0U;
     }
-    const auto& member = members_[id];
+    const auto& member = member_schedule_[id];
     switch (member.kind) {
     case StaticKernelMemberKind::combinational:
         return member.queued;
@@ -1516,22 +1769,40 @@ bool Interpreter::Impl::StaticKernel::target_pending(const std::uint32_t id) con
 void Interpreter::Impl::StaticKernel::schedule(const std::uint32_t member)
 {
     profile_schedules_ += profile_ ? 1U : 0U;
-    auto& state = members_[member];
-    if (state.kind == StaticKernelMemberKind::combinational) {
-        if (state.partition != no_slot) {
-            if (state.partition == running_partition_
-                && state.position > running_position_) {
-                // Runs later in the current partition pass.
-                return;
-            }
-            auto& partition = partitions_[state.partition];
-            if (!partition.queued) {
-                partition.queued = true;
-                enqueue(partition.level, state.partition | partition_tag);
+    auto& state = member_schedule_[member];
+    if (mixed_) {
+        // A VHDL member runs in the next round; a SystemVerilog member woken
+        // by a VHDL commit runs in the next delta.
+        if (state.vhdl) {
+            if (!state.round) {
+                state.round = true;
+                next_round_.push_back(member);
             }
             return;
         }
-        if (!state.queued) {
+        if (committing_round_) {
+            if (!state.deferred) {
+                state.deferred = true;
+                deferred_targets_.push_back({ member, 0U });
+            }
+            return;
+        }
+    }
+    if (state.kind == StaticKernelMemberKind::combinational) {
+        if (state.partition != no_slot) {
+            if (state.partition == running_partition_
+                && state.position >= running_position_) {
+                // Runs later in the current partition pass.
+                return;
+            }
+            if (partition_queued_[state.partition] == 0U) {
+                partition_queued_[state.partition] = 1U;
+                enqueue(partition_level_[state.partition],
+                    state.partition | partition_tag);
+            }
+            return;
+        }
+        if (!state.queued && member != running_member_) {
             state.queued = true;
             enqueue(state.level, member);
         }
@@ -1549,7 +1820,10 @@ void Interpreter::Impl::StaticKernel::run(const std::uint32_t member_index)
     if (trace_) {
         std::cerr << "fsim-kernel-trace: t=" << impl_.scheduler.now()
                   << " d=" << impl_.scheduler.delta() << " run "
-                  << profile_names_[member_index] << '\n';
+                  << profile_names_[member_index]
+                  << (member.fresh ? " fresh" : "")
+                  << (member.compiled ? " compiled" : "")
+                  << (member.generic_mode ? " generic" : "") << '\n';
     }
     if (profile_) {
         ++profile_runs_[static_cast<int>(member.kind)];
@@ -1558,7 +1832,27 @@ void Interpreter::Impl::StaticKernel::run(const std::uint32_t member_index)
         }
         ++profile_member_runs_[member_index];
     }
-    if (vhdl_ && member.compiled && (member.fresh || member.generic_mode)) {
+    if (member.vhdl && member.compiled && member.fresh && !member.generic_mode
+        && !verify_) {
+        // The first run is the process prologue followed by an ordinary
+        // activation: the prologue runs on the reference evaluator, the body
+        // from its start (prologue_end) in compiled code.
+        member.fresh = false;
+        const auto pc = run_generic_from(member_index, 0U, member.prologue_end);
+        sync_compiled_registers(member_index);
+        if (pc == member.body_end) {
+            return;
+        }
+        if (member.generic_mode) {
+            run_generic_from(member_index, pc);
+            sync_compiled_registers(member_index);
+            return;
+        }
+        profile_compiled_runs_ += profile_ ? 1U : 0U;
+        run_compiled(member_index);
+        return;
+    }
+    if (member.vhdl && member.compiled && (member.fresh || member.generic_mode)) {
         if (profile_) {
             ++profile_generic_runs_;
             profile_member_deopts_.resize(members_.size(), 0U);
@@ -1570,7 +1864,7 @@ void Interpreter::Impl::StaticKernel::run(const std::uint32_t member_index)
     }
     if (member.compiled) {
         profile_compiled_runs_ += profile_ ? 1U : 0U;
-        if (verify_ && vhdl_) {
+        if (verify_ && member.vhdl) {
             verify_run(member_index);
             return;
         }
@@ -1768,7 +2062,7 @@ void Interpreter::Impl::StaticKernel::run_generic(const std::uint32_t member_ind
     const auto& member = members_[member_index];
     std::uint32_t pc = member.body_begin;
     std::size_t steps = 0U;
-    if (vhdl_) {
+    if (member.vhdl) {
         // The first run starts at operation 0; later ones resume after the
         // wait.
         if (std::exchange(members_[member_index].fresh, false)) {
@@ -1785,15 +2079,15 @@ void Interpreter::Impl::StaticKernel::run_generic(const std::uint32_t member_ind
     }
 }
 
-void Interpreter::Impl::StaticKernel::run_generic_from(
-    const std::uint32_t member_index, std::uint32_t pc)
+std::uint32_t Interpreter::Impl::StaticKernel::run_generic_from(
+    const std::uint32_t member_index, std::uint32_t pc, const std::uint32_t until)
 {
     // Subprogram bodies may lie anywhere; the run ends at the wait (or the
-    // halt of a process without sensitivity).
+    // halt of a process without sensitivity), or at `until`.
     const auto& member = members_[member_index];
     const auto size = member.operations.size();
     std::size_t steps = 0U;
-    while (pc != member.body_end) {
+    while (pc != member.body_end && pc != until) {
         if (++steps > run_step_limit) {
             fail(member_index, pc, "static kernel member did not terminate");
         }
@@ -1803,6 +2097,7 @@ void Interpreter::Impl::StaticKernel::run_generic_from(
         }
         pc = step_generic(member_index, pc);
     }
+    return pc;
 }
 
 std::uint32_t Interpreter::Impl::StaticKernel::step_generic(
@@ -1834,7 +2129,7 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_generic(
                     blocking, domain);
                 return;
             }
-            if (vhdl_) {
+            if (member.vhdl) {
                 if (slot_of_signal_[signal] == no_slot) {
                     fail(member_index, pc,
                         "static kernel VHDL write targets an aggregate proxy");
@@ -2164,11 +2459,12 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_generic(
                     if (op.severity != AssertionSeverity::failure
                         && impl_.report_hook) {
                         impl_.report_hook(member.process, message, op.severity,
-                            op.source, impl_.scheduler.now(),
-                            impl_.scheduler.delta());
+                            op.source, kernel_now(),
+                            warp_time_ ? 0U : impl_.scheduler.delta());
                     }
                     if (op.severity == AssertionSeverity::failure) {
-                        throw AssertionError(member.process, pc,
+                        throw AssertionError(member.process,
+                            pc < member.origin.size() ? member.origin[pc] : pc,
                             std::string { message }, op.severity, op.source);
                     }
                 }
@@ -2379,7 +2675,7 @@ void Interpreter::Impl::StaticKernel::settle()
         --queued_count_;
         if ((entry & partition_tag) != 0U) {
             const auto partition = entry & ~partition_tag;
-            partitions_[partition].queued = false;
+            partition_queued_[partition] = 0U;
             if (++evaluations > limit) {
                 const auto member = partitions_[partition].members.front();
                 fail(member, members_[member].body_begin,
@@ -2388,12 +2684,15 @@ void Interpreter::Impl::StaticKernel::settle()
             run_partition(partition);
             continue;
         }
-        members_[entry].queued = false;
+        member_schedule_[entry].queued = false;
         if (++evaluations > limit) {
             fail(entry, members_[entry].body_begin,
                 "static kernel combinational logic did not settle");
         }
+        // A combinational member does not wake on its own writes.
+        running_member_ = entry;
         run(entry);
+        running_member_ = no_slot;
     }
 }
 
@@ -2457,14 +2756,17 @@ void Interpreter::Impl::StaticKernel::commit_pending()
 
 void Interpreter::Impl::StaticKernel::publish()
 {
-    const auto domain = vhdl_ ? SignalUpdateDomain::generic
-        : nonblocking_committed_ ? SignalUpdateDomain::systemverilog_nba
-                                 : SignalUpdateDomain::systemverilog_active;
     auto queue = std::move(output_queue_);
     output_queue_.clear();
     for (const auto slot_index : queue) {
         auto& slot = slots_[slot_index];
         slot.output_pending = false;
+        // A value changed before this activation's NBA commit (a blocking
+        // write, such as a clock edge) belongs to the Active region; one
+        // changed by or after the commit to the NBA region.
+        const auto domain = slot.vhdl_written ? SignalUpdateDomain::generic
+            : slot.publish_nba ? SignalUpdateDomain::systemverilog_nba
+                               : SignalUpdateDomain::systemverilog_active;
         if (std::equal(arena_.begin() + slot.offset,
                 arena_.begin() + slot.offset + slot.planes * slot.words,
                 arena_.begin() + slot.published)) {
@@ -2526,14 +2828,26 @@ void Interpreter::Impl::StaticKernel::initialize()
         const auto& member = members_[index];
         if (member.run_at_start
             && (member.kind == StaticKernelMemberKind::combinational
-                || (vhdl_ && member.kind == StaticKernelMemberKind::sequential))) {
+                || (member.vhdl && member.kind == StaticKernelMemberKind::sequential))) {
             schedule(index);
         }
     }
     for (std::uint32_t index = 0U; index < members_.size(); ++index) {
         if (members_[index].kind == StaticKernelMemberKind::once) {
+            if (mixed_ && members_[index].vhdl) {
+                // Its assignments belong to the first VHDL round.
+                auto& state = member_schedule_[index];
+                if (!state.round) {
+                    state.round = true;
+                    next_round_.push_back(index);
+                }
+                continue;
+            }
             run(index);
         }
+    }
+    if (behavioral_) {
+        start_behavioral();
     }
 }
 
@@ -2554,10 +2868,14 @@ void Interpreter::Impl::StaticKernel::write_mirror(const Input& input)
     }
 }
 
-bool Interpreter::Impl::StaticKernel::scan_inputs()
+bool Interpreter::Impl::StaticKernel::scan_inputs(const bool all)
 {
     bool changed = false;
-    for (auto& input : inputs_) {
+    // Inputs no process writes change only between activations; within one
+    // only the others are scanned.
+    const auto count = all ? inputs_.size() : written_inputs_.size();
+    for (std::size_t position = 0U; position < count; ++position) {
+        auto& input = inputs_[all ? position : written_inputs_[position]];
         // Every committed host value change bumps the signal's revision.
         const auto revision = impl_.signal_value_revisions[input.signal];
         if (revision == input.revision && !check_inputs_) {
@@ -2588,6 +2906,14 @@ bool Interpreter::Impl::StaticKernel::scan_inputs()
         }
         const auto before = std::exchange(input.cached, std::move(value));
         write_mirror(input);
+        if (behavioral_) {
+            const auto input_index = static_cast<std::size_t>(&input - inputs_.data());
+            if (input_index < input_waiters_.size()
+                && !input_waiters_[input_index].empty()) {
+                wake_waiters(input_waiters_[input_index], edge_bit(before),
+                    edge_bit(input.cached));
+            }
+        }
         for (const auto& reader : input.readers) {
             bool differs = reader.width == 0U
                 || before.width() != input.cached.width()
@@ -2632,6 +2958,7 @@ bool Interpreter::Impl::StaticKernel::activate()
             }
         }
     } timer { *this, activation_started };
+    warp_time_.reset();
     nonblocking_committed_ = false;
     yield_requested_ = false;
     profile_activations_ += profile_ ? 1U : 0U;
@@ -2640,21 +2967,68 @@ bool Interpreter::Impl::StaticKernel::activate()
     } else {
         (void)scan_inputs();
     }
+    activate_step();
+    // A closed kernel (no host process, output or host-written input) whose
+    // next event is its own timer, with nothing else pending on the host up
+    // to that time, runs its next time steps itself instead of handing each
+    // one to the host scheduler. Nothing outside the kernel can observe the
+    // steps in between; time and $finish are kept at their exact values.
+    const bool observed = static_cast<bool>(impl_.signal_change_hook)
+        || static_cast<bool>(impl_.stored_signal_change_hook)
+        || static_cast<bool>(impl_.scalar_signal_change_hook)
+        || static_cast<bool>(impl_.driver_change_hook)
+        || static_cast<bool>(impl_.container_object_change_hook)
+        || static_cast<bool>(impl_.container_element_change_hook);
+    for (std::size_t step = 0U; time_warp_ && closed_ && !observed && behavioral_
+         && !stopped_
+         && !yield_requested_ && step < max_warp_steps; ++step) {
+        const auto next = next_timer();
+        if (!next) {
+            break;
+        }
+        const auto host_next = impl_.scheduler.next_pending_time();
+        if (host_next && *host_next <= *next) {
+            break;
+        }
+        warp_time_ = *next;
+        nonblocking_committed_ = false;
+        profile_warps_ += profile_ ? 1U : 0U;
+        activate_step();
+    }
+    if (behavioral_) {
+        arm_timer();
+    }
+    publish();
+    return yield_requested_;
+}
+
+void Interpreter::Impl::StaticKernel::activate_step()
+{
+    if (behavioral_) {
+        collect_timers();
+    }
+    if (mixed_) {
+        activate_mixed();
+        return;
+    }
+    const auto run_triggered = [&] {
+        auto triggered = std::move(triggered_);
+        triggered_.clear();
+        std::ranges::sort(triggered);
+        for (const auto member : triggered) {
+            member_schedule_[member].triggered = false;
+            run(member);
+        }
+    };
     for (std::size_t iteration = 0U;; ++iteration) {
         if (iteration > edge_iteration_limit) {
             fail(0U, 0U, "static kernel edge iteration limit exceeded");
         }
         settle();
         check_owned_edges();
-        if (!triggered_.empty() || writes_.count != 0U) {
-            auto triggered = std::move(triggered_);
-            triggered_.clear();
-            std::ranges::sort(triggered);
-            for (const auto member : triggered) {
-                members_[member].triggered = false;
-                run(member);
-            }
-            if (vhdl_) {
+        if (vhdl_) {
+            if (!triggered_.empty() || writes_.count != 0U) {
+                run_triggered();
                 commit_round();
                 if (queued_count_ != 0U || !triggered_.empty()
                     || !trigger_queue_.empty()) {
@@ -2666,20 +3040,164 @@ bool Interpreter::Impl::StaticKernel::activate()
                 }
                 continue;
             }
+        } else {
+            bool active = false;
+            if (!triggered_.empty()) {
+                run_triggered();
+                active = true;
+            }
+            if (behavioral_) {
+                active = run_ready_threads() || active;
+                if (stopped_) {
+                    break;
+                }
+                // The Active region drains (combinational settling included)
+                // before #0 resumptions (Inactive) and before the NBA region.
+                if (active) {
+                    continue;
+                }
+                if (!inactive_threads_.empty()) {
+                    for (const auto thread : inactive_threads_) {
+                        ready_thread(thread);
+                    }
+                    inactive_threads_.clear();
+                    continue;
+                }
+            }
             if (writes_.count != 0U) {
                 nonblocking_committed_ = true;
                 commit_pending();
+                continue;
             }
-            continue;
+            if (active) {
+                continue;
+            }
         }
         // Blocking commits to host-owned signals the kernel also reads are
         // visible immediately; a process never wakes on its own writes.
-        if (!scan_inputs()) {
+        if (!scan_inputs(false)) {
             break;
         }
     }
-    publish();
-    return yield_requested_;
+}
+
+void Interpreter::Impl::StaticKernel::swap_write_queues()
+{
+    std::swap(writes_, parked_writes_);
+    std::swap(write_storage_, parked_storage_);
+    std::swap(pending_generic_, parked_pending_);
+}
+
+void Interpreter::Impl::StaticKernel::sv_drain()
+{
+    // SystemVerilog regions of one delta: Active (combinational settling,
+    // edge-triggered members, ready threads), Inactive (#0), NBA.
+    for (std::size_t iteration = 0U;; ++iteration) {
+        if (iteration > edge_iteration_limit) {
+            fail(0U, 0U, "static kernel edge iteration limit exceeded");
+        }
+        settle();
+        check_owned_edges();
+        bool active = false;
+        if (!triggered_.empty()) {
+            auto triggered = std::move(triggered_);
+            triggered_.clear();
+            std::ranges::sort(triggered);
+            for (const auto member : triggered) {
+                member_schedule_[member].triggered = false;
+                run(member);
+            }
+            active = true;
+        }
+        if (behavioral_) {
+            active = run_ready_threads() || active;
+            if (stopped_) {
+                return;
+            }
+            if (active) {
+                continue;
+            }
+            if (!inactive_threads_.empty()) {
+                for (const auto thread : inactive_threads_) {
+                    ready_thread(thread);
+                }
+                inactive_threads_.clear();
+                continue;
+            }
+        }
+        if (writes_.count != 0U) {
+            nonblocking_committed_ = true;
+            commit_pending();
+            continue;
+        }
+        if (active) {
+            continue;
+        }
+        return;
+    }
+}
+
+void Interpreter::Impl::StaticKernel::activate_mixed()
+{
+    // One iteration is one delta, as the reference scheduler interleaves
+    // them: VHDL members of the round run (their assignments deferred),
+    // SystemVerilog regions drain, then the round commits. SystemVerilog work
+    // woken by a commit and VHDL members woken by anything run in the next
+    // delta. With host processes at the boundary each delta is a host delta;
+    // without, the host still sees a delta every few hundred rounds, so its
+    // delta limit stops a design that never settles.
+    constexpr std::size_t rounds_per_host_delta = 256U;
+    std::size_t rounds = 0U;
+    sv_drain();
+    while (!stopped_) {
+        if (next_round_.empty() && deferred_targets_.empty()
+            && deferred_threads_.empty()) {
+            if (!scan_inputs(false)) {
+                break;
+            }
+            sv_drain();
+            continue;
+        }
+        for (const auto thread : deferred_threads_) {
+            ready_threads_.push_back(thread);
+        }
+        deferred_threads_.clear();
+        auto deferred = std::move(deferred_targets_);
+        deferred_targets_.clear();
+        for (const auto& target : deferred) {
+            if ((target.id & partition_tag) == 0U) {
+                member_schedule_[target.id].deferred = false;
+                schedule(target.id);
+            } else {
+                schedule_target(target);
+            }
+        }
+        auto round = std::move(next_round_);
+        next_round_.clear();
+        std::ranges::sort(round);
+        swap_write_queues();
+        for (const auto member : round) {
+            member_schedule_[member].round = false;
+            run(member);
+        }
+        swap_write_queues();
+        sv_drain();
+        if (stopped_) {
+            break;
+        }
+        swap_write_queues();
+        committing_round_ = true;
+        commit_round();
+        check_owned_edges();
+        committing_round_ = false;
+        swap_write_queues();
+        if ((host_boundary_ || ++rounds == rounds_per_host_delta)
+            && (!next_round_.empty() || !deferred_targets_.empty()
+                || !deferred_threads_.empty())) {
+            yield_requested_ = true;
+            break;
+        }
+    }
 }
 
 void Interpreter::Impl::StaticKernel::materialize(const SignalId signal)
@@ -2755,6 +3273,15 @@ void Interpreter::Impl::materialize_static_kernel_signal(const SignalId signal)
     static_kernel_materializing = false;
 }
 
+void InterpreterProgramAccess::set_static_kernel_time_warp(
+    Interpreter& interpreter, const bool allowed)
+{
+    auto& impl = *interpreter.impl_;
+    if (impl.static_kernel) {
+        impl.static_kernel->set_time_warp(allowed);
+    }
+}
+
 void InterpreterProgramAccess::install_static_kernel(
     Interpreter& interpreter, StaticKernelRuntimeSpec spec)
 {
@@ -2775,7 +3302,10 @@ void InterpreterProgramAccess::install_static_kernel(
         }
         // Members never run on the scheduler; the host is driven by the
         // kernel executor rather than a native process executor.
-        impl.fusion_dormant_process[member.process] = 1U;
+        // 1 marks an inert member (no sensitivity, never initialized or
+        // final on the host); 2 the host, which runs the kernel.
+        impl.fusion_dormant_process[member.process]
+            = member.process == spec.host ? 2U : 1U;
     }
     impl.static_kernel_owned_signal.assign(impl.signals.size(), 0U);
     for (const auto signal : spec.owned_signals) {

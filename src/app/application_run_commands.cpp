@@ -52,7 +52,10 @@ void install_interrupt_hook(Simulation& simulation)
     interrupt_requested.store(false, std::memory_order_relaxed);
     simulation.set_safe_point_hook([](runtime::Scheduler& scheduler,
                                        runtime::SchedulerPhase) {
-        if (interrupt_requested.exchange(false, std::memory_order_relaxed)) {
+        // A plain load first: the exchange is a locked read-modify-write,
+        // and this runs at every scheduler safe point.
+        if (interrupt_requested.load(std::memory_order_relaxed)
+            && interrupt_requested.exchange(false, std::memory_order_relaxed)) {
             scheduler.request_stop();
         }
     });

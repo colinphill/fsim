@@ -18,7 +18,23 @@ the top of §4. Nothing here is committed yet unless a commit is named.
 Every target also requires exact Vivado parity on the deterministic round-2 fixtures (13
 `THRU`/`STIM_SUMMARY` lines) and HDL report parity with the reference engine.
 
-## 2. Current status (2026-10-06, late)
+## 2. Current status (2026-10-07)
+
+Paired qualification `v4-p1-pair-10071004` (7 pairs, CPU 9, fresh caches, frozen
+candidate `.local-artifacts/v4cand-p1-10071004`) against the HEAD control:
+
+| Case | Leg | Compile | Elaborate | Setup + simulation | Total |
+|---|---|---:|---:|---:|---:|
+| Verilog | v4 | 0.59 | 2.85 | **2.95** | **6.38** |
+| Verilog | HEAD | 0.64 | 5.60 | 24.82 | 31.21 |
+| Mixed | v4 | 1.13 | 2.85 | **3.30** | **7.27** |
+| Mixed | HEAD | 1.23 | 3.20 | 20.85 | 25.33 |
+
+Phase 1 exits with these numbers. D6 (about 5.6 s and 4.6 s totals) is still open:
+Verilog needs about 0.8 s more and mixed about 2.7 s. The older table below records the
+2026-10-06 state.
+
+### 2026-10-06 (late) state
 
 Times are fresh-workspace runs on CPU 9 in seconds, kernel on (`FSIM_STATIC_KERNEL=1`),
 without profiling. `FSIM_PROFILE_KERNEL` adds about 25% to the run phase and
@@ -52,7 +68,7 @@ per completed phase).
 | Phase | Exit criteria (plan §7) | Status |
 |---|---|---|
 | 0 Contract, harness, corpus | contract approved, harness running, baselines recorded | partial: the `FSIM_KERNEL_VERIFY` replay harness and parity scripts exist; contract doc and corpus not yet |
-| 1 Verilog slice | exact parity, simulation ≤3 s, total ≤10 s | parity met; simulation ≈9.8 s and total ≈14.7 s not met |
+| 1 Verilog slice | exact parity, simulation ≤3 s, total ≤10 s | **met** on 2026-10-07 (paired run `v4-p1-pair-10071004`): Verilog setup and simulation 2.95 s, total 6.38 s; mixed total 7.27 s; Verilog/mixed 0.88; both transcripts identical to the reference engine, Vivado preflight passed |
 | 2 VHDL and mixed | mixed parity, Verilog within 5% of mixed, `rs-vhdl` parity | **met** on 2026-10-06 (paired run below): mixed parity; `rs-vhdl` parity on every testbench that elaborates (5 of 8; the other 3 fail elaboration on HEAD too); Verilog/mixed 1.005 |
 | 3 Front-end time | both throughput cases ≤15 s median (paired protocol) | **met** on 2026-10-06 (paired run below): Verilog 13.47 s, mixed 12.80 s |
 
@@ -74,6 +90,503 @@ per completed phase).
 | D5 whole-design fallback | done (planner disables the kernel with a reason) | `elaborated_design_static_kernel.cpp` |
 
 ## 4. Log
+
+### 2026-10-07: local registers, heap huge pages, host and planner trims
+
+Both transcripts stay identical after every change (`kernel_parity.py`), and the three
+static-kernel test targets pass.
+- **Local registers in native code.** A KIR register that every run writes before reading
+  (a must-defined forward dataflow over basic blocks, loops included) carries nothing from
+  one run to the next. In bodies that never resume from the register file (not VHDL, so no
+  deoptimization; not behavioral; no `generic` instruction), such registers become stack
+  slots that SROA promotes to SSA values, instead of being stored to the frame on every
+  write. Templates with a VHDL instance keep the frame (`StaticKernelTemplate::vhdl`).
+  - 7,356 template registers, 6,813 local. Verilog simulate 4.27 s to 3.97 s; the hot O2
+    templates compile in 265 ms instead of 325 ms. `FSIM_STATIC_KERNEL_LOCAL_REGISTERS=0`
+    restores the frame stores.
+- **Heap huge pages.** A large design's heap is hundreds of megabytes of small
+  allocations: Verilog simulate took 214k minor page faults and 0.38 s of system time.
+  With transparent huge pages in `madvise` mode, glibc asks for huge pages only when its
+  `glibc.malloc.hugetlb` tunable is set, and it reads tunables only at process start. The
+  `fsim` executable now re-executes itself once with the tunable set (`execv` of
+  `/proc/self/exe`: same process, arguments and descriptors). Library and test callers are
+  unaffected, and `FSIM_HEAP_HUGE_PAGES=0` keeps the default heap.
+  - Faults fell to about 13k, system time to 0.08 s, and user time fell too (fewer TLB
+    misses). Verilog simulate 3.85 s to 3.2 s; mixed simulate 4.0 s to 3.6 s; both
+    elaborations by about 0.5 s.
+- **Host start for a closed kernel.** Inert kernel members (no sensitivity, never
+  initialized or final on the host) are skipped by the static fanout, start queueing,
+  final-process scan, native dependency masks, SystemVerilog update-pool sizing and the
+  switch scan of owned-driver composites. Kernel-owned signals get no host composite (the
+  host never resolves them; a missing composite only selects the general driver path).
+  `fusion_dormant_process` now marks the kernel host 2 so these skips can tell it apart.
+  The region snapshot's member stubs share one operation body, and its builder no longer
+  formats per-process purity diagnostics unless they are being profiled.
+  - Start: about 265 ms to 45 ms.
+- **Planner.** Edge-sensitive signals are computed once per ownership pass instead of
+  scanning all candidates for each alias-family proxy: alias and fixpoint 55 ms to 9 ms.
+- **Load.**
+  - The restored design resolves its signal, string and container names directly in the
+    artifact's canonical path table (`CanonicalHierarchyPaths`) instead of building its
+    own table and remapping onto the canonical one. Under deferred validation (simulate)
+    only those names are resolved, since elaboration froze exactly this design's paths
+    into that table; other loaders still check every path. Freeze: about 150 ms to
+    20 ms.
+  - Restored interned paths are interned once per path ID.
+- **Kernel setup.** Writer classification uses a dense VHDL flag per process and skips
+  single-writer slots (43 ms to 2 ms). Partition construction uses one member-indexed
+  scratch vector instead of per-group hash maps. Per-member `getenv` calls are hoisted.
+- **Hot templates use fast instruction selection.** The optimizing backend's register
+  allocation and machine passes carry most of its benefit. Fast selection halves the
+  hot templates' compile time (about 265 ms to 115 ms) for about 100 ms more run time
+  on this design. `FSIM_STATIC_KERNEL_HOT_FAST_ISEL=0` selects the full selector.
+- **Notifications.** `native_notify` sits beside `slot_changed`, whose notify-target loop
+  is inline. The ranged-reader, output, waiter and edge work is in
+  `slot_changed_general`.
+- **Measurements.** Wall times on this VM drift by 5–10%, so changes were compared
+  against a frozen reference build, run interleaved (`.local-artifacts/v4ref-10070935`).
+  - Verilog simulate: 4.27 s to about 3.07 s (`rep.py`).
+  - Verilog elaborate: 3.43 s to 3.03 s.
+  - Mixed: elaborate 2.93 s, simulate 3.62 s.
+
+### 2026-10-07: startup trims (load validation, run-once members, shared analyses)
+
+Each change below leaves both transcripts identical, and the elaborated snapshots
+byte-identical where elaboration is touched.
+- **Simulate skips the loader's trial population.** `from_state` populated a throwaway
+  interpreter with every process program only to validate it. The simulate command then
+  populates the real interpreter, which validates the same programs through
+  `add_process_program_impl`, so `handle_simulate` now loads under
+  `elaboration::detail::DeferredProgramValidation`. Other loaders, including the codec
+  tests, still validate at load, and payload checksums are still verified.
+  - Verilog simulate fell by about 0.3 s: the 151 ms population plus destroying the
+    trial interpreter.
+- **Run-once members are not compiled.** About 35k Verilog members are constant drivers
+  that run once at start on the reference evaluator. Templates fell from 230 to 209.
+  `FSIM_STATIC_KERNEL_COMPILE_ONCE=1` compiles them again.
+- **Region graph: static read ranges once per operation body.** Processes that share a
+  body have equal read widths, so the analysis runs 1,478 times instead of 85,547.
+  - Load build: ranges 48 ms to about 1 ms. Elaboration: 88 ms to about 2 ms.
+- **`freeze_hierarchy_paths`** reads debug-point scopes through `debug_point()` and
+  `debug_scope()` instead of copying all 175k operations. Runtime decode fell from 603 ms
+  to 560 ms.
+- **`plan_static_kernel`** checks stored operations instead of expanded copies, mapping
+  signal operands through `OperationList::signal()`. Plan: 144 ms to 110 ms, with the same
+  members, owned signals and containers.
+- **Now** (`rep.py`, CPU 9):
+  - Verilog: elaborate 3.43 s, simulate 4.27 s.
+  - Mixed: elaborate 2.99 s, simulate 3.94 s.
+
+### 2026-10-07: kernel-owned time
+
+- **What changed.** A closed kernel can run its own next time steps. Closed means every
+  process is a member, there are no outputs and no host-written inputs. It does so when
+  its next event is its own timer and the host scheduler has nothing pending up to that
+  time (`Scheduler::next_pending_time`).
+  - Both throughput cases fell from 134k kernel activations to 33 (134,048 warped steps).
+- **Exactness.**
+  - `kernel_now()` supplies the warped time for `%t`, the output and report hooks, and
+    `WaitFor`. Output in a warped step reports delta 0, where the scheduler would have
+    run it.
+  - `$finish` in a warped step schedules a host task at that time. The scheduler reaches
+    the same tick and delta before stopping, so the stop line is unchanged.
+  - Kernel members never read `$time` directly; `ReadSimulationTime` is not admitted.
+  - Both transcripts are byte-identical, the full test suite shows the 37 control
+    failures and no others, and the static-kernel tests pass.
+- **Gating.** `Simulation::run` allows the warp only when nothing outside the kernel
+  needs each step. It is refused under any of:
+  - a run limit;
+  - active PSL directives (`VhdlPslExecution::active`);
+  - signal or scalar observers or change hooks;
+  - safe-point observers;
+  - VPI handles or runtime updates;
+  - SystemC.
+
+  The kernel also checks the interpreter's change hooks, and gives the host one
+  activation every 4,096 steps (interrupt latency). `FSIM_STATIC_KERNEL_TIME_WARP=0`
+  disables it.
+- **Simulate** (`rep.py`, five runs, CPU 9): Verilog 4.80 s to **4.68 s**, mixed 4.56 s to
+  **4.18 s**. The warp alone measured 4.80 to 4.60 s and 4.56 to 4.18 s.
+
+### 2026-10-07: paired measurement after the mixed kernel and specialization
+
+Paired run, 7 pairs, CPU 9, against HEAD e8ecb67e, with the candidate frozen as
+`v4cand-mixspec2-10070723`. Evidence:
+`.local-artifacts/simulation-performance/v4-mixspec-pair-10070723`. Status
+`qualified_absolute_targets`: preflight, parity on every pair and the anti-slowdown guard
+all pass.
+
+| Case | Control | Candidate | Compile | Elaborate | Simulate |
+|---|---:|---:|---:|---:|---:|
+| `original_throughput` | 31.68 s | **8.80 s** | 0.59 | 3.45 | 4.76 |
+| `mixed_throughput` | 25.59 s | **8.40 s** | 1.14 | 3.05 | 4.21 |
+
+- Verilog/mixed is 1.048, inside the contract's 1.05. Mixed improved more than Verilog in
+  this round, so Verilog work is next to keep the margin.
+- Against the previous paired run, Verilog went from 9.72 s to 8.80 s and mixed from
+  13.47 s to 8.40 s.
+- **Phase 1:** total ≤10 s is met. Simulation ≤3 s is not (4.76 s).
+- **Full test suite:** the 37 control failures and no others, after updating
+  `runtime_direct_artifact_rows_test`'s list of unsupported schemas to 73 and 75.
+
+### 2026-10-07: mixed-language kernel by default, VHDL body specialization
+
+**One kernel for both languages** (owner direction: VHDL and Verilog in one kernel; design
+in §4c).
+- A design with VHDL and SystemVerilog candidates now plans one mixed kernel by default
+  (`FSIM_STATIC_KERNEL_MIXED=0` keeps the majority language only). If the mixed plan is
+  refused, the planner retries without it.
+- **Fix: first-round initialization.** VHDL `once` members (constant port actuals such as
+  `b => to_unsigned(i+2, 4)`) ran before the first round and their deferred writes were
+  lost. They now join the first VHDL round, which also fixes the `static_kernel_vhdl` test
+  in mixed mode.
+- **`vhdl_unowned` only for VHDL accesses.** A host-routed signal whose kernel readers
+  and writers are all SystemVerilog members is exchanged through the host, as in a
+  SystemVerilog kernel. The `rs-vhdl` `rs_thru_tb` (raw `$urandom` testbench: one
+  testbench process stays on the host and shares `cyc` with a kernel thread) had
+  disabled the whole kernel.
+- `mixed_throughput`: all 5,036 members compiled (the SystemVerilog testbench as
+  behavioral threads), no host outputs, transcript byte-identical to the reference
+  (17,032 lines, 17,018 HDL reports). Simulate 8.93 s to 6.99 s (`rep.py`, CPU 9).
+
+**VHDL body specialization** (`src/runtime/simir_static_kernel_specialize.cpp`).
+- **Problem.** On mixed, one template took 16.5% of all samples: the VHDL `gf_mult`
+  (540 instances). Its function computes a GF(2^8) product with nested `for` loops, index
+  arithmetic and range checks, about 2,500 KIR operations per evaluation. The Verilog
+  version unrolls the same structure at elaboration with `generate`.
+- **What it does.** At kernel construction, for each VHDL member whose activation has a
+  loop, a partial evaluator walks the body with the reference evaluator (`step_generic`)
+  on the registers whose values are known:
+  - calls inline (the fixed-register call stack becomes static);
+  - loops with constant control unroll;
+  - range checks, index arithmetic and constant subexpressions fold;
+  - a strict dynamic select or insert with a known index becomes the static one;
+  - branches on signal values stay. Paths merge again where their known values agree.
+- **Why it is exact.**
+  - The output is ordinary SimIR, appended to the member's operations; activations enter
+    it, and the first run still takes the original body through the prologue.
+  - The reference evaluator, deoptimization (which resumes at a SimIR operation), 'U'
+    tracking and `FSIM_KERNEL_VERIFY` all treat it like any other body.
+  - Known values come from the reference evaluator itself. Every effect (signal reads
+    and writes, assertions and reports) is emitted unchanged and in order, after its
+    operands are materialized.
+  - Diagnostics map the new operations to the originals (`Member::origin`).
+- **Limits.**
+  - A body is kept only if it is at most 2× (+64) its reachable size and it repeats no
+    read of a signal wider than 64 bits; such reads must stay single-definition so the
+    compiled tier can load just the selected field.
+  - Bodies with operations outside the understood set, recursion, or non-isolated
+    frames are left alone.
+- **Cost.** Results are cached per shared canonical operation list. Lists whose only
+  instance overrides are signals, report texts or debug points share one result.
+  - 4,651 members are specialized, 3,348 of them from the cache, in 91 ms.
+  - Codegen is unchanged (0.71 s; KIR 37k to 57k instructions).
+- **Result on `mixed_throughput`:**
+  - The interpreter phase fell from 5.10 s to 3.04 s (`FSIM_PROFILE_PHASES`).
+  - Simulate wall time fell from 6.99 s to **5.17 s** (`rep.py`, five runs, CPU 9).
+  - Transcript and HDL reports are byte-identical, and a 5,000 ns `FSIM_KERNEL_VERIFY`
+    run is clean.
+  - `FSIM_STATIC_KERNEL_SPECIALIZE=0` disables it, and `_DEBUG=1` reports each member.
+- **Redundant reads.** A VHDL signal does not change during an activation unless the
+  member writes it. The specializer therefore drops a repeated plain read of a signal into
+  a register that already holds it. This keeps unrolled loops over array signals
+  single-definition, so their fields still load in place.
+  - A cached recipe is reused only if the mapping from operation to signal is a bijection
+    between the two instances.
+  - A size cap of 3× instead of 2× specializes 18 more clocked processes but saves only
+    about 0.08 s of run, against more codegen. The cap stays at 2×
+    (`FSIM_STATIC_KERNEL_SPECIALIZE_FACTOR` is a diagnostic).
+
+**Fewer helper calls from generated code.** On mixed, generated code called the reference
+helpers 1.85M (`evaluate`) and 1.88M (`effect`) times, mostly through `PackedLogic4`
+conversions (about 12% of run instructions).
+- **Copy propagation in the specializer.** A register copy of an unknown register of the
+  same kind becomes an alias: reads use the source, and the copy is emitted only before
+  the source changes, or at the exit when the copy is live.
+  - Liveness comes from `prune_operations` on the original body, so only live
+    registers are materialized at the exit.
+  - Where paths may meet, aliases are made real, and signal-holding facts match as a
+    subset. Without this, paths that differed only in a deferred copy never merged: the
+    GF multiplier grew 8 copies of its exit and its O2 compile cost about 0.3 s.
+- **Static part selects.** A `DynamicPartSelect` with a known base is rewritten to an
+  `Extract`. This applies when the selection is in range of a source register holding a
+  signal's value (so the width is known), the case the reference evaluator itself takes
+  through `extract_value`. Functions such as `get_slice(v, idx, w)` called on wide signals
+  now read fields straight from the slot.
+- **Indexed VHDL signal stores** (`store_vhdl` sub 1) append to the deferred-write queue
+  in generated code. An unknown or out-of-range index still takes the reference path,
+  which reports the error. `imm_a` carries the target width.
+- **`load_field9` decodes X, Z and 'U' inline** (`kernel_word::logic9_uword`; 'U' only
+  into a tracked register). The coerced variant is total. W, L, H and '-' still take
+  the reference path.
+- **Result.** Helper calls fell to 334k `evaluate` and 595k `effect`. KIR fell from
+  57k to 50k instructions.
+
+**Three codegen tiers.** After these changes the one hot template, the specialized GF
+multiplier, cost more to compile at O2 than it saved: 540 members that each run rarely.
+Templates now have three tiers:
+- **cold:** FastISel at O0;
+- **warm:** `sroa,early-cse,simplifycfg` with SelectionDAG at O0, for heavy member
+  templates;
+- **hot:** O2, for heavy partition templates only. Partitions rerun whole on every input
+  change.
+
+| Hot backend for every heavy template | Mixed simulate | Verilog simulate |
+|---|---:|---:|
+| O2 | 4.96 s | 5.04 s |
+| O0 SelectionDAG | 4.67 s | 5.31 s |
+| Split by tier (adopted) | 4.72 s | 5.02 s |
+
+**Current** (fresh workspaces, `kernel_parity.py`, both transcripts identical):
+- mixed simulate 4.58 s;
+- Verilog simulate 4.80 s.
+
+**Runtime artifact string table** (runtime state schema 73 to 74).
+- **Composition.** On Verilog, the 69 MB `runtime.bin` is mostly per-instance operation
+  overrides: 40 MB across 85,547 process rows.
+  - 26.6 MB of that is 175,918 `DebugPoint` overrides, each carrying its source path as a
+    full string. Shared templates span different generated statements, so their debug
+    points differ per instance.
+- **Change.** Runtime state now writes each distinct `InternedString` once; later
+  occurrences are an index. The decoder rebuilds the table, so repeated strings are no
+  longer parsed or interned again.
+- **Effect.**
+  - `runtime.bin`: Verilog 69.4 MB to 48.3 MB; mixed 16.0 MB.
+  - Simulate: −0.33G instructions, but cycles are within noise. Decode cost is dominated
+    by object construction, not bytes.
+- **Tests updated.** Three tests pin the runtime schema at 74:
+  `application_test_artifact_phases`, `schema_identity_test` and
+  `runtime_direct_artifact_rows_test`. The wire-format test helper
+  (`runtime_direct_artifact_rows_test_support.hpp`) enables the table like the real
+  codec.
+- **Measured and not kept:**
+  - Skipping the load-time validator populate saves about 0.96G instructions but no
+    measurable wall time, and it weakens artifact validation.
+  - glibc malloc tunables (`top_pad`, `trim`/`mmap` thresholds, `tcache`) give at most
+    about 0.1 s on simulate and nothing on elaboration.
+
+**Run-loop trims on mixed** (same transcript after each):
+- **Unwritten inputs** (`StaticKernelRuntimeSpec::unwritten_inputs`). The mixed fixture's
+  408 kernel inputs are constant port actuals that no process writes. They made every
+  VHDL round yield to the host.
+  - The per-round host boundary now counts only inputs some process writes, plus outputs.
+  - Without one, the kernel yields every 256 rounds, so the host's delta limit still
+    stops a design that never settles.
+  - Unwritten inputs are scanned once per activation instead of after every round.
+  - Activations: 356k to 134k. Simulate: 5.17 s to 4.89 s.
+- **First run.** A VHDL member's first run executes the prologue on the reference
+  evaluator up to the original body start, syncs registers, and continues in compiled
+  code. Before, it ran the whole unspecialized body generically. Simulate 4.89 s to
+  4.82 s.
+- **Commits.** Single-word slot stores use a masked store instead of `copy_bits`, and the
+  round's before-images are copied with `memcpy`.
+- `vhdl_unowned` and the planner fallback are described above. `rs_thru_tb` of `rs-vhdl`
+  (raw `$urandom` testbench) now runs as a mixed kernel: 8.3 s against 21.8 s on the
+  reference engine.
+
+**Validation of the frozen candidate** (`.local-artifacts/v4cand-mixspec-10070609`):
+- **Vivado preflight:** all 10 cases pass stimulus parity
+  (`.local-artifacts/simulation-performance/mixspec-preflight-10070609`).
+- **Kernel tests:** the three `static-kernel*` tests pass. A 5,000 ns `FSIM_KERNEL_VERIFY`
+  run on mixed is clean.
+- **Verilog:** `original_throughput` transcript identical. Elaborate 3.67 s, simulate
+  4.94 s (`rep.py`, CPU 9).
+
+### 2026-10-07: paired measurement after the behavioral tier
+
+Paired run, 7 pairs, CPU 9, against HEAD e8ecb67e, with the candidate frozen as
+`v4cand-beh-*`. Evidence: `.local-artifacts/simulation-performance/v4-behavioral-pair-10070444`.
+
+| Case | Control | Candidate | Compile | Elaborate | Simulate |
+|---|---:|---:|---:|---:|---:|
+| `original_throughput` | 34.66 s | **9.72 s** | 0.65 | 3.81 | 5.26 |
+| `mixed_throughput` | 27.22 s | **13.47 s** | 1.24 | 3.26 | 8.93 |
+
+- The Vivado preflight passed. The absolute verdict and the anti-slowdown guard pass.
+- The machine was slower in this run: the control measured 27.22 s for mixed, against
+  25.25 s at Phase 2.
+- **Phase 1 status:**
+  - total ≤10 s: met for Verilog (9.72 s);
+  - simulation ≤3 s: not met (5.26 s).
+  - Startup is now the larger part of simulation: about 3.3 s, against a 2.2 s run.
+
+### 2026-10-07: behavioral tier on by default, shared templates, region-graph stubs
+
+- **Behavioral tier on by default.** With `FSIM_STATIC_KERNEL=1`, behavioral members are
+  admitted unless `FSIM_STATIC_KERNEL_BEHAVIORAL=0`.
+- **Vivado preflight** (`perf_campaign.py --preflight-only --prepare-full`, kernel and
+  behavioral tier on): all 10 cases pass stimulus parity. That is both throughput and
+  codec cases (Verilog and mixed) plus the six codex cases.
+  Evidence: `.local-artifacts/simulation-performance/behavioral-preflight-10070415c`.
+- **Region-graph stubs.** The interpreter's runtime region snapshot gives dormant kernel
+  members a one-operation stub (`WaitForever`, matching id and domain) instead of
+  materializing their programs. Pre-run time fell from 0.46 s to 0.27 s. Graph consumers
+  only lose fast paths for host signals that kernel members write.
+- **Instance constants as bindings.** Units with the same shape (the template key
+  without `KOp::constant` immediates; SystemVerilog only) share one template. The
+  constants that differ between them are loaded from per-unit bindings (`sub` 1, aval
+  and bval each as two 32-bit bindings).
+  - Verilog: 401 to 307 templates, 91.6k to 51.7k instructions, codegen 1.11 s to
+    0.69 s.
+  - The 32 syndrome-cell templates still differ, by `load_field` bit offsets.
+- **Field offsets as bindings.** Within a shape group, a `load_field` whose bit offset
+  differs between units takes the offset from a per-unit binding (`sub` 1, `y`). The
+  native code computes word and shift and selects the high word only when the field
+  crosses a word inside the plane.
+  - Verilog: 307 to 230 templates, 51.7k to 23.0k instructions, codegen 0.60 s.
+  - The run phase fell from 3.65 s to 2.21 s; the shared code is far smaller.
+- **Spec move.** `create_interpreter` moves the plan's specification into the kernel
+  instead of copying it (85k members).
+- **Phase breakdown of Verilog simulate (about 5.5 s):**
+
+  | Step | Time |
+  |---|---:|
+  | Artifact load (runtime-state decode 0.89 s) | 1.18 s |
+  | Kernel plan | 0.22 s |
+  | Kernel codegen | 0.58 s |
+  | Interpreter population and kernel construction | ~0.96 s |
+  | Interpreter start | 0.34 s |
+  | Run | 2.21 s |
+
+  Simulation ≤3 s now depends on startup (plan item 2, the flat kernel image).
+- **Simulate wall time** (`rep.py`, CPU 9, three runs each, two rounds):
+
+  | Case | Before | Now |
+  |---|---:|---:|
+  | Verilog | 7.0 s (behavioral, before these changes) | 5.64 s and 5.81 s |
+  | Mixed | ≈9.0 s | 8.51 s and 8.55 s |
+
+  - Estimated Verilog total: 0.59 + 3.45 + 5.7 ≈ 9.75 s, which would meet the Phase 1
+    total (≤10 s). Simulation (≤3 s) is not met.
+  - In mixed, the SystemVerilog testbench stays on the host because the kernel runs in
+    VHDL mode.
+
+### 2026-10-07: behavioral tier stage 2 (compiled threads)
+
+**What was built.**
+- Behavioral members compile their whole operation stream to KIR:
+  - waits, fork, `ForkEnd`, halt and `$finish` become `KOp::suspend`;
+  - output, strings and plusargs run through the generic bridge (`behavioral_step`);
+  - calls use the synthetic register stack;
+  - isolated nonrecursive frames compile away.
+- Native code enters through a switch over `CompiledBody::resume_entries`: operation 0,
+  the operation after each suspension, and fork branches. A suspension returns 3 with the
+  operation index in `StaticKernelNativeFrame::reserved`.
+- The synthetic call stack is saved per thread while it is suspended, because fork
+  siblings share the register file.
+- A deoptimization moves the whole member to the reference evaluator (registers and
+  every thread's stack).
+- Suspension operations are barriers for in-place reads and wide-move fusion.
+
+**Result on Verilog.**
+- The six testbench `initial` blocks (2,098 operations each) compile; all 85,547
+  members compile.
+- All 12 result lines match.
+- Testbench templates are shared across the six instances, so the 0.63 s host JIT
+  barrier is gone; kernel codegen grows by about 0.14 s.
+- Simulate wall time (`rep.py`, three runs, two rounds):
+
+  | Configuration | Median |
+  |---|---:|
+  | Kernel | 9.04 s, 9.33 s |
+  | Kernel + behavioral | 8.08 s, 8.06 s |
+
+**Whole design in the kernel.**
+- The region graph marks every write of a process that forks as `dynamic_fork_writers`,
+  which made testbench-driven signals unownable. They stayed host signals, so the DUT
+  read them through `load_host` (9.1M helper calls) and the testbench wrote them
+  through `store_host` (2.3M).
+- When every writer of such a signal is a behavioral member, its fork children are
+  kernel threads, so the planner now owns the signal.
+- The Verilog fixture then has 0 boundary inputs and 0 outputs. Helper calls fell to
+  `evaluate` 0.44M and `effect` 0.86M; result lines match.
+- A kernel with no boundary inputs parks its host stub on `WaitForever` (it runs at
+  start and then by its own timers), because `WaitSensitivity` requires a sensitivity
+  list.
+
+**Kernel fix found by the wider Vivado preflight.**
+- Symptom: `codex_reference_mode0_frames1` failed with "static kernel combinational
+  logic did not settle", on the committed Phase 2 kernel too.
+- Cause: an `always_comb` writes, several times per run, a module-level `integer` and
+  accumulators that it also reads. Every intermediate write notified readers, so the
+  running member, or its own partition, re-scheduled itself after each pass.
+- In SystemVerilog a process is not waiting while it runs, so its own writes never
+  wake it. The kernel now matches that:
+  - a partition target whose earliest reader is the running member needs no requeue,
+    because later readers run in the same pass;
+  - a standalone combinational member ignores schedules while it runs.
+- VHDL members notify only at round commit and are unaffected.
+
+### 2026-10-07: behavioral tier stage 1 (interpreted threads)
+
+**What was built.**
+- Behavioral members are admitted behind `FSIM_STATIC_KERNEL_BEHAVIORAL=1`. The planner
+  runs a second pass with `static_kernel_behavioral_operation_supported`, and host
+  sensitivity is added for waited host signals.
+- They run as kernel threads (`simir_static_kernel_behavioral.cpp`):
+  - waits: delays through a kernel timer queue that arms one scheduler task for the
+    earliest wake; `#0` through an Inactive list; `WaitOn` and `WaitSensitivity`
+    through per-slot and per-input waiters with edge filtering;
+  - fork/join (all, any, none) as threads that share the member's registers;
+  - display, format, string and time display through the reference formatter and the
+    host output hook;
+  - string constants and copies, plusargs, automatic frames (packed, string and
+    container registers), and `$finish` with the reference status capture.
+- `activate()` drains the whole Active region (combinational settling, triggered
+  members, ready threads) before `#0` resumptions and before the NBA commit.
+- Kernel outputs are now published per slot: a value that changed before the
+  activation's NBA commit goes to the Active region, otherwise to the NBA region.
+  Before this change, a clock generated inside the kernel reached host testbench
+  processes in the NBA region, and they sampled post-edge values one cycle late.
+
+**Checks.**
+- `tests/app/static_kernel_behavioral_test.cpp`: both engines, four behavioral members,
+  identical transcript.
+- Verilog round-2 fixture with the behavioral tier: all six testbench `initial` blocks,
+  their fork children, monitors, clock, timeout and checker run in the kernel (85,547
+  members, 0 host outputs). All 12 result lines match.
+
+**Cost while interpreted.**
+- The testbench's table and stimulus generation now takes 14.7 s before time 0, and the
+  run takes 7.8 s against 5.0 s.
+- The host JIT barrier is gone (1.5 ms against 0.68 s).
+- Stage 2, compiling behavioral templates, is required before this pays off.
+
+### 2026-10-07: option 1 (known-value fast path) tested and rejected
+
+The plan prefers testing a thesis cheaply, so this measured the ceiling before building
+anything.
+- **Ceiling experiment.** A temporary, unsound flag treated every X/Z plane loaded from a
+  slot or register as zero, and the IR was built with `InstSimplifyFolder`. Together these
+  fold away all 4-state logic, which is the best a guarded known-value fast path could
+  reach.
+- **Result on Verilog.**
+
+  | Measure | Normal | Assume known |
+  |---|---:|---:|
+  | Generated-code instructions | 2.13G | 1.61G (−25%) |
+  | Total instructions | 9.08G | 8.24G (−9%) |
+  | Codegen time | 0.96 s | 0.67 s |
+  | Run phase | 4.88 s | 4.84 s |
+
+  (Instruction figures are `perf record -c 1000000` event totals, so compare them only as
+  ratios.)
+- **Why.** Generated code takes 26% of cycles and 23% of instructions (IPC about 1.5).
+  The instructions removed were executing in the shadow of the dependent loads: a binding
+  load, then the arena slot, then the register file. The kernel run is bound by load
+  latency, not by 4-state arithmetic. Whole-run counters: IPC 1.7, 1.3G L1 data misses,
+  128M branch misses.
+- **`InstSimplifyFolder` on its own** (sound) was neutral in wall time and added about 1.2G
+  instructions, so it was not kept.
+- **Conclusion.** A known-value fast path cannot deliver the ≤3 s simulation gate; at best
+  it saves about 0.3 s of codegen. Reaching ≤3 s would need less work (activity, data
+  layout, fewer dependent loads), not cheaper arithmetic. As decided, work continues with
+  items 2–4 of §4a.
+- **Diagnostics kept:**
+  - `FSIM_STATIC_KERNEL_DUMP_IR=<dir>` writes each group module's IR after the pass
+    pipeline.
+  - `FSIM_PROFILE_PHASES` now also reports `static_kernel_plan` and
+    `create_simulation_interpreter`.
 
 ### 2026-10-06 (night): Phase 2 qualified (paired protocol)
 
@@ -472,6 +985,144 @@ compares SHA-256 of every payload file against the baseline).
   1.0 s.
 - Portable source-path identity cache: compile time went from 7.0 s to 0.9 s.
 
+## 4a. Phase 1 assessment (2026-10-06, after Phase 2)
+
+Phase 1 is the plan's go/no-go gate: Verilog simulation ≤3 s and total ≤10 s, with the
+rule "on a miss, stop and re-plan before investing in breadth". Current Verilog numbers
+are from the Phase 2 paired run (compile 0.59, elaborate 3.45, simulate 8.77, total
+12.82 s). The simulate phase measured with `FSIM_PROFILE_PHASES` on CPU 9 (9.24 s wall)
+breaks down as follows.
+
+| Step | Time | Notes |
+|---|---:|---|
+| Design artifact load | 1.04 s | runtime-state decode 0.79 s |
+| Kernel plan | 0.14 s | |
+| Kernel template codegen (LLVM O0, FastISel) | 0.88 s | 384 templates, 78k KIR instructions, 0.92M IR instructions |
+| Interpreter population and kernel construction | ~0.77 s | all 85k processes still enter the host interpreter |
+| Interpreter start and startup-tier JIT | ~0.58 s | includes a region graph over every process |
+| Background JIT barrier | 0.63 s | the same 2,098-operation testbench process compiled 6 times (once per `rs_thru` instance) |
+| Run | 5.03 s | generated kernel code 48%, kernel runtime 19%, host scheduler, runtime and testbench code 31% |
+
+**What the run costs, and what has been tried.** The kernel executes 2.74G KIR operations
+at about 1 ns each.
+- Combinational partitions (about 800 operations) re-run whole when any input changes.
+- Per-member dirty bits skipped 38% of member runs but made the run slower at O0.
+- The O1/O2 backend saves run time but costs more in compile time than it saves.
+- Keeping registers in SSA gave nothing.
+- IR pipelines beyond `sroa` gave nothing or lost time (`early-cse`, `simplifycfg`; `instcombine` costs +1.3 s).
+- The IR is about 25% register-file traffic, plus binding loads for every signal access
+  (templates are shared across instances).
+
+**Conclusion.** Generated code and kernel runtime alone are about 3.3 s, already above the
+3 s simulation budget. Removing every startup and host cost would still miss the gate.
+Reaching ≤3 s needs a change of approach, not more tuning. Candidates:
+
+1. **A known-value (2-state) fast path with a 4-state guard.** Generate each template
+   assuming known inputs, and fall back to the current 4-state code when a guard sees X/Z.
+   This roughly halves the operations of 4-state logic. Estimated −0.7 to −1.2 s of run.
+2. **A flat kernel image produced at elaboration.** Members, slots and KIR would be
+   loaded directly, and kernel members would never enter the host interpreter. This
+   removes most of artifact decode, interpreter population, kernel construction and
+   start. Estimated −1.5 to −2 s.
+3. **A v4 behavioral tier** for testbench processes (KIR resumable functions, compiled per
+   template). This removes the 0.63 s barrier and most host run costs. Estimated −1.5 to
+   −2 s.
+4. **Code generation for the kernel loop itself** (plan §3.3: no host dispatch per
+   partition). Estimated −0.5 s of kernel runtime.
+
+**Owner decision (2026-10-07).** Item 1 first, because it is the cheapest test of
+whether ≤3 s is reachable at all; then items 2–4. Item 1 was then measured and rejected
+(see the log). For the testbench side, the owner chose to build the v4 behavioral tier
+(item 3) rather than make targeted fixes to the old host JIT, which D1 freezes.
+
+With 2 to 4 together, Verilog simulation is estimated at about 4–5 s and total at about
+8–9 s. That meets the Phase 1 total (≤10 s) but not simulation ≤3 s. Item 1 would be
+needed as well to approach 3 s. D6 (Verilog ≤5.6 s total) also needs elaboration (3.45 s
+now) cut by more than half.
+
+## 4b. Behavioral tier design (plan §3.5, owner decision 2026-10-07)
+
+Goal: testbench processes run inside the kernel as compiled resumable code, so the
+throughput designs need no host processes. This removes the host JIT barrier, the
+host scheduler and commit paths, and array access through callbacks.
+
+**Admission.** A SystemVerilog process that is not combinational, sequential or once
+becomes a `behavioral` member when every operation is supported. The supported set is
+the existing kernel set plus:
+- `WaitFor`, `WaitOn`, `WaitSensitivity`, `WaitForever`;
+- `Fork`/`ForkEnd`, `Call`/`Return`, `CallableFramePush`/`Pop`;
+- `Display`, `FormatDisplay`, `StringDisplay`, `TimeDisplay`;
+- string constants and copies, `PlusArgSelect`, `Halt`, `Stop`.
+
+The new kind stays opt-in behind `FSIM_STATIC_KERNEL_BEHAVIORAL=1` until it reaches
+parity.
+
+**Threads.** A behavioral member owns registers, string registers and container
+registers. It runs as one or more threads, each with its own pc, call stack and
+callable-frame stack. Fork children are threads of the same member that share its
+registers, matching the reference `inherit_fork_program` and shared-frame semantics.
+
+**Suspension.**
+
+| Operation | Effect |
+|---|---|
+| `WaitFor` | kernel timer queue (time, sequence, thread) |
+| `WaitOn` | dynamic waiters on kernel slots or host inputs, with edge filters and an optional timeout |
+| `WaitSensitivity` | the member's static sensitivity |
+| `WaitForever` | parks the thread |
+| `Halt` / `ForkEnd` | ends the thread and reports to its fork join |
+| `Fork` | spawns child threads; the parent continues per its join kind |
+| `Stop` | requests the host stop exactly as the reference does |
+
+**Scheduling.** Ready threads run in the Active step together with triggered sequential
+members. Blocking writes are visible at once and settle combinational partitions after
+the thread suspends. Nonblocking writes use the NBA queue. `$display` goes through the
+host output hook, using the same formatter as the reference (`make_formatted_output`).
+After each activation the kernel arms one host timer for its earliest pending wake time.
+
+**Execution.** Stage 1 interprets threads with `step_generic` for correctness. Stage 2
+compiles behavioral templates to KIR/LLVM: a `suspend` instruction, an entry switch over
+resume points (like the return-target dispatch), and `KOp::generic` for the
+runtime-library operations. The six identical testbench instances then share one
+template, compiled once.
+
+**Verification.** A new test, `tests/app/static_kernel_behavioral_test.cpp`, compares
+kernel and reference transcripts on both engines. The design uses delay clocks,
+`repeat` and `@(edge)`, `wait(cond)`, fork/join, automatic tasks and functions, arrays,
+formatted `$display` and `$finish`. After that, the round-2 fixtures must stay exact
+with the behavioral tier enabled.
+
+## 4c. Mixed-language kernel design (owner direction 2026-10-07: VHDL and Verilog in one kernel)
+
+Today a kernel runs in one language mode. On mixed, the SystemVerilog testbench stays on
+the host, which costs the host JIT barrier (0.87 s), host process execution and
+boundary traffic.
+
+**Reference interleaving** (the scheduler's slot loop):
+- Pending SystemVerilog regions always run before the generic (VHDL) phases continue.
+- A SystemVerilog-origin wakeup stays in the current delta.
+- A SystemVerilog process woken by a VHDL update is requeued in the next delta's generic
+  active phase, so it runs after that delta's VHDL processes and before its update.
+- A VHDL process woken by any change runs in the next delta.
+
+**Kernel delta k:**
+1. Drain pending SystemVerilog work.
+2. Run the VHDL members triggered for round k (writes deferred). The SystemVerilog
+   threads and members woken by round k−1's commit become ready.
+3. Drain SystemVerilog again. VHDL members woken by these writes join round k+1.
+4. Commit the VHDL round. VHDL readers join round k+1; SystemVerilog readers and waiters
+   are held for step 2 of delta k+1.
+
+**Mechanics:**
+- Every member carries its language.
+- Slots of Logic9 signals have four planes; SystemVerilog code reads them through the
+  coercing `load_slot9`.
+- VHDL round writes and SystemVerilog NBAs use separate queues.
+- Publication uses the writer's domain.
+- The mode was opt-in (`FSIM_STATIC_KERNEL_MIXED=1`) until the mixed fixtures reached
+  parity, both against Vivado and in HDL report counts. It became the default on
+  2026-10-07 (`FSIM_STATIC_KERNEL_MIXED=0` disables it).
+
 ## 5. Open issues and decisions
 
 1. **Same-time-step print order.** Testbench instances 4 and 5 finish in the same time step,
@@ -500,22 +1151,37 @@ compares SHA-256 of every payload file against the baseline).
 
 ## 6. Next steps (in order)
 
-1. **Conditional yield at mixed boundaries.** Continue internally when no kernel output
-   changed and the host has nothing else pending in the time slot. This needs a correct
-   "time slot otherwise idle" query from the scheduler and would recover about 0.3 s on
-   mixed.
-2. **Verilog simulation toward Phase 1 (≤3 s).** By wall time, startup is about 2 s,
-   template code generation about 2 s, testbench start about 1 s, and the run about 5 s.
-   - Startup: runtime-state decode, `from_state` region graph and
-     `compute_signal_driver_inventory`, `create_interpreter` validation and driver
-     registration, kernel construction and `plan_static_kernel`.
-   - Code generation: about 2 s for 384 templates at O0. Smaller IR per KIR operation,
-     or interpreting cold templates instead of compiling them.
-   - Run: `slot_changed` and `native_notify` (about 10% of run instructions), host
-     scheduler and commit traffic from testbench processes.
-   - Phase 1 also calls for a v4 behavioral tier for testbench processes (plan §3.5),
-     the long-term home for the host-side costs.
-3. Elaboration: runtime-state serialization (about 0.5 s), constant evaluation (about
-   0.3 s), process canonicalization (about 0.37 s), lowering (about 0.85 s).
-4. **VHDL delta-depth collapsing** (plan §3.2), now constrained by the per-round host
-   yield: collapse only rounds whose outputs no host process reads.
+Phase 1 is met (paired run above). The remaining goal is D6: totals of about 5.6 s
+(Verilog) and 4.6 s (mixed), which means cutting compile + elaborate + simulate by about
+13% and 37%.
+
+Measured state (2026-10-07, `rep.py`, CPU 9, Verilog):
+
+| Item | Time |
+|---|---:|
+| Artifact load (decode 0.35 s: process table 70 ms, path restore 75 ms, region graph 120 ms) | 0.53 s |
+| `plan_static_kernel` | 0.06 s |
+| Interpreter population (85k host processes) | 0.09 s |
+| Kernel member setup (op expansion 74 ms) | 0.12 s |
+| KIR compile | 0.10 s |
+| Partitions | 0.05 s |
+| Codegen (cold 205 ms, hot 115 ms) and canonicalization | 0.40 s |
+| Interpreter start | 0.05 s |
+| Kernel run | 1.35 s |
+
+1. **Elaboration** (2.85 s each case) is now the largest phase.
+   - It is roughly a third of each total, and the plan budgets ≤1.0 s.
+   - Known items: generate-loop lowering of 35k concurrent statements (no template reuse
+     across genvar overlays), runtime-state encoding, the region graph and driver
+     inventory, and hierarchy paths.
+2. **Mixed simulation**: codegen of 663 VHDL-heavy templates (about 0.55 s, all cold) and
+   the VHDL delta run. Local registers do not apply to VHDL templates yet: deoptimization
+   resumes from the register file. Flushing locals before each deopt exit would let them.
+3. **Per-instance work** at load and setup: process-table decode, path restore,
+   population, member op expansion, KIR compile per member. Template-level processing
+   (one pass per body, instances as binding rows; plan §3.7) removes most of it.
+4. **Runtime-state format**: each instance's debug scopes and signal operands are
+   materialized as full operation overrides (about 390k). A compact encoding of the
+   in-memory overrides would cut decode and encode time.
+5. **Kernel run**: notification and scheduling are about 35% of the run, generated code
+   about 60%.

@@ -63,6 +63,50 @@ const std::vector<std::string>& ElaboratedDesign::roots() const noexcept
     return roots_;
 }
 
+namespace detail {
+namespace {
+thread_local bool program_validation_deferred = false;
+} // namespace
+
+DeferredProgramValidation::DeferredProgramValidation() noexcept
+    : previous_ { program_validation_deferred }
+{
+    program_validation_deferred = true;
+}
+
+DeferredProgramValidation::~DeferredProgramValidation()
+{
+    program_validation_deferred = previous_;
+}
+
+bool DeferredProgramValidation::active() noexcept
+{
+    return program_validation_deferred;
+}
+
+namespace {
+thread_local CanonicalHierarchyPaths* canonical_hierarchy_paths = nullptr;
+} // namespace
+
+CanonicalHierarchyPaths::CanonicalHierarchyPaths(
+    const semantic::HierarchyPathTable& table) noexcept
+    : table_ { table }
+    , previous_ { canonical_hierarchy_paths }
+{
+    canonical_hierarchy_paths = this;
+}
+
+CanonicalHierarchyPaths::~CanonicalHierarchyPaths()
+{
+    canonical_hierarchy_paths = previous_;
+}
+
+CanonicalHierarchyPaths* CanonicalHierarchyPaths::active() noexcept
+{
+    return canonical_hierarchy_paths;
+}
+} // namespace detail
+
 const semantic::HierarchyPathTable&
 ElaboratedDesign::hierarchy_paths() const noexcept
 {
@@ -119,11 +163,75 @@ bool ElaboratedDesign::remap_path_table(
     return true;
 }
 
+namespace {
+
+// Resolve the name maps in `canonical`'s table and adopt it. Returns false,
+// changing nothing, when a name is absent from the table.
+template <typename SignalMap, typename StringMap, typename ContainerMap,
+    typename SignalPathMap, typename StringPathMap, typename ContainerPathMap>
+bool adopt_paths(const semantic::HierarchyPathTable& table,
+    SignalMap& signal_by_name, StringMap& string_by_name,
+    ContainerMap& container_by_name, SignalPathMap& signal_by_path,
+    StringPathMap& string_by_path, ContainerPathMap& container_by_path)
+{
+    SignalPathMap signals;
+    StringPathMap strings;
+    ContainerPathMap containers;
+    signals.reserve(signal_by_name.size());
+    strings.reserve(string_by_name.size());
+    containers.reserve(container_by_name.size());
+    const auto resolve = [&](const auto& names, auto& by_path) {
+        for (const auto& [path, value] : names) {
+            const auto id = table.find(path);
+            if (!id) {
+                return false;
+            }
+            by_path.emplace(*id, value);
+        }
+        return true;
+    };
+    if (!resolve(signal_by_name, signals) || !resolve(string_by_name, strings)
+        || !resolve(container_by_name, containers)) {
+        return false;
+    }
+    signal_by_path = std::move(signals);
+    string_by_path = std::move(strings);
+    container_by_path = std::move(containers);
+    signal_by_name.clear();
+    string_by_name.clear();
+    container_by_name.clear();
+    return true;
+}
+
+} // namespace
+
 void ElaboratedDesign::freeze_hierarchy_paths()
 {
+    const auto adopt_canonical_paths
+        = [&](detail::CanonicalHierarchyPaths& canonical) {
+              if (!adopt_paths(canonical.table(), signal_by_name_,
+                      string_by_name_, container_by_name_, signal_by_path_,
+                      string_by_path_, container_by_path_)) {
+                  return false;
+              }
+              hierarchy_paths_ = canonical.table();
+              canonical.mark_adopted();
+              return true;
+          };
+    // A design restored for simulation from its own artifact names exactly
+    // the paths elaboration froze into that artifact's table (both payloads
+    // are checksummed), so only the name maps are resolved.
+    if (auto* const canonical = detail::CanonicalHierarchyPaths::active();
+        canonical != nullptr && detail::DeferredProgramValidation::active()
+        && adopt_canonical_paths(*canonical)) {
+        return;
+    }
     std::vector<std::string_view> paths;
     const auto add = [&](const std::string_view path) {
-        if (!path.empty()) {
+        // Consecutive operations usually name the same interned scope.
+        if (!path.empty()
+            && (paths.empty() || paths.back().data() != path.data()
+                || paths.back().size() != path.size())) {
             paths.push_back(path);
         }
     };
@@ -170,13 +278,21 @@ void ElaboratedDesign::freeze_hierarchy_paths()
         add(process.name());
         for (std::size_t index = 0;
             index < process.operations().size(); ++index) {
-            if (const auto& stored = process.operations()[index];
-                !runtime::simir::operation_holds<
+            const auto& stored = process.operations()[index];
+            if (const auto* const point
+                = runtime::simir::operation_get_if<
+                    runtime::simir::DebugPoint>(&stored)) {
+                // The scope expanded() would give, without copying the
+                // operation.
+                const auto& operations = process.operations();
+                add(operations.debug_scope(
+                    operations.debug_point(index, *point).scope).str());
+                continue;
+            }
+            if (!runtime::simir::operation_holds<
                     runtime::simir::CoverageControl>(stored)
                 && !runtime::simir::operation_holds<
-                    runtime::simir::CoverageAccess>(stored)
-                && !runtime::simir::operation_holds<
-                    runtime::simir::DebugPoint>(stored)) {
+                    runtime::simir::CoverageAccess>(stored)) {
                 continue;
             }
             const auto operation = process.operations().expanded(index);
@@ -228,6 +344,16 @@ void ElaboratedDesign::freeze_hierarchy_paths()
     for (const auto& [path, object] : container_by_name_) {
         (void)object;
         paths.push_back(path);
+    }
+    if (auto* const canonical = detail::CanonicalHierarchyPaths::active();
+        canonical != nullptr
+        && std::ranges::all_of(paths, [&](const std::string_view path) {
+               return canonical->table().contains(path);
+           })) {
+        // The artifact's table holds every path: use its identities directly
+        // (the result a remap onto it would give).
+        (void)adopt_canonical_paths(*canonical);
+        return;
     }
     std::ranges::sort(paths);
     paths.erase(std::unique(paths.begin(), paths.end()), paths.end());
@@ -744,7 +870,9 @@ ElaboratedDesign::create_interpreter(
     populate_interpreter(interpreter.get(), false,
         process_rows_ ? nullptr : &processes_, &substitution);
     process_rows_.reset();
-    auto spec = *plan.spec;
+    // The design is consumed here; the plan's specification moves into the
+    // kernel rather than being copied (85k members for the throughput cases).
+    auto spec = std::move(*plan.spec);
     spec.host = plan.host;
     spec.host_original = std::move(fused_sink_originals_.at(0));
     fused_sink_originals_.clear();
@@ -826,6 +954,18 @@ void ElaboratedDesign::populate_interpreter(
             }
             const auto& common
                 = process_rows_->templates[row.template_id];
+            if (!validation_only && row.instance.id < dormant.size()
+                && dormant[row.instance.id] != 0U
+                && !fused_by_sink.contains(row.instance.id)) {
+                // A dormant member keeps the shared template; only its
+                // instance loses sensitivity and initialization.
+                auto instance = row.instance;
+                instance.static_sensitivity.clear();
+                instance.initialize = false;
+                (void)runtime::simir::InterpreterProgramAccess::add_program(
+                    *interpreter, common, std::move(instance));
+                continue;
+            }
             if (!validation_only) {
                 if (auto replacement = substitute(row.instance.id, [&] {
                         return runtime::simir::ProcessProgramView {
@@ -1631,11 +1771,13 @@ ElaboratedDesign::from_state_with_process_rows(
         }
     }
     result.freeze_hierarchy_paths();
-    try {
-        runtime::simir::Interpreter validator;
-        result.populate_interpreter(&validator, true);
-    } catch (const std::exception&) {
-        return std::nullopt;
+    if (!detail::DeferredProgramValidation::active()) {
+        try {
+            runtime::simir::Interpreter validator;
+            result.populate_interpreter(&validator, true);
+        } catch (const std::exception&) {
+            return std::nullopt;
+        }
     }
     try {
         auto expected_inventory = result.compute_signal_driver_inventory();

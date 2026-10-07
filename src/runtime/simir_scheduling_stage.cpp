@@ -2005,7 +2005,14 @@ void Interpreter::Impl::prepare_systemverilog_update_pool()
         ++capacity;
     };
 
+    // Static kernel members never execute on the scheduler (the kernel
+    // stages its few host updates through the growable pool).
+    const bool kernel = static_cast<bool>(static_kernel);
     for (ProcessId id = 0U; id < processes.size(); ++id) {
+        if (kernel && id < fusion_dormant_process.size()
+            && fusion_dormant_process[id] != 0U) {
+            continue;
+        }
         if (const auto* const compact = processes.compact_constant(id);
             compact != nullptr && compact->startup_write_bank != nullptr) {
             if (compact->startup_write_bank->update_domain

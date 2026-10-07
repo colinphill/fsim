@@ -293,6 +293,20 @@ runtime::RunResult Simulation::run(
         const auto interpreter_begin = profile_phase_split
             ? std::chrono::steady_clock::now()
             : std::chrono::steady_clock::time_point { };
+        // A closed static kernel may run its own time steps only when
+        // nothing here observes the steps in between.
+        runtime::simir::InterpreterProgramAccess::set_static_kernel_time_warp(
+            *impl_->interpreter,
+            !until && !(impl_->vhdl_psl && impl_->vhdl_psl->active())
+                && !impl_->signal_change_hook
+                && impl_->signal_observers.empty()
+                && !impl_->scalar_signal_change_hook
+                && impl_->scalar_signal_observers.empty()
+                && impl_->safe_point_observers.empty()
+                && impl_->vpi_signal_handles.empty()
+                && !impl_->vpi_runtime_updates_enabled
+                && impl_->built.systemc_hierarchies.empty()
+                && !impl_->built.systemc_hierarchy);
         auto result = impl_->interpreter->run(until);
         if (profile_phase_split) {
             const auto milliseconds = [](const auto duration) {

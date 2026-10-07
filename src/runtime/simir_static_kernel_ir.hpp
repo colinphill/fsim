@@ -71,7 +71,8 @@ enum class KOp : std::uint8_t {
     load_slot9,
     /// Signal assignment of register x to slot d: deferred to the end of the
     /// round, or immediate (flag_blocking, shared variables). sub 0: static
-    /// bit offset `offset`; sub 1: dynamic index register y (indices[aux]).
+    /// bit offset `offset`; sub 1: dynamic index register y (indices[aux]),
+    /// imm_a the target slot's width.
     store_vhdl,
     /// d = x op y (IntegerBinaryOperator sub) on width-bit VHDL integers.
     integer_binary,
@@ -99,6 +100,9 @@ enum class KOp : std::uint8_t {
     /// optional DynamicPartSelect (sub 1: base register y, parts[aux], the
     /// selection flags) and the write. flag_nba defers it to the NBA queue.
     wide_move,
+    /// Behavioral threads: stop at SimIR operation x (a wait, fork, halt or
+    /// $finish) and return it to the thread runner.
+    suspend,
 };
 
 /// For KOp::constant in a VHDL body: the 'U' mask of the constant is
@@ -164,6 +168,9 @@ struct CompiledBody {
     /// VHDL: register index of the synthetic call stack pointer (entries
     /// follow it); 0 when the member makes no runtime-stack calls.
     std::uint32_t call_stack_base { };
+    /// Behavioral bodies: instructions a thread may start at (operation 0,
+    /// after each suspension, fork branches), for the native entry switch.
+    std::vector<std::uint32_t> resume_entries;
 };
 
 /// Entries of a synthetic VHDL call stack (deeper calls deoptimize).

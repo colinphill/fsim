@@ -1613,8 +1613,16 @@ void Interpreter::Impl::rebuild_static_fanout()
     std::vector<std::size_t> counts(signals.size(), 0U);
     std::vector<CategoryCounts> category_counts(
         signals.size(), CategoryCounts { });
+    // Inert static kernel members have no static sensitivity.
+    const auto inert = [&](const std::size_t process) {
+        return static_kernel && process < fusion_dormant_process.size()
+            && fusion_dormant_process[process] == 1U;
+    };
     for (std::size_t process_index = 0;
          process_index < processes.size(); ++process_index) {
+        if (inert(process_index)) {
+            continue;
+        }
         for (const auto& sensitivity :
              processes.program_view(
                  static_cast<ProcessId>(process_index)).static_sensitivity()) {
@@ -1693,6 +1701,9 @@ void Interpreter::Impl::rebuild_static_fanout()
     }
     for (std::size_t process_index = 0;
          process_index < processes.size(); ++process_index) {
+        if (inert(process_index)) {
+            continue;
+        }
         const auto process = processes.program_view(
             static_cast<ProcessId>(process_index));
         const auto id = static_cast<ProcessId>(process_index);
@@ -3498,6 +3509,11 @@ void Interpreter::Impl::build_native_signal_dependency_masks() noexcept
     // Legacy native publication/cone routes lack range-aware readiness proofs.
     // Keep these signals on checked publication until RegionGraph certifies them.
     for (ProcessId id = 0U; id < processes.size(); ++id) {
+        // Inert static kernel members have no static sensitivity.
+        if (static_kernel && id < fusion_dormant_process.size()
+            && fusion_dormant_process[id] == 1U) {
+            continue;
+        }
         const auto program = processes.program_view(id);
         for (const auto& sensitivity : program.static_sensitivity()) {
             if (sensitivity.width != 0U)

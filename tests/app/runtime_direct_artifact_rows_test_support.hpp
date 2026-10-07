@@ -180,6 +180,7 @@ inline std::optional<RuntimeWirePayload> read_runtime_wire_payload(
     codec_detail::Reader reader { bytes };
     reader.set_runtime_operation_body_sharing(true);
     reader.set_runtime_process_layout_sharing(true);
+    reader.set_runtime_string_table(true);
     RuntimeWirePayload payload;
     if (!reader.raw("FSIMRUN1") || !reader.read(payload.schema)
         || !reader.read(payload.path_mode)
@@ -200,6 +201,7 @@ inline std::optional<std::string> write_runtime_wire_payload(
     writer.set_runtime_path_projection(true);
     writer.set_runtime_operation_body_sharing(true);
     writer.set_runtime_process_layout_sharing(true);
+    writer.set_runtime_string_table(true);
     writer.raw("FSIMRUN1");
     writer.write(payload.schema);
     writer.write(payload.path_mode);

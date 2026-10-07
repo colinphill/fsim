@@ -43,7 +43,15 @@ void Interpreter::Impl::build_owned_driver_composites()
         return;
     }
     auto switch_signals = std::vector<std::uint8_t>(signals.size(), 0U);
+    // Static kernel members have no switch endpoints (the planner refuses
+    // them) and never drive host signals, and the host never resolves the
+    // signals the kernel owns: neither needs a composite.
+    const bool kernel = static_cast<bool>(static_kernel);
     for (ProcessId id = 0U; id < processes.size(); ++id) {
+        if (kernel && id < fusion_dormant_process.size()
+            && fusion_dormant_process[id] != 0U) {
+            continue;
+        }
         const auto program = processes.program_view(id);
         for (const auto signal : {
                 program.switch_source(),
@@ -55,6 +63,10 @@ void Interpreter::Impl::build_owned_driver_composites()
         }
     }
     for (SignalId signal_id = 0U; signal_id < signals.size(); ++signal_id) {
+        if (kernel && signal_id < static_kernel_owned_signal.size()
+            && static_kernel_owned_signal[signal_id] != 0U) {
+            continue;
+        }
         const auto& signal = get_signal(signal_id);
         const auto width = signal.initial_value.width();
         const auto& table = driver_values[signal_id];

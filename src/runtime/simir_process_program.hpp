@@ -312,6 +312,11 @@ public:
     /// already run its stub program; every other member must be dormant.
     static void install_static_kernel(Interpreter& interpreter,
         StaticKernelRuntimeSpec spec);
+    /// Whether an installed closed static kernel may run its own next time
+    /// steps: only when nothing outside the kernel (observers, PSL, VPI, a
+    /// run limit) needs to see each step through the scheduler.
+    static void set_static_kernel_time_warp(Interpreter& interpreter,
+        bool allowed);
 };
 
 /// Startup-only interner. Operation-body identity narrows likely matches;

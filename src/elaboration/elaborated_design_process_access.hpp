@@ -65,6 +65,51 @@ private:
         std::uint32_t> template_ids_;
 };
 
+/// While alive on this thread, loading runtime state skips the trial
+/// interpreter population that validates every process program. Only for a
+/// caller that populates a real interpreter from the loaded design next,
+/// which validates the same programs (simulation).
+class DeferredProgramValidation {
+public:
+    DeferredProgramValidation() noexcept;
+    ~DeferredProgramValidation();
+    DeferredProgramValidation(const DeferredProgramValidation&) = delete;
+    DeferredProgramValidation& operator=(const DeferredProgramValidation&) = delete;
+
+    [[nodiscard]] static bool active() noexcept;
+
+private:
+    bool previous_ { };
+};
+
+/// While alive, a design restored on this thread resolves its hierarchy
+/// paths against `table` (the artifact's canonical path table) instead of
+/// building its own and remapping onto the canonical one afterwards.
+/// adopted() reports whether that happened; when a path is absent from the
+/// table the design builds its own, and the caller's remap reports it.
+class CanonicalHierarchyPaths {
+public:
+    explicit CanonicalHierarchyPaths(
+        const semantic::HierarchyPathTable& table) noexcept;
+    ~CanonicalHierarchyPaths();
+    CanonicalHierarchyPaths(const CanonicalHierarchyPaths&) = delete;
+    CanonicalHierarchyPaths& operator=(const CanonicalHierarchyPaths&) = delete;
+
+    [[nodiscard]] bool adopted() const noexcept { return adopted_; }
+
+    [[nodiscard]] static CanonicalHierarchyPaths* active() noexcept;
+    [[nodiscard]] const semantic::HierarchyPathTable& table() const noexcept
+    {
+        return table_;
+    }
+    void mark_adopted() noexcept { adopted_ = true; }
+
+private:
+    const semantic::HierarchyPathTable& table_;
+    CanonicalHierarchyPaths* previous_ { };
+    bool adopted_ { };
+};
+
 /// Private bridge between the artifact decoder and ElaboratedDesign's
 /// row-backed runtime representation. This type is not part of the public
 /// elaboration API.

@@ -14,6 +14,7 @@
 #include "simir_static_kernel_native.hpp"
 #include "simir_static_kernel.hpp"
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -22,6 +23,7 @@
 #include <queue>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -129,6 +131,13 @@ public:
     /// Returns true when the kernel staged updates to its own inputs and
     /// must run again in the next delta.
     [[nodiscard]] bool activate();
+    /// FSIM_STATIC_KERNEL_TIME_WARP=0 disables kernel-owned time.
+    void set_time_warp(const bool allowed) noexcept
+    {
+        const char* text = std::getenv("FSIM_STATIC_KERNEL_TIME_WARP");
+        time_warp_ = allowed
+            && (text == nullptr || std::string_view { text } != "0");
+    }
     void materialize(SignalId signal);
 
 private:
@@ -141,6 +150,8 @@ private:
     struct Member {
         ProcessId process { };
         StaticKernelMemberKind kind { };
+        /// A VHDL process (delta rounds); otherwise SystemVerilog.
+        bool vhdl { };
         bool run_at_start { };
         std::uint32_t body_begin { };
         std::uint32_t body_end { };
@@ -157,6 +168,12 @@ private:
             std::uint32_t identity { };
             std::vector<RegisterId> ids;
             std::vector<PackedLogic4> values;
+            /// Behavioral members also save string values and container
+            /// register bindings.
+            std::vector<StringRegisterId> string_ids;
+            std::vector<std::string> strings;
+            std::vector<ContainerRegisterId> container_ids;
+            std::vector<std::uint32_t> containers;
             std::size_t bytes { };
         };
         std::vector<Frame> frames;
@@ -166,22 +183,29 @@ private:
         std::uint32_t partition_key { static_kernel_detail::no_slot };
         std::uint32_t partition { static_kernel_detail::no_slot };
         std::uint32_t position { };
-        bool queued { };
-        bool triggered { };
         /// VHDL delta mode: the next run starts at operation 0.
         bool fresh { };
+        /// VHDL: where the process prologue enters the body (the original
+        /// body_begin, before specialization).
+        std::uint32_t prologue_end { };
         /// VHDL delta mode: a register holds a value compiled code cannot
         /// represent, so the member runs on the reference evaluator.
         bool generic_mode { };
         /// Automatic frames are no-ops (isolated callables, no recursion);
         /// both tiers skip them so a deoptimization can continue mid-call.
         bool frames_elided { };
+        /// Behavioral members: string registers shared by the member's
+        /// threads, and the signal/edge list of WaitSensitivity.
+        std::vector<std::string> strings;
+        std::vector<Sensitivity> wait_sensitivity;
+        /// VHDL members with a specialized body (specialize_member): the
+        /// original operation each operation stands for; empty otherwise.
+        std::vector<InstructionIndex> origin;
     };
 
     struct Partition {
         std::vector<std::uint32_t> members;
         std::uint32_t level { };
-        bool queued { };
         CompiledBody program;
         NativeUnit native;
     };
@@ -218,6 +242,11 @@ private:
         bool trigger_pending { };
         bool output { };
         bool output_pending { };
+        /// Changed during or after this activation's NBA commit: published
+        /// in the NBA region; otherwise in the Active region.
+        bool publish_nba { };
+        /// Written by VHDL members: published in the generic domain.
+        bool vhdl_written { };
         std::uint32_t published { static_kernel_detail::no_slot };
         std::vector<WriterRegion> writers;
         bool disjoint_writers { true };
@@ -228,6 +257,9 @@ private:
         /// the round's saved prior value.
         bool touched { };
         std::uint32_t before { };
+        /// The round's before-image when it fits (planes * words <= 4);
+        /// larger slots keep it in round_before_.
+        std::array<std::uint64_t, 4> small_before { };
         ProcessId last_writer { };
         /// Every writer is one process, so last_writer never changes.
         bool single_writer { };
@@ -243,6 +275,9 @@ private:
         std::uint64_t revision { };
         std::vector<Reader> readers;
         std::vector<EdgeReader> edges;
+        /// No process writes the signal (StaticKernelRuntimeSpec::
+        /// unwritten_inputs).
+        bool unwritten { };
     };
 
     struct Container {
@@ -333,6 +368,10 @@ private:
     /// `changed_mask` holds the changed bits starting at `field_offset`.
     void slot_changed(std::uint32_t slot, std::uint64_t changed_mask,
         const std::uint64_t* before, std::uint32_t field_offset = 0U);
+    /// slot_changed's work beyond the notify targets (ranged readers,
+    /// outputs, waiters, edges).
+    void slot_changed_general(std::uint32_t slot, std::uint64_t changed_mask,
+        const std::uint64_t* before, std::uint32_t field_offset);
     [[nodiscard]] Logic4 slot_edge_bit(std::uint32_t slot) const noexcept;
     void store_slot_bits(std::uint32_t slot, const PackedLogic4& value,
         std::uint32_t offset);
@@ -348,7 +387,10 @@ private:
     /// the reference evaluator finishes the activation.
     void handle_deopt(std::uint32_t member, CompiledBody& body,
         const static_kernel_detail::KernelDeopt& deopt);
-    void run_generic_from(std::uint32_t member, std::uint32_t pc);
+    /// Runs the reference evaluator from pc to the wait, or to `until`;
+    /// returns where it stopped.
+    std::uint32_t run_generic_from(std::uint32_t member, std::uint32_t pc,
+        std::uint32_t until = static_kernel_detail::no_slot);
     void verify_run(std::uint32_t member);
     /// Copies the reference registers into the compiled register file, or
     /// keeps the member on the reference evaluator.
@@ -437,6 +479,9 @@ private:
     static void native_fail(StaticKernelNativeFrame* frame, std::uint32_t at,
         std::uint32_t reason);
     void compile_members();
+    /// Appends a VHDL member's body specialized on its constant control
+    /// flow and enters it from then on; false when not applicable.
+    bool specialize_member(std::uint32_t member);
     void eliminate_dead_constants(CompiledBody& body, std::uint32_t member);
     void track_unknowns(CompiledBody& body, std::uint32_t member) const;
     void prune_operations(std::uint32_t member,
@@ -448,13 +493,173 @@ private:
     void commit_pending();
     void publish();
     void initialize();
-    [[nodiscard]] bool scan_inputs();
+    [[nodiscard]] bool scan_inputs(bool all = true);
     [[noreturn]] void fail(std::uint32_t member, InstructionIndex instruction,
         const std::string& message) const;
 
     Impl& impl_;
     std::vector<Member> members_;
     std::vector<Partition> partitions_;
+
+    /// Hot scheduling state, packed apart from the large member and
+    /// partition records; filled by build_schedule_targets.
+    struct MemberSchedule {
+        std::uint32_t partition { static_kernel_detail::no_slot };
+        std::uint32_t position { };
+        std::uint32_t level { };
+        StaticKernelMemberKind kind { };
+        bool queued { };
+        bool triggered { };
+        bool vhdl { };
+        /// Mixed kernels: queued for the next VHDL round, or held for the
+        /// next delta (a SystemVerilog member woken by a VHDL commit).
+        bool round { };
+        bool deferred { };
+    };
+    /// Whole-slot targets [begin, end) in notify_targets_. `general` marks
+    /// a slot that also has ranged readers, an output, edges or several
+    /// writers, which slot_changed handles from the full Slot record.
+    struct SlotNotify {
+        std::uint32_t begin { };
+        std::uint32_t end { };
+        bool general { };
+    };
+    std::vector<MemberSchedule> member_schedule_;
+    std::vector<std::uint8_t> partition_queued_;
+    std::vector<std::uint32_t> partition_level_;
+    std::vector<SlotNotify> slot_notify_;
+
+    /// Behavioral tier. A thread is one resumable execution context of a
+    /// behavioral member; fork children are threads of the same member and
+    /// share its registers.
+    struct Thread {
+        std::uint32_t member { };
+        std::uint32_t pc { };
+        std::vector<InstructionIndex> call_stack;
+        std::vector<Member::Frame> frames;
+        std::size_t frame_bytes { };
+        /// The forking thread and the fork group this child belongs to.
+        std::uint32_t parent { static_kernel_detail::no_slot };
+        std::uint32_t group { static_kernel_detail::no_slot };
+        /// Live children; the parent of a join-all fork resumes at zero.
+        std::uint32_t children { };
+        /// Bumped whenever the thread resumes, so stale waiter and timer
+        /// entries from an earlier wait are ignored.
+        std::uint64_t epoch { };
+        bool alive { };
+        bool queued { };
+        /// Compiled members: the synthetic call stack (pointer, entries)
+        /// saved while the thread is suspended.
+        std::vector<Word> stack;
+    };
+    struct ForkGroup {
+        std::uint32_t parent { };
+        ForkJoinKind join { ForkJoinKind::all };
+        std::uint32_t remaining { };
+        bool resumed { };
+    };
+    struct Waiter {
+        std::uint32_t thread { };
+        std::uint64_t epoch { };
+        EdgeKind edge { EdgeKind::any };
+    };
+    struct Timer {
+        SimulationTick time { };
+        std::uint64_t sequence { };
+        std::uint32_t thread { };
+        std::uint64_t epoch { };
+        friend bool operator>(const Timer& left, const Timer& right)
+        {
+            return left.time != right.time ? left.time > right.time
+                                            : left.sequence > right.sequence;
+        }
+    };
+    std::vector<Thread> threads_;
+    std::vector<std::uint32_t> free_threads_;
+    std::vector<ForkGroup> fork_groups_;
+    std::vector<std::uint32_t> free_fork_groups_;
+    std::vector<std::uint32_t> ready_threads_;
+    std::vector<std::uint32_t> inactive_threads_;
+    std::vector<std::vector<Waiter>> slot_waiters_;
+    std::vector<std::vector<Waiter>> input_waiters_;
+    std::priority_queue<Timer, std::vector<Timer>, std::greater<>> timers_;
+    std::uint64_t timer_sequence_ { };
+    /// The wake time of the scheduler task that will activate the kernel.
+    std::optional<SimulationTick> armed_timer_;
+    bool behavioral_ { };
+    bool stopped_ { };
+    /// Mixed-language kernel state (activate_mixed): VHDL members of the
+    /// next round, SystemVerilog work held until the next delta while a VHDL
+    /// round commits, and the parked write queue of the inactive language.
+    bool mixed_ { };
+    /// Mixed mode: host processes read kernel outputs or write kernel
+    /// inputs, so each delta round is also a host delta.
+    bool host_boundary_ { };
+    /// Kernel-owned time (see activate): enabled for a closed kernel the
+    /// application does not observe between time steps.
+    bool time_warp_ { };
+    /// No host process, output or host-written input.
+    bool closed_ { };
+    static constexpr std::size_t max_warp_steps = 4096U;
+    /// The time step the kernel runs when it advanced past the scheduler.
+    std::optional<SimulationTick> warp_time_;
+    std::uint64_t profile_warps_ { };
+    [[nodiscard]] SimulationTick kernel_now() const noexcept
+    {
+        return warp_time_ ? *warp_time_ : impl_.scheduler.now();
+    }
+    void activate_step();
+
+    [[nodiscard]] std::optional<SimulationTick> next_timer();
+    void schedule_stop_at(SimulationTick time);
+    /// Inputs some process writes (scan_inputs within an activation).
+    std::vector<std::uint32_t> written_inputs_;
+    bool committing_round_ { };
+    std::vector<std::uint32_t> next_round_;
+    std::vector<ScheduleTarget> deferred_targets_;
+    std::vector<std::uint32_t> deferred_threads_;
+    StaticKernelWriteQueue parked_writes_ { };
+    std::vector<StaticKernelWrite> parked_storage_;
+    std::vector<Pending> parked_pending_;
+    void swap_write_queues();
+    void sv_drain();
+    void activate_mixed();
+    /// The combinational member settle() is running (no_slot otherwise).
+    std::uint32_t running_member_ { static_kernel_detail::no_slot };
+    ProcessId host_process_ { };
+    /// Slots a behavioral thread may wait on: never silent, always on the
+    /// general notify path; the edge bit last seen by dynamic waiters.
+    std::vector<std::uint8_t> slot_waitable_;
+    std::vector<Logic4> slot_wait_seen_;
+    void timer_due(SimulationTick time);
+
+    enum class Boundary : std::uint8_t { none, advance, suspend, finish };
+    /// Behavioral: the thread and position compiled code starts at, and the
+    /// suspension operation it stopped at.
+    std::uint32_t behavioral_entry_ { };
+    std::optional<std::uint32_t> behavioral_suspended_;
+    std::uint32_t deopt_resume_ { };
+    [[nodiscard]] bool behavioral_step(std::uint32_t member, std::uint32_t pc);
+    [[nodiscard]] Boundary behavioral_boundary(std::uint32_t thread,
+        std::uint32_t pc);
+    [[nodiscard]] std::optional<std::uint32_t> run_behavioral_compiled(
+        std::uint32_t thread, std::uint32_t start);
+    void sync_behavioral_registers(std::uint32_t member, std::uint32_t keep);
+    void start_behavioral();
+    [[nodiscard]] std::uint32_t spawn_thread(std::uint32_t member,
+        std::uint32_t pc, std::uint32_t parent, std::uint32_t group);
+    void ready_thread(std::uint32_t thread);
+    [[nodiscard]] bool run_ready_threads();
+    void run_thread(std::uint32_t thread);
+    void wait_on(std::uint32_t thread, std::span<const Sensitivity> entries);
+    void finish_thread(std::uint32_t thread);
+    void wake_waiters(std::vector<Waiter>& waiters, Logic4 before,
+        Logic4 after);
+    void collect_timers();
+    void arm_timer();
+    void behavioral_output(std::uint32_t member, std::string_view text,
+        bool newline);
+    std::vector<ScheduleTarget> notify_targets_;
     std::vector<std::unique_ptr<CompiledBody>> templates_;
     /// Owns the generated code.
     std::shared_ptr<StaticKernelCodegen> codegen_;
@@ -523,6 +728,7 @@ private:
     std::uint64_t profile_activations_ { };
     std::uint64_t profile_activation_ns_ { };
     std::uint64_t profile_native_calls_[6] { };
+    std::unordered_map<const void*, std::uint64_t> profile_template_runs_;
     std::uint64_t profile_slot_changes_ { };
     std::uint64_t profile_schedules_ { };
     std::map<std::string, std::uint64_t> profile_generic_ops_;
@@ -537,6 +743,11 @@ private:
     std::vector<std::uint64_t> profile_member_runs_;
     std::vector<std::string> profile_names_;
     std::size_t compiled_members_ { };
+    std::size_t specialized_members_ { };
+    double specialize_seconds_ { };
+    /// specialize_member's recipes (type-erased; see the specializer).
+    std::shared_ptr<void> specialize_cache_;
+    std::size_t specialize_cache_hits_ { };
     std::string compile_failure_detail_;
     std::size_t wide_members_ { };
     std::size_t wide_member_ops_ { };

@@ -20,6 +20,14 @@ using namespace static_kernel_detail;
 namespace kw = kernel_word;
 
 
+/// Behavioral operations at which a thread suspends: other threads may run
+/// (and change any state) before it resumes.
+template <typename T>
+inline constexpr bool behavioral_suspension = std::is_same_v<T, WaitFor>
+    || std::is_same_v<T, WaitOn> || std::is_same_v<T, WaitForever>
+    || std::is_same_v<T, Fork> || std::is_same_v<T, ForkEnd>
+    || std::is_same_v<T, Stop>;
+
 [[nodiscard]] inline bool comparison(const BinaryOperator operation) noexcept
 {
     switch (operation) {
@@ -108,6 +116,10 @@ inline void operation_registers(const Operation& operation,
             write = op.destination;
         } else if constexpr (std::is_same_v<T, Branch>) {
             reads.push_back(op.condition);
+        } else if constexpr (std::is_same_v<T, FormatDisplay>) {
+            reads.push_back(op.source);
+        } else if constexpr (std::is_same_v<T, PlusArgSelect>) {
+            write = op.destination;
         } else if constexpr (std::is_same_v<T, Assert>) {
             reads.push_back(op.condition);
         } else if constexpr (std::is_same_v<T, IntegerBinary>) {
@@ -213,6 +225,7 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
     case KOp::nop:
     case KOp::mark:
     case KOp::mem_bind:
+    case KOp::suspend:
         fall();
         break;
     case KOp::constant:

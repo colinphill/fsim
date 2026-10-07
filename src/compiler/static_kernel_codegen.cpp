@@ -24,6 +24,7 @@
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <array>
 #include <chrono>
 #include <fstream>
 #include <unistd.h>
@@ -35,6 +36,9 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <string_view>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace fsim::compiler {
@@ -58,6 +62,7 @@ static_assert(offsetof(StaticKernelNativeFrame, bindings) == 8U);
 static_assert(offsetof(StaticKernelNativeFrame, member) == 32U);
 static_assert(offsetof(StaticKernelNativeFrame, position) == 36U);
 static_assert(offsetof(StaticKernelNativeFrame, status) == 40U);
+static_assert(offsetof(StaticKernelNativeFrame, reserved) == 44U);
 static_assert(offsetof(StaticKernelNativeFrame, writes) == 56U);
 static_assert(offsetof(StaticKernelNativeFrame, containers) == 64U);
 static_assert(offsetof(runtime::simir::StaticKernelContainerInfo, slot) == 4U);
@@ -125,7 +130,8 @@ struct Pair {
 class FunctionEmitter {
 public:
     FunctionEmitter(llvm::Module& module, llvm::Function& function,
-        const detail::CompiledBody& body, const StaticKernelNativeHelpers& helpers)
+        const detail::CompiledBody& body, const StaticKernelNativeHelpers& helpers,
+        const bool local_registers)
         : context_(module.getContext())
         , function_(function)
         , body_(body)
@@ -135,6 +141,7 @@ public:
         , i64_(llvm::Type::getInt64Ty(context_))
         , i8_(llvm::Type::getInt8Ty(context_))
         , ptr_(llvm::PointerType::getUnqual(context_))
+        , local_registers_(local_registers)
     {
     }
 
@@ -162,9 +169,12 @@ public:
                 leader[std::min(inst.y, size)] = 1U;
                 leader[std::min(inst.z, size)] = 1U;
                 leader[at + 1U] = 1U;
-            } else if (inst.op == KOp::ret) {
+            } else if (inst.op == KOp::ret || inst.op == KOp::suspend) {
                 leader[at + 1U] = 1U;
             }
+        }
+        for (const auto resume : body_.resume_entries) {
+            leader[std::min(resume, size)] = 1U;
         }
         blocks_.assign(size + 1U, nullptr);
         for (std::uint32_t at = 0U; at < size; ++at) {
@@ -176,9 +186,28 @@ public:
         blocks_[size] = return_block_;
         builder_.SetInsertPoint(entry);
         out_ = builder_.CreateAlloca(i64_, constant(3U), "out");
+        plan_local_registers();
+        for (std::size_t reg = 0U; reg < local_.size(); ++reg) {
+            if (local_[reg] != nullptr) {
+                local_[reg] = builder_.CreateAlloca(
+                    llvm::ArrayType::get(i64_, 2U), nullptr, "r");
+            }
+        }
         arena_ = builder_.CreateLoad(ptr_, frame_field(0U), "arena");
         bindings_ = builder_.CreateLoad(ptr_, frame_field(8U), "bindings");
-        builder_.CreateBr(blocks_[std::min(body_.entry, size)]);
+        if (body_.resume_entries.empty()) {
+            builder_.CreateBr(blocks_[std::min(body_.entry, size)]);
+        } else {
+            // A behavioral thread resumes at the instruction in `reserved`.
+            auto* start = builder_.CreateLoad(i32_, frame_field(44U), "resume");
+            auto* targets = builder_.CreateSwitch(start, failure_block_,
+                static_cast<unsigned>(body_.resume_entries.size()));
+            for (const auto resume : body_.resume_entries) {
+                targets->addCase(llvm::ConstantInt::get(
+                                     llvm::cast<llvm::IntegerType>(i32_), resume),
+                    blocks_[std::min(resume, size)]);
+            }
+        }
         for (std::uint32_t at = 0U; at < size; ++at) {
             if (blocks_[at] != nullptr) {
                 if (builder_.GetInsertBlock() != nullptr
@@ -215,15 +244,255 @@ private:
         return builder_.CreateConstInBoundsGEP1_64(i8_, frame_, offset);
     }
 
+    /// The two words of register `reg`: in the frame's register file, or in
+    /// a local slot (promoted to SSA values) when no run reads it before
+    /// writing it.
+    [[nodiscard]] std::pair<llvm::Value*, llvm::Value*> register_address(
+        const std::uint32_t reg)
+    {
+        if (reg < local_.size() && local_[reg] != nullptr) {
+            return { builder_.CreateConstInBoundsGEP1_64(i64_, local_[reg], 0U),
+                builder_.CreateConstInBoundsGEP1_64(i64_, local_[reg], 1U) };
+        }
+        return { builder_.CreateConstInBoundsGEP1_64(i64_, registers_,
+                     static_cast<std::uint64_t>(reg) * 2U),
+            builder_.CreateConstInBoundsGEP1_64(i64_, registers_,
+                static_cast<std::uint64_t>(reg) * 2U + 1U) };
+    }
+
+    /// Registers that every run writes before reading carry nothing from one
+    /// run to the next. In bodies that never resume from the register file
+    /// (no VHDL deoptimization, no behavioral suspension, no generic
+    /// instruction reading it) they become local slots, so their values stay
+    /// in machine registers instead of being stored to the frame.
+    void plan_local_registers()
+    {
+        local_.clear();
+        static const bool disabled = [] {
+            const char* text = std::getenv("FSIM_STATIC_KERNEL_LOCAL_REGISTERS");
+            return text != nullptr && std::string_view { text } == "0";
+        }();
+        if (!local_registers_ || disabled || !body_.resume_entries.empty()
+            || body_.shadow_base != 0U || body_.call_stack_base != 0U) {
+            return;
+        }
+        const auto size = static_cast<std::uint32_t>(body_.code.size());
+        const auto count = static_cast<std::uint32_t>(body_.registers.size());
+        const auto words = (static_cast<std::size_t>(count) + 63U) / 64U;
+        using Bits = std::vector<std::uint64_t>;
+        const auto test = [](const Bits& bits, const std::uint32_t reg) {
+            return ((bits[reg / 64U] >> (reg % 64U)) & 1U) != 0U;
+        };
+        const auto set = [](Bits& bits, const std::uint32_t reg) {
+            bits[reg / 64U] |= std::uint64_t { 1 } << (reg % 64U);
+        };
+        // Register operands of each instruction; false for an instruction
+        // that may reach the register file another way.
+        std::vector<std::uint32_t> reads;
+        reads.reserve(8U);
+        const auto operands = [&](const KInst& inst, bool& writes) {
+            reads.clear();
+            writes = false;
+            switch (inst.op) {
+            case KOp::nop:
+            case KOp::mem_bind:
+            case KOp::mark:
+            case KOp::jump:
+                return true;
+            case KOp::constant:
+            case KOp::load_slot:
+            case KOp::load_host:
+            case KOp::load_field:
+                writes = true;
+                return true;
+            case KOp::copy:
+            case KOp::reduce:
+            case KOp::unary_not:
+            case KOp::logical_not:
+            case KOp::two_state:
+            case KOp::extract:
+                reads = { inst.x };
+                writes = true;
+                return true;
+            case KOp::binary:
+            case KOp::logical_binary:
+            case KOp::shift:
+            case KOp::insert:
+                reads = { inst.x, inst.y };
+                writes = true;
+                return true;
+            case KOp::concat:
+                for (std::uint32_t index = 0U; index < inst.x; ++index) {
+                    reads.push_back(body_.concat[inst.aux + index].reg);
+                }
+                writes = true;
+                return true;
+            case KOp::conditional:
+            case KOp::dynamic_insert:
+            case KOp::dynamic_part_insert:
+                reads = { inst.x, inst.y, inst.z };
+                writes = true;
+                return true;
+            case KOp::dynamic_extract:
+            case KOp::dynamic_part_select:
+                reads = { inst.x, inst.y };
+                writes = true;
+                return true;
+            case KOp::mem_read:
+                reads = { inst.y };
+                writes = true;
+                return true;
+            case KOp::store_slot:
+            case KOp::store_slot_nba:
+            case KOp::store_host:
+            case KOp::branch:
+                reads = { inst.x };
+                return true;
+            case KOp::store_slot_dynamic:
+            case KOp::store_slot_part:
+            case KOp::mem_write:
+                reads = { inst.x, inst.y, inst.z };
+                return true;
+            case KOp::wide_move:
+                reads = { inst.y };
+                return true;
+            default:
+                return false;
+            }
+        };
+        // Basic blocks and their successors.
+        const auto entry = std::min(body_.entry, size);
+        std::vector<std::uint8_t> leader(size + 1U, 0U);
+        leader[entry] = 1U;
+        for (std::uint32_t at = 0U; at < size; ++at) {
+            const auto& inst = body_.code[at];
+            bool writes = false;
+            if (!operands(inst, writes)) {
+                return;
+            }
+            if (inst.op == KOp::jump) {
+                leader[std::min(inst.d, size)] = 1U;
+                leader[at + 1U] = 1U;
+            } else if (inst.op == KOp::branch) {
+                leader[std::min(inst.y, size)] = 1U;
+                leader[std::min(inst.z, size)] = 1U;
+                leader[at + 1U] = 1U;
+            }
+        }
+        std::vector<std::uint32_t> block_begin;
+        std::vector<std::uint32_t> block_of(size + 1U, 0U);
+        for (std::uint32_t at = 0U; at < size; ++at) {
+            if (leader[at] != 0U || at == 0U) {
+                block_begin.push_back(at);
+            }
+            block_of[at] = static_cast<std::uint32_t>(block_begin.size() - 1U);
+        }
+        const auto blocks = static_cast<std::uint32_t>(block_begin.size());
+        const auto exit_block = blocks;
+        block_of[size] = exit_block;
+        const auto block_end = [&](const std::uint32_t block) {
+            return block + 1U < blocks ? block_begin[block + 1U] : size;
+        };
+        std::vector<std::vector<std::uint32_t>> successors(blocks);
+        for (std::uint32_t block = 0U; block < blocks; ++block) {
+            const auto last = block_end(block) - 1U;
+            const auto& inst = body_.code[last];
+            if (inst.op == KOp::jump) {
+                successors[block] = { block_of[std::min(inst.d, size)] };
+            } else if (inst.op == KOp::branch) {
+                successors[block] = { block_of[std::min(inst.y, size)],
+                    block_of[std::min(inst.z, size)] };
+            } else {
+                successors[block] = { block_of[last + 1U] };
+            }
+        }
+        // Must-defined registers at block entry: the intersection over
+        // predecessors, iterated to a fixed point (loops included).
+        std::vector<Bits> in(blocks, Bits(words, ~std::uint64_t { 0 }));
+        std::vector<std::uint8_t> reached(blocks, 0U);
+        const auto entry_block = block_of[entry];
+        if (entry_block == exit_block) {
+            return;
+        }
+        std::ranges::fill(in[entry_block], 0U);
+        reached[entry_block] = 1U;
+        Bits state(words, 0U);
+        for (bool changed = true; changed;) {
+            changed = false;
+            for (std::uint32_t block = 0U; block < blocks; ++block) {
+                if (reached[block] == 0U) {
+                    continue;
+                }
+                state = in[block];
+                for (auto at = block_begin[block]; at < block_end(block); ++at) {
+                    const auto& inst = body_.code[at];
+                    bool writes = false;
+                    (void)operands(inst, writes);
+                    if (writes && inst.d < count) {
+                        set(state, inst.d);
+                    }
+                }
+                for (const auto successor : successors[block]) {
+                    // Each run starts at the entry with nothing defined.
+                    if (successor == exit_block || successor == entry_block) {
+                        continue;
+                    }
+                    auto& target = in[successor];
+                    if (reached[successor] == 0U) {
+                        reached[successor] = 1U;
+                        target = state;
+                        changed = true;
+                        continue;
+                    }
+                    for (std::size_t word = 0U; word < words; ++word) {
+                        const auto merged = target[word] & state[word];
+                        if (merged != target[word]) {
+                            target[word] = merged;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        Bits live_in(words, 0U);
+        Bits written(words, 0U);
+        for (std::uint32_t block = 0U; block < blocks; ++block) {
+            if (reached[block] == 0U) {
+                continue;
+            }
+            state = in[block];
+            for (auto at = block_begin[block]; at < block_end(block); ++at) {
+                const auto& inst = body_.code[at];
+                bool writes = false;
+                (void)operands(inst, writes);
+                for (const auto reg : reads) {
+                    if (reg < count && !test(state, reg)) {
+                        set(live_in, reg);
+                    }
+                }
+                if (writes && inst.d < count) {
+                    set(state, inst.d);
+                    set(written, inst.d);
+                }
+            }
+        }
+        local_.assign(count, nullptr);
+        for (std::uint32_t reg = 0U; reg < count; ++reg) {
+            if (test(written, reg) && !test(live_in, reg)
+                && reg < body_.register_widths.size()
+                && body_.register_widths[reg] <= 64U) {
+                // Placeholder; emit() creates the slot.
+                local_[reg] = registers_;
+            }
+        }
+    }
+
     [[nodiscard]] Pair load_register(const std::uint32_t reg)
     {
         if (const auto found = cache_.find(reg); found != cache_.end()) {
             return found->second;
         }
-        auto* base = builder_.CreateConstInBoundsGEP1_64(i64_, registers_,
-            static_cast<std::uint64_t>(reg) * 2U);
-        auto* high = builder_.CreateConstInBoundsGEP1_64(i64_, registers_,
-            static_cast<std::uint64_t>(reg) * 2U + 1U);
+        const auto [base, high] = register_address(reg);
         Pair value { builder_.CreateLoad(i64_, base),
             builder_.CreateLoad(i64_, high) };
         cache_[reg] = value;
@@ -232,10 +501,7 @@ private:
 
     void store_register(const std::uint32_t reg, const Pair value)
     {
-        auto* base = builder_.CreateConstInBoundsGEP1_64(i64_, registers_,
-            static_cast<std::uint64_t>(reg) * 2U);
-        auto* high = builder_.CreateConstInBoundsGEP1_64(i64_, registers_,
-            static_cast<std::uint64_t>(reg) * 2U + 1U);
+        const auto [base, high] = register_address(reg);
         builder_.CreateStore(value.a, base);
         builder_.CreateStore(value.b, high);
         cache_[reg] = value;
@@ -509,7 +775,8 @@ private:
     /// Fast path in a fresh block; the slow path calls the evaluate helper.
     /// Returns the merged result in the continuation block.
     [[nodiscard]] Pair with_fallback(llvm::Value* fast_ok, const Pair fast,
-        const std::uint32_t at, const Pair x, const Pair y)
+        const std::uint32_t at, const Pair x, const Pair y,
+        llvm::Value* fast_unknown = nullptr)
     {
         auto* fast_block = builder_.GetInsertBlock();
         auto* slow = llvm::BasicBlock::Create(context_, "slow", &function_);
@@ -526,9 +793,10 @@ private:
         auto* b = builder_.CreatePHI(i64_, 2U);
         b->addIncoming(fast.b, fast_block);
         b->addIncoming(slow_value.b, slow_end);
-        // The fast path never produces 'U'.
+        // The fast path produces 'U' only where it says so.
         auto* unknown = builder_.CreatePHI(i64_, 2U);
-        unknown->addIncoming(constant(0U), fast_block);
+        unknown->addIncoming(fast_unknown != nullptr ? fast_unknown : constant(0U),
+            fast_block);
         unknown->addIncoming(last_unknown_, slow_end);
         last_unknown_ = unknown;
         return { a, b };
@@ -986,7 +1254,10 @@ private:
             base_register);
     }
 
-    void emit_deferred_store(const KInst& inst, const std::uint32_t at)
+    /// Appends a deferred VHDL write at bit `offset` (an i32; the static
+    /// offset when null).
+    void emit_deferred_store(const KInst& inst, const std::uint32_t at,
+        llvm::Value* offset = nullptr)
     {
         const auto value = load_register(inst.x);
         auto* unknown = builder_.CreateAnd(unknown_of(inst.x),
@@ -1010,7 +1281,9 @@ private:
         builder_.CreateStore(builder_.CreateAnd(binding(inst.d, 1U),
                                  llvm::ConstantInt::get(i32_, ~silent_bit)),
             field(0U));
-        builder_.CreateStore(llvm::ConstantInt::get(i32_, inst.offset), field(4U));
+        builder_.CreateStore(offset != nullptr ? offset
+                                               : llvm::ConstantInt::get(i32_, inst.offset),
+            field(4U));
         builder_.CreateStore(llvm::ConstantInt::get(i32_, inst.width), field(8U));
         builder_.CreateStore(builder_.CreateLoad(i32_, frame_field(32U)),
             field(12U));
@@ -1023,9 +1296,48 @@ private:
             builder_.CreateConstInBoundsGEP1_64(i8_, queue, 8U));
         builder_.CreateBr(done);
         builder_.SetInsertPoint(slow);
-        call_effect(at, value, zero_pair(), Pair { unknown, constant(0U) });
+        call_effect(at, value,
+            inst.sub == 1U ? load_register(inst.y) : zero_pair(),
+            Pair { unknown, constant(0U) });
         builder_.CreateBr(done);
         builder_.SetInsertPoint(done);
+    }
+
+    /// Deferred store at a dynamic index (kernel_word::dynamic_index): a
+    /// known, in-range index whose element fits the target appends directly;
+    /// anything else takes the reference path, which reports the error.
+    void emit_indexed_deferred_store(const KInst& inst, const std::uint32_t at)
+    {
+        const auto& selection = body_.indices[inst.aux];
+        const auto lower = std::min(selection.left, selection.right);
+        const auto upper = std::max(selection.left, selection.right);
+        const auto index = load_register(inst.y);
+        auto* known = builder_.CreateICmpEQ(
+            builder_.CreateAnd(index.b, constant(mask_of(32U))), constant(0U));
+        auto* value = signed_index(index);
+        auto* in_range = builder_.CreateAnd(
+            builder_.CreateICmpSGE(value, constant(static_cast<std::uint64_t>(lower))),
+            builder_.CreateICmpSLE(value, constant(static_cast<std::uint64_t>(upper))));
+        auto* right = constant(static_cast<std::uint64_t>(selection.right));
+        auto* distance = builder_.CreateSelect(builder_.CreateICmpSGE(value, right),
+            builder_.CreateSub(value, right), builder_.CreateSub(right, value));
+        auto* offset = builder_.CreateAdd(distance, constant(selection.base_offset));
+        // offset + width <= slot width (both small; no overflow in 64 bits).
+        auto* fits = builder_.CreateICmpULE(
+            builder_.CreateAdd(offset, constant(inst.width)), constant(inst.imm_a));
+        auto* ok = builder_.CreateAnd(builder_.CreateAnd(known, in_range), fits);
+        auto* direct = llvm::BasicBlock::Create(context_, "indexed_store", &function_);
+        auto* reference = llvm::BasicBlock::Create(context_, "indexed_store_ref", &function_);
+        auto* joined = llvm::BasicBlock::Create(context_, "indexed_stored", &function_);
+        builder_.CreateCondBr(ok, direct, reference);
+        builder_.SetInsertPoint(direct);
+        emit_deferred_store(inst, at, builder_.CreateTrunc(offset, i32_));
+        builder_.CreateBr(joined);
+        builder_.SetInsertPoint(reference);
+        call_effect(at, load_register(inst.x), index,
+            Pair { unknown_of(inst.x), constant(0U) });
+        builder_.CreateBr(joined);
+        builder_.SetInsertPoint(joined);
     }
 
     // 'U' tracking (see CompiledBody::shadow_base).
@@ -1392,6 +1704,12 @@ private:
         case KOp::nop:
         case KOp::mem_bind:
             break;
+        case KOp::suspend:
+            // Report the suspension operation to the thread runner.
+            builder_.CreateStore(llvm::ConstantInt::get(i32_, inst.x),
+                frame_field(44U));
+            builder_.CreateRet(llvm::ConstantInt::get(i32_, 3U));
+            break;
         case KOp::generic: {
             auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
                 { ptr_, ptr_, i32_ }, false);
@@ -1410,6 +1728,17 @@ private:
                 frame_field(36U));
             break;
         case KOp::constant:
+            if (inst.sub == 1U) {
+                // A per-instance constant: each plane is two 32-bit bindings.
+                const auto word = [&](const std::uint32_t index) {
+                    auto* low = builder_.CreateZExt(binding(index, 0U), i64_);
+                    auto* high = builder_.CreateZExt(binding(index, 1U), i64_);
+                    return builder_.CreateOr(low,
+                        builder_.CreateShl(high, constant(32U)));
+                };
+                store_register(inst.d, { word(inst.x), word(inst.y) });
+                break;
+            }
             store_register(inst.d, { constant(inst.imm_a), constant(inst.imm_b) });
             break;
         case KOp::copy:
@@ -1556,6 +1885,43 @@ private:
             break;
         case KOp::load_field: {
             auto* base = builder_.CreateZExt(binding(inst.x, 0U), i64_);
+            if (inst.sub == 1U) {
+                // The bit offset is a per-instance binding: the high word is
+                // read (from an in-plane address) only when the field
+                // crosses a word boundary inside the plane.
+                auto* offset = builder_.CreateZExt(binding(inst.y, 0U), i64_);
+                auto* word = builder_.CreateLShr(offset, constant(6U));
+                auto* shift = builder_.CreateAnd(offset, constant(63U));
+                auto* crosses = builder_.CreateAnd(
+                    builder_.CreateICmpNE(shift, constant(0U)),
+                    builder_.CreateAnd(
+                        builder_.CreateICmpUGT(
+                            builder_.CreateAdd(shift, constant(inst.width)),
+                            constant(64U)),
+                        builder_.CreateICmpULT(
+                            builder_.CreateAdd(word, constant(1U)),
+                            constant(inst.imm_a))));
+                auto* next = builder_.CreateSelect(crosses,
+                    builder_.CreateAdd(word, constant(1U)), word);
+                auto* spill_shift = builder_.CreateAnd(
+                    builder_.CreateSub(constant(64U), shift), constant(63U));
+                const auto plane = [&](const std::uint64_t first) {
+                    auto* start = builder_.CreateAdd(base, constant(first));
+                    auto* low = builder_.CreateLoad(i64_,
+                        builder_.CreateInBoundsGEP(i64_, arena_,
+                            builder_.CreateAdd(start, word)));
+                    auto* high = builder_.CreateLoad(i64_,
+                        builder_.CreateInBoundsGEP(i64_, arena_,
+                            builder_.CreateAdd(start, next)));
+                    auto* value = builder_.CreateOr(
+                        builder_.CreateLShr(low, shift),
+                        builder_.CreateSelect(crosses,
+                            builder_.CreateShl(high, spill_shift), constant(0U)));
+                    return builder_.CreateAnd(value, constant(mask_of(inst.width)));
+                };
+                store_register(inst.d, { plane(0U), plane(inst.imm_a) });
+                break;
+            }
             const auto word = inst.offset / 64U;
             const auto shift = inst.offset % 64U;
             const auto plane = [&](const std::uint64_t first) {
@@ -1689,18 +2055,52 @@ private:
             auto* m = constant(mask_of(inst.width));
             auto* p0 = plane(0U);
             auto* p1 = plane(1U);
-            auto* upper = builder_.CreateOr(plane(2U), plane(3U));
-            auto* ok = builder_.CreateAnd(
-                builder_.CreateICmpEQ(upper, constant(0U)),
-                builder_.CreateICmpEQ(p1, m));
+            auto* p2 = plane(2U);
+            auto* p3 = plane(3U);
+            const auto inverted = [&](llvm::Value* value) {
+                return builder_.CreateAnd(builder_.CreateNot(value), m);
+            };
+            if (inst.sub == 1U) {
+                // Coerced to Logic4 (kernel_word::logic9_coerced): total.
+                auto* not_p3 = inverted(p3);
+                auto* zero = builder_.CreateAnd(builder_.CreateAnd(not_p3, p1), inverted(p0));
+                auto* one = builder_.CreateAnd(builder_.CreateAnd(not_p3, p1), p0);
+                auto* high_z = builder_.CreateAnd(builder_.CreateAnd(not_p3, p2),
+                    builder_.CreateAnd(inverted(p1), inverted(p0)));
+                auto* unknown = inverted(builder_.CreateOr(builder_.CreateOr(zero, one), high_z));
+                store_register(inst.d, Pair { builder_.CreateOr(one, unknown),
+                                           builder_.CreateOr(high_z, unknown) });
+                last_unknown_ = constant(0U);
+                break;
+            }
+            // Exact (kernel_word::logic9_uword): 0, 1, X, Z, and 'U' into a
+            // tracked register; W, L, H and '-' take the reference path.
+            auto* u = inverted(builder_.CreateOr(builder_.CreateOr(p0, p1),
+                builder_.CreateOr(p2, p3)));
+            auto* q0 = builder_.CreateOr(p0, u);
+            auto* known = builder_.CreateAnd(p1, inverted(p2));
+            auto* x = builder_.CreateAnd(builder_.CreateAnd(inverted(p2), inverted(p1)), q0);
+            auto* high_z = builder_.CreateAnd(builder_.CreateAnd(p2, inverted(p1)),
+                inverted(q0));
+            llvm::Value* ok = builder_.CreateAnd(builder_.CreateICmpEQ(p3, constant(0U)),
+                builder_.CreateICmpEQ(builder_.CreateOr(builder_.CreateOr(known, x), high_z),
+                    m));
+            if (!tracked(inst.d)) {
+                ok = builder_.CreateAnd(ok, builder_.CreateICmpEQ(u, constant(0U)));
+            }
             store_register(inst.d,
-                with_fallback(ok, Pair { p0, constant(0U) }, at, zero_pair(),
-                    zero_pair()));
+                with_fallback(ok, Pair { q0, builder_.CreateOr(x, high_z) }, at,
+                    zero_pair(), zero_pair(), u));
             break;
         }
         case KOp::store_vhdl:
             if (inst.sub == 0U && (inst.flags & detail::flag_blocking) == 0U) {
                 emit_deferred_store(inst, at);
+                break;
+            }
+            if (inst.sub == 1U && (inst.flags & detail::flag_blocking) == 0U
+                && inst.imm_a != 0U) {
+                emit_indexed_deferred_store(inst, at);
                 break;
             }
             // z carries the value's 'U' mask.
@@ -2090,6 +2490,9 @@ private:
     llvm::PointerType* ptr_;
     llvm::Value* frame_ { };
     llvm::Value* registers_ { };
+    bool local_registers_ { };
+    /// Per register: its local slot, or null when it lives in the frame.
+    std::vector<llvm::Value*> local_;
     llvm::Value* arena_ { };
     llvm::Value* out_ { };
     /// 'U' mask returned by the last evaluate helper call (or its merge).
@@ -2113,9 +2516,17 @@ public:
         const auto codegen_level = level == nullptr ? 0 : std::atoi(level);
         jit_ = make_jit(codegen_level,
             std::getenv("FSIM_STATIC_KERNEL_NO_FAST_ISEL") == nullptr);
-        // Hot templates: the optimizing backend (register allocation and
-        // instruction selection matter for large shared programs).
-        hot_jit_ = make_jit(2, false);
+        // Hot templates: the optimizing backend. Register allocation and the
+        // machine passes carry most of its benefit; fast instruction
+        // selection halves its compile time for a small run-time cost
+        // (FSIM_STATIC_KERNEL_HOT_FAST_ISEL=0 selects the full selector).
+        const char* hot_level = std::getenv("FSIM_STATIC_KERNEL_HOT_LEVEL");
+        const char* hot_fast_isel = std::getenv("FSIM_STATIC_KERNEL_HOT_FAST_ISEL");
+        hot_jit_ = make_jit(hot_level == nullptr ? 2 : std::atoi(hot_level),
+            hot_fast_isel == nullptr || std::string_view { hot_fast_isel } != "0");
+        // Warm templates: full instruction selection without the optimizing
+        // backend's cost.
+        warm_jit_ = make_jit(0, false);
     }
 
     std::vector<StaticKernelNativeEntry> compile(
@@ -2125,17 +2536,21 @@ public:
         const auto started = std::chrono::steady_clock::now();
         std::vector<StaticKernelNativeEntry> entries(templates.size(), nullptr);
         std::size_t instructions = 0U;
-        for (const bool hot : { false, true }) {
+        std::array<double, 3> tier_ms { };
+        for (const std::uint8_t tier : { std::uint8_t { 0U }, std::uint8_t { 1U }, std::uint8_t { 2U } }) {
             std::vector<std::size_t> group;
             for (std::size_t index = 0U; index < templates.size(); ++index) {
-                if (templates[index].hot == hot) {
+                if (templates[index].tier == tier) {
                     group.push_back(index);
                     instructions += templates[index].body->code.size();
                 }
             }
             if (!group.empty()) {
-                compile_group(hot ? *hot_jit_ : *jit_, templates, group, helpers,
-                    entries, hot);
+                const auto group_started = std::chrono::steady_clock::now();
+                compile_group(tier == 2U ? *hot_jit_ : tier == 1U ? *warm_jit_ : *jit_,
+                    templates, group, helpers, entries, tier);
+                tier_ms[tier] = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - group_started).count();
             }
         }
         ++generation_;
@@ -2170,9 +2585,16 @@ public:
                       << templates.size() << " hot="
                       << std::ranges::count_if(templates,
                              [](const StaticKernelTemplate& entry) {
-                                 return entry.hot;
+                                 return entry.tier == 2U;
+                             })
+                      << " warm="
+                      << std::ranges::count_if(templates,
+                             [](const StaticKernelTemplate& entry) {
+                                 return entry.tier == 1U;
                              })
                       << " instructions=" << instructions
+                      << " cold_ms=" << tier_ms[0] << " warm_ms=" << tier_ms[1]
+                      << " hot_ms=" << tier_ms[2]
                       << " total_ms=" << ms(started, finished) << '\n';
         }
         return entries;
@@ -2205,7 +2627,7 @@ private:
         std::span<const StaticKernelTemplate> templates,
         const std::vector<std::size_t>& group,
         const StaticKernelNativeHelpers& helpers,
-        std::vector<StaticKernelNativeEntry>& entries, const bool hot)
+        std::vector<StaticKernelNativeEntry>& entries, const std::uint8_t tier)
     {
         auto context = std::make_unique<llvm::LLVMContext>();
         auto module = std::make_unique<llvm::Module>("fsim_static_kernel", *context);
@@ -2224,7 +2646,7 @@ private:
             function->addParamAttr(0, llvm::Attribute::NoAlias);
             function->addFnAttr(llvm::Attribute::NoUnwind);
             FunctionEmitter emitter(*module, *function, *templates[index].body,
-                helpers);
+                helpers, !templates[index].vhdl);
             emitter.emit();
         }
         if (std::getenv("FSIM_STATIC_KERNEL_VERIFY") != nullptr
@@ -2247,14 +2669,28 @@ private:
             // Cold templates only need registers promoted for the fast
             // instruction selector; further IR passes cost more compile
             // time than they save at run time.
-            const char* custom = std::getenv("FSIM_STATIC_KERNEL_PIPELINE");
+            const char* custom = std::getenv(tier == 2U
+                    && std::getenv("FSIM_STATIC_KERNEL_HOT_PIPELINE") != nullptr
+                ? "FSIM_STATIC_KERNEL_HOT_PIPELINE" : "FSIM_STATIC_KERNEL_PIPELINE");
             if (auto error = builder.parsePassPipeline(pipeline,
                     custom != nullptr ? custom
-                        : hot         ? "function(sroa,early-cse,simplifycfg)"
+                        : tier != 0U  ? "function(sroa,early-cse,simplifycfg)"
                                       : "function(sroa)")) {
                 throw std::runtime_error(error_text(std::move(error)));
             }
             pipeline.run(*module, module_analyses);
+        }
+        if (const char* dump = std::getenv("FSIM_STATIC_KERNEL_DUMP_IR")) {
+            // Diagnostic: the IR handed to instruction selection, one file per
+            // group; function fsim_sk_<generation>_<index> is template <index>.
+            auto file = support::native_fs::open_ofstream(
+                std::filesystem::path { dump }
+                / ("static-kernel-" + std::to_string(generation_)
+                    + (tier == 2U ? "-hot.ll" : tier == 1U ? "-warm.ll" : "-cold.ll")));
+            std::string text;
+            llvm::raw_string_ostream stream(text);
+            module->print(stream, nullptr);
+            file << text;
         }
         if (auto error = jit.addIRModule(llvm::orc::ThreadSafeModule(
                 std::move(module), std::move(context)))) {
@@ -2271,6 +2707,7 @@ private:
 
     std::unique_ptr<llvm::orc::LLJIT> jit_;
     std::unique_ptr<llvm::orc::LLJIT> hot_jit_;
+    std::unique_ptr<llvm::orc::LLJIT> warm_jit_;
     std::size_t generation_ { };
 };
 

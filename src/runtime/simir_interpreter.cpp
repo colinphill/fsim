@@ -2806,7 +2806,16 @@ void Interpreter::start()
     impl_->build_fused_static_cohort_plans();
     std::vector<bool> prearmed_static_waits(
         impl_->processes.size(), false);
+    // Inert static kernel members are never initialized on the host.
+    const auto inert = [&](const ProcessId id) {
+        return impl_->static_kernel
+            && id < impl_->fusion_dormant_process.size()
+            && impl_->fusion_dormant_process[id] == 1U;
+    };
     for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
+        if (inert(id)) {
+            continue;
+        }
         const auto program = impl_->processes.program_view(id);
         if (!program.initialize() || program.final()
             || program.static_sensitivity().empty()
@@ -2822,6 +2831,9 @@ void Interpreter::start()
         prearmed_static_waits[id] = true;
     }
     for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
+        if (inert(id)) {
+            continue;
+        }
         const auto program = impl_->processes.program_view(id);
         if (program.initialize() && !program.final()
             && !prearmed_static_waits[id]) {
@@ -2852,6 +2864,11 @@ RunResult Interpreter::run(std::optional<SimulationTick> until)
         impl_->scheduler.clear_stop();
     }
     for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
+        // Static kernel members are never final blocks.
+        if (impl_->static_kernel && id < impl_->fusion_dormant_process.size()
+            && impl_->fusion_dormant_process[id] == 1U) {
+            continue;
+        }
         if (impl_->processes.program_view(id).final()) {
             impl_->queue_at(id, impl_->scheduler.now());
         }

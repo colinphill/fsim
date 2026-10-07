@@ -4,6 +4,7 @@
 #include "simir_region_graph_driver_class.hpp"
 #include "simir_region_graph_program_access.hpp"
 
+#include <unordered_map>
 #include <algorithm>
 #include <cstddef>
 #include <cstdlib>
@@ -1861,6 +1862,12 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
     static const bool purity_profile
         = std::getenv("FSIM_PROFILE_REGION_PURITY") != nullptr;
     std::map<std::string, std::pair<std::uint64_t, std::string>> purity_reasons;
+    // Static read ranges depend only on the operations and the widths of the
+    // signals they read; processes sharing an operation body share both
+    // (sharing requires equal widths and value kinds), so the analysis runs
+    // once per body.
+    std::unordered_map<const void*,
+        std::map<std::size_t, std::vector<StaticReadRange>>> read_ranges_by_body;
     for (std::size_t index = 0; index < programs.size(); ++index) {
         const auto& program = programs[index];
         std::string first_impurity;
@@ -1882,7 +1889,9 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
         node.reads = node.sensitivities;
         node.writes = program.driver_regions();
         node.pure = static_loop(program);
-        note_impurity(node.pure, "not_static_loop:" + static_loop_failure(program));
+        if (purity_profile) {
+            note_impurity(node.pure, "not_static_loop:" + static_loop_failure(program));
+        }
         const bool has_static_loop = node.pure;
         bool has_dynamic_fork { };
         bool ownership_complete = true;
@@ -1969,8 +1978,19 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                                  RegionObservation capability) {
             observe_access(signal, capability, 0U, 0U);
         };
-        const auto read_ranges
-            = infer_static_read_ranges(program, descriptors);
+        const auto* const body = program.operations().body_identity();
+        const auto& read_ranges = body != nullptr
+            ? [&]() -> const std::map<std::size_t, std::vector<StaticReadRange>>& {
+                  auto found = read_ranges_by_body.find(body);
+                  if (found == read_ranges_by_body.end()) {
+                      found = read_ranges_by_body.emplace(body,
+                          infer_static_read_ranges(program, descriptors)).first;
+                  }
+                  return found->second;
+              }()
+            : read_ranges_by_body.emplace(nullptr,
+                  std::map<std::size_t, std::vector<StaticReadRange>> { }).first->second
+                  = infer_static_read_ranges(program, descriptors);
         const auto& operations = program.operations();
         std::size_t current_instruction { };
         const auto observe_read = [&](const ReadSignal& read,
@@ -2078,6 +2098,11 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                 // graph access, dependency, or purity facts.
                 continue;
             }
+            if (plain_register_operation(stored_operation)) {
+                // No signal, container or fork access, and supported: nothing
+                // to record (and no instance field to expand).
+                continue;
+            }
             const auto operation = operations.expanded(instruction);
             bool fork_control_known = true;
             if (const auto* fork = operation_get_if<Fork>(&operation)) {
@@ -2156,7 +2181,7 @@ RegionGraph region_graph_detail::RegionGraphProgramBuilder::build(
                     }
                 }, operation);
             }
-            if (node.pure && !supported) {
+            if (purity_profile && node.pure && !supported) {
                 note_impurity(false, "operation:" + std::string {
                     visit_operation([](const auto& value) {
                         return std::string_view { typeid(value).name() };

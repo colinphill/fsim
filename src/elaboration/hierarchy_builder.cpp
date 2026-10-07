@@ -4,6 +4,7 @@
 #include "lowerer_internal.hpp"
 #include "../diagnostic/thread_cpu_clock.hpp"
 
+#include <iostream>
 #include <algorithm>
 #include <cstdlib>
 #include <map>
@@ -1011,6 +1012,12 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
             std::move(*process)
         };
     };
+    static const bool debug_reject = std::getenv("FSIM_DEBUG_LOWERING_REJECT") != nullptr;
+    const auto why = [&](const char* reason) {
+        if (debug_reject) {
+            std::cerr << "fsim-lowering-reject: " << reason << ' ' << path << '\n';
+        }
+    };
     const auto lower_ordinary = [&] {
         record_lowering_census(
             systemverilog_concurrent_template_rejections_);
@@ -1020,6 +1027,7 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
     };
     const auto source = specialized.find_statement(statement);
     if (!source || source->systemverilog == nullptr) {
+        why("no_source");
         return lower_ordinary();
     }
     const auto& assignment = *source->systemverilog;
@@ -1042,6 +1050,9 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
         || assignment.clocking_cycle_count
         || !assignment.statements.empty()
         || !assignment.else_statements.empty()) {
+        why(assignment.kind != semantic::sv::StatementKind::assignment ? "not_assignment"
+            : assignment.assignment_kind != semantic::sv::AssignmentKind::continuous ? "not_continuous"
+            : "shape");
         return lower_ordinary();
     }
 
@@ -1058,12 +1069,14 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
                 || cached.language_standard != unit.standard
                 || cached.compatibility_profile
                     != unit.compatibility_profile) {
+                why(overlay == no_overlay_class ? "no_overlay" : "overlay_differs");
                 continue;
             }
             matching_overlay = true;
             const auto target_roles = resolve_systemverilog_template_roles(
                 lowerer, cached.signal_roles);
             if (!target_roles) {
+                why("roles");
                 continue;
             }
             auto signal_remap = make_systemverilog_template_signal_remap(
@@ -1072,6 +1085,7 @@ HierarchyBuilder::lower_cached_systemverilog_concurrent_statement(
                 design_.signal_info_,
                 design_.signals_);
             if (!signal_remap) {
+                why("remap");
                 continue;
             }
 

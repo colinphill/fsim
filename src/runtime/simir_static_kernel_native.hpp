@@ -139,8 +139,15 @@ using StaticKernelNativeEntry = std::uint32_t (*)(
 
 struct StaticKernelTemplate {
     const static_kernel_detail::CompiledBody* body { };
-    /// Shared by many units and large: worth the optimizing backend.
-    bool hot { };
+    /// 0 cold (fast instruction selection), 1 warm (IR clean-up and full
+    /// instruction selection, unoptimized backend), 2 hot (the optimizing
+    /// backend): heavy templates get more, and partitions, whose code runs
+    /// on every input change, the most.
+    std::uint8_t tier { };
+    /// Some instance is a VHDL member: deoptimization resumes on the
+    /// reference evaluator from the register file, so every register write
+    /// must reach it.
+    bool vhdl { };
 };
 
 class StaticKernelCodegen {

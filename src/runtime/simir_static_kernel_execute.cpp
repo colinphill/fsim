@@ -21,7 +21,7 @@ namespace kw = kernel_word;
 void Interpreter::Impl::StaticKernel::execute(
     CompiledBody& body, std::uint32_t member_index)
 {
-    if (vhdl_) {
+    if (members_[member_index].vhdl) {
         try {
             execute_body(body, member_index);
         } catch (const KernelDeopt& deopt) {
@@ -39,10 +39,13 @@ void Interpreter::Impl::StaticKernel::execute_body(
     auto* registers = body.registers.data();
     const auto& code = body.code;
     const auto size = static_cast<std::uint32_t>(code.size());
-    std::uint32_t pc = body.entry;
+    // A behavioral body starts at the thread's resume point and runs until it
+    // reaches a suspension, however long the thread computes before that.
+    const bool behavioral = !body.resume_entries.empty();
+    std::uint32_t pc = behavioral ? behavioral_entry_ : body.entry;
     std::size_t steps = 0U;
     // SimIR operation index of instruction 0.
-    const auto origin = vhdl_ ? 0U : current->body_begin;
+    const auto origin = current->vhdl ? 0U : current->body_begin;
     const auto fail_at = [&](const std::uint32_t at, const std::string& message) {
         fail(member_index, origin + at, message);
     };
@@ -60,7 +63,7 @@ void Interpreter::Impl::StaticKernel::execute_body(
     };
     try {
     while (pc < size) {
-        if (++steps > run_step_limit) {
+        if (++steps > run_step_limit && !behavioral) {
             fail_at(pc, "static kernel member did not terminate");
         }
         const auto& inst = code[pc];
@@ -411,6 +414,9 @@ void Interpreter::Impl::StaticKernel::execute_body(
         }
         case KOp::deopt:
             throw KernelDeopt { at, false };
+        case KOp::suspend:
+            behavioral_suspended_ = inst.x;
+            return;
         }
         if (mode == 0U) {
             continue;
@@ -551,7 +557,12 @@ void Interpreter::Impl::StaticKernel::execute_generic(CompiledBody& body,
             member.registers[reg] = body.wide_registers[index];
         }
     }
-    (void)step_generic(member_index, inst.x);
+    // Behavioral runtime-library operations (output, strings, plusargs)
+    // run on the thread's reference state.
+    if (member.kind != StaticKernelMemberKind::behavioral
+        || !behavioral_step(member_index, inst.x)) {
+        (void)step_generic(member_index, inst.x);
+    }
     if (write) {
         const auto index = base + *write;
         const auto width = body.register_widths[index];

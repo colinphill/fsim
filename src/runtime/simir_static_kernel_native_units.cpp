@@ -4,6 +4,7 @@
 // runtime helpers, template binding and partitions.
 #include "simir_static_kernel_compiled_internal.hpp"
 
+#include <cctype>
 #include <cxxabi.h>
 #include <iostream>
 #include <limits>
@@ -32,6 +33,9 @@ void Interpreter::Impl::StaticKernel::run_native(NativeUnit& unit,
     CompiledBody& body, const std::uint32_t member)
 {
     profile_native_calls_[4] += profile_ ? 1U : 0U;
+    if (profile_) {
+        ++profile_template_runs_[unit.program];
+    }
     StaticKernelNativeFrame frame;
     frame.arena = arena_.data();
     frame.bindings = unit.bindings.data();
@@ -43,12 +47,23 @@ void Interpreter::Impl::StaticKernel::run_native(NativeUnit& unit,
     frame.member = member;
     frame.position = 0U;
     frame.status = 0U;
+    const bool behavioral = !body.resume_entries.empty();
+    // Behavioral bodies start at a resume point and return 3 when they
+    // reach a suspension, whose operation index comes back in `reserved`.
+    frame.reserved = behavioral ? behavioral_entry_ : 0U;
     profile_operations_ += profile_ ? body.code.size() : 0U;
     const auto status = unit.entry(&frame, body.registers.data());
     if (frame.status == 2U && pending_deopt_) {
+        if (behavioral) {
+            return;
+        }
         const auto deopt = *pending_deopt_;
         pending_deopt_.reset();
         handle_deopt(frame.member, body, deopt);
+        return;
+    }
+    if (behavioral && status == 3U && frame.status == 0U) {
+        behavioral_suspended_ = frame.reserved;
         return;
     }
     if (status != 0U || frame.status != 0U) {
@@ -73,9 +88,17 @@ void Interpreter::Impl::StaticKernel::native_evaluate(
         const auto& body = *static_cast<const CompiledBody*>(frame->program);
         const auto& inst = body.code[at];
         if (kernel.profile_) {
+            static const bool who = std::getenv("FSIM_PROFILE_KERNEL_WHO") != nullptr;
+            std::string member;
+            if (who && frame->member < kernel.profile_names_.size()) {
+                member = " " + kernel.profile_names_[frame->member];
+                std::erase_if(member, [](const char c) {
+                    return std::isdigit(static_cast<unsigned char>(c)) != 0;
+                });
+            }
             ++kernel.profile_generic_ops_["evaluate op="
                 + std::to_string(static_cast<int>(inst.op)) + " sub="
-                + std::to_string(inst.sub) + " w=" + std::to_string(inst.width)];
+                + std::to_string(inst.sub) + " w=" + std::to_string(inst.width) + member];
         }
         std::uint32_t resolved = 0U;
         if (inst.op == KOp::load_host || inst.op == KOp::mem_read) {
@@ -87,7 +110,7 @@ void Interpreter::Impl::StaticKernel::native_evaluate(
             resolved = frame->bindings[2U * inst.x + 1U] & ~partition_tag;
         }
         const auto result = kernel.evaluate_slow(body, inst, at, frame->member,
-            kernel.vhdl_ ? 0U : kernel.members_[frame->member].body_begin,
+            kernel.members_[frame->member].vhdl ? 0U : kernel.members_[frame->member].body_begin,
             { xa, xb }, { ya, yb },
             { za, zb }, resolved,
             &static_cast<CompiledBody*>(frame->instance)->wide_registers);
@@ -124,9 +147,17 @@ void Interpreter::Impl::StaticKernel::native_effect(
         const auto& body = *static_cast<const CompiledBody*>(frame->program);
         const auto& inst = body.code[at];
         if (kernel.profile_) {
+            static const bool who = std::getenv("FSIM_PROFILE_KERNEL_WHO") != nullptr;
+            std::string member;
+            if (who && frame->member < kernel.profile_names_.size()) {
+                member = " " + kernel.profile_names_[frame->member];
+                std::erase_if(member, [](const char c) {
+                    return std::isdigit(static_cast<unsigned char>(c)) != 0;
+                });
+            }
             ++kernel.profile_generic_ops_["effect op="
                 + std::to_string(static_cast<int>(inst.op)) + " sub="
-                + std::to_string(inst.sub) + " w=" + std::to_string(inst.width)];
+                + std::to_string(inst.sub) + " w=" + std::to_string(inst.width) + member];
         }
         const auto binding = inst.d;
         std::uint32_t resolved = 0U;
@@ -145,7 +176,7 @@ void Interpreter::Impl::StaticKernel::native_effect(
         }
         kernel.running_position_ = frame->position;
         kernel.effect_slow(body, inst, at, frame->member,
-            kernel.vhdl_ ? 0U : kernel.members_[frame->member].body_begin,
+            kernel.members_[frame->member].vhdl ? 0U : kernel.members_[frame->member].body_begin,
             source, { ya, yb }, { za, zb }, resolved);
     } catch (const KernelDeopt& deopt) {
         kernel.pending_deopt_ = deopt;
@@ -153,42 +184,6 @@ void Interpreter::Impl::StaticKernel::native_effect(
             kernel.pending_deopt_->resume = at;
         }
         frame->status = 2U;
-    } catch (...) {
-        kernel.native_exception_ = std::current_exception();
-        frame->status = 1U;
-    }
-}
-
-void Interpreter::Impl::StaticKernel::native_notify(
-    StaticKernelNativeFrame* frame, const std::uint32_t slot,
-    const std::uint64_t changed)
-{
-    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
-    kernel.profile_native_calls_[2] += kernel.profile_ ? 1U : 0U;
-    try {
-        kernel.running_position_ = frame->position;
-        if (auto& state = kernel.slots_[slot]; !state.single_writer) {
-            state.last_writer = kernel.member_process_[frame->member];
-        }
-        kernel.slot_changed(slot, changed, nullptr);
-    } catch (...) {
-        kernel.native_exception_ = std::current_exception();
-        frame->status = 1U;
-    }
-}
-
-void Interpreter::Impl::StaticKernel::native_notify_field(
-    StaticKernelNativeFrame* frame, const std::uint32_t slot,
-    const std::uint64_t changed, const std::uint32_t field_offset)
-{
-    auto& kernel = *static_cast<StaticKernel*>(frame->kernel);
-    kernel.profile_native_calls_[2] += kernel.profile_ ? 1U : 0U;
-    try {
-        kernel.running_position_ = frame->position;
-        if (auto& state = kernel.slots_[slot]; !state.single_writer) {
-            state.last_writer = kernel.member_process_[frame->member];
-        }
-        kernel.slot_changed(slot, changed, nullptr, field_offset);
     } catch (...) {
         kernel.native_exception_ = std::current_exception();
         frame->status = 1U;
@@ -208,7 +203,7 @@ void Interpreter::Impl::StaticKernel::native_fail(
     }
     try {
         kernel.fail(frame->member,
-            (kernel.vhdl_ ? 0U : kernel.members_[frame->member].body_begin) + at,
+            (kernel.members_[frame->member].vhdl ? 0U : kernel.members_[frame->member].body_begin) + at,
             "branch condition is unknown or high impedance");
     } catch (...) {
         kernel.native_exception_ = std::current_exception();
@@ -225,33 +220,46 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
     struct Unit {
         NativeUnit* native;
         const CompiledBody* body;
+        /// VHDL bodies keep their constants (Logic9 and 'U' metadata).
+        bool vhdl { };
     };
     std::vector<Unit> units;
     for (auto& partition_state : partitions_) {
-        units.push_back({ &partition_state.native, &partition_state.program });
+        units.push_back({ &partition_state.native, &partition_state.program, false });
     }
     for (auto& member : members_) {
         if (member.compiled && member.partition == no_slot) {
-            units.push_back({ &member.native, &*member.compiled });
+            units.push_back({ &member.native, &*member.compiled, member.vhdl });
         }
     }
-    std::unordered_map<std::string, std::uint32_t> template_of_key;
-    std::vector<std::uint32_t> template_of_unit(units.size(), no_slot);
-    for (std::size_t unit = 0U; unit < units.size(); ++unit) {
-        const auto& instance = *units[unit].body;
-        auto canonical = std::make_unique<CompiledBody>(instance);
+    // 1. Canonical bodies: slots, host signals, memories and marks become
+    // per-unit bindings.
+    struct Canonical {
+        std::unique_ptr<CompiledBody> body;
         std::vector<std::uint32_t> bindings;
         std::unordered_map<std::uint64_t, std::uint32_t> binding_of;
+    };
+    std::vector<Canonical> canonicals(units.size());
+    const auto bind_in = [](Canonical& unit_state, const std::uint64_t kind,
+                             const std::uint32_t value, const std::uint32_t first,
+                             const std::uint32_t second) {
+        const auto key = (kind << 40U) | value;
+        const auto [it, inserted] = unit_state.binding_of.emplace(
+            key, static_cast<std::uint32_t>(unit_state.bindings.size() / 2U));
+        if (inserted) {
+            unit_state.bindings.push_back(first);
+            unit_state.bindings.push_back(second);
+        }
+        return it->second;
+    };
+    for (std::size_t unit = 0U; unit < units.size(); ++unit) {
+        const auto& instance = *units[unit].body;
+        auto& state = canonicals[unit];
+        state.body = std::make_unique<CompiledBody>(instance);
+        auto& canonical = state.body;
         const auto bind = [&](const std::uint64_t kind, const std::uint32_t value,
                               const std::uint32_t first, const std::uint32_t second) {
-            const auto key = (kind << 40U) | value;
-            const auto [it, inserted] = binding_of.emplace(
-                key, static_cast<std::uint32_t>(bindings.size() / 2U));
-            if (inserted) {
-                bindings.push_back(first);
-                bindings.push_back(second);
-            }
-            return it->second;
+            return bind_in(state, kind, value, first, second);
         };
         const auto bind_slot = [&](const std::uint32_t slot) {
             return bind(1U, slot, slots_[slot].offset,
@@ -305,6 +313,9 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
                 break;
             }
         }
+    }
+    const auto make_key = [&](const CompiledBody& body, const bool shape) {
+        const auto* canonical = &body;
         std::string key;
         const auto append = [&](const auto& value) {
             key.append(reinterpret_cast<const char*>(&value), sizeof(value));
@@ -318,10 +329,14 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
             append(inst.x);
             append(inst.y);
             append(inst.z);
-            append(inst.offset);
+            // The shape also ignores field offsets, which may become bindings.
+            append(shape && inst.op == KOp::load_field
+                    ? std::uint32_t { 0 } : inst.offset);
             append(inst.aux);
-            append(inst.imm_a);
-            append(inst.imm_b);
+            // The shape ignores constant values, which may become bindings.
+            const bool open = shape && inst.op == KOp::constant;
+            append(open ? std::uint64_t { 0 } : inst.imm_a);
+            append(open ? std::uint64_t { 0 } : inst.imm_b);
         }
         append(canonical->registers.size());
         append(canonical->entry);
@@ -354,18 +369,102 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
             append(operand.reg);
             append(operand.width);
         }
+        return key;
+    };
+    // 2. Units with the same shape share one template: the constants that
+    // differ between them are loaded from their bindings (sub 1, x and y the
+    // bindings of the aval and bval words as two 32-bit halves).
+    {
+        std::unordered_map<std::string, std::vector<std::uint32_t>> by_shape;
+        for (std::size_t unit = 0U; unit < units.size(); ++unit) {
+            if (units[unit].vhdl) {
+                continue;
+            }
+            by_shape[make_key(*canonicals[unit].body, true)].push_back(
+                static_cast<std::uint32_t>(unit));
+        }
+        for (const auto& [shape, group] : by_shape) {
+            if (group.size() < 2U) {
+                continue;
+            }
+            const auto& first = canonicals[group.front()].body->code;
+            for (std::uint32_t at = 0U; at < first.size(); ++at) {
+                if (first[at].op == KOp::load_field && first[at].sub == 0U) {
+                    // Field reads at different bit offsets of the same-shaped
+                    // slot read the offset from a binding (sub 1, y).
+                    const bool offsets_differ = std::ranges::any_of(group,
+                        [&](const std::uint32_t unit) {
+                            return canonicals[unit].body->code[at].offset
+                                != first[at].offset;
+                        });
+                    if (offsets_differ) {
+                        for (const auto unit : group) {
+                            auto& state = canonicals[unit];
+                            auto& inst = state.body->code[at];
+                            inst.sub = 1U;
+                            inst.y = bind_in(state, 7U, at, inst.offset, 0U);
+                            inst.offset = 0U;
+                        }
+                    }
+                    continue;
+                }
+                if (first[at].op != KOp::constant) {
+                    continue;
+                }
+                const bool differs = std::ranges::any_of(group,
+                    [&](const std::uint32_t unit) {
+                        const auto& inst = canonicals[unit].body->code[at];
+                        return inst.imm_a != first[at].imm_a
+                            || inst.imm_b != first[at].imm_b;
+                    });
+                if (!differs) {
+                    continue;
+                }
+                for (const auto unit : group) {
+                    auto& state = canonicals[unit];
+                    auto& inst = state.body->code[at];
+                    inst.sub = 1U;
+                    inst.x = bind_in(state, 5U, at,
+                        static_cast<std::uint32_t>(inst.imm_a),
+                        static_cast<std::uint32_t>(inst.imm_a >> 32U));
+                    inst.y = bind_in(state, 6U, at,
+                        static_cast<std::uint32_t>(inst.imm_b),
+                        static_cast<std::uint32_t>(inst.imm_b >> 32U));
+                    inst.imm_a = 0U;
+                    inst.imm_b = 0U;
+                }
+            }
+        }
+    }
+    // 3. Templates.
+    std::unordered_map<std::string, std::uint32_t> template_of_key;
+    std::vector<std::uint32_t> template_of_unit(units.size(), no_slot);
+    for (std::size_t unit = 0U; unit < units.size(); ++unit) {
+        auto& state = canonicals[unit];
+        auto key = make_key(*state.body, false);
         const auto [found, inserted] = template_of_key.emplace(
             std::move(key), static_cast<std::uint32_t>(templates_.size()));
         if (inserted) {
-            templates_.push_back(std::move(canonical));
+            templates_.push_back(std::move(state.body));
         }
         template_of_unit[unit] = found->second;
-        units[unit].native->bindings = std::move(bindings);
+        units[unit].native->bindings = std::move(state.bindings);
         units[unit].native->program = templates_[found->second].get();
     }
     std::vector<std::size_t> template_units(templates_.size(), 0U);
-    for (const auto index : template_of_unit) {
-        ++template_units[index];
+    // Partitions rerun whole whenever any of their inputs changes, so their
+    // code runs far more often than a member's (which runs only when its
+    // own inputs change); only heavy partition templates repay the
+    // optimizing backend's compile time, heavy member templates get the
+    // cheaper warm tier.
+    std::vector<std::uint8_t> template_partition(templates_.size(), 0U);
+    std::vector<std::uint8_t> template_vhdl(templates_.size(), 0U);
+    for (std::size_t unit = 0U; unit < template_of_unit.size(); ++unit) {
+        ++template_units[template_of_unit[unit]];
+        template_vhdl[template_of_unit[unit]] |= units[unit].vhdl ? 1U : 0U;
+        if (unit < partitions_.size()) {
+            template_partition[template_of_unit[unit]] = 1U;
+        }
     }
     std::vector<StaticKernelTemplate> templates;
     templates.reserve(templates_.size());
@@ -378,7 +477,11 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
         // carries; only the heaviest get the slower optimizing backend.
         const auto size = templates_[index]->code.size();
         templates.push_back({ templates_[index].get(),
-            size >= 64U && template_units[index] * size >= hot_threshold });
+            static_cast<std::uint8_t>(
+                size >= 64U && template_units[index] * size >= hot_threshold
+                    ? (template_partition[index] != 0U ? 2U : 1U)
+                    : 0U),
+            template_vhdl[index] != 0U });
     }
     StaticKernelNativeHelpers helpers;
     helpers.evaluate = &StaticKernel::native_evaluate;
@@ -464,7 +567,7 @@ void Interpreter::Impl::StaticKernel::build_partitions(
     std::map<std::uint32_t, std::vector<std::uint32_t>> groups;
     for (std::uint32_t index = 0U; index < members_.size(); ++index) {
         const auto& member = members_[index];
-        if (member.kind == StaticKernelMemberKind::combinational
+        if (member.kind == StaticKernelMemberKind::combinational && !member.vhdl
             && member.compiled && member.partition_key != no_slot) {
             groups[member.partition_key].push_back(index);
         }
@@ -474,15 +577,20 @@ void Interpreter::Impl::StaticKernel::build_partitions(
     // keeps one partition per key.
     std::vector<std::vector<std::uint32_t>> components;
     const bool split = std::getenv("FSIM_STATIC_KERNEL_WHOLE_PARTITIONS") == nullptr;
+    // Position of a member within the group being processed (no_slot
+    // outside it); reset after each group.
+    std::vector<std::uint32_t> local(members_.size(), no_slot);
+    const auto local_of = [&](const std::uint32_t member) {
+        return member < local.size() ? local[member] : no_slot;
+    };
     for (auto& [key, group] : groups) {
         (void)key;
         if (!split || group.size() < 2U) {
             components.push_back(std::move(group));
             continue;
         }
-        std::unordered_map<std::uint32_t, std::uint32_t> local;
         for (std::uint32_t at = 0U; at < group.size(); ++at) {
-            local.emplace(group[at], at);
+            local[group[at]] = at;
         }
         std::vector<std::uint32_t> parent(group.size());
         for (std::uint32_t at = 0U; at < group.size(); ++at) {
@@ -497,14 +605,17 @@ void Interpreter::Impl::StaticKernel::build_partitions(
         };
         for (std::uint32_t at = 0U; at < group.size(); ++at) {
             for (const auto successor : successors[group[at]]) {
-                if (const auto found = local.find(successor); found != local.end()) {
+                if (const auto found = local_of(successor); found != no_slot) {
                     const auto left = find(at);
-                    const auto right = find(found->second);
+                    const auto right = find(found);
                     if (left != right) {
                         parent[std::max(left, right)] = std::min(left, right);
                     }
                 }
             }
+        }
+        for (const auto member : group) {
+            local[member] = no_slot;
         }
         std::map<std::uint32_t, std::vector<std::uint32_t>> by_root;
         for (std::uint32_t at = 0U; at < group.size(); ++at) {
@@ -522,16 +633,15 @@ void Interpreter::Impl::StaticKernel::build_partitions(
         // Partition-local topological order, ties in declaration order, so
         // instances of one module share one canonical program.
         {
-            std::unordered_map<std::uint32_t, std::uint32_t> local;
             for (std::uint32_t at = 0U; at < members.size(); ++at) {
-                local.emplace(members[at], at);
+                local[members[at]] = at;
             }
             std::vector<std::uint32_t> indegree(members.size(), 0U);
             for (const auto member : members) {
                 for (const auto successor : successors[member]) {
-                    if (const auto found = local.find(successor);
-                        found != local.end() && successor != member) {
-                        ++indegree[found->second];
+                    if (const auto found = local_of(successor);
+                        found != no_slot && successor != member) {
+                        ++indegree[found];
                     }
                 }
             }
@@ -565,13 +675,16 @@ void Interpreter::Impl::StaticKernel::build_partitions(
                 done[at] = 1U;
                 ordered.push_back(member);
                 for (const auto successor : successors[member]) {
-                    if (const auto found = local.find(successor);
-                        found != local.end() && done[found->second] == 0U
-                        && successor != member && indegree[found->second] != 0U
-                        && --indegree[found->second] == 0U) {
+                    if (const auto found = local_of(successor);
+                        found != no_slot && done[found] == 0U
+                        && successor != member && indegree[found] != 0U
+                        && --indegree[found] == 0U) {
                         ready.push(successor);
                     }
                 }
+            }
+            for (const auto member : members) {
+                local[member] = no_slot;
             }
             members = std::move(ordered);
         }
@@ -703,6 +816,7 @@ void Interpreter::Impl::StaticKernel::build_partitions(
                 case KOp::nop:
                 case KOp::mem_bind:
                 case KOp::mark:
+                case KOp::suspend:
                     break;
                 case KOp::generic:
                     inst.y += register_base;
@@ -965,8 +1079,10 @@ void Interpreter::Impl::StaticKernel::build_partitions(
     for (std::uint32_t index = 0U; index < count; ++index) {
         member_of_process.emplace(members_[index].process, index);
     }
-    for (auto& slot : slots_) {
-        if (slot.output || !slot.edges.empty()) {
+    for (std::uint32_t index = 0U; index < slots_.size(); ++index) {
+        auto& slot = slots_[index];
+        if (slot.output || !slot.edges.empty()
+            || (index < slot_waitable_.size() && slot_waitable_[index] != 0U)) {
             continue;
         }
         if (slot.readers.empty()) {
