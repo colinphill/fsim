@@ -531,15 +531,20 @@ void VerilogParser::validate_function_body(
               || statement.kind == StatementKind::DisableFork
               || statement.kind == StatementKind::Pause
               || statement.kind == StatementKind::Finish;
+          // IEEE 1800-2009 13.4.4 introduced fork...join_none background
+          // processes in functions.
           if (statement.kind == StatementKind::Fork
               && statement.fork_join_kind == ForkJoinKind::None
+              && standard_revision_ != StandardRevision::SystemVerilog2009
+              && standard_revision_ != StandardRevision::SystemVerilog2012
+              && standard_revision_ != StandardRevision::SystemVerilog2017
               && standard_revision_
                   != StandardRevision::SystemVerilog2023) {
             error(
                 start,
                 "FSIM-SV-SEM-246",
                 "a function may spawn fork...join_none background "
-                "processes only in SystemVerilog-2023");
+                "processes only in SystemVerilog-2009 or later");
           }
           if (forbidden) {
             error(

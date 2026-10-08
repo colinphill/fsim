@@ -2121,8 +2121,11 @@ private:
             }
             const auto index_profile = expression_profile(
                 selected->selectors[index]);
+            // An index is a value of the dimension's discrete index type;
+            // enumeration values select by position (IEEE 1076-2008 8.4).
             if (index_profile
-                && index_profile->kind != ProfileKind::integer) {
+                && index_profile->kind != ProfileKind::integer
+                && index_profile->kind != ProfileKind::enumeration) {
                 report(
                     "FSIM-ELAB-VHARRAYSEL-002",
                     "VHDL array index requires an integer-family signed "

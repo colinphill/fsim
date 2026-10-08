@@ -2960,6 +2960,14 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
         && found->second < design_.signal_info_.size()) {
         return found->second;
     }
+    if (name.find('.') != std::string::npos
+        && !hir_referenced_declaration(expression_id)) {
+        if (const auto signal = hir_hierarchical_signal(name)) {
+            hierarchical_reference_used_ = true;
+            return signal;
+        }
+        hierarchical_reference_missed_ = true;
+    }
     // A separately selected top-level may provide the conventional global
     // signaling surface used by vendor libraries (for example glbl.GSR).
     // Admit only a direct member of an explicit root alias. Deeper paths
@@ -2977,6 +2985,41 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
             && global->second < design_.signal_info_.size()
         ? std::optional { global->second }
         : std::nullopt;
+}
+
+std::optional<SignalId> Lowerer::hir_hierarchical_signal(
+    const std::string_view name) const
+{
+    // A hierarchical name is resolved from the innermost enclosing scope
+    // outward (IEEE 1800-2017 23.8): first below the current instance, then
+    // below each ancestor, and finally from the top. Only full hierarchical
+    // paths are consulted; the single-root shortcut names are ambiguous.
+    auto path = name;
+    if (path.starts_with("$root.")) {
+        path.remove_prefix(6U);
+    }
+    const auto lookup = [&](const std::string& candidate)
+        -> std::optional<SignalId> {
+        const auto found = design_.signal_by_name_.find(candidate);
+        return found != design_.signal_by_name_.end()
+                && found->second < design_.signal_info_.size()
+            ? std::optional { found->second }
+            : std::nullopt;
+    };
+    if (!name.starts_with("$root.")) {
+        std::string_view scope = hierarchy_;
+        while (!scope.empty()) {
+            if (const auto signal = lookup(
+                    std::string { scope } + "." + std::string { path })) {
+                return signal;
+            }
+            const auto separator = scope.find_last_of('.');
+            scope = separator == std::string_view::npos
+                ? std::string_view { }
+                : scope.substr(0U, separator);
+        }
+    }
+    return lookup(std::string { path });
 }
 
 std::optional<Lowerer::HirRuntimeBinding>
@@ -6631,6 +6674,16 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
     if (hir_vhdl_now_expression(expression_id)) {
         return frontend::ValueDomain::Integer;
     }
+    if (hir_vhdl_function_name(expression_id)) {
+        const auto resolution = resolve_hir_vhdl_function_call(
+            expression_id, process_scope, 0U);
+        const auto type = resolution
+            ? hir_callable_type(resolution->body, 0U)
+            : std::nullopt;
+        if (type && !type->string) {
+            return type->domain;
+        }
+    }
     if (const auto binding = hir_case_pattern_binding(expression_id)) {
         return binding->domain;
     }
@@ -7248,6 +7301,33 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
     return std::nullopt;
 }
 
+bool Lowerer::hir_vhdl_function_name(
+    const semantic::ExpressionId expression_id) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return false;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->kind != semantic::vhdl::ExpressionKind::name
+        || !expression->vhdl->referenced_name) {
+        return false;
+    }
+    if (const auto selected = hir_referenced_declaration(expression_id)) {
+        const auto declaration = specialized_hir_unit_->find_declaration(
+            *selected);
+        if (!declaration || declaration->vhdl == nullptr
+            || !declaration->vhdl->callable
+            || !declaration->vhdl->callable->function) {
+            return false;
+        }
+    }
+    return resolve_hir_vhdl_function_call(
+               expression_id, hir_process_scope_, 0U)
+        .has_value();
+}
+
 bool Lowerer::hir_vhdl_now_expression(
     const semantic::ExpressionId expression_id) const
 {
@@ -7488,6 +7568,16 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
     }
     if (hir_vhdl_now_expression(expression_id)) {
         return 64U;
+    }
+    if (hir_vhdl_function_name(expression_id)) {
+        const auto resolution = resolve_hir_vhdl_function_call(
+            expression_id, process_scope, 0U);
+        const auto type = resolution
+            ? hir_callable_type(resolution->body, 0U)
+            : std::nullopt;
+        if (type && !type->string && type->width != 0U) {
+            return type->width;
+        }
     }
     if (const auto binding = hir_case_pattern_binding(expression_id)) {
         return binding->width;

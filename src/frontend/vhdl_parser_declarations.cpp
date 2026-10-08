@@ -366,11 +366,19 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
       !incomplete_declaration && prior_declaration != unit.type_aliases.end() &&
       prior_declaration->declaration_kind ==
           TypeDeclarationKind::VhdlIncomplete;
+  // A protected type body completes the protected type declared earlier in
+  // the same declarative region (IEEE 1076-2008 5.6.3).
+  const bool completing_protected =
+      keyword("is", 0, true) && keyword("protected", 1, true) &&
+      keyword("body", 2, true) &&
+      (prior_declaration == unit.type_aliases.end() ||
+       prior_declaration->declaration_kind ==
+           TypeDeclarationKind::VhdlProtected);
   const bool duplicate =
       (!nested_scope && vhdl_named_types_.contains(canonical_name) &&
-       !completing_incomplete) ||
+       !completing_incomplete && !completing_protected) ||
       (prior_declaration != unit.type_aliases.end() &&
-       !completing_incomplete) ||
+       !completing_incomplete && !completing_protected) ||
       std::any_of(unit.parameters.begin(), unit.parameters.end(),
                   [&](const ParameterDeclaration &parameter) {
                     return parameter.kind == ParameterKind::Type &&

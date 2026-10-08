@@ -909,22 +909,20 @@ end architecture;
                 == ExpressionKind::LogicLiteral,
         "VHDL signal initializers must remain in architecture HIR");
 
-    const auto invalid_port_default = parse_text(
-        "invalid-port-default.vhd",
+    const auto output_port_default = parse_text(
+        "output-port-default.vhd",
         R"(
-entity invalid_port_default is
-  port (output_value : out bit := '0');
+entity output_port_default is
+  port (output_value : out bit := '1');
 end entity;
 )",
         Language::Vhdl2008);
     require(
-        !invalid_port_default.ok()
-            && std::ranges::any_of(
-                invalid_port_default.diagnostics,
-                [](const Diagnostic& diagnostic) {
-                    return diagnostic.code == "FSIM-VHDL-SEM-075";
-                }),
-        "non-input VHDL entity-port defaults need a targeted diagnostic");
+        output_port_default.ok()
+            && output_port_default.design.units.front().ports.size() == 1
+            && output_port_default.design.units.front().ports.front()
+                   .default_value,
+        "VHDL output-port defaults initialize the port's driver");
 
     const auto sv = parse_text(
         "initializers.sv",

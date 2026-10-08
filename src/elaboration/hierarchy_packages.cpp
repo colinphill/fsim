@@ -11696,12 +11696,13 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
     }
 
     std::size_t concurrent_order { };
+    std::vector<semantic::ProcessId> deferred_processes;
     if (!lower_compiled_systemverilog_processes(
             unit, *specialized, path, source_language,
             active_concurrent_statements, active_processes,
             generate_occurrences, generated_materializations, lowerer,
             clocking_processes, specialization, program_owner,
-            concurrent_order)) {
+            concurrent_order, &deferred_processes)) {
         return false;
     }
     append_selected_systemverilog_classes(
@@ -11738,6 +11739,12 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
     if (!instantiate_compiled_systemverilog_instance_worklist(
             unit, instance_materializations, source_language,
             concurrent_order, generated_path)) {
+        return false;
+    }
+    if (!deferred_processes.empty()
+        && !lower_deferred_systemverilog_processes(
+            unit, *specialized, path, source_language, deferred_processes,
+            lowerer, specialization_index, program_owner)) {
         return false;
     }
     resolve_compiled_systemverilog_virtual_interface_initializers(

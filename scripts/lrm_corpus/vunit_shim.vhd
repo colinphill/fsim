@@ -23,16 +23,18 @@ use ieee.numeric_std.all;
 
 package vunit_shim_pkg is
   type runner_sync_t is (runner_idle, runner_active);
-  signal runner : runner_sync_t := runner_idle;
+  -- VUnit's runner is a synchronization signal; testbenches only pass it to
+  -- test_runner_setup/cleanup, so a constant stands in for it.
+  constant runner : runner_sync_t := runner_idle;
 
   -- Testbenches are compiled with their runner_cfg generic removed; this
   -- constant takes its place.
   constant runner_cfg : string := "";
 
   procedure test_runner_setup(
-    signal runner : in runner_sync_t;
+    constant runner : in runner_sync_t;
     constant runner_cfg : in string := "");
-  procedure test_runner_cleanup(signal runner : in runner_sync_t);
+  procedure test_runner_cleanup(constant runner : in runner_sync_t);
   impure function test_suite return boolean;
   impure function run(constant name : string) return boolean;
 
@@ -155,13 +157,13 @@ package body vunit_shim_pkg is
   shared variable state : shim_state_t;
 
   procedure test_runner_setup(
-    signal runner : in runner_sync_t;
+    constant runner : in runner_sync_t;
     constant runner_cfg : in string := "") is
   begin
     state.begin_suite;
   end procedure;
 
-  procedure test_runner_cleanup(signal runner : in runner_sync_t) is
+  procedure test_runner_cleanup(constant runner : in runner_sync_t) is
   begin
     report "VUNIT-SHIM: done failures=" & integer'image(state.failure_count)
       severity note;

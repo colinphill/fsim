@@ -4997,6 +4997,43 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
     const std::size_t expected_width,
     const frontend::SystemVerilogScalarKind scalar_context)
 {
+    const auto diagnostics_before = diagnostics_.size();
+    auto result = lower_hir_expression_impl(
+        expression_id, expected_width, scalar_context);
+    if (!result && !hir_unlowered_expression_
+        && diagnostics_.size() == diagnostics_before
+        && specialized_hir_unit_ != nullptr) {
+        const auto expression = specialized_hir_unit_->find_expression(
+            expression_id);
+        if (expression
+            && (expression->vhdl != nullptr
+                || expression->systemverilog != nullptr)) {
+            const auto& text = expression->vhdl != nullptr
+                ? expression->vhdl->text
+                : expression->systemverilog->text;
+            const auto kind = expression->vhdl != nullptr
+                ? static_cast<std::uint32_t>(expression->vhdl->kind)
+                : static_cast<std::uint32_t>(
+                      expression->systemverilog->kind);
+            const auto span = hir_source_span(
+                expression->vhdl != nullptr
+                    ? expression->vhdl->source
+                    : expression->systemverilog->source);
+            hir_unlowered_expression_ = "expression kind "
+                + std::to_string(kind) + " '"
+                + text.substr(0U, std::min<std::size_t>(text.size(), 60U))
+                + "' at " + std::to_string(span.begin.line) + ":"
+                + std::to_string(span.begin.column);
+        }
+    }
+    return result;
+}
+
+std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
+    const semantic::ExpressionId expression_id,
+    const std::size_t expected_width,
+    const frontend::SystemVerilogScalarKind scalar_context)
+{
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
@@ -5014,6 +5051,9 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
         return expected_width == 0U || expected_width == 64U
             ? std::optional { now }
             : resize_register(now, expected_width, true);
+    }
+    if (hir_vhdl_function_name(expression_id)) {
+        return lower_hir_function_call(expression_id, expected_width);
     }
     if (const auto pattern_binding
         = hir_case_pattern_binding(expression_id)) {
@@ -9693,12 +9733,69 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
         && (expression->vhdl->text == "rising_edge"
             || expression->vhdl->text == "falling_edge")
         && expression->vhdl->operands.size() == 1U) {
-        report(
-            "FSIM-ELAB-045",
-            "a VHDL edge predicate is executable only as the sole, "
-            "else-free outer statement of a sensitive process",
-            hir_source_span(expression->vhdl->source));
-        return std::nullopt;
+        // RISING_EDGE(S) is S'EVENT and TO_X01(S) = '1' and
+        // TO_X01(S'LAST_VALUE) = '0' (IEEE 1076-2008 16.7); matching
+        // equality folds 'H' and 'L' onto '1' and '0'.
+        const auto declaration = hir_referenced_declaration(
+            expression->vhdl->operands.front());
+        const auto binding = declaration
+            ? hir_runtime_binding(*declaration, hir_process_scope_, false)
+            : std::nullopt;
+        if (!binding || binding->kind != HirRuntimeBindingKind::signal
+            || !binding->signal || binding->width != 1U) {
+            report(
+                "FSIM-ELAB-045",
+                "a VHDL edge predicate requires a scalar signal operand",
+                hir_source_span(expression->vhdl->source));
+            return std::nullopt;
+        }
+        const auto signal = *binding->signal;
+        const auto logic9
+            = binding->domain == frontend::ValueDomain::Logic9;
+        const auto rising = expression->vhdl->text == "rising_edge";
+        record_implicit_signal_dependency(signal);
+        const auto event = allocate_register(
+            1U, frontend::ValueDomain::Boolean);
+        process_.operations.emplace_back(SignalEvent { event, signal });
+        const auto current = allocate_register(1U, binding->domain);
+        process_.operations.emplace_back(ReadSignal { current, signal });
+        const auto previous = allocate_register(1U, binding->domain);
+        process_.operations.emplace_back(SignalLastValue {
+            previous, signal });
+        const auto level = [&](const bool high) {
+            const auto constant = allocate_register(1U, binding->domain);
+            process_.operations.emplace_back(LoadConstant {
+                constant,
+                logic9
+                    ? PackedLogic4::from_logic9_msb_string(high ? "1" : "0")
+                    : PackedLogic4(1U, high ? Logic4::one : Logic4::zero),
+            });
+            return constant;
+        };
+        const auto matches = [&](const RegisterId value, const bool high) {
+            const auto result = allocate_register(
+                1U, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(Binary {
+                logic9 ? BinaryOperator::vhdl_match_equal
+                       : BinaryOperator::case_equal,
+                result,
+                value,
+                level(high),
+            });
+            return result;
+        };
+        const auto now_level = matches(current, rising);
+        const auto was_level = matches(previous, !rising);
+        const auto both_levels = allocate_register(
+            1U, frontend::ValueDomain::Boolean);
+        process_.operations.emplace_back(LogicalBinary {
+            LogicalBinaryOperator::logical_and, both_levels, now_level,
+            was_level });
+        const auto edge = allocate_register(
+            1U, frontend::ValueDomain::Boolean);
+        process_.operations.emplace_back(LogicalBinary {
+            LogicalBinaryOperator::logical_and, edge, event, both_levels });
+        result = edge;
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call

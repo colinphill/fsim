@@ -427,10 +427,11 @@ endmodule
     const std::array shortcut_roots{
         Root{"shortcut_consumer", "dut"},
         Root{"global_parent", "global_parent"}};
+    // A hierarchical name resolves upward to another top-level module and
+    // then downward through its instances (IEEE 1800-2017 23.8).
     const auto shortcut_result =
         elaborate_roots(unsupported_shortcut.design, shortcut_roots);
-    assert(!shortcut_result.ok());
-    assert(has_diagnostic(shortcut_result, "FSIM-ELAB-ROOT-001"));
+    assert(shortcut_result.ok());
 }
 
 } // namespace fsim::tests::elaboration

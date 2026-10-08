@@ -4005,8 +4005,10 @@ Lowerer::bind_hir_function_actuals(
         && declaration->vhdl != nullptr) {
         const auto& call = *expression->vhdl;
         const auto& callable = *declaration->vhdl;
+        // A bare name calls a function without an actual parameter part.
         const auto callable_expression
             = call.kind == semantic::vhdl::ExpressionKind::call
+            || call.kind == semantic::vhdl::ExpressionKind::name
             || call.kind == semantic::vhdl::ExpressionKind::index
             || call.kind == semantic::vhdl::ExpressionKind::unary
             || call.kind == semantic::vhdl::ExpressionKind::binary;
@@ -4232,6 +4234,8 @@ Lowerer::resolve_hir_vhdl_function_call(
             && expression->vhdl != nullptr
         ? expression->vhdl->kind
                 == semantic::vhdl::ExpressionKind::call
+            || expression->vhdl->kind
+                == semantic::vhdl::ExpressionKind::name
             || expression->vhdl->kind
                 == semantic::vhdl::ExpressionKind::index
             || expression->vhdl->kind

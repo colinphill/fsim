@@ -782,12 +782,10 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit)
         }
         std::optional<Expression> default_value;
         if (match(TokenKind::ColonEqual)) {
-            const auto initializer = previous();
+            // Ports of every mode may have a default; for out, inout and
+            // buffer ports it initializes the port's driver (IEEE
+            // 1076-2008 6.5.6.3).
             default_value = parse_expression();
-            if (!mode_view && direction != PortDirection::Input) {
-                error(initializer, "FSIM-VHDL-SEM-075",
-                    "a VHDL port default is permitted only on an input formal");
-            }
         }
         for (const auto& name : names) {
             const auto canonical = vhdl_name(name.text);

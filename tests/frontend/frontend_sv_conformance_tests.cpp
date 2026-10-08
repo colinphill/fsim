@@ -1015,9 +1015,10 @@ endmodule
 endmodule
 )",
         "FSIM-SV-PARSE-368");
-    require_isolated(
-        "function-background-process",
-        R"(module function_background_process;
+    {
+        // IEEE 1800-2009 13.4.4 introduced background processes spawned by
+        // function calls.
+        constexpr std::string_view function_background = R"(module function_background_process;
   function automatic bit launch();
     fork
       begin #1; end
@@ -1025,8 +1026,21 @@ endmodule
     return 1'b1;
   endfunction
 endmodule
-)",
-        "FSIM-SV-SEM-246");
+)";
+        const auto spawning = [&](const StandardRevision revision) {
+            return parse_verilog(
+                SourceText { "function-background-process.sv",
+                    std::string { function_background } },
+                revision);
+        };
+        const auto legacy = spawning(StandardRevision::SystemVerilog2005);
+        require(
+            spawning(StandardRevision::SystemVerilog2009).ok()
+                && spawning(StandardRevision::SystemVerilog2017).ok()
+                && spawning(StandardRevision::SystemVerilog2023).ok()
+                && !legacy.ok() && has_code(legacy, "FSIM-SV-SEM-246"),
+            "function background processes begin in SystemVerilog-2009");
+    }
     require_isolated(
         "anonymous-program-interface-class",
         R"(program;

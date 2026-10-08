@@ -114,6 +114,41 @@ VHDL strings, subprograms and STD.ENV:
 Regression fixtures: `tests/fixtures/compliance/`. They run on both engines,
 and their expected values were checked against xsim.
 
+### Corpus run 2 (after batch 1, interpreter)
+
+| Suite | Cases | Pass | Fail | Timeout | Skip | Pass rate |
+|---|---:|---:|---:|---:|---:|---:|
+| sv-tests | 1497 | 988 | 504 | 5 | 0 | 66.0% |
+| verilator | 2415 | 397 | 1715 | 7 | 296 | 18.7% |
+| ivtest | 2826 | 1198 | 1600 | 3 | 25 | 42.8% |
+| vests | 3665 | 1710 | 1953 | 2 | 0 | 46.7% |
+| nvc | 1482 | 412 | 852 | 3 | 215 | 32.5% |
+| vhdl-compliance | 72 | 0 | 72 | 0 | 0 | 0.0% |
+
+### Batch 2
+
+- A protected type body following its declaration in the same region was
+  reported as a duplicate type.
+- `fork ... join_none` in functions is accepted from SystemVerilog-2009
+  (IEEE 1800-2009 13.4.4); lowering in subprogram bodies is pending.
+- VHDL ports of every mode accept a default; using it as the driver's
+  initial value is pending.
+- Enumeration values index arrays (validation).
+- `rising_edge`/`falling_edge` lower as boolean expressions, including on
+  signal-class formals and with `else` branches.
+- `wait for` accepts a runtime TIME value.
+- Functions called without an actual parameter part (`return do_it;`).
+- SystemVerilog hierarchical references resolve below the current instance,
+  below each ancestor, from the top-level modules, and through `$root`, for
+  both reads and writes. A process naming an instance that does not exist yet
+  is lowered again after the unit's children are instantiated, and such
+  processes are never cached as templates. Still pending: event controls on
+  hierarchical names, continuous assignments, and generate-scope processes.
+- `fork ... join_none` in functions also lowers from SystemVerilog-2009.
+- FSIM-ELAB-HIR-001 "could not be lowered" reports now name the innermost
+  unsupported expression; `lrm_corpus.py run --rerun-from --rerun-code`
+  re-runs selected failures.
+
 ## Known gaps queue (ranked by blocked corpus cases; refreshed per run)
 
 | Gap | Evidence |
@@ -123,7 +158,12 @@ and their expected values were checked against xsim.
 | sv-tests: SV class/randomization constraint syntax | `FSIM-SV-UNSUPPORTED-001` (73) |
 | VHDL: `wait for` with a non-static duration (for example a TIME formal) | testbench procedures |
 | VHDL: `rising_edge`/`falling_edge` of a signal-class formal | testbench procedures |
-| VHDL: element selection with an enumeration index | enum-indexed arrays (neorv32) |
+| VHDL: signal initializers of composite types with non-logic elements (`array (0 to 2) of integer := (...)`) | enum-indexed arrays, ROM tables |
+| VHDL: output-port defaults as the driver's initial value | VESTs |
+| VHDL: `x'range` in array constraints (direction from the prefix) | 120 VESTs/nvc cases |
+| VHDL: re-analysis replacing a same-named unit from another file | 103 VESTs Ashenden cases |
+| SV: `fork` inside functions and tasks (lowering) | sv-tests, UVM |
+| SV: hierarchical references in event controls, continuous assignments, generate processes | Verilator |
 | VHDL: package-level signals and shared variables (protected types) | VUnit library stand-in, OSVVM |
 | VHDL: top-level generic overrides and STRING generics | VUnit `runner_cfg` |
 | VHDL: VHDL-2008 STD.ENV package (`use std.env.all`) | VHDL-2008 testbenches |

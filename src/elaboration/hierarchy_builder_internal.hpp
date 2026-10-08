@@ -1324,7 +1324,19 @@ private:
         std::vector<Process>& clocking_processes,
         SpecializationInfo& specialization,
         std::optional<std::uint32_t> program_owner,
-        std::size_t& concurrent_order);
+        std::size_t& concurrent_order,
+        std::vector<semantic::ProcessId>* deferred_processes = nullptr);
+    // Lower processes whose hierarchical references named instances that
+    // did not exist yet; called once the unit's children are instantiated.
+    bool lower_deferred_systemverilog_processes(
+        const semantic::sv::Unit& unit,
+        const semantic::SpecializedHirUnit& specialized,
+        const std::string& path,
+        frontend::Language source_language,
+        const std::vector<semantic::ProcessId>& deferred_processes,
+        Lowerer& lowerer,
+        std::size_t specialization_index,
+        std::optional<std::uint32_t> program_owner);
 
     bool materialize_compiled_systemverilog_declaration(
         const semantic::sv::Unit& unit,

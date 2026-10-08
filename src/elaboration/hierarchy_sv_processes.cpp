@@ -222,7 +222,8 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
     std::vector<Process>& clocking_processes,
     SpecializationInfo& specialization,
     const std::optional<std::uint32_t> program_owner,
-    std::size_t& concurrent_order)
+    std::size_t& concurrent_order,
+    std::vector<semantic::ProcessId>* const deferred_processes)
 {
     std::unordered_map<const semantic::sv::GenerateRegion*,
         std::vector<semantic::DeclarationId>> generated_signal_declarations;
@@ -384,12 +385,21 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             diagnostics_before = diagnostics_.size();
             invocation_before
                 = lowerer.next_hir_callable_invocation_identity();
+            lowerer.reset_hierarchical_reference_state();
             lowered = lowerer.lower_hir_process(
                 process_id,
                 source_language,
                 path);
             lowerer.set_hir_code_coverage_active(false);
             lowered_here = lowered.has_value();
+        }
+        if (!lowered && deferred_processes != nullptr
+            && lowerer.hierarchical_reference_missed()) {
+            // A hierarchical reference may name a child instance that is
+            // instantiated after this unit's processes; retry then.
+            diagnostics_.resize(diagnostics_before);
+            deferred_processes->push_back(process_id);
+            continue;
         }
         if (!lowered) {
             report(
@@ -412,7 +422,8 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             && process->systemverilog != nullptr
             && diagnostics_.size() == diagnostics_before
             && invocation_after >= invocation_before
-            && !lowerer.has_generated_processes()) {
+            && !lowerer.has_generated_processes()
+            && !lowerer.hierarchical_reference_used()) {
             remembered_template
                 = remember_systemverilog_process_template(
                     unit,
@@ -694,6 +705,60 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
         }
     }
     flush_constant_drivers();
+    return true;
+}
+
+bool HierarchyBuilder::lower_deferred_systemverilog_processes(
+    const semantic::sv::Unit& unit,
+    const semantic::SpecializedHirUnit& specialized,
+    const std::string& path,
+    const frontend::Language source_language,
+    const std::vector<semantic::ProcessId>& deferred_processes,
+    Lowerer& lowerer,
+    const std::size_t specialization_index,
+    const std::optional<std::uint32_t> program_owner)
+{
+    for (const auto process_id : deferred_processes) {
+        const auto process = specialized.find_process(process_id);
+        const auto process_source = process
+                && process->systemverilog != nullptr
+            ? process->systemverilog->source
+            : unit.source;
+        lowerer.reset_hierarchical_reference_state();
+        auto lowered = lowerer.lower_hir_process(
+            process_id, source_language, path);
+        if (!lowered) {
+            report(
+                "FSIM-ELAB-HIR-001",
+                "compiled process could not be lowered from HIR",
+                compiled_source_span(*compiled_, process_source));
+            return false;
+        }
+        const bool concurrent_assertion = process
+            && process->systemverilog != nullptr
+            && process->systemverilog->concurrent_assertion;
+        lowered->language_standard = unit.standard;
+        lowered->compatibility_profile = unit.compatibility_profile;
+        lowered->observed = concurrent_assertion;
+        lowered->reactive = !concurrent_assertion
+            && program_owner.has_value();
+        lowered->program_owner = program_owner;
+        canonicalize_process_operations(*lowered);
+        auto& specialization
+            = design_.specializations_[specialization_index];
+        specialization.processes.push_back(lowered->id);
+        specialization.semantic_processes.emplace_back(
+            lowered->id, process_id);
+        design_.append_process_record(std::move(*lowered));
+        for (auto& generated : lowerer.take_generated_processes()) {
+            generated.language_standard = unit.standard;
+            generated.compatibility_profile = unit.compatibility_profile;
+            canonicalize_process_operations(generated);
+            design_.specializations_[specialization_index]
+                .processes.push_back(generated.id);
+            design_.append_process_record(std::move(generated));
+        }
+    }
     return true;
 }
 

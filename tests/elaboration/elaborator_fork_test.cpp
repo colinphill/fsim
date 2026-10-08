@@ -363,7 +363,7 @@ module legacy_function_background;
   endfunction
 endmodule
 )" },
-        fsim::frontend::StandardRevision::SystemVerilog2017);
+        fsim::frontend::StandardRevision::SystemVerilog2005);
     assert(!legacy_function_background.ok());
     assert(std::ranges::any_of(
         legacy_function_background.diagnostics,

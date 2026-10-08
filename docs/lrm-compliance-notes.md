@@ -66,3 +66,25 @@ corpora (`scripts/lrm_corpus.py`). Progress and results are in
   (`systemverilog_time_function`).
 - Port actuals of different packed width: bound through the `$actual_`
   adapter instead of aliasing (hierarchy_sv_ports.cpp).
+
+## SystemVerilog hierarchical references (plan, 2026-10-08)
+
+- `s.a` is folded by the parser into one identifier text "s.a"
+  (verilog_parser_expressions_part2.cpp `parse_postfix`); non-identifier bases
+  become `@sv-select:<member>` chains. HIR `referenced_name` finds nothing;
+  `dependencies.hierarchy` is set by compiled_design_normalization.cpp.
+- Choke point: `Lowerer::hir_direct_signal` (lowerer_hir_capability.cpp) —
+  reads, widths/domains (`hir_direct_signal_binding`), writes, and
+  sensitivity all go through it. SV process event lists use
+  `hir_referenced_declaration` instead and need a direct-signal check.
+- Ordering: `instantiate_compiled_systemverilog_unit` lowers a parent's
+  processes before instantiating children, so downward references must be
+  lowered after the child worklist (precedent:
+  `PendingVirtualInterfaceInitializer`); sibling/`$root` forward references
+  need a global queue drained in `HierarchyBuilder::finalize()`.
+- Resolve only full paths in `design_.signal_by_name_` (the single-root
+  shortcut keys are ambiguous): downward from `hierarchy_`, upward through
+  ancestor prefixes / module names (`SpecializationInfo`), `$root.`.
+- Template caching hazard: processes using hierarchical references must not
+  be remembered or replayed (`replay_systemverilog_process_template`,
+  `lower_cached_systemverilog_concurrent_statement`).

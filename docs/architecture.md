@@ -781,10 +781,12 @@ and native module objects remain root-local. Before process lowering, the
 elaborator specializes and allocates every SystemVerilog root's packed
 root-level signal surface. That makes language-defined top-level hierarchical
 references such as `glbl.GSR` independent of root selection order, including the
-conventional separately selected vendor global-signaling module. Descendant
-paths are deliberately not opened as an fsim-specific backdoor: a reference
-such as `glbl.child.internal` is rejected with `FSIM-ELAB-ROOT-001` and must be
-exposed through a root-level port or signal. VHDL and SystemC cross-root
+conventional separately selected vendor global-signaling module.
+SystemVerilog hierarchical names (IEEE 1800-2017 23.6-23.8) resolve below the
+current instance, below each ancestor, and from the top-level modules, so
+`glbl.child.internal` names the signal in that root's descendant instance; a
+process whose reference names an instance that does not exist yet is lowered
+again after the unit's children are instantiated. VHDL and SystemC cross-root
 communication likewise uses their defined ports, signals, packages, or common
 kernel services rather than arbitrary foreign hierarchy shortcuts.
 

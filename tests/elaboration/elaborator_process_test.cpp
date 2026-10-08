@@ -26,10 +26,11 @@ end architecture;
 )",
         fsim::frontend::Language::Vhdl2008);
     assert(unsafe_edge.ok());
-    const auto rejected_edge =
+    // An edge predicate with an else branch is an ordinary boolean
+    // expression (IEEE 1076-2008 16.7).
+    const auto edge_with_else =
         compile_and_elaborate(unsafe_edge.design, "unsafe_edge");
-    assert(!rejected_edge.ok());
-    assert(has_diagnostic(rejected_edge, "FSIM-ELAB-045"));
+    assert(edge_with_else.ok());
 
     const auto logical_not = fsim::frontend::parse_text(
         "logical_not.sv",

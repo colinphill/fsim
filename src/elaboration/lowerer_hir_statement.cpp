@@ -846,8 +846,13 @@ bool Lowerer::lower_hir_statements(
 {
     bool valid = true;
     for (const auto statement : statements) {
+        hir_unlowered_expression_.reset();
         if (!lower_hir_statement(statement)) {
             valid = false;
+            const auto detail = hir_unlowered_expression_
+                ? "; unsupported " + *hir_unlowered_expression_
+                : std::string { };
+            hir_unlowered_expression_.reset();
             const auto record = specialized_hir_unit_ != nullptr
                 ? specialized_hir_unit_->find_statement(statement)
                 : std::nullopt;
@@ -862,7 +867,7 @@ bool Lowerer::lower_hir_statements(
                             record->systemverilog->kind))
                         + " at source line "
                         + std::to_string(origin.begin.line)
-                        + " could not be lowered",
+                        + " could not be lowered" + detail,
                     origin);
             } else if (record && record->vhdl != nullptr) {
                 const auto origin = hir_source_span(record->vhdl->source);
@@ -874,7 +879,7 @@ bool Lowerer::lower_hir_statements(
                             record->vhdl->kind))
                         + " at source line "
                         + std::to_string(origin.begin.line)
-                        + " could not be lowered",
+                        + " could not be lowered" + detail,
                     origin);
             }
         }
@@ -9393,9 +9398,19 @@ bool Lowerer::lower_hir_statement(
     const auto lower_fork = [&](const semantic::sv::Statement& input) {
         const bool function = active_hir_callable_
             && hir_callable_frames_[*active_hir_callable_].function;
+        // IEEE 1800-2009 13.4.4: background processes spawned by function
+        // calls from procedural code originating in an initial block.
+        const bool background_revision
+            = systemverilog_standard_
+                == frontend::StandardRevision::SystemVerilog2009
+            || systemverilog_standard_
+                == frontend::StandardRevision::SystemVerilog2012
+            || systemverilog_standard_
+                == frontend::StandardRevision::SystemVerilog2017
+            || systemverilog_standard_
+                == frontend::StandardRevision::SystemVerilog2023;
         const bool legal_function_background = function
-            && systemverilog_standard_
-                == frontend::StandardRevision::SystemVerilog2023
+            && background_revision
             && process_kind_ == frontend::ProcessKind::Initial
             && input.fork_join == semantic::sv::ForkJoinKind::none;
         if ((function && !legal_function_background)
@@ -9406,8 +9421,8 @@ bool Lowerer::lower_hir_statement(
                 "FSIM-ELAB-107",
                 function
                     ? "a function may spawn fork...join_none background "
-                        "processes only in SystemVerilog-2023 procedural "
-                        "code originating in an initial block"
+                        "processes only in SystemVerilog-2009 or later "
+                        "procedural code originating in an initial block"
                     : "fork branches cannot escape a callable frame",
                 span);
             return true;
@@ -12744,6 +12759,31 @@ bool Lowerer::lower_hir_statement(
                 && input.delay->additional.empty()
             ? delay_magnitude(input.delay->primary)
             : std::optional<runtime::SimulationTick> { };
+        if (input.delay && !timeout && input.delay->additional.empty()
+            && input.delay->primary.expression && !input.condition
+            && input.sensitivities.empty()
+            && !specialized_hir_unit_->evaluate_integral_expression(
+                *input.delay->primary.expression)) {
+            // `wait for T` with a runtime TIME value; TIME values are
+            // already counts of the resolution limit.
+            const auto duration = lower_hir_expression(
+                *input.delay->primary.expression, 64U);
+            if (!duration) {
+                report(
+                    "FSIM-ELAB-VHTIME-001",
+                    "a VHDL wait timeout requires a nonnegative TIME value",
+                    span);
+                return true;
+            }
+            WaitFor wait;
+            wait.delay = 1U;
+            wait.source = *duration;
+            wait.source_width = static_cast<std::uint32_t>(
+                register_width(*duration));
+            wait.source_signed = true;
+            process_.operations.emplace_back(wait);
+            return true;
+        }
         if (input.delay && !timeout) {
             report(
                 "FSIM-ELAB-VHTIME-001",

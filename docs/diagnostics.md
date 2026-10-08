@@ -905,7 +905,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-SEM-072` | error | A component port default is declared on a non-input formal. |
 | `FSIM-VHDL-SEM-073` | error | A positional VHDL function-call actual follows a named actual. |
 | `FSIM-VHDL-SEM-074` | error | A VHDL procedure parameter default is declared on a non-input formal. |
-| `FSIM-VHDL-SEM-075` | error | A VHDL entity port default is declared on a non-input formal. |
+| `FSIM-VHDL-SEM-075` | error | Retired catalog identity: VHDL ports of every mode accept a default. |
 | `FSIM-VHDL-SEM-076` | error | A VHDL value generic is declared with a nonconstant object class. |
 | `FSIM-VHDL-SEM-077` | error | A VHDL value generic is declared with a mode other than input. |
 | `FSIM-VHDL-SEM-078` | error | A named port actual is repeated in one instance map. |
@@ -1601,7 +1601,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-SEM-243` | error | A `wait_order` operand is not a named-event identifier. |
 | `FSIM-SV-SEM-244` | error | An executable explicit/event covergroup sample uses a compound event or coverpoint expression outside the direct-owner-object execution slice. |
 | `FSIM-SV-SEM-245` | error | An interface class is nested inside another class. |
-| `FSIM-SV-SEM-246` | error | A function uses `fork...join_none` before the SystemVerilog-2023 profile. |
+| `FSIM-SV-SEM-246` | error | A function uses `fork...join_none` before the SystemVerilog-2009 profile. |
 | `FSIM-SV-SEM-247` | error | A return statement is nested in a `fork...join` branch. |
 | `FSIM-SV-SEM-248` | error | A task or function formal uses `const` without the required following `ref` direction. |
 | `FSIM-SV-SEM-249` | error | A task or function body assigns to a read-only `const ref` formal. |
@@ -1852,7 +1852,7 @@ scheduler.
 | `FSIM-ELAB-041` | error | A literal is malformed or unsupported by executable lowering. |
 | `FSIM-ELAB-042` | error | An operator was parsed but has no executable SimIR lowering. |
 | `FSIM-ELAB-043` | error | An expression form was parsed but has no executable SimIR lowering. |
-| `FSIM-ELAB-045` | error | A VHDL edge predicate appears outside the one supported process-guard form. |
+| `FSIM-ELAB-045` | error | A VHDL edge predicate operand is not a scalar signal. |
 | `FSIM-ELAB-047` | error | Assignment target and expression widths differ. |
 | `FSIM-ELAB-048` | error | A VHDL `if` condition does not have scalar Boolean type. |
 | `FSIM-ELAB-049` | error | Binary operands have different widths and would require implicit sizing. |
@@ -1863,7 +1863,7 @@ scheduler.
 | `FSIM-ELAB-054` | error | A local variable initializer has the wrong packed width. |
 | `FSIM-ELAB-055` | error | A VHDL rejection limit exceeds its first waveform-element delay during executable lowering. |
 | `FSIM-ELAB-056` | error | A local variable assignment is nonblocking. |
-| `FSIM-ELAB-ROOT-001` | error | A source expression uses an unsupported cross-root hierarchy shortcut instead of a language-defined root-level global mechanism. |
+| `FSIM-ELAB-ROOT-001` | error | A source expression's hierarchical name through another root names no signal. |
 | `FSIM-ELAB-ROOT-002` | error | The public elaboration root list is empty or contains an empty target or missing or unsafe alias. |
 | `FSIM-ELAB-ROOT-003` | error | The public elaboration root list contains a duplicate alias. |
 | `FSIM-ELAB-057` | error | A local variable assignment has the wrong packed width. |
@@ -1930,7 +1930,7 @@ scheduler.
 | `FSIM-ELAB-104` | error | A random system function is used in an unsupported language or with an invalid argument count. |
 | `FSIM-ELAB-105` | error | Procedural assignment timing-control HIR has an inconsistent control kind, delay, or event payload. |
 | `FSIM-ELAB-106` | error | Procedural update metadata is inconsistent with its normalized expression or captured lvalue. |
-| `FSIM-ELAB-107` | error | A callable fork would escape its frame, or a SystemVerilog-2023 function background process originates outside procedural code rooted in an `initial` block. |
+| `FSIM-ELAB-107` | error | A callable fork would escape its frame, or a function background process (SystemVerilog-2009 or later) originates outside procedural code rooted in an `initial` block. |
 | `FSIM-ELAB-108` | error | A postponed `$strobe` operand is not yet a direct packed-signal reference. |
 | `FSIM-ELAB-DRV-001` | error | An unresolved variable has multiple process drivers. |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |

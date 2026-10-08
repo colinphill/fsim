@@ -1131,6 +1131,19 @@ def select_cases(args) -> list[Case]:
     if args.filter:
         pattern = re.compile(args.filter)
         cases = [c for c in cases if pattern.search(f"{c.suite}/{c.id}")]
+    if getattr(args, "rerun_from", None):
+        # Re-run only cases that did not pass in an earlier run, optionally
+        # restricted to those whose first diagnostic has the given code.
+        wanted = set()
+        for line in args.rerun_from.read_text().splitlines():
+            record = json.loads(line)
+            if record["status"] in ("pass", "skip"):
+                continue
+            first = (record.get("diagnostics") or [{}])[0].get("code")
+            if args.rerun_code and first != args.rerun_code:
+                continue
+            wanted.add((record["suite"], record["id"]))
+        cases = [c for c in cases if (c.suite, c.id) in wanted]
     return cases
 
 
@@ -1273,6 +1286,10 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--out", type=Path)
     p_run.add_argument("--keep", action="store_true", help="keep passing workspaces")
     p_run.add_argument("-q", "--quiet", action="store_true")
+    p_run.add_argument("--rerun-from", type=Path,
+                       help="results.jsonl whose non-passing cases to re-run")
+    p_run.add_argument("--rerun-code",
+                       help="with --rerun-from, only cases failing first with this code")
     p_run.set_defaults(func=command_run)
 
     p_report = sub.add_parser("report", help="summarize a results.jsonl")

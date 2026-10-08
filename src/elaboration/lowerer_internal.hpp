@@ -119,6 +119,23 @@ public:
     [[nodiscard]] bool hir_concurrent_signal_read_only(
         SignalId signal) const noexcept;
     [[nodiscard]] bool has_generated_processes() const noexcept;
+    // SystemVerilog hierarchical references (IEEE 1800-2017 23.6-23.8)
+    // resolved, or missed, since the last reset. A process that missed one
+    // may be lowered again once more of the hierarchy exists; a process
+    // that used one must not become a shared process template.
+    void reset_hierarchical_reference_state() noexcept
+    {
+        hierarchical_reference_used_ = false;
+        hierarchical_reference_missed_ = false;
+    }
+    [[nodiscard]] bool hierarchical_reference_used() const noexcept
+    {
+        return hierarchical_reference_used_;
+    }
+    [[nodiscard]] bool hierarchical_reference_missed() const noexcept
+    {
+        return hierarchical_reference_missed_;
+    }
     [[nodiscard]] std::uint32_t next_hir_callable_invocation_identity()
         const noexcept;
     [[nodiscard]] bool advance_hir_callable_invocation_identity(
@@ -553,6 +570,10 @@ private:
         = frontend::SystemVerilogScalarKind::None) const;
     // VHDL REAL and floating types share the IEEE double representation and
     // runtime scalar operations of SystemVerilog real.
+    // A VHDL name that denotes a function called without an actual
+    // parameter part (IEEE 1076-2008 9.3.4).
+    [[nodiscard]] bool hir_vhdl_function_name(
+        semantic::ExpressionId expression) const;
     // The predefined function STD.STANDARD.NOW (IEEE 1076-2008 16.3),
     // unless a user declaration named NOW hides it.
     [[nodiscard]] bool hir_vhdl_now_expression(
@@ -662,6 +683,14 @@ private:
         std::size_t expected_width,
         frontend::SystemVerilogScalarKind scalar_context
         = frontend::SystemVerilogScalarKind::None);
+    [[nodiscard]] std::optional<RegisterId> lower_hir_expression_impl(
+        semantic::ExpressionId expression,
+        std::size_t expected_width,
+        frontend::SystemVerilogScalarKind scalar_context);
+    // The innermost expression that failed to lower without its own
+    // diagnostic while the current statement was lowered; named in the
+    // statement's FSIM-ELAB-HIR-001 report.
+    std::optional<std::string> hir_unlowered_expression_;
     struct HirSynchronizationAttempt {
         bool handled { };
         bool succeeded { };
@@ -1681,6 +1710,10 @@ private:
         frontend::StandardRevision::SystemVerilog2017
     };
     std::string hierarchy_;
+    mutable bool hierarchical_reference_used_ { };
+    mutable bool hierarchical_reference_missed_ { };
+    [[nodiscard]] std::optional<SignalId> hir_hierarchical_signal(
+        std::string_view name) const;
 };
 
 } // namespace fsim::elaboration
