@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_simulation_internal.hpp"
 #include "application_phase_profile.hpp"
+#include "../elaboration/elaborated_design_process_access.hpp"
 #include "../runtime/simir_static_kernel.hpp"
 #if defined(FSIM_HAS_LLVM)
+#include "fsim/compiler/object_cache.hpp"
 #include "fsim/compiler/static_kernel_codegen.hpp"
 #endif
 
@@ -11,6 +13,33 @@
 namespace fsim::app {
 
 namespace {
+
+#if defined(FSIM_HAS_LLVM)
+/// The static-kernel plan persisted for a loaded artifact (elaborate --aot
+/// stores it; simulate restores it), keyed by the artifact's content and
+/// the planner.
+struct PersistedPlanSlot {
+    std::optional<compiler::ObjectCache> cache;
+    std::string key;
+};
+
+PersistedPlanSlot persisted_plan_slot(const BuiltProject& built)
+{
+    PersistedPlanSlot slot;
+    // FSIM_STATIC_KERNEL_PLAN_CACHE=0 plans every run.
+    const char* enabled = std::getenv("FSIM_STATIC_KERNEL_PLAN_CACHE");
+    if (built.cache_path.empty() || built.artifact_identity.empty()
+        || (enabled != nullptr && std::string_view { enabled } == "0")) {
+        return slot;
+    }
+    slot.cache.emplace(built.cache_path / "static-kernel");
+    compiler::CacheKeyBuilder key;
+    key.add("planner", elaboration::detail::static_kernel_plan_identity());
+    key.add("design", built.artifact_identity);
+    slot.key = key.finish();
+    return slot;
+}
+#endif
 
 std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
     BuiltProject& built, const std::uint64_t max_deltas)
@@ -28,7 +57,37 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
             const application_detail::ScopedPhaseProfile planning {
                 "static_kernel_plan"
             };
+#if defined(FSIM_HAS_LLVM)
+            const auto slot = persisted_plan_slot(built);
+            const bool ahead_of_time
+                = compiler::StaticKernelAheadOfTimeScope::active();
+            if (slot.cache && !ahead_of_time) {
+                std::error_code error;
+                if (const auto bytes = slot.cache->load(slot.key, error)) {
+                    if (auto restored = elaboration::detail::restore_static_kernel_plan(
+                            built.design,
+                            std::string_view { reinterpret_cast<const char*>(
+                                                   bytes->data()),
+                                bytes->size() })) {
+                        return std::move(*restored);
+                    }
+                }
+            }
+            auto planned = built.design.plan_static_kernel();
+            if (slot.cache && ahead_of_time) {
+                const auto bytes
+                    = elaboration::detail::serialize_static_kernel_plan(planned);
+                if (!bytes.empty()) {
+                    std::error_code error;
+                    static_cast<void>(slot.cache->store(slot.key,
+                        std::as_bytes(std::span { bytes.data(), bytes.size() }),
+                        error));
+                }
+            }
+            return planned;
+#else
             return built.design.plan_static_kernel();
+#endif
         }();
         if (std::getenv("FSIM_PROFILE_PHASES") != nullptr) {
             std::cerr << "fsim-profile: static-kernel disabled=" << plan.disabled

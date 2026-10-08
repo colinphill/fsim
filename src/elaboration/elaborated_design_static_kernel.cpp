@@ -25,6 +25,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <string_view>
 #include <limits>
 #include <optional>
 #include <type_traits>
@@ -105,6 +106,44 @@ struct Candidate {
 
 /// Candidate::kind of a behavioral member (StaticKernelMemberKind).
 constexpr std::uint8_t behavioral_kind = 3U;
+
+} // namespace
+
+namespace {
+
+/// The program the scheduler runs for the kernel's host process: it wakes
+/// on the boundary inputs and activates the kernel.
+runtime::simir::Process host_stub(const runtime::simir::ProcessProgramView& host,
+    std::vector<runtime::simir::Sensitivity> sensitivity)
+{
+    using namespace runtime::simir;
+    auto stub = host.materialize();
+    stub.static_sensitivity = std::move(sensitivity);
+    stub.debug_locals.clear();
+    stub.debug_string_locals.clear();
+    stub.debug_container_locals.clear();
+    stub.expression_profiles = { };
+    stub.register_value_kinds = { };
+    stub.static_trigger_regions = { };
+    stub.container_register_types = { };
+    stub.register_count = 0U;
+    stub.string_register_count = 0U;
+    stub.container_register_count = 0U;
+    stub.initialize = true;
+    std::vector<Operation> body;
+    // Without boundary inputs nothing on the host wakes the kernel; it runs at
+    // start and then by its own timers (behavioral delays).
+    if (stub.static_sensitivity.empty()) {
+        body.push_back(WaitForever { });
+    } else {
+        body.push_back(WaitSensitivity { });
+    }
+    body.push_back(Jump { 0U });
+    body.push_back(Yield { });
+    body.push_back(Jump { 0U });
+    stub.operations = OperationList { std::move(body) };
+    return stub;
+}
 
 } // namespace
 
@@ -1286,32 +1325,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
         }
     }
     plan.host = spec->members.front().process;
-    auto stub = views[plan.host].materialize();
-    stub.static_sensitivity = std::move(host_sensitivity);
-    stub.debug_locals.clear();
-    stub.debug_string_locals.clear();
-    stub.debug_container_locals.clear();
-    stub.expression_profiles = { };
-    stub.register_value_kinds = { };
-    stub.static_trigger_regions = { };
-    stub.container_register_types = { };
-    stub.register_count = 0U;
-    stub.string_register_count = 0U;
-    stub.container_register_count = 0U;
-    stub.initialize = true;
-    std::vector<Operation> body;
-    // Without boundary inputs nothing on the host wakes the kernel; it runs at
-    // start and then by its own timers (behavioral delays).
-    if (stub.static_sensitivity.empty()) {
-        body.push_back(WaitForever { });
-    } else {
-        body.push_back(WaitSensitivity { });
-    }
-    body.push_back(Jump { 0U });
-    body.push_back(Yield { });
-    body.push_back(Jump { 0U });
-    stub.operations = OperationList { std::move(body) };
-    plan.host_program = std::move(stub);
+    plan.host_program = host_stub(views[plan.host], std::move(host_sensitivity));
     plan.members = spec->members.size();
     plan.owned_signals = spec->owned_signals.size();
     plan.boundary_outputs = spec->boundary_outputs.size();
@@ -1325,5 +1339,256 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
     }
     return plan;
 }
+
+
+namespace detail {
+namespace {
+
+constexpr std::string_view plan_magic { "fsim-static-kernel-plan-v1" };
+
+class PlanWriter {
+public:
+    template <typename T>
+        requires std::is_integral_v<T> || std::is_enum_v<T>
+    void put(const T value)
+    {
+        const auto raw = static_cast<std::uint64_t>(value);
+        for (unsigned shift = 0U; shift < 64U; shift += 8U) {
+            bytes.push_back(static_cast<char>((raw >> shift) & 0xffU));
+        }
+    }
+    template <typename T, typename F>
+    void list(const std::vector<T>& items, F&& each)
+    {
+        put(items.size());
+        for (const auto& item : items) {
+            each(item);
+        }
+    }
+    void sensitivities(const std::vector<runtime::simir::Sensitivity>& items)
+    {
+        list(items, [&](const runtime::simir::Sensitivity& entry) {
+            put(entry.signal);
+            put(entry.edge);
+            put(entry.offset);
+            put(entry.width);
+        });
+    }
+    std::string bytes;
+};
+
+class PlanReader {
+public:
+    explicit PlanReader(const std::string_view bytes) : bytes_ { bytes } { }
+
+    template <typename T>
+        requires std::is_integral_v<T> || std::is_enum_v<T>
+    bool get(T& value)
+    {
+        if (bytes_.size() - at_ < 8U) {
+            return false;
+        }
+        std::uint64_t raw { };
+        for (unsigned index = 0U; index < 8U; ++index) {
+            raw |= static_cast<std::uint64_t>(
+                       static_cast<unsigned char>(bytes_[at_ + index]))
+                << (8U * index);
+        }
+        at_ += 8U;
+        if constexpr (std::is_same_v<T, bool>) {
+            if (raw > 1U) {
+                return false;
+            }
+            value = raw != 0U;
+        } else if constexpr (std::is_enum_v<T>) {
+            using U = std::underlying_type_t<T>;
+            if (raw > std::numeric_limits<U>::max()) {
+                return false;
+            }
+            value = static_cast<T>(static_cast<U>(raw));
+        } else {
+            if (raw > static_cast<std::uint64_t>(std::numeric_limits<T>::max())) {
+                return false;
+            }
+            value = static_cast<T>(raw);
+        }
+        return true;
+    }
+    /// Each item is at least eight bytes, so a count beyond the remaining
+    /// bytes is corrupt (and never allocates).
+    template <typename T, typename F>
+    bool list(std::vector<T>& items, F&& each)
+    {
+        std::size_t count { };
+        if (!get(count) || count > (bytes_.size() - at_) / 8U) {
+            return false;
+        }
+        items.resize(count);
+        for (auto& item : items) {
+            if (!each(item)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    bool sensitivities(std::vector<runtime::simir::Sensitivity>& items)
+    {
+        return list(items, [&](runtime::simir::Sensitivity& entry) {
+            return get(entry.signal) && get(entry.edge) && get(entry.offset)
+                && get(entry.width);
+        });
+    }
+    [[nodiscard]] bool done() const noexcept { return at_ == bytes_.size(); }
+
+private:
+    std::string_view bytes_;
+    std::size_t at_ { };
+};
+
+} // namespace
+
+std::string static_kernel_plan_identity()
+{
+    // The planner and the environment knobs that change what it plans.
+    std::string identity { plan_magic };
+    identity += ";" __DATE__ " " __TIME__;
+    for (const char* name : { "FSIM_STATIC_KERNEL_BEHAVIORAL",
+             "FSIM_STATIC_KERNEL_MIXED" }) {
+        const char* value = std::getenv(name);
+        identity += ";";
+        identity += name;
+        identity += "=";
+        identity += value != nullptr ? value : "-";
+    }
+    return identity;
+}
+
+std::string serialize_static_kernel_plan(const StaticKernelPlan& plan)
+{
+    PlanWriter out;
+    out.bytes.assign(plan_magic);
+    if (plan.disabled || !plan.spec) {
+        return { };
+    }
+    const auto& spec = *plan.spec;
+    out.put(plan.host);
+    out.sensitivities(plan.host_program.static_sensitivity);
+    out.list(spec.members, [&](const runtime::simir::StaticKernelMemberSpec& member) {
+        out.put(member.process);
+        out.put(member.kind);
+        out.put(member.body_begin);
+        out.put(member.body_end);
+        out.put(member.exit_alt);
+        out.put(member.run_at_start);
+        out.sensitivities(member.sensitivity);
+        out.put(member.partition);
+        out.put(member.vhdl);
+    });
+    out.list(spec.owned_signals, [&](const auto signal) { out.put(signal); });
+    out.list(spec.boundary_outputs, [&](const auto signal) { out.put(signal); });
+    out.list(spec.families, [&](const runtime::simir::StaticKernelAliasFamily& family) {
+        out.put(family.proxy);
+        out.put(family.width);
+        out.list(family.leaves, [&](const runtime::simir::StaticKernelAliasLeaf& leaf) {
+            out.put(leaf.signal);
+            out.put(leaf.offset);
+            out.put(leaf.width);
+        });
+    });
+    out.list(spec.containers, [&](const runtime::simir::StaticKernelContainerSpec& container) {
+        out.put(container.object);
+        out.put(container.storage);
+        out.list(container.element_signals, [&](const auto signal) { out.put(signal); });
+        out.put(container.packed_signal);
+    });
+    out.put(spec.vhdl);
+    out.put(spec.mixed);
+    out.list(spec.writer_regions, [&](const runtime::simir::StaticKernelWriterRegion& region) {
+        out.put(region.signal);
+        out.put(region.process);
+        out.put(region.offset);
+        out.put(region.width);
+    });
+    out.list(spec.unwritten_inputs, [&](const auto signal) { out.put(signal); });
+    out.put(plan.boundary_inputs);
+    return std::move(out.bytes);
+}
+
+std::optional<StaticKernelPlan> restore_static_kernel_plan(
+    const ElaboratedDesign& design, const std::string_view bytes)
+{
+    using namespace runtime::simir;
+    if (!bytes.starts_with(plan_magic)) {
+        return std::nullopt;
+    }
+    PlanReader in { bytes.substr(plan_magic.size()) };
+    const auto processes = ElaboratedDesignProcessAccess::process_count(design);
+    const auto signals = design.signals().size();
+    const auto containers = design.container_objects().size();
+    const auto signal_ok = [&](const SignalId signal) { return signal < signals; };
+    const auto sensitivity_ok = [&](const std::vector<Sensitivity>& items) {
+        return std::ranges::all_of(items, [&](const Sensitivity& entry) {
+            return signal_ok(entry.signal);
+        });
+    };
+    StaticKernelPlan plan;
+    auto spec = std::make_shared<StaticKernelRuntimeSpec>();
+    std::vector<Sensitivity> host_sensitivity;
+    const auto signal_list = [&](std::vector<SignalId>& items) {
+        return in.list(items, [&](SignalId& signal) {
+            return in.get(signal) && signal_ok(signal);
+        });
+    };
+    const bool read = in.get(plan.host) && plan.host < processes
+        && in.sensitivities(host_sensitivity) && sensitivity_ok(host_sensitivity)
+        && in.list(spec->members, [&](StaticKernelMemberSpec& member) {
+               return in.get(member.process) && member.process < processes
+                   && in.get(member.kind)
+                   && member.kind <= StaticKernelMemberKind::behavioral
+                   && in.get(member.body_begin) && in.get(member.body_end)
+                   && in.get(member.exit_alt) && in.get(member.run_at_start)
+                   && in.sensitivities(member.sensitivity)
+                   && sensitivity_ok(member.sensitivity)
+                   && in.get(member.partition) && in.get(member.vhdl);
+           })
+        && signal_list(spec->owned_signals) && signal_list(spec->boundary_outputs)
+        && in.list(spec->families, [&](StaticKernelAliasFamily& family) {
+               return in.get(family.proxy) && signal_ok(family.proxy)
+                   && in.get(family.width)
+                   && in.list(family.leaves, [&](StaticKernelAliasLeaf& leaf) {
+                          return in.get(leaf.signal) && signal_ok(leaf.signal)
+                              && in.get(leaf.offset) && in.get(leaf.width);
+                      });
+           })
+        && in.list(spec->containers, [&](StaticKernelContainerSpec& container) {
+               return in.get(container.object) && container.object < containers
+                   && in.get(container.storage)
+                   && container.storage <= StaticKernelContainerStorage::packed_signal
+                   && signal_list(container.element_signals)
+                   && in.get(container.packed_signal);
+           })
+        && in.get(spec->vhdl) && in.get(spec->mixed)
+        && in.list(spec->writer_regions, [&](StaticKernelWriterRegion& region) {
+               return in.get(region.signal) && signal_ok(region.signal)
+                   && in.get(region.process) && region.process < processes
+                   && in.get(region.offset) && in.get(region.width);
+           })
+        && signal_list(spec->unwritten_inputs)
+        && in.get(plan.boundary_inputs) && in.done();
+    if (!read || spec->members.empty() || spec->members.front().process != plan.host) {
+        return std::nullopt;
+    }
+    plan.host_program = host_stub(
+        ElaboratedDesignProcessAccess::process_view(design, plan.host),
+        std::move(host_sensitivity));
+    plan.members = spec->members.size();
+    plan.owned_signals = spec->owned_signals.size();
+    plan.boundary_outputs = spec->boundary_outputs.size();
+    plan.owned_containers = spec->containers.size();
+    plan.spec = std::move(spec);
+    return plan;
+}
+
+} // namespace detail
 
 } // namespace fsim::elaboration

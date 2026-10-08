@@ -7,6 +7,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -75,6 +78,35 @@ public:
     ~DeferredProgramValidation();
     DeferredProgramValidation(const DeferredProgramValidation&) = delete;
     DeferredProgramValidation& operator=(const DeferredProgramValidation&) = delete;
+
+    [[nodiscard]] static bool active() noexcept;
+
+private:
+    bool previous_ { };
+};
+
+/// Engine v4 static-kernel plan persistence: elaborate --aot stores the
+/// plan beside the kernel's native code, and a later simulate of the same
+/// artifact restores it instead of planning (which builds the region graph).
+[[nodiscard]] std::string serialize_static_kernel_plan(
+    const StaticKernelPlan& plan);
+/// Null when `bytes` is not a plan for `design` (wrong format, or process,
+/// signal or container references out of range).
+[[nodiscard]] std::optional<StaticKernelPlan> restore_static_kernel_plan(
+    const ElaboratedDesign& design, std::string_view bytes);
+/// The planner's identity, for persisted plans' cache keys.
+[[nodiscard]] std::string static_kernel_plan_identity();
+
+/// While alive, an artifact restored on this thread is trusted: its
+/// checksums and producing build already match, so derived state it carries
+/// (the signal driver inventory) is adopted rather than re-derived and
+/// cross-checked. FSIM_VERIFY_ARTIFACT=1 keeps the full checks.
+class TrustedArtifactLoad {
+public:
+    TrustedArtifactLoad() noexcept;
+    ~TrustedArtifactLoad();
+    TrustedArtifactLoad(const TrustedArtifactLoad&) = delete;
+    TrustedArtifactLoad& operator=(const TrustedArtifactLoad&) = delete;
 
     [[nodiscard]] static bool active() noexcept;
 

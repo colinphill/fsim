@@ -1041,10 +1041,15 @@ std::optional<BuiltProject> load_design_artifact(
               support::path_to_utf8(uvm_index->artifact), diagnostics)
         : std::optional<fsim::runtime::SystemVerilogUvmCheckpointArtifact> { };
     uvm_bytes.reset();
+    // A trusted artifact (checksummed, from a matching build) is not
+    // re-derived and cross-checked; FSIM_VERIFY_ARTIFACT=1 keeps the checks.
+    const bool trusted = elaboration::detail::TrustedArtifactLoad::active();
     if (!runtime || !semantics || !design_ir || !constraint_hir || !vhdl_hir
         || !coverage || !uvm_state
-        || !design_ir->valid(*semantics)
-        || !application_detail::valid_runtime_projection(*design_ir, *runtime)) {
+        || (!trusted
+            && (!design_ir->valid(*semantics)
+                || !application_detail::valid_runtime_projection(
+                    *design_ir, *runtime)))) {
         if (!diagnostics.has_error()) {
             diagnostics.error(
                 "FSIM-ART-0014",
@@ -1767,6 +1772,7 @@ static int handle_simulate_impl(
     // as it is populated; the loader's trial population would repeat that.
     auto built = [&] {
         const elaboration::detail::DeferredProgramValidation deferred;
+        const elaboration::detail::TrustedArtifactLoad trusted;
         return load_design_artifact(*invocation.design, diagnostics);
     }();
     if (!built) {

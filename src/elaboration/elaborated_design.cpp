@@ -85,6 +85,30 @@ bool DeferredProgramValidation::active() noexcept
 }
 
 namespace {
+thread_local bool artifact_trusted = false;
+} // namespace
+
+TrustedArtifactLoad::TrustedArtifactLoad() noexcept
+    : previous_ { artifact_trusted }
+{
+    artifact_trusted = true;
+}
+
+TrustedArtifactLoad::~TrustedArtifactLoad()
+{
+    artifact_trusted = previous_;
+}
+
+bool TrustedArtifactLoad::active() noexcept
+{
+    static const bool verify = [] {
+        const char* text = std::getenv("FSIM_VERIFY_ARTIFACT");
+        return text != nullptr && std::string_view { text } == "1";
+    }();
+    return artifact_trusted && !verify;
+}
+
+namespace {
 thread_local CanonicalHierarchyPaths* canonical_hierarchy_paths = nullptr;
 } // namespace
 
@@ -1778,6 +1802,12 @@ ElaboratedDesign::from_state_with_process_rows(
         } catch (const std::exception&) {
             return std::nullopt;
         }
+    }
+    if (serialized_driver_inventory && detail::TrustedArtifactLoad::active()) {
+        // A trusted artifact's inventory stands; re-deriving it would build
+        // the region graph only to compare.
+        result.signal_driver_inventory_ = std::move(serialized_driver_inventory);
+        return result;
     }
     try {
         auto expected_inventory = result.compute_signal_driver_inventory();

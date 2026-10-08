@@ -131,6 +131,34 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-08 (later): trusted artifact load, persisted kernel plan
+
+**Owner decision (2026-10-08).** `fsim simulate` trusts a checksummed artifact from a
+matching build. It does not re-derive and cross-check it:
+- The serialized driver inventory is adopted. Before, it was recomputed through a full
+  region-graph build and compared.
+- The DesignIR validity and runtime-projection checks are skipped.
+- `FSIM_VERIFY_ARTIFACT=1` restores the checks (`elaboration::detail::TrustedArtifactLoad`).
+- Checksum verification itself is unchanged.
+
+**The static-kernel plan is persisted.**
+- `elaborate --aot` stores the plan in the workspace's `static-kernel` object cache. Its
+  key covers the artifact's content digest, the planner build and the plan's environment
+  knobs.
+- `simulate` restores it instead of planning: original_codec planning goes from 275 ms
+  to 10 ms. With the inventory check gone, simulate no longer builds the region graph.
+- A plan that does not fit the design (formats or references out of range) is
+  discarded, and the planner runs. `FSIM_STATIC_KERNEL_PLAN_CACHE=0` always plans.
+
+Parity is identical on all ten cases, and ctest matches the baseline.
+
+| Case | Simulate | Target |
+|---|---:|---:|
+| original_codec | 2.85 s | 2.58 s |
+| mixed_codec | 2.43 s | 2.25 s |
+| original_throughput | 2.00 s | 2.62 s |
+| mixed_throughput | 1.59 s | 2.10 s |
+
 ### 2026-10-08 (later): VHDL commit skips unchanged Logic9 writes
 
 - **The VHDL commit's unchanged-write skip now covers 4-plane (Logic9) slots.**
