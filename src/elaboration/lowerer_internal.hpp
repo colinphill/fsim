@@ -416,6 +416,28 @@ private:
     [[nodiscard]] std::optional<std::size_t> hir_expression_width(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
+    // The index of the non-null operand of a VHDL `&` whose other operand
+    // is a statically null array, if exactly one operand is null.
+    // The CHARACTER code of a VHDL character literal lowered self-determined
+    // or in an 8-bit context: a non-logic character, a CHARACTER control
+    // name (NUL), or a logic character ('0') whose context is CHARACTER.
+    [[nodiscard]] std::optional<std::uint64_t>
+    hir_vhdl_character_literal_code(
+        semantic::ExpressionId expression, std::size_t expected_width) const;
+    // Whether a VHDL expression has the predefined CHARACTER type.
+    [[nodiscard]] bool hir_vhdl_character_typed(
+        semantic::ExpressionId expression) const;
+    // Collects the logic character literals of the current unit whose
+    // context (assignment target, initialized object, comparison operand,
+    // case selector, or attribute prefix) is CHARACTER.
+    void collect_hir_vhdl_character_contexts() const;
+    mutable const semantic::vhdl::Hir* hir_vhdl_character_context_hir_ { };
+    mutable std::uint64_t hir_vhdl_character_context_revision_ { };
+    mutable std::unordered_set<std::uint32_t>
+        hir_vhdl_character_context_literals_;
+    [[nodiscard]] std::optional<std::size_t>
+    hir_vhdl_null_concatenation_operand(
+        std::span<const semantic::ExpressionId> operands) const;
     [[nodiscard]] std::optional<std::size_t>
     hir_vhdl_expression_runtime_width(
         semantic::ExpressionId expression,

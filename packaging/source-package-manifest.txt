@@ -1973,10 +1973,12 @@ tests/fixtures/compliance/sv_class_statements.sv
 tests/fixtures/compliance/sv_compilation_unit_declarations.sv
 tests/fixtures/compliance/sv_function_statements.sv
 tests/fixtures/compliance/sv_hierarchical_references.sv
+tests/fixtures/compliance/sv_net_data_types.sv
 tests/fixtures/compliance/sv_port_width_mismatch.sv
 tests/fixtures/compliance/sv_streaming_unpack.sv
 tests/fixtures/compliance/sv_time_without_timescale.sv
 tests/fixtures/compliance/verilog_2005_begin_keywords.v
+tests/fixtures/compliance/vhdl_character_type.vhd
 tests/fixtures/compliance/vhdl_composite_constants.vhd
 tests/fixtures/compliance/vhdl_enum_index_arrays.vhd
 tests/fixtures/compliance/vhdl_now_and_string_formals.vhd

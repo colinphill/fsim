@@ -3333,6 +3333,11 @@ Lowerer::hir_vhdl_type_actual(
         result.executable_width = 1U;
         return result;
     }
+    if (name == "character") {
+        result.domain = semantic::vhdl::ValueDomain::bit2;
+        result.executable_width = 8U;
+        return result;
+    }
     return std::nullopt;
 }
 

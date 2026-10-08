@@ -249,6 +249,50 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 10: CHARACTER values, null concatenation, net data types
+
+- CHARACTER values (IEEE 1076-2008 16.3):
+  - graphic literals (`'A'`);
+  - the non-graphic names `NUL` to `USP`, `DEL` and `C128` to `C159`;
+  - logic-looking literals (`'0'`, `'X'`) whose context is CHARACTER: an
+    assignment target, an initialized object, a comparison operand, a case
+    selector, or a `CHARACTER'` attribute prefix. Without such a context they
+    stay BIT or STD_ULOGIC values, so numeric_std `u + '1'` is unchanged.
+  - CHARACTER as an attribute prefix (`'POS`, `'HIGH`, ...) and as a case
+    selector.
+- A null array operand of `&` contributes no elements (IEEE 1076-2008
+  9.2.5). This affects 27 VESTs concatenation tests.
+- SystemVerilog nets with an explicit 4-state data type (`wire logic [7:0]`,
+  `wire integer`, IEEE 1800-2017 6.7.1), and the `vectored`/`scalared`
+  keywords.
+- New diagnostic `FSIM-SV-SEM-394`: a void function's `return` supplies a
+  value (IEEE 1800-2017 13.4.1). Batch 8 had made the sv-tests negative case
+  13.4.1--function-void-return pass by accident.
+- The corpus runner's Verilator shell now follows the C++ main that Verilator's
+  `driver.py` generates: `clk` toggles every 5 units after time 10 (109
+  rising edges by time 1100), and only `clk` and `fastclk` are connected. The
+  tests count cycles against that main. Before, the shell copied the
+  driver's Verilog shell, which gives about 91 edges, so tests that wait for
+  cycle 99 never finished. Its input scan also misread
+  `input logic [95:0] i` as a port named `logic`.
+
+Fixtures: `vhdl_character_type.vhd` and `sv_net_data_types.sv`, both checked
+against xsim.
+
+### Corpus run 5 (after batches 6 to 9 and the Verilator shell fix, interpreter)
+
+| Suite | Cases | Pass | Fail | Timeout | Skip | Pass rate |
+|---|---:|---:|---:|---:|---:|---:|
+| sv-tests | 1497 | 1066 | 430 | 1 | 0 | 71.2% |
+| verilator | 2415 | 549 | 1567 | 3 | 296 | 25.9% |
+| ivtest | 2826 | 1238 | 1559 | 4 | 25 | 44.2% |
+| vests | 3665 | 1873 | 1790 | 2 | 0 | 51.1% |
+| nvc | 1482 | 443 | 821 | 3 | 215 | 35.0% |
+| vhdl-compliance | 72 | 16 | 56 | 0 | 0 | 22.2% |
+
+VUnit test cases: 12 of 154 pass. Compared with run 4, 192 cases newly pass.
+One newly fails: the sv-tests void-return negative case, fixed in batch 10.
+
 ### Batch 9: SystemVerilog class statements and string replication
 
 - A class function method called as a statement (`c.set(5);`) or discarded
@@ -375,7 +419,7 @@ error, and each exposes an existing gap:
 | sv-tests: SV class/randomization constraint syntax | `FSIM-SV-UNSUPPORTED-001` (73) |
 | VHDL: `wait for` with a non-static duration (for example a TIME formal) | testbench procedures |
 | VHDL: `rising_edge`/`falling_edge` of a signal-class formal | testbench procedures |
-| VHDL: CHARACTER and STD_ULOGIC index values given as character literals (`t('H')`, `array (std_ulogic) of ...` aggregates), which need character literals resolved by type | IEEE package tables, VESTs |
+| VHDL: STD_ULOGIC index values given as character literals (`t('H')`, `array (std_ulogic) of ...` aggregates); CHARACTER done in batch 10 except STRING element writes (`s(1) := 'A'`) | IEEE package tables, VESTs |
 | VHDL: invalid input accepted (for example integer literals as `unsigned` aggregate elements) | sv-tests/VESTs negative cases |
 | VHDL: output-port defaults as the driver's initial value | VESTs, nvc issue885 |
 | VHDL: reading an `out` port is accepted before VHDL-2008 | VESTs tc112 |
@@ -396,4 +440,4 @@ error, and each exposes an existing gap:
 | SV: hierarchical references in event controls, continuous assignments, generate processes | Verilator |
 | VHDL: package-level signals | 14 VESTs/nvc cases |
 | VHDL: VHDL-2008 STD.ENV package (`use std.env.all`) | VHDL-2008 testbenches |
-| VHDL: CHARACTER objects, TIME `'image`, user-defined attributes | VESTs |
+| VHDL: TIME `'image` and `TIME'HIGH`, physical unit names as primaries (`us = 1000 ns`), `SEVERITY_LEVEL'POS`, user-defined attributes | VESTs |

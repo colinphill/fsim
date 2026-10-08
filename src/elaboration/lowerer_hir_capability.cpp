@@ -2,6 +2,7 @@
 #include "lowerer_internal.hpp"
 #include "fsim/frontend/parser.hpp"
 
+#include <array>
 #include <charconv>
 #include <cstdlib>
 #include <iostream>
@@ -634,6 +635,70 @@ namespace {
             || operation == ">" || operation == ">=";
     }
 
+    bool vhdl_logic_character(const char value) noexcept
+    {
+        const auto normalized = static_cast<char>(
+            std::toupper(static_cast<unsigned char>(value)));
+        return normalized == 'U' || normalized == 'X'
+            || normalized == '0' || normalized == '1'
+            || normalized == 'Z' || normalized == 'W'
+            || normalized == 'L' || normalized == 'H'
+            || normalized == '-';
+    }
+
+    // The code of a VHDL character literal ('A'), which is a STD.STANDARD
+    // CHARACTER value unless context selects another enumeration type.
+    std::optional<unsigned char> vhdl_character_literal_code(
+        const semantic::vhdl::Expression& source) noexcept
+    {
+        if (source.kind != semantic::vhdl::ExpressionKind::logic_literal
+            || source.text.size() != 3U || source.text.front() != '\''
+            || source.text.back() != '\'') {
+            return std::nullopt;
+        }
+        return static_cast<unsigned char>(source.text[1]);
+    }
+
+    std::optional<std::uint64_t> vhdl_character_control_literal_code(
+        const std::string_view name)
+    {
+        static constexpr std::array<std::string_view, 32U> low {
+            "nul", "soh", "stx", "etx", "eot", "enq", "ack", "bel",
+            "bs", "ht", "lf", "vt", "ff", "cr", "so", "si",
+            "dle", "dc1", "dc2", "dc3", "dc4", "nak", "syn", "etb",
+            "can", "em", "sub", "esc", "fsp", "gsp", "rsp", "usp",
+        };
+        std::string lower { name };
+        std::ranges::transform(lower, lower.begin(), [](const char value) {
+            return static_cast<char>(
+                std::tolower(static_cast<unsigned char>(value)));
+        });
+        if (const auto found = std::ranges::find(low, lower);
+            found != low.end()) {
+            return static_cast<std::uint64_t>(found - low.begin());
+        }
+        if (lower == "del") {
+            return 127U;
+        }
+        if (lower.size() == 4U && lower.front() == 'c') {
+            const auto code = unsigned_decimal(
+                std::string_view { lower }.substr(1U));
+            if (code && *code >= 128U && *code <= 159U) {
+                return *code;
+            }
+        }
+        return std::nullopt;
+    }
+
+    // A character literal that cannot denote a standard-logic or BIT value
+    // is self-determined as an 8-bit CHARACTER.
+    bool vhdl_non_logic_character_literal(
+        const semantic::vhdl::Expression& source) noexcept
+    {
+        const auto code = vhdl_character_literal_code(source);
+        return code && !vhdl_logic_character(static_cast<char>(*code));
+    }
+
     bool vhdl_comparison_operator(const std::string_view operation)
     {
         return vhdl_equality_operator(operation)
@@ -1219,6 +1284,18 @@ std::optional<std::int64_t> Lowerer::hir_constant_integer(
             }
         }
         if (expression->vhdl != nullptr
+            && expression->vhdl->kind
+                == semantic::vhdl::ExpressionKind::logic_literal) {
+            collect_hir_vhdl_character_contexts();
+            if (hir_vhdl_character_context_literals_.contains(
+                    candidate.value())) {
+                if (const auto code
+                    = hir_vhdl_character_literal_code(candidate, 0U)) {
+                    return finish(static_cast<std::int64_t>(*code));
+                }
+            }
+        }
+        if (expression->vhdl != nullptr
             && (expression->vhdl->kind
                     == semantic::vhdl::ExpressionKind::name
                 || expression->vhdl->kind
@@ -1252,6 +1329,10 @@ std::optional<std::int64_t> Lowerer::hir_constant_integer(
                 specialized_hir_unit_->design().vhdl_hir.types());
             if (ordinal && !ambiguous) {
                 return finish(ordinal);
+            }
+            if (const auto code
+                = hir_vhdl_character_literal_code(candidate, 0U)) {
+                return finish(static_cast<std::int64_t>(*code));
             }
         }
         if (!frame_sensitive_package_constant
@@ -6408,6 +6489,25 @@ Lowerer::hir_vhdl_attribute_profile(
             { },
         };
     }
+    if (!scalar_range
+        && (same_hir_identifier(terminal_spelling, "character", true)
+            || same_hir_identifier(
+                terminal_spelling, "severity_level", true))) {
+        // Predefined enumerations without a HIR definition (IEEE 1076-2008
+        // 16.3): CHARACTER has 256 positions, SEVERITY_LEVEL four.
+        scalar_range = semantic::vhdl::RangeConstraint {
+            semantic::vhdl::RangeKind::enumeration,
+            0,
+            same_hir_identifier(terminal_spelling, "character", true)
+                ? 255
+                : 3,
+            std::nullopt,
+            std::nullopt,
+            false,
+            false,
+            { },
+        };
+    }
     if (!scalar_range) {
         const bool integer = same_hir_identifier(
             terminal_spelling, "integer", true);
@@ -7056,6 +7156,9 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
         && expression->vhdl->kind
             == semantic::vhdl::ExpressionKind::call
         && expression->vhdl->text == "@vhdl-null") {
+        return frontend::ValueDomain::Bit2;
+    }
+    if (hir_vhdl_character_literal_code(expression_id, 0U)) {
         return frontend::ValueDomain::Bit2;
     }
     if (hir_vhdl_generate_iterator_value(
@@ -7901,6 +8004,201 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
     return contextual_kind;
 }
 
+bool Lowerer::hir_vhdl_character_typed(
+    const semantic::ExpressionId expression_id) const
+{
+    const auto expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (!expression || expression->vhdl == nullptr) {
+        return false;
+    }
+    if (const auto code = vhdl_character_literal_code(*expression->vhdl)) {
+        return vhdl_non_logic_character_literal(*expression->vhdl);
+    }
+    if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::name
+        && !(expression->vhdl->referenced_name
+            && (expression->vhdl->referenced_name->selected
+                || !expression->vhdl->referenced_name->overloads.empty()))
+        && vhdl_character_control_literal_code(expression->vhdl->text)) {
+        return true;
+    }
+    const auto subtype = hir_vhdl_expression_subtype(expression_id);
+    if (!subtype) {
+        return false;
+    }
+    auto spelling = std::string_view { subtype->type_mark.spelling };
+    auto target = subtype->type_mark.target;
+    std::unordered_set<std::uint32_t> visited;
+    while (target.valid() && visited.insert(target.value()).second) {
+        const auto type = specialized_hir_unit_->find_type(target);
+        if (!type || type->vhdl == nullptr
+            || (type->vhdl->form != semantic::vhdl::TypeForm::subtype
+                && type->vhdl->form != semantic::vhdl::TypeForm::alias)) {
+            break;
+        }
+        spelling = type->vhdl->base.type_mark.spelling;
+        target = type->vhdl->base.type_mark.target;
+    }
+    if (const auto separator = spelling.find_last_of('.');
+        separator != std::string_view::npos) {
+        spelling.remove_prefix(separator + 1U);
+    }
+    return same_hir_identifier(spelling, "character", true);
+}
+
+void Lowerer::collect_hir_vhdl_character_contexts() const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return;
+    }
+    // Process and subprogram bodies live in the design-wide HIR rather than
+    // the specialization overlay, so scan that once per HIR revision.
+    const auto& hir = specialized_hir_unit_->design().vhdl_hir;
+    if (hir_vhdl_character_context_hir_ == &hir
+        && hir_vhdl_character_context_revision_ == hir.revision()) {
+        return;
+    }
+    hir_vhdl_character_context_hir_ = &hir;
+    hir_vhdl_character_context_revision_ = hir.revision();
+    hir_vhdl_character_context_literals_.clear();
+    const auto logic_literal = [&](const semantic::ExpressionId id) {
+        const auto expression = specialized_hir_unit_->find_expression(id);
+        return expression && expression->vhdl != nullptr
+            && vhdl_character_literal_code(*expression->vhdl)
+            && !vhdl_non_logic_character_literal(*expression->vhdl);
+    };
+    const auto mark = [&](const semantic::ExpressionId id) {
+        if (logic_literal(id)) {
+            hir_vhdl_character_context_literals_.insert(id.value());
+        }
+    };
+    for (const auto& expression : hir.expressions()) {
+        const auto& operands = expression.operands;
+        if (expression.kind == semantic::vhdl::ExpressionKind::binary
+            && operands.size() == 2U
+            && vhdl_comparison_operator(expression.text)) {
+            if (logic_literal(operands[0])
+                && hir_vhdl_character_typed(operands[1])) {
+                mark(operands[0]);
+            } else if (logic_literal(operands[1])
+                && hir_vhdl_character_typed(operands[0])) {
+                mark(operands[1]);
+            }
+        } else if (expression.kind == semantic::vhdl::ExpressionKind::call
+            && operands.size() == 2U && logic_literal(operands[1])
+            && (expression.text == "'pos" || expression.text == "'succ"
+                || expression.text == "'pred" || expression.text == "'image"
+                || expression.text == "'leftof"
+                || expression.text == "'rightof")) {
+            const auto prefix = hir_vhdl_type_actual(operands[0]);
+            if (prefix
+                && same_hir_identifier(
+                    prefix->type_mark.spelling, "character", true)) {
+                mark(operands[1]);
+            }
+        } else if (expression.kind == semantic::vhdl::ExpressionKind::call
+            && operands.size() == 1U
+            && same_hir_identifier(expression.text,
+                "@vhdl-qualified:character", true)) {
+            mark(operands[0]);
+        }
+    }
+    for (const auto& statement : hir.statements()) {
+        const auto literal_value = (statement.value
+                && logic_literal(*statement.value))
+            || std::ranges::any_of(statement.waveform,
+                [&](const semantic::vhdl::WaveformElement& element) {
+                    return logic_literal(element.value);
+                });
+        if (statement.target && literal_value
+            && hir_vhdl_character_typed(*statement.target)) {
+            if (statement.value) {
+                mark(*statement.value);
+            }
+            for (const auto& element : statement.waveform) {
+                mark(element.value);
+            }
+        }
+        const auto literal_choice = std::ranges::any_of(
+            statement.alternatives,
+            [&](const semantic::vhdl::CaseAlternative& alternative) {
+                return std::ranges::any_of(
+                    alternative.choices, logic_literal);
+            });
+        if (statement.condition && literal_choice
+            && hir_vhdl_character_typed(*statement.condition)) {
+            for (const auto& alternative : statement.alternatives) {
+                for (const auto choice : alternative.choices) {
+                    mark(choice);
+                }
+            }
+        }
+    }
+    for (const auto& declaration : hir.declarations()) {
+        if (!declaration.initializer || !declaration.subtype
+            || !logic_literal(*declaration.initializer)) {
+            continue;
+        }
+        auto spelling
+            = std::string_view { declaration.subtype->type_mark.spelling };
+        if (const auto separator = spelling.find_last_of('.');
+            separator != std::string_view::npos) {
+            spelling.remove_prefix(separator + 1U);
+        }
+        if (same_hir_identifier(spelling, "character", true)) {
+            mark(*declaration.initializer);
+        }
+    }
+}
+
+std::optional<std::uint64_t> Lowerer::hir_vhdl_character_literal_code(
+    const semantic::ExpressionId expression_id,
+    const std::size_t expected_width) const
+{
+    const auto expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (!expression || expression->vhdl == nullptr) {
+        return std::nullopt;
+    }
+    if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::name
+        && (expected_width == 0U || expected_width == 8U)
+        && !(expression->vhdl->referenced_name
+            && (expression->vhdl->referenced_name->selected
+                || !expression->vhdl->referenced_name->overloads.empty()))) {
+        // CHARACTER's non-graphic literals (NUL, ..., DEL, C128, ...) when
+        // no declaration claims the name (IEEE 1076-2008 16.3).
+        return vhdl_character_control_literal_code(expression->vhdl->text);
+    }
+    collect_hir_vhdl_character_contexts();
+    // A logic character ('0', 'X', ...) is a BIT or STD_ULOGIC value unless
+    // its context is CHARACTER-typed; an 8-bit expected width alone does not
+    // decide that (numeric_std `u + '1'` widens a STD_ULOGIC operand).
+    const auto code = vhdl_character_literal_code(*expression->vhdl);
+    if (!code || (expected_width != 0U && expected_width != 8U)
+        || (!vhdl_non_logic_character_literal(*expression->vhdl)
+            && !hir_vhdl_character_context_literals_.contains(
+                expression_id.value()))) {
+        return std::nullopt;
+    }
+    return *code;
+}
+
+std::optional<std::size_t> Lowerer::hir_vhdl_null_concatenation_operand(
+    const std::span<const semantic::ExpressionId> operands) const
+{
+    if (operands.size() != 2U) {
+        return std::nullopt;
+    }
+    const auto left = hir_expression_width(operands[0], hir_process_scope_);
+    const auto right = hir_expression_width(operands[1], hir_process_scope_);
+    if (!left || !right || (*left == 0U) == (*right == 0U)) {
+        return std::nullopt;
+    }
+    return *left == 0U ? 1U : 0U;
+}
+
 std::optional<std::size_t> Lowerer::hir_expression_width(
     const semantic::ExpressionId expression_id,
     const semantic::ScopeId process_scope) const
@@ -7955,6 +8253,9 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
             == semantic::vhdl::ExpressionKind::call
         && expression->vhdl->text == "@vhdl-null") {
         return 32U;
+    }
+    if (hir_vhdl_character_literal_code(expression_id, 0U)) {
+        return 8U;
     }
     if (hir_vhdl_generate_iterator_value(
             expression_id, process_scope)) {
@@ -12328,7 +12629,8 @@ bool Lowerer::can_lower_hir_expression(
                 supported = true;
                 break;
             }
-            if (hir_vhdl_standard_enumeration_literal(expression_id)) {
+            if (hir_vhdl_standard_enumeration_literal(expression_id)
+                || hir_vhdl_character_literal_code(expression_id, 0U)) {
                 supported = true;
                 break;
             }
@@ -12377,17 +12679,7 @@ bool Lowerer::can_lower_hir_expression(
             supported = source.decoded_string
                 && !source.decoded_string->empty()
                 && std::ranges::all_of(
-                    *source.decoded_string,
-                    [](const char value) {
-                        const auto normalized = static_cast<char>(
-                            std::toupper(
-                                static_cast<unsigned char>(value)));
-                        return normalized == 'U' || normalized == 'X'
-                            || normalized == '0' || normalized == '1'
-                            || normalized == 'Z' || normalized == 'W'
-                            || normalized == 'L' || normalized == 'H'
-                            || normalized == '-';
-                    });
+                    *source.decoded_string, vhdl_logic_character);
             break;
         case semantic::vhdl::ExpressionKind::boolean_literal:
         case semantic::vhdl::ExpressionKind::logic_literal:

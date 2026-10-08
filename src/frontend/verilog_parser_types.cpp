@@ -800,10 +800,34 @@ void VerilogParser::parse_optional_net_type(Type& type)
         return;
     }
     const auto keyword_token = advance();
-    if (contains_word(
-            { "wire", "tri", "tri0", "tri1", "wand", "triand", "wor",
-                "trior", "trireg", "uwire" },
-            keyword_token.text)
+    const bool net_keyword = contains_word(
+        { "wire", "tri", "tri0", "tri1", "wand", "triand", "wor",
+            "trior", "trireg", "uwire", "supply0", "supply1" },
+        keyword_token.text);
+    if (net_keyword) {
+        // IEEE 1364-2005 6.1.3: vectored and scalared only advise on
+        // bit-select access to a vector net.
+        (void)(match_keyword("vectored") || match_keyword("scalared"));
+    }
+    if (net_keyword && (keyword("logic") || keyword("integer"))) {
+        // A net's explicit 4-state integral data type (IEEE 1800-2017
+        // 6.7.1): `wire logic [7:0]` is `wire [7:0]`, and `wire integer`
+        // is a signed 32-bit wire.
+        const auto data_type = advance();
+        (void)require_standard(
+            "an explicit net data type",
+            StandardRevision::SystemVerilog2005,
+            data_type);
+        type.spelling = keyword_token.text;
+        type.domain = ValueDomain::Logic4;
+        if (data_type.text == "integer") {
+            type.is_signed = true;
+            type.packed_range = PackedRange { 31, 0, true };
+        }
+        return;
+    }
+    if (net_keyword && keyword_token.text != "supply0"
+        && keyword_token.text != "supply1"
         && (keyword("shortreal") || keyword("real")
             || keyword("realtime") || keyword("time"))) {
         type.systemverilog_net_type = keyword_token.text;

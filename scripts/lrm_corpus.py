@@ -289,7 +289,6 @@ VERILATOR_SHELL = """module top;
     initial begin
 {init0}
         #10;
-{init1}
         while ($time < 1100) begin
 {body}
         end
@@ -311,21 +310,26 @@ def verilator_shell(top_text: str) -> str:
                 inputs.append(match.group(2))
             if re.match(r"^\s*(function|task|endmodule)", line):
                 get_sigs = False
-    inputs.sort()
+    # The C++ main only drives clk and fastclk; other inputs keep their reset
+    # value, so the shell leaves them unconnected.
+    inputs = sorted(name for name in inputs if name in ("clk", "fastclk"))
     decls = "\n".join(f"    reg {name};" for name in inputs)
     ports = "\n".join(("      " + ("," if i else "") + f".{name} ({name})")
                       for i, name in enumerate(inputs))
     init0 = "".join(f"        {n} = 0;\n" for n in ("fastclk", "clk") if n in inputs)
-    init1 = "".join(f"        {n} = 1;\n" for n in ("fastclk", "clk") if n in inputs)
+    # Mirrors the C++ main that driver.py generates for Verilator runs (the
+    # tests' cycle counts are calibrated against it): after time 10, each loop
+    # iteration advances five units, toggling fastclk every unit and clk on the
+    # first, so clk rises at 10, 20, ..., 1090.
     body = ""
-    for step in range(6):
-        body += "          #1;\n"
+    for step in range(5):
         if "fastclk" in inputs:
             body += "          fastclk = !fastclk;\n"
-        if step == 4 and "clk" in inputs:
+        if step == 0 and "clk" in inputs:
             body += "          clk = !clk;\n"
+        body += "          #1;\n"
     return VERILATOR_SHELL.format(decls=decls, ports=ports, init0=init0.rstrip("\n"),
-                                  init1=init1.rstrip("\n"), body=body.rstrip("\n"))
+                                  body=body.rstrip("\n"))
 
 
 def python_literal_list(source: str, keyword: str) -> list[str] | None:

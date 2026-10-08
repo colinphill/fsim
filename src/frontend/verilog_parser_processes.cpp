@@ -309,6 +309,12 @@ std::optional<Statement> VerilogParser::parse_statement()
             error(start, "FSIM-SV-SEM-071",
                 "a task return statement cannot return a value");
             statement.value = parse_expression();
+        } else if (in_function_ && current_function_returns_void_
+            && !at(TokenKind::Semicolon)) {
+            // IEEE 1800-2017 13.4.1: a void function returns no value.
+            error(start, "FSIM-SV-SEM-394",
+                "a void function return statement cannot return a value");
+            statement.value = parse_expression();
         } else if (!at(TokenKind::Semicolon)) {
             statement.value = parse_expression();
         }

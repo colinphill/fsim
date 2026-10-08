@@ -7572,6 +7572,17 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                       destination, expected_width, element->signed_value) }
                 : std::optional { destination };
         }
+    } else if (const auto code
+        = hir_vhdl_character_literal_code(expression_id, expected_width)) {
+        // A CHARACTER literal denotes its position in STD.STANDARD's
+        // CHARACTER, held in the type's 8-bit layout.
+        const auto destination = allocate_register(
+            8U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            destination,
+            PackedLogic4::from_aval_bval(8U, *code, 0U),
+        });
+        result = destination;
     } else if (expression->vhdl != nullptr
         && expression->vhdl->kind
             == semantic::vhdl::ExpressionKind::string_literal
@@ -10601,6 +10612,30 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             static_cast<std::uint32_t>(width),
         });
         result = destination;
+    } else if (expression->vhdl != nullptr && source.binary
+        && source.text == "&" && source.operands.size() == 2U
+        && hir_vhdl_null_concatenation_operand(source.operands)) {
+        // A null array operand contributes no elements; the result is the
+        // other operand (IEEE 1076-2008 9.2.5).
+        const auto kept = *hir_vhdl_null_concatenation_operand(
+            source.operands);
+        const auto kept_width = hir_expression_width(
+            source.operands[kept], hir_process_scope_);
+        auto operand = lower_hir_expression(
+            source.operands[kept], *kept_width);
+        const auto domain = hir_expression_domain(
+            expression_id, hir_process_scope_);
+        if (!operand || !domain) {
+            return std::nullopt;
+        }
+        if (register_domain(*operand) != *domain) {
+            const auto converted = allocate_register(
+                register_width(*operand), *domain);
+            process_.operations.emplace_back(CopyRegister {
+                converted, *operand });
+            operand = converted;
+        }
+        result = *operand;
     } else if (expression->vhdl != nullptr && source.binary
         && source.text == "&" && source.operands.size() == 2U) {
         const auto left_width = hir_expression_width(

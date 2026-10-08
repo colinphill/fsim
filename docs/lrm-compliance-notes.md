@@ -107,3 +107,23 @@ corpora (`scripts/lrm_corpus.py`). Progress and results are in
 - Locals in subprograms fold frame-dependent bounds (`vec'left` of an
   unconstrained formal) with `hir_constant_integer` before resolving their
   subtype, so each call frame sizes them from its actual.
+
+## SystemVerilog statement forms (batches 8 and 9)
+
+- A function called as a statement becomes a `container_method` statement
+  whose value is the call: `void'(f())` already used this form (value
+  `@sv-cast:void`). The executable HIR builder rewrites module-level calls
+  of functions (`SystemVerilogExecutableBuilder`). The frontend class
+  resolver (`Resolver::resolve_task_call`) rewrites `obj.f(...)` of a
+  function method outside class methods. The lowerer's `container_method`
+  case discards user, class and static method calls.
+- Inside class methods, `this.f()` statements keep the `@sv-task:` form,
+  which the runtime class executor (application_class_hir_execution.cpp)
+  runs directly.
+- Void functions and methods report a one-bit placeholder result
+  (`hir_callable_type`, `hir_class_method_profile`).
+- Open issue: property writes in classes declared inside a module fail at
+  run time, while `$unit` and package classes work. A task-form call into a
+  module-local class reports a SimIR driver width mismatch. This suggests
+  the call reaches the method body through module task lowering instead of
+  the class executor.
