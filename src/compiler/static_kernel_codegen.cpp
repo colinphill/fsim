@@ -2781,11 +2781,25 @@ private:
         auto* info = binding(inst.d, 1U);
         auto* low = slot_word(inst.d, 0U);
         auto* high = slot_word(inst.d, 1U);
+        const bool linear = (inst.flags & detail::flag_linear) != 0U;
+        if (inst.aux != 0U) {
+            // The template's slot is silent in every unit (build_native):
+            // nothing observes the change, so the store needs no comparison
+            // and no notification.
+            Pair next = value;
+            if (linear) {
+                next = insert(Pair { builder_.CreateLoad(i64_, low),
+                                  builder_.CreateLoad(i64_, high) },
+                    value, inst.offset, inst.width);
+            }
+            builder_.CreateStore(next.a, low);
+            builder_.CreateStore(next.b, high);
+            return;
+        }
         const Pair old { builder_.CreateLoad(i64_, low),
             builder_.CreateLoad(i64_, high) };
-        const auto next = (inst.flags & detail::flag_linear) != 0U
-            ? insert(old, value, inst.offset, inst.width)
-            : value;
+        const auto next = linear ? insert(old, value, inst.offset, inst.width)
+                                 : value;
         auto* silent = builder_.CreateICmpNE(
             builder_.CreateAnd(info, llvm::ConstantInt::get(i32_, silent_bit)),
             llvm::ConstantInt::get(i32_, 0U));

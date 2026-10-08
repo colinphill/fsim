@@ -560,6 +560,14 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
                     }
                     break;
                 case KOp::store_slot:
+                    // A silent slot's store is plain in the template (aux 1):
+                    // part of its shape, so units whose slot is not silent
+                    // get their own template.
+                    if (inst.sub == 0U && slots_[inst.d].silent) {
+                        inst.aux = 1U;
+                    }
+                    inst.d = bind_slot(inst.d);
+                    break;
                 case KOp::store_slot_nba:
                 case KOp::store_slot_dynamic:
                 case KOp::store_slot_part:

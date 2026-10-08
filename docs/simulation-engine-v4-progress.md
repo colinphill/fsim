@@ -131,6 +131,41 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-08 (later): plain stores for silent slots in templates
+
+**What changed.** Canonicalization marks a narrow `store_slot` to a silent slot
+(`aux = 1`). The mark is part of the template's shape, so units whose slot is not silent
+get their own template. Codegen emits a plain store for these: no old-value load, no
+comparison, no notification. Before, the silent bit came only from the bindings at run
+time, so even the hot tier kept the comparison and both branches for every
+partition-internal net.
+
+**Results**, interleaved A/B against the 1008c binary, output identical:
+- original_codec: 2.63 → 2.53 s.
+- original_throughput: 1.76 → 1.69 s.
+
+**Not kept: a higher tier for clocked templates.**
+- Giving all of them the hot tier cuts original_codec by 0.14 s, but costs +3.2 s of
+  elaborate there and +7.9 s on mixed_codec: the geomean would drop to about 2.8×.
+- A units × size weight gains only 0.03 s.
+
+### 2026-10-08 (later): confirming AOT campaign `v4-corpus-1008c`
+
+Candidate 01590e32, `llvm_o2_aot`, 3 samples, CPU 9, xsim measured in the same session.
+The machine ran slower than during `1008b`: xsim original_codec simulate 7.59 s against
+7.34 s.
+
+| Case | xsim simulate | fsim simulate | Simulate ratio | e2e |
+|---|---:|---:|---:|---:|
+| original_codec | 7.59 | 2.58 | **2.94×** (needs ≤2.53 s) | 2.11× |
+| mixed_codec | 6.59 | 2.13 | 3.10× | 2.32× |
+| mixed_throughput | 6.14 | 1.48 | 4.16× | 3.01× |
+| original_throughput | 7.65 | 1.78 | 4.31× | 3.26× |
+| codex (six) | 3.88–4.08 | 0.12–0.27 | 15–34× | 3.55–3.81× |
+
+- **Geometric mean e2e: 3.23×.**
+- **Simulate ≥3×:** nine of ten cases. original_codec misses by 0.05 s.
+
 ### 2026-10-08 (later): persisted canonical templates; partition store forwarding
 
 - **Canonical templates and per-unit bindings are persisted** (kind `native`, keyed
