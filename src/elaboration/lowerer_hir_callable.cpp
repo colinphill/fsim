@@ -3338,6 +3338,12 @@ Lowerer::hir_vhdl_type_actual(
         result.executable_width = 8U;
         return result;
     }
+    if (name == "severity_level" || name == "file_open_kind"
+        || name == "file_open_status") {
+        result.domain = semantic::vhdl::ValueDomain::bit2;
+        result.executable_width = 2U;
+        return result;
+    }
     return std::nullopt;
 }
 

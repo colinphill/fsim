@@ -187,7 +187,9 @@ VhdlParser::parse_vhdl_block_configuration(
           "block or generate name in configuration");
   result.block_name = vhdl_name(block.text);
   if (match(TokenKind::LeftParen)) {
-    result.generate_index = parse_expression();
+    // A generate specification is a static expression or a static discrete
+    // range (IEEE 1076-2008 3.4.2).
+    result.generate_index = parse_vhdl_case_choice();
     expect(
         TokenKind::RightParen,
         "')' after generate configuration index",

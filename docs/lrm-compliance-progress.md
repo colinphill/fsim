@@ -249,6 +249,38 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 11: package signals, declarative use clauses, generate configurations
+
+- Package signals (IEEE 1076-2008 4.7, 6.4.2.3). Each is one design-wide
+  object, bound like a package shared variable. Instances write it and read
+  it, and processes can be sensitive to it.
+- Use clauses in package, entity and architecture declarative regions
+  (12.4). They are treated as part of the unit's context clause. Signal
+  declarations in an entity declarative region (3.2.3).
+- Block configurations of a for-generate may select a static discrete range
+  (`for g(0 to 3)`, 3.4.2). Generate specifications may use package
+  constants and `'LOW`/`'HIGH`/`'LEFT`/`'RIGHT` of scalar subtypes.
+- A component declaration in a block hides the architecture's homograph.
+  Directly visible components hide use-visible ones (12.3). Before, both
+  were treated as overloads, and the instance matched neither.
+- SEVERITY_LEVEL, FILE_OPEN_KIND and FILE_OPEN_STATUS objects: signals,
+  ports, array elements, `'POS`, `'VAL`, `'IMAGE`, and initializers using
+  their literals. `CHARACTER'VAL` also works now.
+- A CHARACTER constant initialized with a logic-looking literal
+  (`constant c : character := '0'`) has value 48. Batch 10 had made
+  comparisons with `'0'` CHARACTER-typed without changing this.
+- New legality checks exposed by the new syntax:
+  - `FSIM-VHDL-SEM-115`: an entity statement part contains a non-passive
+    statement.
+  - `FSIM-FE-VHORDER-004` now also covers `use lib.unit;` naming something
+    other than a primary unit.
+
+Corpus effect (full VESTs, nvc and VHDL-Compliance suites): compared with
+run 5, 101 cases newly pass and none newly fail. VESTs is at 53.7%.
+
+Fixtures: `vhdl_package_signals.vhd` and `vhdl_generate_configuration.vhd`,
+both checked against xsim.
+
 ### Batch 10: CHARACTER values, null concatenation, net data types
 
 - CHARACTER values (IEEE 1076-2008 16.3):
@@ -424,7 +456,9 @@ error, and each exposes an existing gap:
 | VHDL: output-port defaults as the driver's initial value | VESTs, nvc issue885 |
 | VHDL: reading an `out` port is accepted before VHDL-2008 | VESTs tc112 |
 | VHDL: individual association of formal subelements (`rec.field => x`) and formal conversion functions (`to_x(F) => S`) | 98 VESTs/nvc cases (`FSIM-VHDL-PARSE-042`) |
-| VHDL: package-level signals | 138 nvc/VESTs cases (`FSIM-VHDL-UNSUPPORTED-022`) |
+| VHDL: library-level package instantiation (`package p is new work.g generic map (...)`) | 21 nvc/VHDL-Compliance cases (`FSIM-VHDL-UNSUPPORTED-022` 'new') |
+| VHDL: names in a configuration are not resolved against the configured architecture (architecture-local constants in generate specifications); design-wide unique names are used as a fallback | nvc config cases (`FSIM-ELAB-VHCONFIG-010`) |
+| VHDL: aggregate initializers of arrays of SEVERITY_LEVEL (`(others => note)`) | VESTs |
 | VHDL: an array element such as `bit_vector(0 to N-1)`, constrained with non-literal bounds, was treated as unconstrained and gated to VHDL-2008 (fixed in batch 4) | 126 nvc/VESTs cases (`FSIM-FE-VHSTD-003`) |
 | VHDL: unconstrained array ports (`port (d : in bit_vector)`) bind with width 1 (`FSIM-ELAB-BIND-020`) | VESTs, generic-width library cells |
 | VHDL: analysis-time legality (index-constraint bounds and types, slices of multidimensional arrays, labels as primaries) | about 33 VESTs negative tests exposed by batch 4, part of the 724 accepted-invalid cases |
@@ -438,6 +472,5 @@ error, and each exposes an existing gap:
 | SV: randomization and constraint blocks (`randomize`, `constraint`, `with`) | UVM-based sv-tests, chapter 18 |
 | SV: `fork` inside functions and tasks (lowering) | sv-tests, UVM |
 | SV: hierarchical references in event controls, continuous assignments, generate processes | Verilator |
-| VHDL: package-level signals | 14 VESTs/nvc cases |
 | VHDL: VHDL-2008 STD.ENV package (`use std.env.all`) | VHDL-2008 testbenches |
-| VHDL: TIME `'image` and `TIME'HIGH`, physical unit names as primaries (`us = 1000 ns`), `SEVERITY_LEVEL'POS`, user-defined attributes | VESTs |
+| VHDL: TIME `'image` and `TIME'HIGH`, physical unit names as primaries (`us = 1000 ns`), user-defined attributes | VESTs |

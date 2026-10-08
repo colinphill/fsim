@@ -380,22 +380,176 @@ std::string configuration_expression_identity(
     return expression_identity(compiled, id, active);
 }
 
-std::optional<std::int64_t> configuration_static_integer(
+namespace {
+
+std::optional<std::int64_t> static_integer(
     const semantic::CompiledDesign& compiled,
-    const semantic::ExpressionId id)
+    semantic::ExpressionId id,
+    std::size_t depth);
+
+const semantic::vhdl::Declaration* named_declaration(
+    const semantic::CompiledDesign& compiled,
+    const semantic::vhdl::Expression& expression)
+{
+    if (!expression.referenced_name) {
+        return nullptr;
+    }
+    const auto& name = *expression.referenced_name;
+    const auto id = name.selected ? name.selected
+        : name.overloads.size() == 1U
+        ? std::optional { name.overloads.front() }
+        : std::nullopt;
+    if (id) {
+        const auto declaration = compiled.find_declaration(*id);
+        return declaration ? declaration->vhdl : nullptr;
+    }
+    // A configuration's names are not resolved against the configured
+    // architecture or its packages; accept a design-wide constant, type or
+    // subtype only when the name is unique.
+    const semantic::vhdl::Declaration* found = nullptr;
+    for (const auto& declaration : compiled.vhdl_hir.declarations()) {
+        using Form = semantic::vhdl::DeclarationForm;
+        if ((declaration.form != Form::constant
+                && declaration.form != Form::type
+                && declaration.form != Form::subtype)
+            || !configuration_name_equal(declaration.name, expression.text)) {
+            continue;
+        }
+        if (found != nullptr) {
+            return nullptr;
+        }
+        found = &declaration;
+    }
+    return found;
+}
+
+// A bound of a scalar subtype's range: 'LEFT, 'RIGHT, 'LOW or 'HIGH.
+std::optional<std::int64_t> static_range_bound(
+    const semantic::CompiledDesign& compiled,
+    const semantic::vhdl::SubtypeIndication& subtype,
+    const std::string_view attribute,
+    const std::size_t depth)
+{
+    const semantic::vhdl::RangeConstraint* range = nullptr;
+    for (const auto& constraint : subtype.constraints) {
+        if (constraint.kind == semantic::vhdl::RangeKind::integer) {
+            range = &constraint;
+            break;
+        }
+    }
+    if (range == nullptr && subtype.type_mark.target.valid()) {
+        const auto type = compiled.find_type(subtype.type_mark.target);
+        if (type && type->vhdl != nullptr) {
+            if (type->vhdl->scalar_range) {
+                range = &*type->vhdl->scalar_range;
+            } else if (type->vhdl->form
+                    == semantic::vhdl::TypeForm::subtype
+                && depth < 16U) {
+                return static_range_bound(
+                    compiled, type->vhdl->base, attribute, depth + 1U);
+            }
+        }
+    }
+    if (range == nullptr) {
+        return std::nullopt;
+    }
+    const auto bound = [&](const std::optional<std::int64_t>& value,
+                           const std::optional<semantic::ExpressionId>&
+                               expression) -> std::optional<std::int64_t> {
+        if (value) {
+            return value;
+        }
+        return expression ? static_integer(compiled, *expression, depth + 1U)
+                          : std::nullopt;
+    };
+    const auto left = bound(range->left, range->left_expression);
+    const auto right = bound(range->right, range->right_expression);
+    if (!left || !right) {
+        return std::nullopt;
+    }
+    if (attribute == "'left") {
+        return left;
+    }
+    if (attribute == "'right") {
+        return right;
+    }
+    if (attribute == "'low") {
+        return std::min(*left, *right);
+    }
+    if (attribute == "'high") {
+        return std::max(*left, *right);
+    }
+    return std::nullopt;
+}
+
+std::optional<std::int64_t> static_integer(
+    const semantic::CompiledDesign& compiled,
+    const semantic::ExpressionId id,
+    const std::size_t depth)
 {
     const auto* expression = expression_for(compiled, id);
-    if (expression == nullptr) {
+    if (expression == nullptr || depth > 32U) {
         return std::nullopt;
     }
     using Kind = semantic::vhdl::ExpressionKind;
     if (expression->kind == Kind::integer_literal) {
         return integer_literal(expression->text);
     }
+    if (expression->kind == Kind::name) {
+        // A constant whose initializer is itself static (IEEE 1076-2008
+        // 9.4.2).
+        const auto* declaration = named_declaration(compiled, *expression);
+        if (declaration == nullptr
+            || declaration->form != semantic::vhdl::DeclarationForm::constant
+            || !declaration->initializer) {
+            return std::nullopt;
+        }
+        return static_integer(compiled, *declaration->initializer, depth + 1U);
+    }
+    if (expression->kind == Kind::call && expression->operands.size() == 1U
+        && (expression->text == "'left" || expression->text == "'right"
+            || expression->text == "'low" || expression->text == "'high")) {
+        const auto* prefix = expression_for(
+            compiled, expression->operands.front());
+        const auto* declaration = prefix != nullptr
+            ? named_declaration(compiled, *prefix)
+            : nullptr;
+        if (declaration == nullptr) {
+            return std::nullopt;
+        }
+        if (declaration->subtype) {
+            return static_range_bound(
+                compiled, *declaration->subtype, expression->text, depth);
+        }
+        if (declaration->declared_type) {
+            const auto type = compiled.find_type(*declaration->declared_type);
+            if (type && type->vhdl != nullptr) {
+                return static_range_bound(
+                    compiled, type->vhdl->base, expression->text, depth);
+            }
+        }
+        return std::nullopt;
+    }
+    if (expression->kind == Kind::binary
+        && expression->operands.size() == 2U
+        && (expression->text == "+" || expression->text == "-")) {
+        const auto left = static_integer(
+            compiled, expression->operands[0], depth + 1U);
+        const auto right = static_integer(
+            compiled, expression->operands[1], depth + 1U);
+        std::int64_t result { };
+        if (!left || !right
+            || (expression->text == "+"
+                    ? __builtin_add_overflow(*left, *right, &result)
+                    : __builtin_sub_overflow(*left, *right, &result))) {
+            return std::nullopt;
+        }
+        return result;
+    }
     if (expression->kind == Kind::unary
         && expression->operands.size() == 1U) {
-        const auto operand = configuration_static_integer(
-            compiled, expression->operands.front());
+        const auto operand = static_integer(
+            compiled, expression->operands.front(), depth + 1U);
         if (!operand) {
             return std::nullopt;
         }
@@ -410,19 +564,59 @@ std::optional<std::int64_t> configuration_static_integer(
     return std::nullopt;
 }
 
-std::optional<std::string> configuration_block_scope(
+} // namespace
+
+std::optional<std::int64_t> configuration_static_integer(
+    const semantic::CompiledDesign& compiled,
+    const semantic::ExpressionId id)
+{
+    return static_integer(compiled, id, 0U);
+}
+
+std::optional<std::vector<std::string>> configuration_block_scopes(
     const semantic::CompiledDesign& compiled,
     const semantic::vhdl::BlockConfiguration& block)
 {
     if (!block.generate_index) {
-        return block.block.spelling;
+        return std::vector { block.block.spelling };
     }
-    const auto index = configuration_static_integer(
+    const auto* index = expression_for(compiled, *block.generate_index);
+    if (index != nullptr
+        && index->kind == semantic::vhdl::ExpressionKind::call
+        && (index->text == "@vhdl-case-range-to"
+            || index->text == "@vhdl-case-range-downto")
+        && index->operands.size() == 2U) {
+        // A static discrete range selects every generate parameter value in
+        // it (IEEE 1076-2008 3.4.2); a null range selects none.
+        const auto left = configuration_static_integer(
+            compiled, index->operands[0]);
+        const auto right = configuration_static_integer(
+            compiled, index->operands[1]);
+        if (!left || !right) {
+            return std::nullopt;
+        }
+        const bool descending = index->text == "@vhdl-case-range-downto";
+        const auto low = descending ? *right : *left;
+        const auto high = descending ? *left : *right;
+        std::vector<std::string> scopes;
+        constexpr std::int64_t maximum_scopes = 65536;
+        if (low <= high && high - low >= maximum_scopes) {
+            return std::nullopt;
+        }
+        for (auto value = low; value <= high; ++value) {
+            scopes.push_back(
+                block.block.spelling + "[" + std::to_string(value) + "]");
+        }
+        return scopes;
+    }
+    const auto value = configuration_static_integer(
         compiled, *block.generate_index);
-    if (!index) {
+    if (!value) {
         return std::nullopt;
     }
-    return block.block.spelling + "[" + std::to_string(*index) + "]";
+    return std::vector {
+        block.block.spelling + "[" + std::to_string(*value) + "]"
+    };
 }
 
 std::optional<std::vector<std::string>> configuration_occurrence_parts(

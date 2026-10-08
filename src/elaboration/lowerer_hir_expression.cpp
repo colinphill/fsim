@@ -12491,7 +12491,10 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_runtime_image(
             && (domain == frontend::ValueDomain::Logic9
                 || domain == frontend::ValueDomain::Logic4
                 || domain == frontend::ValueDomain::Bit2)
-            && simple_type != "character");
+            && simple_type != "character"
+            && simple_type != "severity_level"
+            && simple_type != "file_open_kind"
+            && simple_type != "file_open_status");
     if (array_value) {
         // TO_STRING/TO_HSTRING/TO_OSTRING of a bit or logic vector; digits
         // and metavalues are upper case (IEEE 1076-2008 5.3.2.4).
@@ -12531,6 +12534,12 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_runtime_image(
     } else if (domain == frontend::ValueDomain::Boolean
         || simple_type == "boolean") {
         images = { "false", "true" };
+    } else if (simple_type == "severity_level") {
+        images = { "note", "warning", "error", "failure" };
+    } else if (simple_type == "file_open_kind") {
+        images = { "read_mode", "write_mode", "append_mode" };
+    } else if (simple_type == "file_open_status") {
+        images = { "open_ok", "status_error", "name_error", "mode_error" };
     }
     if (!images.empty()) {
         // Select the literal image by ordinal; the last literal is the

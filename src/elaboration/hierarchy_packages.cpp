@@ -1240,6 +1240,13 @@ namespace {
                     8U, frontend::ValueDomain::Bit2
                 };
             }
+            if (compiled_vhdl_name_equal(name, "severity_level")
+                || compiled_vhdl_name_equal(name, "file_open_kind")
+                || compiled_vhdl_name_equal(name, "file_open_status")) {
+                return CompiledVhdlSignalLayout {
+                    2U, frontend::ValueDomain::Bit2
+                };
+            }
             return std::nullopt;
         };
         const auto builtin_element_layout = [&](const std::string_view spelling)
@@ -6679,16 +6686,20 @@ namespace {
         for (std::size_t index = 0U; index + 1U < occurrence.size(); ++index) {
             const semantic::vhdl::BlockConfiguration* next = nullptr;
             for (const auto& child : selected->blocks) {
-                const auto scope = vhdl_configuration_detail::
-                    configuration_block_scope(compiled, child);
+                const auto scopes = vhdl_configuration_detail::
+                    configuration_block_scopes(compiled, child);
                 const auto indexed_open = occurrence[index].rfind('[');
                 const auto unindexed = indexed_open != std::string::npos
                         && occurrence[index].ends_with(']')
                     ? std::string_view { occurrence[index] }.substr(
                           0U, indexed_open)
                     : std::string_view { occurrence[index] };
-                if (scope
-                    && (compiled_vhdl_name_equal(*scope, occurrence[index])
+                if (scopes
+                    && (std::ranges::any_of(*scopes,
+                            [&](const std::string& scope) {
+                                return compiled_vhdl_name_equal(
+                                    scope, occurrence[index]);
+                            })
                         || (!child.generate_index
                             && compiled_vhdl_name_equal(
                                 child.block.spelling, unindexed)))) {
@@ -9914,9 +9925,9 @@ namespace {
                                         const semantic::vhdl::BlockConfiguration& block) -> void {
             std::unordered_set<std::string> sibling_scopes;
             for (const auto& child : block.blocks) {
-                const auto local = vhdl_configuration_detail::
-                    configuration_block_scope(compiled, child);
-                if (!local) {
+                const auto locals = vhdl_configuration_detail::
+                    configuration_block_scopes(compiled, child);
+                if (!locals) {
                     report_issue(
                         "FSIM-ELAB-VHCONFIG-010",
                         "configuration block '" + child.block.spelling
@@ -9925,58 +9936,61 @@ namespace {
                     valid = false;
                     continue;
                 }
-                const auto canonical = vhdl_configuration_detail::
-                    configuration_canonical_name(*local);
-                if (!sibling_scopes.insert(canonical).second) {
-                    report_issue(
-                        "FSIM-ELAB-VHCONFIG-015",
-                        "configuration block scope '" + *local
-                            + "' is selected more than once",
-                        child.source);
-                    valid = false;
-                    continue;
-                }
+                for (const auto& selected_scope : *locals) {
+                    const auto* local = &selected_scope;
+                    const auto canonical = vhdl_configuration_detail::
+                        configuration_canonical_name(*local);
+                    if (!sibling_scopes.insert(canonical).second) {
+                        report_issue(
+                            "FSIM-ELAB-VHCONFIG-015",
+                            "configuration block scope '" + *local
+                                + "' is selected more than once",
+                            child.source);
+                        valid = false;
+                        continue;
+                    }
 
-                configured_path.push_back(*local);
-                std::vector<semantic::ScopeId> matched_scopes;
-                for (const auto& scope : scopes) {
-                    std::size_t configured_index { };
-                    for (const auto& part : scope.parts) {
-                        if (scope_part_matches(
-                                part,
-                                configured_path[configured_index])) {
-                            ++configured_index;
-                            if (configured_index
-                                == configured_path.size()) {
-                                matched_scopes.push_back(scope.id);
-                                break;
+                    configured_path.push_back(*local);
+                    std::vector<semantic::ScopeId> matched_scopes;
+                    for (const auto& scope : scopes) {
+                        std::size_t configured_index { };
+                        for (const auto& part : scope.parts) {
+                            if (scope_part_matches(
+                                    part,
+                                    configured_path[configured_index])) {
+                                ++configured_index;
+                                if (configured_index
+                                    == configured_path.size()) {
+                                    matched_scopes.push_back(scope.id);
+                                    break;
+                                }
                             }
                         }
                     }
-                }
-                if (matched_scopes.empty()) {
-                    std::string scope;
-                    for (const auto& part : configured_path) {
-                        if (!scope.empty()) {
-                            scope += ".";
+                    if (matched_scopes.empty()) {
+                        std::string scope;
+                        for (const auto& part : configured_path) {
+                            if (!scope.empty()) {
+                                scope += ".";
+                            }
+                            scope += part;
                         }
-                        scope += part;
+                        report_issue(
+                            "FSIM-ELAB-VHCONFIG-010",
+                            "configuration block scope '" + scope
+                                + "' does not select an elaborated block or "
+                                  "generate occurrence",
+                            child.source);
+                        valid = false;
+                        configured_path.pop_back();
+                        continue;
                     }
-                    report_issue(
-                        "FSIM-ELAB-VHCONFIG-010",
-                        "configuration block scope '" + scope
-                            + "' does not select an elaborated block or "
-                              "generate occurrence",
-                        child.source);
-                    valid = false;
+                    validate_compiled_vhdl_configuration_rules(
+                        compiled, path, child.components, matched_scopes,
+                        report_issue);
+                    self(self, child);
                     configured_path.pop_back();
-                    continue;
                 }
-                validate_compiled_vhdl_configuration_rules(
-                    compiled, path, child.components, matched_scopes,
-                    report_issue);
-                self(self, child);
-                configured_path.pop_back();
             }
         };
         validate_block(validate_block, *configuration);
@@ -13830,13 +13844,13 @@ std::optional<SignalId> HierarchyBuilder::compiled_vhdl_package_constant_signal(
     return result;
 }
 
-bool HierarchyBuilder::bind_compiled_vhdl_package_shared_variables(
+bool HierarchyBuilder::bind_compiled_vhdl_package_objects(
     const semantic::SpecializedHirUnit& specialization,
     SignalMap& signals,
     ContainerMap& container_objects)
 {
-    if (!vhdl_package_shared_variables_) {
-        auto& found = vhdl_package_shared_variables_.emplace();
+    if (!vhdl_package_objects_) {
+        auto& found = vhdl_package_objects_.emplace();
         for (const auto& unit : compiled_->vhdl_hir.units()) {
             if (unit.kind != semantic::vhdl::UnitKind::package
                 || !unit.standard_package_revision.empty()) {
@@ -13855,18 +13869,22 @@ bool HierarchyBuilder::bind_compiled_vhdl_package_shared_variables(
             }
             for (const auto id : unit.declarations) {
                 const auto declaration = specialization.find_declaration(id);
+                // Package signals (IEEE 1076-2008 6.4.2.3) are, like
+                // shared variables, one object for the whole design.
                 if (declaration && declaration->vhdl != nullptr
-                    && declaration->vhdl->form
-                        == semantic::vhdl::DeclarationForm::variable
-                    && declaration->vhdl->shared) {
+                    && ((declaration->vhdl->form
+                                == semantic::vhdl::DeclarationForm::variable
+                            && declaration->vhdl->shared)
+                        || declaration->vhdl->form
+                            == semantic::vhdl::DeclarationForm::signal)) {
                     found.push_back(id);
                 }
             }
         }
     }
-    for (const auto id : *vhdl_package_shared_variables_) {
-        auto bound = vhdl_package_shared_variable_bindings_.find(id.value());
-        if (bound == vhdl_package_shared_variable_bindings_.end()) {
+    for (const auto id : *vhdl_package_objects_) {
+        auto bound = vhdl_package_object_bindings_.find(id.value());
+        if (bound == vhdl_package_object_bindings_.end()) {
             const auto declaration = specialization.find_declaration(id);
             const auto* scope = declaration && declaration->vhdl != nullptr
                 ? compiled_semantic_scope(*compiled_, declaration->vhdl->scope)
@@ -13877,7 +13895,7 @@ bool HierarchyBuilder::bind_compiled_vhdl_package_shared_variables(
             if (!unit || unit->vhdl == nullptr) {
                 continue;
             }
-            PackageSharedVariableBindings bindings;
+            PackageObjectBindings bindings;
             ReadOnlySignalSet read_only;
             std::unordered_set<std::string> declared;
             std::vector<std::pair<std::string, std::string>> shapes;
@@ -13888,7 +13906,7 @@ bool HierarchyBuilder::bind_compiled_vhdl_package_shared_variables(
                     unit->vhdl->compatibility_profile, *declaration->vhdl)) {
                 return false;
             }
-            bound = vhdl_package_shared_variable_bindings_
+            bound = vhdl_package_object_bindings_
                         .emplace(id.value(), std::move(bindings))
                         .first;
         }
@@ -14610,9 +14628,33 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             *materialized_type, width);
     }
     if (declaration.initializer) {
-        const auto value = working_specialization
-                               .evaluate_integral_expression(
-                                   *declaration.initializer);
+        // A character literal initializing a CHARACTER object is its
+        // STD.STANDARD position even when it looks like a BIT ('0').
+        const auto character_literal = [&]() -> std::optional<std::int64_t> {
+            const auto initializer = working_specialization.find_expression(
+                *declaration.initializer);
+            const auto mark = std::string_view {
+                declaration.subtype->type_mark.spelling
+            };
+            const auto separator = mark.find_last_of(".:");
+            if (!initializer || initializer->vhdl == nullptr
+                || initializer->vhdl->kind
+                    != semantic::vhdl::ExpressionKind::logic_literal
+                || initializer->vhdl->text.size() != 3U
+                || initializer->vhdl->text.front() != '\''
+                || !compiled_vhdl_name_equal(
+                    separator == std::string_view::npos
+                        ? mark
+                        : mark.substr(separator + 1U),
+                    "character")) {
+                return std::nullopt;
+            }
+            return static_cast<unsigned char>(initializer->vhdl->text[1]);
+        }();
+        const auto value = character_literal
+            ? character_literal
+            : working_specialization.evaluate_integral_expression(
+                  *declaration.initializer);
         auto static_value = compiled_vhdl_static_port_value(
             working_specialization,
             *declaration.initializer,
@@ -19130,6 +19172,11 @@ bool HierarchyBuilder::compiled_vhdl_component_subtype_compatible(
             std::string_view { "positive" },
             std::string_view { "real" },
             std::string_view { "time" },
+            std::string_view { "severity_level" },
+            std::string_view { "file_open_kind" },
+            std::string_view { "file_open_status" },
+            std::string_view { "boolean_vector" },
+            std::string_view { "integer_vector" },
             std::string_view { "std_logic" },
             std::string_view { "std_ulogic" },
             std::string_view { "bit_vector" },
@@ -20196,7 +20243,7 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
     };
     if (!add_unit_declarations(*entity)
         || !add_unit_declarations(architecture)
-        || !bind_compiled_vhdl_package_shared_variables(
+        || !bind_compiled_vhdl_package_objects(
             *specialized, signals, container_objects)) {
         return false;
     }

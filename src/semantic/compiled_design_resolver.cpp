@@ -2522,6 +2522,14 @@ CompiledDesignResolver::effective_vhdl_subtype(
             result.domain = vhdl::ValueDomain::bit2;
             result.executable_width = 3U;
             return true;
+        } else if (same_vhdl_identifier(name, "severity_level")
+            || same_vhdl_identifier(name, "file_open_kind")
+            || same_vhdl_identifier(name, "file_open_status")) {
+            // Predefined STD.STANDARD enumerations of at most four values
+            // (IEEE 1076-2008 16.3).
+            result.domain = vhdl::ValueDomain::bit2;
+            result.executable_width = 2U;
+            return true;
         } else if (same_vhdl_identifier(name, "type_class")
             || same_vhdl_identifier(name, "value_class")) {
             result.domain = vhdl::ValueDomain::bit2;

@@ -898,8 +898,10 @@ void VhdlHirBuilder::add_disconnection_specifications(
     } else if (type.vhdl_array_constraints.empty()
         && type.packed_aggregate == frontend::PackedAggregateKind::None
         && type.packed_range
-        // REAL's 64-bit packed range is its representation, not an index.
-        && type.systemverilog_scalar != frontend::SystemVerilogScalarKind::Real) {
+        // REAL's 64-bit packed range and an enumeration's ordinal width
+        // (SEVERITY_LEVEL's two bits) are representations, not indices.
+        && type.systemverilog_scalar != frontend::SystemVerilogScalarKind::Real
+        && type.enumeration_literals.empty()) {
         result.constraints.push_back(concrete_range(
             frontend::IntegerRange {
                 type.packed_range->left,

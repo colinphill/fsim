@@ -1981,8 +1981,10 @@ tests/fixtures/compliance/verilog_2005_begin_keywords.v
 tests/fixtures/compliance/vhdl_character_type.vhd
 tests/fixtures/compliance/vhdl_composite_constants.vhd
 tests/fixtures/compliance/vhdl_enum_index_arrays.vhd
+tests/fixtures/compliance/vhdl_generate_configuration.vhd
 tests/fixtures/compliance/vhdl_now_and_string_formals.vhd
 tests/fixtures/compliance/vhdl_package_shared_variables.vhd
+tests/fixtures/compliance/vhdl_package_signals.vhd
 tests/fixtures/compliance/vhdl_procedure_constant_actuals.vhd
 tests/fixtures/compliance/vhdl_range_constraints.vhd
 tests/fixtures/compliance/vhdl_real_arithmetic.vhd

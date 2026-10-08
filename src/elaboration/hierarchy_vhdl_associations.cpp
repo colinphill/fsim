@@ -513,25 +513,28 @@ HierarchyBuilder::collect_visible_compiled_vhdl_components(
             left.empty() ? std::string_view { "work" } : left,
             right.empty() ? std::string_view { "work" } : right);
     };
-    const auto declaration_visible_from_instance = [&](
-                                                       const semantic::ScopeId declaration_scope) {
+    // The number of declarative regions between the instance and an
+    // architecture-local declaration, if the declaration encloses it.
+    const auto declaration_distance_from_instance = [&](
+                                                        const semantic::ScopeId declaration_scope)
+        -> std::optional<std::size_t> {
         const auto* declared_scope = find_scope(declaration_scope);
         if (declared_scope == nullptr) {
-            return false;
+            return std::nullopt;
         }
         if (declared_scope->unit != architecture.id) {
-            return true;
+            return std::size_t { };
         }
         auto scope = std::optional<semantic::ScopeId> { instance_scope };
         for (std::size_t depth { };
             scope && depth <= scopes.size(); ++depth) {
             if (*scope == declaration_scope) {
-                return true;
+                return depth;
             }
             const auto* current = find_scope(*scope);
             scope = current != nullptr ? current->parent : std::nullopt;
         }
-        return false;
+        return std::nullopt;
     };
     const auto associated_entity = [&](const semantic::vhdl::Unit& owner) {
         return owner.kind == semantic::vhdl::UnitKind::entity
@@ -539,6 +542,10 @@ HierarchyBuilder::collect_visible_compiled_vhdl_components(
             && name_equal(owner.name, architecture.primary_name);
     };
 
+    // A component declaration hides homographs in enclosing declarative
+    // regions, and a directly visible one hides use-visible package
+    // components (IEEE 1076-2008 12.3, 12.4). Lower ranks are nearer.
+    std::vector<std::size_t> ranks;
     for (const auto& declaration : compiled_->vhdl_hir.declarations()) {
         if (!declaration.component
             || !name_equal(declaration.name, target_name)) {
@@ -555,9 +562,11 @@ HierarchyBuilder::collect_visible_compiled_vhdl_components(
         }
         const auto owner_unit = compiled_->find_unit(unit->id);
         const auto* owner = owner_unit ? owner_unit->vhdl : nullptr;
+        const auto distance = owner != nullptr && owner->id == architecture.id
+            ? declaration_distance_from_instance(declaration.scope)
+            : std::nullopt;
         if (owner == nullptr
-            || (owner->id == architecture.id
-                && !declaration_visible_from_instance(declaration.scope))
+            || (owner->id == architecture.id && !distance)
             || (owner->id != architecture.id
                 && !associated_entity(*owner)
                 && !semantic::CompiledDesignResolver {
@@ -568,7 +577,21 @@ HierarchyBuilder::collect_visible_compiled_vhdl_components(
         if (std::ranges::find(visible_components, &declaration)
             == visible_components.end()) {
             visible_components.push_back(&declaration);
+            ranks.push_back(distance ? *distance
+                    : associated_entity(*owner)
+                    ? scopes.size() + 1U
+                    : scopes.size() + 2U);
         }
+    }
+    if (!ranks.empty()) {
+        const auto nearest = std::ranges::min(ranks);
+        std::vector<const semantic::vhdl::Declaration*> hidden_removed;
+        for (std::size_t index { }; index < ranks.size(); ++index) {
+            if (ranks[index] == nearest) {
+                hidden_removed.push_back(visible_components[index]);
+            }
+        }
+        visible_components = std::move(hidden_removed);
     }
     return visible_components;
 }

@@ -1833,6 +1833,56 @@ private:
         return true;
     }
 
+    // A literal of SEVERITY_LEVEL, FILE_OPEN_KIND or FILE_OPEN_STATUS that
+    // no declaration claims (IEEE 1076-2008 16.3).
+    [[nodiscard]] static std::optional<std::int64_t>
+    vhdl_predefined_enumeration_ordinal(const vhdl::Expression& expression)
+    {
+        if (expression.kind != vhdl::ExpressionKind::name
+            || (expression.referenced_name
+                && (expression.referenced_name->selected
+                    || !expression.referenced_name->overloads.empty()))) {
+            return std::nullopt;
+        }
+        static constexpr std::array<std::pair<std::string_view, int>, 11U>
+            literals {{
+                { "note", 0 }, { "warning", 1 }, { "error", 2 },
+                { "failure", 3 }, { "read_mode", 0 }, { "write_mode", 1 },
+                { "append_mode", 2 }, { "open_ok", 0 },
+                { "status_error", 1 }, { "name_error", 2 },
+                { "mode_error", 3 },
+            }};
+        for (const auto& [name, ordinal] : literals) {
+            if (vhdl_name_equal(expression.text, name)) {
+                return ordinal;
+            }
+        }
+        return std::nullopt;
+    }
+
+    [[nodiscard]] std::optional<std::int64_t> vhdl_character_initializer(
+        const vhdl::Declaration& declaration,
+        const ExpressionId initializer) const
+    {
+        if (!declaration.subtype) {
+            return std::nullopt;
+        }
+        auto mark = std::string_view { declaration.subtype->type_mark.spelling };
+        if (const auto separator = mark.find_last_of(".:");
+            separator != std::string_view::npos) {
+            mark.remove_prefix(separator + 1U);
+        }
+        const auto expression = unit_.find_expression(initializer);
+        if (!vhdl_name_equal(mark, "character") || !expression
+            || expression->vhdl == nullptr
+            || expression->vhdl->kind != vhdl::ExpressionKind::logic_literal
+            || expression->vhdl->text.size() != 3U
+            || expression->vhdl->text.front() != '\'') {
+            return std::nullopt;
+        }
+        return static_cast<unsigned char>(expression->vhdl->text[1]);
+    }
+
     [[nodiscard]] static VhdlConstantValue vhdl_integer_value(
         const std::int64_t value)
     {
@@ -2790,71 +2840,79 @@ private:
                     == vhdl::DeclarationForm::generic_constant)) {
             if (view->vhdl->initializer) {
                 const auto initializer = *view->vhdl->initializer;
-                const bool memo_eligible
-                    = vhdl_initializer_memo_eligible();
-                if (memo_eligible) {
-                    VhdlConstantValue cached;
-                    std::uint64_t work_delta { };
-                    bool cached_hierarchy_free { };
-                    if (initializer_memo_context_->find(unit_.design(),
+                // A character literal initializing a CHARACTER constant is its
+                // STD.STANDARD position even when it looks like a BIT ('0').
+                const auto character_code = vhdl_character_initializer(
+                    *view->vhdl, initializer);
+                if (character_code) {
+                    result = vhdl_integer_value(*character_code);
+                } else {
+                    const bool memo_eligible
+                        = vhdl_initializer_memo_eligible();
+                    if (memo_eligible) {
+                        VhdlConstantValue cached;
+                        std::uint64_t work_delta { };
+                        bool cached_hierarchy_free { };
+                        if (initializer_memo_context_->find(unit_.design(),
+                                unit_.unit(), declaration, initializer,
+                                unit_.specialization(), unit_.selected_generates(),
+                                cached, work_delta, cached_hierarchy_free)) {
+                            if (consume_constant_work_unit(work_delta)) {
+                                initializer_memo_context_->record_hit(work_delta);
+                                active_vhdl_declarations_.erase(declaration);
+                                if (!cached_hierarchy_free) {
+                                    ++hierarchy_reads_;
+                                }
+                                return cached;
+                            }
+                            // Re-run the evaluator when the saved work would
+                            // cross this evaluator's budget. It must consume the
+                            // same partial work and fail at the original point.
+                        }
+                        initializer_memo_context_->record_miss();
+                    }
+                    const auto work_before = constant_work_units_;
+                    const auto hierarchy_reads_before = hierarchy_reads_;
+                    if (profile_vhdl_initializers_) {
+                        const auto begin = diagnostic::thread_cpu_now();
+                        result = evaluate_vhdl_value(initializer);
+                        const auto elapsed = diagnostic::thread_cpu_elapsed(
+                            begin, diagnostic::thread_cpu_now());
+                        auto& profile = vhdl_initializer_profiles_[declaration];
+                        profile.expression = initializer;
+                        ++profile.calls;
+                        profile.successes += result ? 1U : 0U;
+                        profile.work_units += constant_work_units_ - work_before;
+                        if (elapsed) {
+                            profile.cpu_ns += static_cast<std::uint64_t>(
+                                elapsed->count());
+                        } else {
+                            profile.cpu_unavailable = true;
+                        }
+                        profile.min_frame_depth = std::min(
+                            profile.min_frame_depth, call_frames_.size());
+                        profile.max_frame_depth = std::max(
+                            profile.max_frame_depth, call_frames_.size());
+                        profile.min_active_declarations = std::min(
+                            profile.min_active_declarations,
+                            active_vhdl_declarations_.size());
+                        profile.max_active_declarations = std::max(
+                            profile.max_active_declarations,
+                            active_vhdl_declarations_.size());
+                        profile.binding_present |= binding_ != nullptr;
+                    } else {
+                        result = evaluate_vhdl_value(initializer);
+                    }
+                    const auto work_delta = constant_work_units_ - work_before;
+                    if (memo_eligible && result
+                        && vhdl_initializer_value_complete(*result)
+                        && work_delta >= 4096U) {
+                        initializer_memo_context_->insert(unit_.design(),
                             unit_.unit(), declaration, initializer,
                             unit_.specialization(), unit_.selected_generates(),
-                            cached, work_delta, cached_hierarchy_free)) {
-                        if (consume_constant_work_unit(work_delta)) {
-                            initializer_memo_context_->record_hit(work_delta);
-                            active_vhdl_declarations_.erase(declaration);
-                            if (!cached_hierarchy_free) {
-                                ++hierarchy_reads_;
-                            }
-                            return cached;
-                        }
-                        // Re-run the evaluator when the saved work would
-                        // cross this evaluator's budget. It must consume the
-                        // same partial work and fail at the original point.
+                            *result, work_delta,
+                            hierarchy_reads_ == hierarchy_reads_before);
                     }
-                    initializer_memo_context_->record_miss();
-                }
-                const auto work_before = constant_work_units_;
-                const auto hierarchy_reads_before = hierarchy_reads_;
-                if (profile_vhdl_initializers_) {
-                    const auto begin = diagnostic::thread_cpu_now();
-                    result = evaluate_vhdl_value(initializer);
-                    const auto elapsed = diagnostic::thread_cpu_elapsed(
-                        begin, diagnostic::thread_cpu_now());
-                    auto& profile = vhdl_initializer_profiles_[declaration];
-                    profile.expression = initializer;
-                    ++profile.calls;
-                    profile.successes += result ? 1U : 0U;
-                    profile.work_units += constant_work_units_ - work_before;
-                    if (elapsed) {
-                        profile.cpu_ns += static_cast<std::uint64_t>(
-                            elapsed->count());
-                    } else {
-                        profile.cpu_unavailable = true;
-                    }
-                    profile.min_frame_depth = std::min(
-                        profile.min_frame_depth, call_frames_.size());
-                    profile.max_frame_depth = std::max(
-                        profile.max_frame_depth, call_frames_.size());
-                    profile.min_active_declarations = std::min(
-                        profile.min_active_declarations,
-                        active_vhdl_declarations_.size());
-                    profile.max_active_declarations = std::max(
-                        profile.max_active_declarations,
-                        active_vhdl_declarations_.size());
-                    profile.binding_present |= binding_ != nullptr;
-                } else {
-                    result = evaluate_vhdl_value(initializer);
-                }
-                const auto work_delta = constant_work_units_ - work_before;
-                if (memo_eligible && result
-                    && vhdl_initializer_value_complete(*result)
-                    && work_delta >= 4096U) {
-                    initializer_memo_context_->insert(unit_.design(),
-                        unit_.unit(), declaration, initializer,
-                        unit_.specialization(), unit_.selected_generates(),
-                        *result, work_delta,
-                        hierarchy_reads_ == hierarchy_reads_before);
                 }
             } else if (view->vhdl->deferred && view->vhdl->completion) {
                 result = evaluate_vhdl_declaration(*view->vhdl->completion);
@@ -5230,7 +5288,11 @@ public:
                 }
             }
             if (!result && constant && view->vhdl->initializer) {
-                result = evaluate(*view->vhdl->initializer);
+                result = vhdl_character_initializer(
+                    *view->vhdl, *view->vhdl->initializer);
+                if (!result) {
+                    result = evaluate(*view->vhdl->initializer);
+                }
                 if (!result && view->vhdl->subtype) {
                     result = evaluate_vhdl_enumeration_literal(
                         *view->vhdl->subtype,
@@ -7257,6 +7319,10 @@ private:
                     hierarchy != hierarchy_identities_.end()) {
                     ++hierarchy_reads_;
                     return hierarchy->second;
+                }
+                if (const auto ordinal
+                    = vhdl_predefined_enumeration_ordinal(expression)) {
+                    return ordinal;
                 }
                 return parse_integral_identity(expression.text);
             }

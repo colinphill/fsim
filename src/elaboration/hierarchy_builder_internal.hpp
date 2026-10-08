@@ -579,10 +579,10 @@ private:
     std::optional<SignalId> compiled_vhdl_package_constant_signal(
         const semantic::SpecializedHirUnit& specialization,
         semantic::DeclarationId declaration);
-    // Shared variables of non-generic packages are design-global objects
-    // (IEEE 1076-2008 4.7): each is materialized once and bound by name in
-    // every VHDL instance's signal and container maps.
-    bool bind_compiled_vhdl_package_shared_variables(
+    // Shared variables and signals of non-generic packages are design-global
+    // objects (IEEE 1076-2008 4.7): each is materialized once and bound by
+    // name in every VHDL instance's signal and container maps.
+    bool bind_compiled_vhdl_package_objects(
         const semantic::SpecializedHirUnit& specialization,
         SignalMap& signals,
         ContainerMap& container_objects);
@@ -1562,14 +1562,14 @@ private:
     std::vector<std::pair<std::string, std::string>> root_generic_overrides_;
     std::vector<semantic::SpecializedHirActualIdentity>
     compiled_vhdl_root_generic_actuals(const semantic::vhdl::Unit& root);
-    struct PackageSharedVariableBindings {
+    struct PackageObjectBindings {
         SignalMap signals;
         ContainerMap containers;
     };
     std::optional<std::vector<semantic::DeclarationId>>
-        vhdl_package_shared_variables_;
-    std::unordered_map<std::uint32_t, PackageSharedVariableBindings>
-        vhdl_package_shared_variable_bindings_;
+        vhdl_package_objects_;
+    std::unordered_map<std::uint32_t, PackageObjectBindings>
+        vhdl_package_object_bindings_;
     std::unordered_map<SignalId, std::string> resolver_by_signal_;
     std::unordered_map<std::string, ResolutionKind>
         vhdl_resolution_kinds_;

@@ -20,7 +20,9 @@ std::string configuration_expression_identity(
 std::optional<std::int64_t> configuration_static_integer(
     const semantic::CompiledDesign&, semantic::ExpressionId);
 
-std::optional<std::string> configuration_block_scope(
+// The generate scopes a block configuration selects: the block itself, one
+// generate parameter value, or every value of a static discrete range.
+std::optional<std::vector<std::string>> configuration_block_scopes(
     const semantic::CompiledDesign&,
     const semantic::vhdl::BlockConfiguration&);
 

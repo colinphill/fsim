@@ -13,6 +13,14 @@ ParseResult VhdlParser::run()
 {
     ParsedDesign design;
     std::vector<VhdlContextItem> pending_context;
+    // The context clause precedes use clauses that the unit's declarative
+    // region adds itself.
+    const auto attach_context = [&](DesignUnit& unit) {
+        unit.vhdl_context.insert(unit.vhdl_context.begin(),
+            std::make_move_iterator(pending_context.begin()),
+            std::make_move_iterator(pending_context.end()));
+        pending_context.clear();
+    };
     while (!at_end()) {
         numeric_bit_context_ = std::ranges::any_of(pending_context, [](const VhdlContextItem& item) {
             return item.kind == VhdlContextItemKind::UseClause && std::ranges::any_of(item.selected_names, [](const std::string_view name) {
@@ -25,7 +33,7 @@ ParseResult VhdlParser::run()
             if (any_keyword({ "vunit", "vprop", "vmode" }, true)) {
                 const auto start = advance();
                 auto unit = parse_vhdl_psl_verification_unit(start, true);
-                unit.vhdl_context = std::exchange(pending_context, { });
+                attach_context(unit);
                 unit.span = cover(marker.span, unit.span);
                 design.units.push_back(std::move(unit));
             } else {
@@ -37,7 +45,7 @@ ParseResult VhdlParser::run()
         } else if (any_keyword({ "vunit", "vprop", "vmode" }, true)) {
             const auto start = advance();
             auto unit = parse_vhdl_psl_verification_unit(start, false);
-            unit.vhdl_context = std::exchange(pending_context, { });
+            attach_context(unit);
             design.units.push_back(std::move(unit));
         } else if (keyword("context", 0, true) && at(TokenKind::Identifier, 1) && keyword("is", 2, true)) {
             const auto start = advance();
@@ -58,25 +66,25 @@ ParseResult VhdlParser::run()
             }
         } else if (match_keyword("entity", true)) {
             auto unit = parse_entity(previous());
-            unit.vhdl_context = std::exchange(pending_context, { });
+            attach_context(unit);
             design.units.push_back(std::move(unit));
         } else if (match_keyword("architecture", true)) {
             auto unit = parse_architecture(previous());
-            unit.vhdl_context = std::exchange(pending_context, { });
+            attach_context(unit);
             design.units.push_back(std::move(unit));
         } else if (match_keyword("configuration", true)) {
             auto unit = parse_vhdl_configuration(previous());
-            unit.vhdl_context = std::exchange(pending_context, { });
+            attach_context(unit);
             design.units.push_back(std::move(unit));
         } else if (match_keyword("package", true)) {
             const auto start = previous();
             if (match_keyword("body", true)) {
                 auto unit = parse_package(start, true);
-                unit.vhdl_context = std::exchange(pending_context, { });
+                attach_context(unit);
                 design.units.push_back(std::move(unit));
             } else {
                 auto unit = parse_package(start);
-                unit.vhdl_context = std::exchange(pending_context, { });
+                attach_context(unit);
                 design.units.push_back(std::move(unit));
             }
         } else {
@@ -342,6 +350,15 @@ DesignUnit VhdlParser::parse_package(const Token& start, const bool body)
             parse_vhdl_procedure_item(unit, previous(), true);
         } else if (match_keyword("file", true)) {
             parse_vhdl_file_declaration(unit.variables, previous());
+        } else if (keyword("use", 0, true)) {
+            // A use clause in a declarative region (IEEE 1076-2008 12.4) is
+            // treated as part of the unit's context clause.
+            if (auto item = parse_context_item()) {
+                unit.vhdl_context.push_back(std::move(*item));
+            }
+        } else if (!body && match_keyword("signal", true)) {
+            // Package signals (IEEE 1076-2008 4.7, 6.4.2.3).
+            parse_signal_declaration(unit.signals, &unit.parameters);
         } else if (match_keyword("shared", true)) {
             // Package shared variables (IEEE 1076-2008 4.7, 4.8, 6.4.2.4).
             parse_vhdl_shared_variable(unit, previous());
@@ -481,6 +498,15 @@ DesignUnit VhdlParser::parse_entity(const Token& start)
             parse_vhdl_procedure_item(unit, previous(), true);
         } else if (match_keyword("file", true)) {
             parse_vhdl_file_declaration(unit.variables, previous());
+        } else if (keyword("use", 0, true)) {
+            // A use clause in a declarative region (IEEE 1076-2008 12.4) is
+            // treated as part of the unit's context clause.
+            if (auto item = parse_context_item()) {
+                unit.vhdl_context.push_back(std::move(*item));
+            }
+        } else if (match_keyword("signal", true)) {
+            // Entity declarative signals (IEEE 1076-2008 3.2.3).
+            parse_signal_declaration(unit.signals, &unit.parameters);
         } else if (match_keyword("package", true)) {
             const auto package_start = previous();
             auto instance = parse_vhdl_package_instantiation(package_start);
@@ -530,7 +556,26 @@ DesignUnit VhdlParser::parse_entity(const Token& start)
 
     if (match_keyword("begin", true)) {
         while (!at_end() && !keyword("end", 0, true)) {
+            const auto statement_start = current();
+            const auto statements = unit.concurrent_statements.size();
+            const auto instances = unit.instances.size();
+            const auto generates = unit.generate_regions.size();
             parse_concurrent_statement(unit);
+            // Entity statements are passive (IEEE 1076-2008 3.2.4): no
+            // signal assignments, instances or generate statements.
+            const bool assignment = std::any_of(
+                unit.concurrent_statements.begin()
+                    + static_cast<std::ptrdiff_t>(statements),
+                unit.concurrent_statements.end(),
+                [](const Statement& statement) {
+                    return statement.kind == StatementKind::Assignment;
+                });
+            if (assignment || unit.instances.size() != instances
+                || unit.generate_regions.size() != generates) {
+                error(statement_start, "FSIM-VHDL-SEM-115",
+                    "an entity statement part may contain only passive "
+                    "concurrent assertions, procedure calls and processes");
+            }
         }
     }
 
@@ -1382,6 +1427,12 @@ DesignUnit VhdlParser::parse_architecture(const Token& start)
         if (keyword("generic", 0, true) && vhdl_generic_clause_precedes_subprogram()) {
             const auto generic_start = advance();
             parse_vhdl_generic_subprogram(unit, generic_start, true);
+        } else if (keyword("use", 0, true)) {
+            // A use clause in a declarative region (IEEE 1076-2008 12.4) is
+            // treated as part of the unit's context clause.
+            if (auto item = parse_context_item()) {
+                unit.vhdl_context.push_back(std::move(*item));
+            }
         } else if (match_keyword("signal", true)) {
             parse_signal_declaration(unit.signals, &unit.parameters);
         } else if (match_keyword("shared", true)) {

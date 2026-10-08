@@ -551,6 +551,9 @@ private:
             std::string_view { "std_ulogic" },
             std::string_view { "real" },
             std::string_view { "time" },
+            std::string_view { "severity_level" },
+            std::string_view { "file_open_kind" },
+            std::string_view { "file_open_status" },
         };
         if (std::ranges::any_of(scalar_names,
                 [&](const auto candidate) {

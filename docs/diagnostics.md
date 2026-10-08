@@ -205,7 +205,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-FE-VHORDER-001` | error | A VHDL architecture appears before its entity in manifest analysis order. |
 | `FSIM-FE-VHORDER-002` | error | A VHDL package body appears before its matching package declaration. |
 | `FSIM-FE-VHORDER-003` | error | A VHDL context reference names a context that has not yet been analyzed. |
-| `FSIM-FE-VHORDER-004` | error | A VHDL use clause names a project package that has not yet been analyzed. |
+| `FSIM-FE-VHORDER-004` | error | A VHDL use clause names a project package, or (`use lib.unit;`) a primary unit, that has not yet been analyzed; an architecture is not a primary unit. |
 | `FSIM-FE-VHORDER-005` | error | A VHDL configuration declaration appears before its configured entity. |
 | `FSIM-FE-VHORDER-006` | error | A VHDL configuration declaration or binding names an architecture that has not yet been analyzed. |
 | `FSIM-FE-VHORDER-007` | error | A VHDL entity binding names an entity that has not yet been analyzed. |
@@ -944,6 +944,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-SEM-112` | error | A VHDL-2019 function result subtype identifier conflicts with its function profile or a local declaration. |
 | `FSIM-VHDL-SEM-113` | error | A VHDL-2019 predefined attribute is used with an illegal result context or argument count. |
 | `FSIM-VHDL-SEM-114` | error | A VHDL declarative region repeats a converse mode-view alias name. |
+| `FSIM-VHDL-SEM-115` | error | An entity statement part contains a signal assignment, instance or generate statement; entity statements must be passive (IEEE 1076-2008 3.2.4). |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |

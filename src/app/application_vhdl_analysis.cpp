@@ -200,6 +200,22 @@ class AnalysisOrderValidator {
                       + "' must be analyzed before its use clause",
                   item.span);
           }
+        } else if (item.kind == frontend::VhdlContextItemKind::UseClause
+            && parts.size() == 2 && parts[1] != "all"
+            && parts[0] != "ieee" && parts[0] != "std") {
+          // `use library.unit;` names a primary unit (IEEE 1076-2008
+          // 12.4); an architecture or package body is a secondary unit.
+          const auto library = selected_library(parts[0], owner_library);
+          const auto key = primary_key(library, parts[1]);
+          if (!packages_.contains(key) && !entities_.contains(key)
+              && !configurations_.contains(key) && !contexts_.contains(key)) {
+              report(
+                  "FSIM-FE-VHORDER-004",
+                  "VHDL primary unit '" + library + "."
+                      + std::string { parts[1] }
+                      + "' must be analyzed before its use clause",
+                  item.span);
+          }
         } else if (
             item.kind
                 == frontend::VhdlContextItemKind::ContextReference
