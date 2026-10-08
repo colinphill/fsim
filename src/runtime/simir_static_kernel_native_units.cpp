@@ -52,6 +52,18 @@ void Interpreter::Impl::StaticKernel::run_compiled(const std::uint32_t member_in
         if (member.registers_known) {
             member.unknown_runs = 0U;
         }
+    } else if (++member.off_runs >= member.off_retry) {
+        member.off_runs = 0U;
+        member.off_retry = member.off_retry < (1U << 20U)
+            ? member.off_retry * 2U : member.off_retry;
+        member.registers_known = registers_known(*member.compiled);
+        if (member.registers_known) {
+            // Known values again: two-state code gets a fresh start.
+            member.two_state_off = false;
+            member.two_state_deopts = 0U;
+            fast_runs_[member_index].two_state_runs = 0U;
+            refresh_fast_run(member_index);
+        }
     }
 }
 

@@ -143,7 +143,7 @@ class FunctionEmitter {
 public:
     FunctionEmitter(llvm::Module& module, llvm::Function& function,
         const detail::CompiledBody& body,
-        const bool local_registers, const bool two_state,
+        const bool local_registers, const bool flush_locals, const bool two_state,
         std::vector<std::uint32_t>* const resume_points)
         : context_(module.getContext())
         , module_(module)
@@ -156,6 +156,7 @@ public:
         , i8_(llvm::Type::getInt8Ty(context_))
         , ptr_(llvm::PointerType::getUnqual(context_))
         , local_registers_(local_registers)
+        , flush_locals_(flush_locals)
         , two_state_(two_state)
         , resume_points_(resume_points)
     {
@@ -216,6 +217,14 @@ public:
                 local_[reg] = builder_.CreateAlloca(
                     llvm::ArrayType::get(i64_, 2U), nullptr, "r");
             }
+            if (local_[reg] != nullptr && flush_locals_) {
+                // Defined (as a known 0) before this run writes it, for the
+                // flush at an exit (failure_block_).
+                builder_.CreateStore(constant(0U),
+                    builder_.CreateConstInBoundsGEP1_64(i64_, local_[reg], 0U));
+                builder_.CreateStore(constant(0U),
+                    builder_.CreateConstInBoundsGEP1_64(i64_, local_[reg], 1U));
+            }
         }
         arena_ = builder_.CreateLoad(ptr_, frame_field(0U), "arena");
         bindings_ = builder_.CreateLoad(ptr_, frame_field(8U), "bindings");
@@ -252,6 +261,8 @@ public:
                 }
                 builder_.SetInsertPoint(blocks_[at]);
                 cache_.clear();
+                spine_.clear();
+                spine_.insert(blocks_[at]);
             }
             last_unknown_ = nullptr;
             insert_unknown_ = nullptr;
@@ -261,6 +272,13 @@ public:
             const auto result_unknown = unknown_before(at);
             emit_instruction(at);
             unknown_after(at, result_unknown);
+            // Every instruction's inner blocks rejoin in the block it ends
+            // in, which dominates the rest of the KIR block; values defined
+            // in its inner blocks must not be reused after it.
+            spine_.insert(builder_.GetInsertBlock());
+            std::erase_if(cache_, [&](const auto& entry) {
+                return !available(entry.second);
+            });
         }
         if (builder_.GetInsertBlock()->getTerminator() == nullptr) {
             builder_.CreateBr(return_block_);
@@ -268,6 +286,21 @@ public:
         builder_.SetInsertPoint(return_block_);
         builder_.CreateRet(llvm::ConstantInt::get(i32_, 0U));
         builder_.SetInsertPoint(failure_block_);
+        // VHDL deoptimization and the full code (after two-state code)
+        // continue from the register file: local registers go there first.
+        // (SystemVerilog failures only report errors.)
+        for (std::size_t reg = 0U; reg < local_.size() && flush_locals_; ++reg) {
+            if (local_[reg] == nullptr) {
+                continue;
+            }
+            for (std::uint64_t word = 0U; word < 2U; ++word) {
+                builder_.CreateStore(
+                    builder_.CreateLoad(i64_,
+                        builder_.CreateConstInBoundsGEP1_64(i64_, local_[reg], word)),
+                    builder_.CreateConstInBoundsGEP1_64(i64_, registers_,
+                        static_cast<std::uint64_t>(reg) * 2U + word));
+            }
+        }
         builder_.CreateRet(llvm::ConstantInt::get(i32_, 1U));
     }
 
@@ -312,9 +345,12 @@ private:
         }();
         // Two-state code hands over to the full code, which continues from
         // the register file (as from a resume entry).
+        // Exits flush local registers to the register file (failure_block_),
+        // so two-state code and deoptimizing bodies may use them; code
+        // entered mid-body (behavioral resumption, the full code's
+        // continuations) and runtime-stack calls may not.
         if (!local_registers_ || disabled || !body_.resume_entries.empty()
-            || body_.shadow_base != 0U || body_.call_stack_base != 0U
-            || two_state_
+            || body_.call_stack_base != 0U
             || (resume_points_ != nullptr && !resume_points_->empty())) {
             return;
         }
@@ -345,7 +381,28 @@ private:
             case KOp::load_slot:
             case KOp::load_host:
             case KOp::load_field:
+            case KOp::load_slot9:
+            case KOp::load_field9:
+            case KOp::deopt:
                 writes = true;
+                return true;
+            case KOp::integer_unary:
+                reads = { inst.x };
+                writes = true;
+                return true;
+            case KOp::integer_binary:
+                reads = { inst.x, inst.y };
+                writes = true;
+                return true;
+            case KOp::integer_check:
+            case KOp::assert_check:
+                reads = { inst.x };
+                return true;
+            case KOp::store_vhdl:
+                reads = { inst.x };
+                if (inst.sub == 1U) {
+                    reads.push_back(inst.y);
+                }
                 return true;
             case KOp::copy:
             case KOp::reduce:
@@ -522,16 +579,34 @@ private:
         for (std::uint32_t reg = 0U; reg < count; ++reg) {
             if (test(written, reg) && !test(live_in, reg)
                 && reg < body_.register_widths.size()
-                && body_.register_widths[reg] <= 64U) {
+                && body_.register_widths[reg] <= 64U && !tracked(reg)
+                && (body_.shadow_base == 0U || reg < body_.shadow_base)) {
                 // Placeholder; emit() creates the slot.
                 local_[reg] = registers_;
             }
         }
     }
 
+    /// Whether both words are defined where the builder inserts: in its
+    /// block or in a block of the KIR block's spine (see emit), which
+    /// dominates it.
+    [[nodiscard]] bool available(const Pair& value) const
+    {
+        const auto defined = [&](llvm::Value* word) {
+            const auto* instruction = llvm::dyn_cast_or_null<llvm::Instruction>(word);
+            if (instruction == nullptr) {
+                return true;
+            }
+            const auto* block = instruction->getParent();
+            return block == builder_.GetInsertBlock() || spine_.contains(block);
+        };
+        return defined(value.a) && defined(value.b);
+    }
+
     [[nodiscard]] Pair load_register(const std::uint32_t reg)
     {
-        if (const auto found = cache_.find(reg); found != cache_.end()) {
+        if (const auto found = cache_.find(reg);
+            found != cache_.end() && available(found->second)) {
             return found->second;
         }
         const auto [base, high] = register_address(reg);
@@ -549,6 +624,9 @@ private:
             // value with either completes the instruction on the reference
             // path. A 'U' mask comes only from a load (last_unknown_).
             builder_.CreateStore(value.a, base);
+            if (reg < local_.size() && local_[reg] != nullptr) {
+                builder_.CreateStore(constant(0U), high);
+            }
             llvm::Value* unknown = tracked(reg) && last_unknown_ != nullptr
                 ? last_unknown_ : constant(0U);
             guard_known(value.b, unknown, high,
@@ -2660,6 +2738,8 @@ private:
     llvm::Value* frame_ { };
     llvm::Value* registers_ { };
     bool local_registers_ { };
+    /// Exits store local registers to the register file (VHDL).
+    bool flush_locals_ { };
     /// Records the instruction after the current one as a continuation.
     std::uint32_t continue_point()
     {
@@ -2694,6 +2774,9 @@ private:
     llvm::BasicBlock* failure_block_ { };
     std::vector<llvm::BasicBlock*> blocks_;
     std::map<std::uint32_t, Pair> cache_;
+    /// Blocks of the current KIR block in which an instruction started or
+    /// ended (see emit).
+    std::unordered_set<const llvm::BasicBlock*> spine_;
     std::uint32_t current_ { };
 };
 
@@ -2722,6 +2805,12 @@ public:
         // Warm templates: full instruction selection without the optimizing
         // backend's cost.
         warm_jit_ = make_jit(capture_, 0, false);
+        if (const char* limit = std::getenv("FSIM_STATIC_KERNEL_OPT_MAX_SIZE")) {
+            opt_max_size_ = static_cast<std::size_t>(std::strtoull(limit, nullptr, 10));
+            const char* opt_level = std::getenv("FSIM_STATIC_KERNEL_OPT_LEVEL");
+            opt_jit_ = make_jit(capture_,
+                opt_level == nullptr ? 1 : std::atoi(opt_level), true);
+        }
     }
 
     [[nodiscard]] bool ahead_of_time() const noexcept override
@@ -2769,20 +2858,38 @@ public:
         }
         std::size_t instructions = 0U;
         std::array<double, 3> tier_ms { };
-        for (const std::uint8_t tier : { std::uint8_t { 0U }, std::uint8_t { 1U }, std::uint8_t { 2U } }) {
+        const auto optimized = [&](const std::size_t index) {
+            static const std::size_t opt_min_size = [] {
+                const char* text = std::getenv("FSIM_STATIC_KERNEL_OPT_MIN_SIZE");
+                return text == nullptr ? std::size_t { 0 }
+                    : static_cast<std::size_t>(std::strtoull(text, nullptr, 10));
+            }();
+            static const bool opt_full = std::getenv("FSIM_STATIC_KERNEL_OPT_FULL") != nullptr;
+            // Full code that continues two-state code runs rarely.
+            const bool full_code = !templates[index].two_state
+                && templates[index].resume_points != nullptr
+                && !templates[index].resume_points->empty();
+            return opt_jit_ && templates[index].tier == 0U && (opt_full || !full_code)
+                && templates[index].body->code.size() >= opt_min_size
+                && templates[index].body->code.size() <= opt_max_size_
+                && templates[index].body->resume_entries.empty();
+        };
+        for (const std::uint8_t tier : { std::uint8_t { 0U }, std::uint8_t { 1U }, std::uint8_t { 2U }, std::uint8_t { 3U } }) {
             std::vector<std::size_t> group;
             for (std::size_t index = 0U; index < templates.size(); ++index) {
-                if (templates[index].tier == tier && entries[index] == nullptr) {
+                const auto effective = optimized(index) ? 3U : templates[index].tier;
+                if (effective == tier && entries[index] == nullptr) {
                     group.push_back(index);
                     instructions += templates[index].body->code.size();
                 }
             }
             if (!group.empty()) {
                 const auto group_started = std::chrono::steady_clock::now();
-                auto& jit = tier == 2U ? *hot_jit_ : tier == 1U ? *warm_jit_ : *jit_;
+                auto& jit = tier == 3U ? *opt_jit_ : tier == 2U ? *hot_jit_ : tier == 1U ? *warm_jit_ : *jit_;
                 define_helpers(jit, helpers);
-                compile_group(jit, templates, keys, group, entries, tier);
-                tier_ms[tier] = std::chrono::duration<double, std::milli>(
+                compile_group(jit, templates, keys, group, entries,
+                    tier == 3U ? std::uint8_t { 1U } : tier);
+                tier_ms[std::min<std::uint8_t>(tier, 2U)] += std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - group_started).count();
             }
         }
@@ -2949,8 +3056,17 @@ private:
             function->addParamAttr(1, llvm::Attribute::NoAlias);
             function->addParamAttr(0, llvm::Attribute::NoAlias);
             function->addFnAttr(llvm::Attribute::NoUnwind);
+            // Exits flush local registers (failure_block_), so VHDL bodies,
+            // which deoptimize from the register file, may use them too
+            // (FSIM_STATIC_KERNEL_VHDL_LOCALS=1). Off by default: with the
+            // unoptimized backend they cost compile time and gain nothing.
+            static const bool vhdl_locals = [] {
+                const char* text = std::getenv("FSIM_STATIC_KERNEL_VHDL_LOCALS");
+                return text != nullptr && std::string_view { text } == "1";
+            }();
             FunctionEmitter emitter(*module, *function, *templates[index].body,
-                !templates[index].vhdl, templates[index].two_state,
+                vhdl_locals || !templates[index].vhdl, templates[index].vhdl,
+                templates[index].two_state,
                 templates[index].resume_points);
             emitter.emit();
         }
@@ -3067,6 +3183,9 @@ private:
             }
         }
         for (const char* name : { "FSIM_STATIC_KERNEL_LOCAL_REGISTERS",
+                 "FSIM_STATIC_KERNEL_VHDL_LOCALS", "FSIM_STATIC_KERNEL_OPT_MAX_SIZE",
+                 "FSIM_STATIC_KERNEL_OPT_MIN_SIZE", "FSIM_STATIC_KERNEL_OPT_FULL",
+                 "FSIM_STATIC_KERNEL_OPT_LEVEL",
                  "FSIM_STATIC_KERNEL_CODEGEN_LEVEL", "FSIM_STATIC_KERNEL_NO_FAST_ISEL",
                  "FSIM_STATIC_KERNEL_HOT_LEVEL", "FSIM_STATIC_KERNEL_HOT_FAST_ISEL",
                  "FSIM_STATIC_KERNEL_PIPELINE", "FSIM_STATIC_KERNEL_HOT_PIPELINE" }) {
@@ -3306,6 +3425,8 @@ private:
     std::unique_ptr<llvm::orc::LLJIT> jit_;
     std::unique_ptr<llvm::orc::LLJIT> hot_jit_;
     std::unique_ptr<llvm::orc::LLJIT> warm_jit_;
+    std::unique_ptr<llvm::orc::LLJIT> opt_jit_;
+    std::size_t opt_max_size_ { };
     std::size_t generation_ { };
 };
 

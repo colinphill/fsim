@@ -1975,6 +1975,15 @@ void Interpreter::Impl::StaticKernel::run(const std::uint32_t member_index)
     refresh_fast_run(member_index);
 }
 
+bool Interpreter::Impl::StaticKernel::first_run_is_activation(const Member& member)
+{
+    if (member.prologue_end >= member.operations.size()) {
+        return false;
+    }
+    const auto* jump = operation_get_if<Jump>(&member.operations[member.prologue_end]);
+    return member.prologue_end == 0U || (jump != nullptr && jump->target == 0U);
+}
+
 void Interpreter::Impl::StaticKernel::run_member(const std::uint32_t member_index)
 {
     auto& member = members_[member_index];
@@ -1992,6 +2001,15 @@ void Interpreter::Impl::StaticKernel::run_member(const std::uint32_t member_inde
             profile_member_runs_.assign(members_.size(), 0U);
         }
         ++profile_member_runs_[member_index];
+    }
+    if (member.vhdl && member.compiled && member.fresh && !member.generic_mode
+        && !verify_ && first_run_is_activation(member)) {
+        // The prologue is the body itself (the activation's entry jumps to
+        // operation 0), so the first run is an ordinary activation.
+        member.fresh = false;
+        profile_compiled_runs_ += profile_ ? 1U : 0U;
+        run_compiled(member_index);
+        return;
     }
     if (member.vhdl && member.compiled && member.fresh && !member.generic_mode
         && !verify_) {

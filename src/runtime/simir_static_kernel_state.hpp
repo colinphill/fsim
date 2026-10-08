@@ -221,6 +221,11 @@ private:
         std::uint32_t two_state_deopts { };
         std::uint32_t unknown_runs { };
         bool two_state_off { };
+        /// While two-state code is off: full runs since it went off, and
+        /// the count at which known registers turn it back on (doubling
+        /// each time; X before a reset need not last).
+        std::uint32_t off_runs { };
+        std::uint32_t off_retry { 256U };
         std::uint32_t partition_key { static_kernel_detail::no_slot };
         std::uint32_t partition { static_kernel_detail::no_slot };
         std::uint32_t position { };
@@ -476,6 +481,10 @@ private:
     [[nodiscard]] bool target_pending(std::uint32_t id) const;
     void run(std::uint32_t member);
     void run_member(std::uint32_t member);
+    /// Whether a member's first run (the process prologue) is the same as
+    /// an ordinary activation: its activations enter at a jump to operation
+    /// 0, so both run the original operations from 0 to the wait.
+    [[nodiscard]] static bool first_run_is_activation(const Member& member);
     void run_generic(std::uint32_t member);
     [[nodiscard]] std::uint32_t step_generic(std::uint32_t member,
         std::uint32_t pc);
