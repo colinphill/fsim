@@ -9614,12 +9614,34 @@ Lowerer::hir_systemverilog_member_selection(
     auto current = *declaration->systemverilog->type;
     std::size_t offset { };
     std::optional<HirPackedMemberSelection::TaggedMember> tagged;
+    const semantic::CompiledDesignResolver type_resolver {
+        *specialized_hir_unit_, hir_generic_binding_frames_
+    };
     while (!remaining.empty()) {
+        // Types from other units (an imported package typedef) keep only
+        // their spelling across object linking.
+        if (!current.target.target.valid()) {
+            current = type_resolver.effective_systemverilog_type(
+                current, declaration->systemverilog->scope)
+                          .value_or(current);
+        }
         if (!current.target.target.valid()) {
             return std::nullopt;
         }
-        const auto definition = specialized_hir_unit_->find_type(
+        auto definition = specialized_hir_unit_->find_type(
             current.target.target);
+        // A typedef of a structure (for example one imported from a
+        // package) denotes the structure.
+        std::unordered_set<std::uint32_t> aliases;
+        while (definition && definition->systemverilog != nullptr
+            && definition->systemverilog->form
+                == semantic::sv::TypeForm::alias
+            && definition->systemverilog->base.target.target.valid()
+            && aliases.insert(definition->systemverilog->base.target
+                                  .target.value()).second) {
+            definition = specialized_hir_unit_->find_type(
+                definition->systemverilog->base.target.target);
+        }
         if (!definition || definition->systemverilog == nullptr) {
             return std::nullopt;
         }

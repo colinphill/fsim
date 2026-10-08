@@ -346,9 +346,9 @@ ParseResult VerilogParser::run() {
                     design.functions.push_back(std::move(function));
                 }
             } else {
-                design.systemverilog_class_method_definitions.push_back(
-                    parse_class_out_of_block_method(
-                        declaration, SystemVerilogClassMethodKind::Function));
+                // A compilation-unit function (IEEE 1800-2017 3.12.1).
+                auto& unit = compilation_unit_package(declaration);
+                unit.functions.push_back(parse_function(declaration));
             }
         } else if (match_keyword("task")) {
             compilation_unit_has_design_item_ = true;
@@ -380,9 +380,9 @@ ParseResult VerilogParser::run() {
                     design.tasks.push_back(std::move(task));
                 }
             } else {
-                design.systemverilog_class_method_definitions.push_back(
-                    parse_class_out_of_block_method(
-                        declaration, SystemVerilogClassMethodKind::Task));
+                // A compilation-unit task (IEEE 1800-2017 3.12.1).
+                auto& unit = compilation_unit_package(declaration);
+                unit.tasks.push_back(parse_task(declaration));
             }
         } else if (match_keyword("primitive")) {
             compilation_unit_has_design_item_ = true;
@@ -447,6 +447,11 @@ ParseResult VerilogParser::run() {
                 compilation_unit_imports_, previous());
         } else if (at(TokenKind::Backtick)) {
             parse_directive();
+        } else if (keyword("parameter") || keyword("localparam")
+            || keyword("typedef") || keyword("const")
+            || keyword("let") || is_declaration_start()) {
+            compilation_unit_has_design_item_ = true;
+            parse_compilation_unit_declaration();
         } else if (at(TokenKind::Identifier)
             && structural_word_standard(current().text)) {
             const auto later_structure = advance();
@@ -473,6 +478,13 @@ ParseResult VerilogParser::run() {
             skip_to_semicolon();
         }
     }
+    if (compilation_unit_package_) {
+        compilation_unit_package_->span = cover(
+            compilation_unit_package_->span, previous().span);
+        design.units.insert(
+            design.units.begin(), std::move(*compilation_unit_package_));
+        compilation_unit_package_.reset();
+    }
     if (!keyword_stack_.empty()) {
         error(
             current(),
@@ -496,6 +508,77 @@ ParseResult VerilogParser::run() {
     }
     normalize_udp_instances(design);
     return ParseResult { std::move(design), std::move(diagnostics_) };
+}
+
+DesignUnit& VerilogParser::compilation_unit_package(const Token& start) {
+    if (!compilation_unit_package_) {
+        auto& unit = compilation_unit_package_.emplace();
+        unit.kind = UnitKind::SystemVerilogPackage;
+        unit.language = language_;
+        unit.standard_revision = standard_revision_;
+        unit.verilog_compatibility_profile = compatibility_profile_;
+        unit.systemverilog_imports = compilation_unit_imports_;
+        update_unit_time(unit);
+        // The design file names its compilation unit, so separately compiled
+        // files keep separate $unit scopes.
+        std::uint64_t hash = 1469598103934665603ULL;
+        for (const char character : std::string_view { start.span.source_name }) {
+            hash = (hash ^ static_cast<unsigned char>(character))
+                * 1099511628211ULL;
+        }
+        static constexpr char digits[] = "0123456789abcdef";
+        std::string suffix(16U, '0');
+        for (std::size_t index = 0; index < suffix.size(); ++index) {
+            suffix[suffix.size() - 1U - index]
+                = digits[(hash >> (4U * index)) & 0xfU];
+        }
+        unit.name = "fsim_unit_" + suffix;
+        unit.span = start.span;
+        compilation_unit_imports_.push_back({ unit.name, { }, start.span });
+        active_package_imports_ = compilation_unit_imports_;
+    }
+    return *compilation_unit_package_;
+}
+
+void VerilogParser::parse_compilation_unit_declaration() {
+    const auto start = current();
+    if (!require_standard(
+            "a compilation-unit declaration",
+            StandardRevision::SystemVerilog2005,
+            start,
+            "FSIM-SV-PARSE-348")) {
+        skip_to_semicolon();
+        return;
+    }
+    auto& unit = compilation_unit_package(start);
+    const auto parameters = unit.parameters.size();
+    const auto signals = unit.signals.size();
+    const auto before = position();
+    if (match_keyword("parameter") || match_keyword("localparam")) {
+        // A compilation-unit parameter is a local parameter (6.20.1).
+        parse_parameter_group(unit, true, false, previous());
+    } else if (match_keyword("typedef")) {
+        parse_typedef(unit, previous());
+    } else if (match_keyword("let")) {
+        parse_let_declaration(unit, previous());
+    } else if (match_keyword("event")) {
+        parse_event_declaration(unit, previous());
+    } else {
+        parse_declaration(unit);
+    }
+    if (position() == before) {
+        const auto unexpected = advance();
+        error(unexpected, "FSIM-SV-UNSUPPORTED-001",
+            "unsupported compilation-unit item '" + unexpected.text + "'");
+        skip_to_semicolon();
+    }
+    auto& exports = package_constant_names_[unit.name];
+    for (auto index = parameters; index < unit.parameters.size(); ++index) {
+        exports.insert(unit.parameters[index].name);
+    }
+    for (auto index = signals; index < unit.signals.size(); ++index) {
+        exports.insert(unit.signals[index].name);
+    }
 }
 
 [[nodiscard]] bool VerilogParser::keyword(

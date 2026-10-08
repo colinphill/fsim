@@ -313,6 +313,19 @@ void VerilogParser::parse_typedef(
         Token>>
         enum_parameters;
     std::vector<EnumLiteralDeclaration> enum_literals;
+    // A forward type declaration (IEEE 1800-2017 6.18) names a type that a
+    // later typedef completes: `typedef struct name;`, `typedef name;`.
+    if (((keyword("struct") || keyword("union") || keyword("enum"))
+            && at(TokenKind::Identifier, 1) && at(TokenKind::Semicolon, 2))
+        || (at(TokenKind::Identifier) && at(TokenKind::Semicolon, 1))) {
+        if (!at(TokenKind::Identifier)
+            || keyword("struct") || keyword("union") || keyword("enum")) {
+            (void)advance();
+        }
+        (void)advance();
+        (void)advance();
+        return;
+    }
     if (keyword("struct") || keyword("union")) {
         const bool is_union = match_keyword("union");
         if (!is_union) {
@@ -356,6 +369,12 @@ void VerilogParser::parse_typedef(
         std::unordered_set<std::string> member_names;
         std::optional<std::uint64_t> ordinary_union_width;
         while (!at_end() && !at(TokenKind::RightBrace)) {
+            const auto member_progress = position();
+            // Members of an unpacked structure may be random variables
+            // (IEEE 1800-2017 7.2.1, 18.4).
+            if (!packed) {
+                (void)(match_keyword("rand") || match_keyword("randc"));
+            }
             const auto member_start = current();
             Type member_type;
             if (keyword("struct") || keyword("union")) {
@@ -465,6 +484,12 @@ void VerilogParser::parse_typedef(
                 TokenKind::Semicolon,
                 "';' after packed aggregate member declaration",
                 "FSIM-SV-PARSE-088");
+            if (position() == member_progress) {
+                skip_to_semicolon();
+                if (position() == member_progress) {
+                    (void)advance();
+                }
+            }
         }
         expect(
             TokenKind::RightBrace,

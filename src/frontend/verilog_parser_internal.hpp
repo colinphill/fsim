@@ -729,6 +729,12 @@ class VerilogParser final : private detail::ParserBase {
   std::unordered_set<std::string> container_iterator_names_;
   std::vector<SystemVerilogImport>
       compilation_unit_imports_;
+  // Compilation-unit ($unit) parameters, typedefs and data objects
+  // (IEEE 1800-2017 3.12.1) collect in a synthetic package that later units
+  // of the compilation unit import.
+  std::optional<DesignUnit> compilation_unit_package_;
+  DesignUnit& compilation_unit_package(const Token& start);
+  void parse_compilation_unit_declaration();
   std::unordered_map<std::string, std::string>
       dpi_import_linkage_profiles_;
   std::vector<SystemVerilogAssertionDeclaration>

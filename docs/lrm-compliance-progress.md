@@ -224,6 +224,31 @@ constraint parse error:
 - slices of multidimensional arrays;
 - labels and other non-object names used as primaries.
 
+### Batch 5: compilation-unit declarations
+
+- Compilation-unit (`$unit`) parameters, local parameters, typedefs,
+  variables, `let`, events, functions and tasks (IEEE 1800-2017 3.12.1) are
+  collected in a synthetic package per design file (`fsim_unit_<hash>`).
+  Later design units of the compilation unit import it.
+  - Before, `typedef` and `let` there were silently skipped, functions were
+    rejected as unqualified class methods, and parameters and variables
+    failed with `FSIM-SV-UNSUPPORTED-001` (218 cases).
+- Forward type declarations (`typedef struct name;`, `typedef name;`,
+  IEEE 1800-2017 6.18).
+- `rand`/`randc` members of unpacked structures parse. An aggregate member
+  the parser cannot read no longer loops forever.
+- Member selection (`p.hi`) on a variable whose structure type comes from
+  another unit, such as a package typedef or `$unit`, now resolves. Such
+  type references keep only their spelling across object linking.
+
+Fixture: `sv_compilation_unit_declarations.sv`, checked against xsim.
+Targeted rerun of the 218 cases: 63 now pass. Most of the rest fail later
+on other gaps:
+
+- package parameter defaults (`FSIM-ELAB-SVPKG-006`);
+- non-ANSI port forms;
+- randomization.
+
 ### Corpus run 3 (after batches 2 and 3, interpreter)
 
 | Suite | Cases | Pass | Fail | Timeout | Skip | Pass rate |
@@ -262,7 +287,8 @@ error, and each exposes an existing gap:
 | VHDL: an array element such as `bit_vector(0 to N-1)`, constrained with non-literal bounds, was treated as unconstrained and gated to VHDL-2008 (fixed in batch 4) | 126 nvc/VESTs cases (`FSIM-FE-VHSTD-003`) |
 | VHDL: unconstrained array ports (`port (d : in bit_vector)`) bind with width 1 (`FSIM-ELAB-BIND-020`) | VESTs, generic-width library cells |
 | VHDL: analysis-time legality (index-constraint bounds and types, slices of multidimensional arrays, labels as primaries) | about 33 VESTs negative tests exposed by batch 4, part of the 724 accepted-invalid cases |
-| SV: compilation-unit (`$unit`) parameters, variables and unpacked struct/union typedefs | 218 cases (`FSIM-SV-UNSUPPORTED-001`) |
+| SV: package-level events (`event e;` in a package or `$unit`) | Verilator fork/process tests |
+| SV: package parameter defaults that cannot be evaluated (`FSIM-ELAB-SVPKG-006`) | 18 sv-tests number cases |
 | SV: randomization and constraint blocks (`randomize`, `constraint`, `with`) | UVM-based sv-tests, chapter 18 |
 | SV: `fork` inside functions and tasks (lowering) | sv-tests, UVM |
 | SV: hierarchical references in event controls, continuous assignments, generate processes | Verilator |

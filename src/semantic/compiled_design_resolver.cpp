@@ -5272,12 +5272,36 @@ CompiledDesignResolver::resolve_systemverilog_expression(
               auto type = *declaration.systemverilog->type;
               auto remaining = member_path;
               while (!remaining.empty()) {
+                  // Types from other units (an imported package typedef)
+                  // keep only their spelling across object linking.
+                  if (!type.target.target.valid()) {
+                      type = effective_systemverilog_type(
+                          type, declaration.systemverilog->scope)
+                                 .value_or(type);
+                  }
                   if (!type.target.target.valid()) {
                       return false;
                   }
-                  const auto definition = effective_ != nullptr
+                  auto definition = effective_ != nullptr
                       ? effective_->find_type(type.target.target)
                       : design_->find_type(type.target.target);
+                  // A typedef of a structure (for example one imported
+                  // from a package) denotes the structure.
+                  std::unordered_set<std::uint32_t> aliases;
+                  while (definition && definition->systemverilog != nullptr
+                      && definition->systemverilog->form
+                          == sv::TypeForm::alias
+                      && definition->systemverilog->base.target.target
+                             .valid()
+                      && aliases.insert(definition->systemverilog->base
+                                            .target.target.value())
+                             .second) {
+                      const auto base
+                          = definition->systemverilog->base.target.target;
+                      definition = effective_ != nullptr
+                          ? effective_->find_type(base)
+                          : design_->find_type(base);
+                  }
                   if (!definition
                       || definition->systemverilog == nullptr) {
                       return false;

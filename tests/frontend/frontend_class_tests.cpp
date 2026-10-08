@@ -760,9 +760,6 @@ class InvalidMembers;
   constraint repeated { 1; }
   constraint repeated { 1; }
 endclass
-function int unqualified();
-  return 0;
-endfunction
 )",
       Language::SystemVerilog2017);
   const auto has_member_code = [&](const std::string_view code) {
@@ -776,9 +773,26 @@ endfunction
       has_member_code("FSIM-SV-SEM-169")
           && has_member_code("FSIM-SV-SEM-170")
           && has_member_code("FSIM-SV-SEM-171")
-          && has_member_code("FSIM-SV-SEM-172")
           && has_member_code("FSIM-SV-SEM-173"),
       "class qualifier, member, method, and constraint diagnostics must be stable");
+
+  // A function in the compilation-unit scope is an ordinary function there
+  // (IEEE 1800-2017 3.12.1), not an out-of-block class method.
+  const auto unit_function = parse_text(
+      "compilation_unit_function.sv",
+      R"(
+function int unqualified();
+  return 0;
+endfunction
+)",
+      Language::SystemVerilog2017);
+  require(
+      unit_function.ok() && !unit_function.design.units.empty()
+          && unit_function.design.units.front().kind
+              == UnitKind::SystemVerilogPackage
+          && unit_function.design.units.front().functions.size() == 1U,
+      "a compilation-unit function is collected in the compilation-unit "
+      "package");
 
   auto uvm_surface = parse_text(
       "uvm_type_surface.sv",
