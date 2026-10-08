@@ -149,6 +149,30 @@ and their expected values were checked against xsim.
   unsupported expression; `lrm_corpus.py run --rerun-from --rerun-code`
   re-runs selected failures.
 
+### Batch 3: enumeration-indexed arrays and composite constants
+
+- Signals with composite initializers failed to elaborate unless the elements
+  were single logic values. This covered arrays of vectors, integers,
+  enumerations and records, multidimensional arrays, enumeration indices,
+  and range or OTHERS choices. They are now evaluated statically.
+- Composite constants whose elements are not single logic values could not
+  be read in processes (`constant rom : rom_t := ...; x := rom(i);` failed).
+  Constants in architectures are materialized as read-only signals. Constants
+  in non-generic packages are materialized on first use, so dynamic indexing
+  works too.
+- Enumeration-typed index expressions (`arr(sel)` with `sel` an enumeration
+  signal or variable) are accepted for reads and writes, including record
+  fields of selected elements and multidimensional selections.
+- BOOLEAN, BIT, CHARACTER, SEVERITY_LEVEL and STD_ULOGIC type marks give
+  static index ranges (`array (e_t, boolean) of natural`).
+- `T'POS(d)` and other enumeration attributes accept a for-loop parameter
+  that iterates over `T`, either directly or through an array's
+  `'RANGE`/`'REVERSE_RANGE`.
+- Based and exponent integer literals (`16#A0#`, `1E3`) lower at run time.
+
+Fixtures: `vhdl_enum_index_arrays.vhd`, `vhdl_composite_constants.vhd`.
+Both were checked against xsim.
+
 ## Known gaps queue (ranked by blocked corpus cases; refreshed per run)
 
 | Gap | Evidence |
@@ -158,7 +182,8 @@ and their expected values were checked against xsim.
 | sv-tests: SV class/randomization constraint syntax | `FSIM-SV-UNSUPPORTED-001` (73) |
 | VHDL: `wait for` with a non-static duration (for example a TIME formal) | testbench procedures |
 | VHDL: `rising_edge`/`falling_edge` of a signal-class formal | testbench procedures |
-| VHDL: signal initializers of composite types with non-logic elements (`array (0 to 2) of integer := (...)`) | enum-indexed arrays, ROM tables |
+| VHDL: CHARACTER and STD_ULOGIC index values given as character literals (`t('H')`, `array (std_ulogic) of ...` aggregates), which need character literals resolved by type | IEEE package tables, VESTs |
+| VHDL: invalid input accepted (for example integer literals as `unsigned` aggregate elements) | sv-tests/VESTs negative cases |
 | VHDL: output-port defaults as the driver's initial value | VESTs |
 | VHDL: `x'range` in array constraints (direction from the prefix) | 120 VESTs/nvc cases |
 | VHDL: re-analysis replacing a same-named unit from another file | 103 VESTs Ashenden cases |

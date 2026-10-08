@@ -562,6 +562,17 @@ private:
         std::string_view standard,
         std::string_view declaring_unit_compatibility_profile,
         const semantic::vhdl::Declaration& declaration);
+    // A composite VHDL constant whose elements are not single logic values,
+    // materialized as a read-only signal named `name` holding its static
+    // value; nullopt when the constant keeps the folding paths.
+    std::optional<SignalId> add_compiled_vhdl_constant_signal(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::vhdl::Declaration& declaration,
+        const std::string& name);
+    // A non-generic package constant materialized once for the design.
+    std::optional<SignalId> compiled_vhdl_package_constant_signal(
+        const semantic::SpecializedHirUnit& specialization,
+        semantic::DeclarationId declaration);
 
     // Expression and path inputs borrow from the active binding worklist and
     // compiled HIR. They are consumed synchronously; returned metadata owns
@@ -1533,6 +1544,8 @@ private:
     std::unordered_map<SignalId, std::vector<std::string>>
         boundary_driver_paths_;
     std::unordered_set<SignalId> vhdl_unprotected_shared_signals_;
+    std::unordered_map<std::uint32_t, std::optional<SignalId>>
+        vhdl_package_constant_signals_;
     std::unordered_map<SignalId, std::string> resolver_by_signal_;
     std::unordered_map<std::string, ResolutionKind>
         vhdl_resolution_kinds_;

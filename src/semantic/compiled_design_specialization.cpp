@@ -7027,6 +7027,32 @@ private:
                     prefix->vhdl->source,
                 };
             }
+            // Predefined enumeration types without a HIR definition
+            // (IEEE 1076-2008 16.3; IEEE 1164 STD_ULOGIC).
+            std::optional<std::int64_t> last_ordinal;
+            if (vhdl_name_equal(predefined_name, "boolean")
+                || vhdl_name_equal(predefined_name, "bit")) {
+                last_ordinal = 1;
+            } else if (vhdl_name_equal(predefined_name, "character")) {
+                last_ordinal = 255;
+            } else if (vhdl_name_equal(predefined_name, "severity_level")) {
+                last_ordinal = 3;
+            } else if (vhdl_name_equal(predefined_name, "std_ulogic")
+                || vhdl_name_equal(predefined_name, "std_logic")) {
+                last_ordinal = 8;
+            }
+            if (!range && last_ordinal) {
+                range = vhdl::RangeConstraint {
+                    vhdl::RangeKind::enumeration,
+                    0,
+                    *last_ordinal,
+                    std::nullopt,
+                    std::nullopt,
+                    false,
+                    false,
+                    prefix->vhdl->source,
+                };
+            }
         }
         if (!range || !range->left || !range->right) {
             return std::nullopt;

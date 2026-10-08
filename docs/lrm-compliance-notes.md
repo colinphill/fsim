@@ -45,10 +45,14 @@ corpora (`scripts/lrm_corpus.py`). Progress and results are in
   collected from callable bodies. Signal formals need a new binding kind
   (frame keyed by actual SignalId). Hazard: `wait on <local>` lowers to
   WaitForever silently.
-- Package objects: package constants fold; no package-level signals or
-  shared variables exist (objects materialize per instance in
-  `materialize_compiled_vhdl_declaration`). Needs design-global objects
-  registered into every instance's signal/container maps.
+- Package objects: scalar and logic-vector package constants fold. Composite
+  constants with other elements become read-only design signals on first
+  use (`HierarchyBuilder::compiled_vhdl_package_constant_signal`, called
+  through `Lowerer::set_package_constant_signal`). Architecture constants of
+  that kind are materialized in `materialize_compiled_vhdl_declaration`.
+  There are still no package-level signals or shared variables. They need
+  design-global objects registered into every instance's signal and
+  container maps; the on-demand constant hook is the precedent.
 - STD.ENV: `vhdl_simulator_api` gates every std.env name to VHDL-2019
   (vhdl_parser_expressions.cpp, vhdl_parser_statements.cpp); elaboration gate
   FSIM-ELAB-VHENV-001 in lowerer_hir_callable.cpp; std/env.vhdl injected only

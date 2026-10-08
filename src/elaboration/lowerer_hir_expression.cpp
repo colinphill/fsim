@@ -618,6 +618,80 @@ namespace {
         }
     }
 
+    // A VHDL integer abstract literal with underscores, a base
+    // (`16#FF#`) or an exponent (`1E3`, `2#1#E4`) (IEEE 1076-2008 15.5).
+    std::optional<std::uint64_t> vhdl_integer_literal(std::string_view text)
+    {
+        std::string normalized;
+        for (const auto character : text) {
+            if (character != '_') {
+                normalized.push_back(static_cast<char>(
+                    std::tolower(static_cast<unsigned char>(character))));
+            }
+        }
+        std::uint64_t base = 10U;
+        std::string_view digits = normalized;
+        std::string_view exponent;
+        const auto first_hash = normalized.find_first_of("#:");
+        if (first_hash != std::string::npos) {
+            const auto second_hash = normalized.find(
+                normalized[first_hash], first_hash + 1U);
+            if (second_hash == std::string::npos) {
+                return std::nullopt;
+            }
+            const auto parsed_base = unsigned_decimal(
+                std::string_view { normalized }.substr(0U, first_hash));
+            if (!parsed_base || *parsed_base < 2U || *parsed_base > 16U) {
+                return std::nullopt;
+            }
+            base = *parsed_base;
+            digits = std::string_view { normalized }.substr(
+                first_hash + 1U, second_hash - first_hash - 1U);
+            exponent = std::string_view { normalized }.substr(second_hash + 1U);
+        } else if (const auto marker = normalized.find('e');
+                   marker != std::string::npos) {
+            digits = std::string_view { normalized }.substr(0U, marker);
+            exponent = std::string_view { normalized }.substr(marker);
+        }
+        if (digits.empty()) {
+            return std::nullopt;
+        }
+        std::uint64_t value { };
+        for (const auto character : digits) {
+            const auto digit = character >= '0' && character <= '9'
+                ? static_cast<std::uint64_t>(character - '0')
+                : character >= 'a' && character <= 'f'
+                ? static_cast<std::uint64_t>(character - 'a' + 10)
+                : base;
+            if (digit >= base
+                || value > (std::numeric_limits<std::uint64_t>::max() - digit)
+                        / base) {
+                return std::nullopt;
+            }
+            value = value * base + digit;
+        }
+        if (!exponent.empty()) {
+            if (exponent.front() != 'e') {
+                return std::nullopt;
+            }
+            exponent.remove_prefix(1U);
+            if (!exponent.empty() && exponent.front() == '+') {
+                exponent.remove_prefix(1U);
+            }
+            const auto power = unsigned_decimal(exponent);
+            if (!power) {
+                return std::nullopt;
+            }
+            for (std::uint64_t step { }; step < *power; ++step) {
+                if (value > std::numeric_limits<std::uint64_t>::max() / base) {
+                    return std::nullopt;
+                }
+                value *= base;
+            }
+        }
+        return value;
+    }
+
     std::optional<LoweredLiteral> hir_literal(
         const HirExpressionLeaf& expression,
         const std::size_t expected_width,
@@ -714,7 +788,11 @@ namespace {
             negative = text.front() == '-';
             text.remove_prefix(1U);
         }
-        const auto value = unsigned_decimal(text);
+        auto value = unsigned_decimal(text);
+        if (!value && language == frontend::Language::Vhdl2008
+            && expression.integer) {
+            value = vhdl_integer_literal(text);
+        }
         if (value && negative) {
             const auto maximum = static_cast<std::uint64_t>(
                 std::numeric_limits<std::int64_t>::max());
@@ -885,7 +963,7 @@ std::optional<DynamicIndex> Lowerer::lower_hir_dynamic_index(
             != source_width) {
         return std::nullopt;
     }
-    const auto lowered = lower_hir_expression(index_id, *index_width);
+    auto lowered = lower_hir_expression(index_id, *index_width);
     if (!lowered) {
         return std::nullopt;
     }
@@ -893,6 +971,9 @@ std::optional<DynamicIndex> Lowerer::lower_hir_dynamic_index(
         index_id);
     if (!index_expression) {
         return std::nullopt;
+    }
+    if (hir_vhdl_enumeration_index(index_id, hir_process_scope_)) {
+        lowered = widen_enumeration_ordinal(*lowered);
     }
     if (index_expression->systemverilog != nullptr) {
         const auto normalized = register_width(*lowered) == 32U
@@ -964,10 +1045,13 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_dynamic_element_offset(
         index_id, hir_process_scope_);
     const auto index_domain = hir_expression_domain(
         index_id, hir_process_scope_);
+    const auto enumeration_index
+        = hir_vhdl_enumeration_index(index_id, hir_process_scope_);
     if (!range || !index_width || *index_width == 0U
         || !index_domain
-        || *index_domain != frontend::ValueDomain::Integer
-        || (*index_width != 32U && *index_width != 64U)
+        || (!enumeration_index
+            && (*index_domain != frontend::ValueDomain::Integer
+                || (*index_width != 32U && *index_width != 64U)))
         || element_width == 0U
         || element_width > std::numeric_limits<std::int64_t>::max()) {
         return std::nullopt;
@@ -975,6 +1059,9 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_dynamic_element_offset(
     auto index = lower_hir_expression(index_id, *index_width);
     if (!index) {
         return std::nullopt;
+    }
+    if (enumeration_index) {
+        index = widen_enumeration_ordinal(*index);
     }
     const auto arithmetic_width = std::max<std::size_t>(
         register_width(*index), 32U);
@@ -1053,6 +1140,10 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_array_offset(
     }
     auto arithmetic_width = std::size_t { 32U };
     for (const auto& dimension : selection.dynamic_indices) {
+        if (hir_vhdl_enumeration_index(
+                dimension.expression, hir_process_scope_)) {
+            continue;
+        }
         const auto width = hir_expression_width(
             dimension.expression, hir_process_scope_);
         if (!width || (*width != 32U && *width != 64U)) {
@@ -1078,6 +1169,10 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_array_offset(
             dimension.expression, index_width.value());
         if (!index) {
             return std::nullopt;
+        }
+        if (hir_vhdl_enumeration_index(
+                dimension.expression, hir_process_scope_)) {
+            index = widen_enumeration_ordinal(*index);
         }
         if (register_width(*index) != arithmetic_width) {
             index = resize_register(*index, arithmetic_width, true);
@@ -8557,28 +8652,33 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 > selection->root_width - selection->offset) {
             return std::nullopt;
         }
-        std::optional<RegisterId> root;
-        if (binding) {
-            if (selection->root_width != binding->width) {
+        const auto bound_root = [&]() -> std::optional<RegisterId> {
+            if (!binding || selection->root_width != binding->width) {
                 return std::nullopt;
             }
             if (binding->kind == HirRuntimeBindingKind::local) {
-                root = binding->local;
-            } else if (binding->signal) {
-                root = allocate_register(binding->width, binding->domain);
-                process_.operations.emplace_back(ReadSignal {
-                    *root,
-                    *binding->signal,
-                    sample_concurrent_assertion_reads_
-                        ? SignalReadKind::sampled
-                        : SignalReadKind::current,
-                });
-                record_implicit_signal_dependency(*binding->signal);
+                return binding->local;
             }
-        } else {
-            // Constant array declarations have no runtime binding. Materialize
-            // only an exactly typed, bounded packed-array projection here;
-            // dynamic selectors still use the normal checked offset path.
+            if (!binding->signal) {
+                return std::nullopt;
+            }
+            const auto value = allocate_register(
+                binding->width, binding->domain);
+            process_.operations.emplace_back(ReadSignal {
+                value,
+                *binding->signal,
+                sample_concurrent_assertion_reads_
+                    ? SignalReadKind::sampled
+                    : SignalReadKind::current,
+            });
+            record_implicit_signal_dependency(*binding->signal);
+            return value;
+        };
+        // A constant array folds to an exactly typed, bounded packed-array
+        // projection; dynamic selectors still use the normal checked offset
+        // path. Constants this cannot fold may be materialized as read-only
+        // signals, which bind like any signal.
+        const auto constant_root = [&]() -> std::optional<RegisterId> {
             const auto declaration = specialized_hir_unit_->find_declaration(
                 selection->declaration);
             using DeclarationForm
@@ -8775,12 +8875,30 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 if (value.width() != flat_width) {
                     return std::nullopt;
                 }
-                root = allocate_register(flat_width, element_domain);
+                const auto folded = allocate_register(
+                    flat_width, element_domain);
                 process_.operations.emplace_back(LoadConstant {
-                    *root, std::move(value) });
+                    folded, std::move(value) });
+                return folded;
             } catch (const std::invalid_argument&) {
                 return std::nullopt;
             }
+        };
+        const auto selected_declaration
+            = specialized_hir_unit_->find_declaration(
+                selection->declaration);
+        const bool constant_declaration = selected_declaration
+            && selected_declaration->vhdl != nullptr
+            && (selected_declaration->vhdl->form
+                    == semantic::vhdl::DeclarationForm::constant
+                || selected_declaration->vhdl->form
+                    == semantic::vhdl::DeclarationForm::generic_constant);
+        std::optional<RegisterId> root;
+        if (!binding || constant_declaration) {
+            root = constant_root();
+        }
+        if (!root) {
+            root = bound_root();
         }
         if (!root) {
             return std::nullopt;

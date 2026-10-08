@@ -8,6 +8,7 @@
 #include "fsim/frontend/parser.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 
+#include <functional>
 #include <map>
 #include <vector>
 
@@ -160,6 +161,15 @@ public:
 
     void set_systemverilog_program_owner(
         std::optional<std::uint32_t> owner) noexcept;
+
+    // Materializes a composite VHDL package constant as a read-only design
+    // signal on its first use and returns it; nullopt keeps constant folding.
+    using PackageConstantSignal
+        = std::function<std::optional<SignalId>(semantic::DeclarationId)>;
+    void set_package_constant_signal(PackageConstantSignal materialize)
+    {
+        package_constant_signal_ = std::move(materialize);
+    }
 
 private:
     struct HirEffectiveVhdlSubtypeCacheEntry {
@@ -349,6 +359,16 @@ private:
         semantic::ExpressionId source,
         semantic::ExpressionId index,
         semantic::ScopeId process_scope) const;
+    // A VHDL index expression of an enumeration type (IEEE 1076-2008 5.3.2.1):
+    // its runtime value is the ordinal, widened before indexing.
+    [[nodiscard]] bool hir_vhdl_enumeration_index(
+        semantic::ExpressionId index,
+        semantic::ScopeId process_scope) const;
+    // The enumeration type a VHDL for-loop parameter iterates over, when the
+    // value names one; the parameter's runtime value is the ordinal.
+    [[nodiscard]] std::optional<semantic::TypeId>
+    hir_vhdl_loop_parameter_enumeration(
+        semantic::ExpressionId value) const;
     [[nodiscard]] std::optional<std::size_t> hir_dynamic_part_width(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
@@ -1518,6 +1538,7 @@ private:
     ElaboratedDesign& design_;
     const SignalBindings& signals_;
     const ReadOnlySignalBindings& read_only_signals_;
+    PackageConstantSignal package_constant_signal_;
     const StringObjectBindings& string_objects_;
     const ReadOnlyStringBindings& read_only_string_objects_;
     const ContainerObjectBindings& container_objects_;
