@@ -543,6 +543,9 @@ private:
     /// no check beyond the call (refresh_fast_run), else `entry` is null.
     struct FastRun {
         StaticKernelNativeEntry entry { };
+        /// body->registers.data(), kept here so a run does not load the
+        /// body first (one dependent cache miss per member run).
+        kernel_word::Word* registers { };
         const std::uint32_t* bindings { };
         const void* program { };
         CompiledBody* body { };

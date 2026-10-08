@@ -228,6 +228,7 @@ void Interpreter::Impl::StaticKernel::refresh_fast_run(
     fast.bindings = unit.bindings.data();
     fast.program = unit.program;
     fast.body = eligible ? const_cast<CompiledBody*>(&*member.compiled) : nullptr;
+    fast.registers = fast.body != nullptr ? fast.body->registers.data() : nullptr;
     fast.two_state = unit.two_state;
 }
 

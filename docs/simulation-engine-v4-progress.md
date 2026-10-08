@@ -131,6 +131,26 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-08 (later): VHDL commit skips unchanged Logic9 writes
+
+- **The VHDL commit's unchanged-write skip now covers 4-plane (Logic9) slots.**
+  `std_logic` signals are Logic9, so the skip never fired in mixed designs before.
+  - It compares the planes `store_planes_word` would write.
+  - mixed_codec, interleaved A/B with frozen binaries: 2.68 → 2.56 s.
+- **The fast member run caches the register-file pointer** in its `FastRun` entry. This
+  removes one dependent cache miss per run. Interleaved A/B: 2.69 → 2.65 s.
+- **Not kept:** prefetching the next members' run entries and register files (2.64 vs
+  2.66 s).
+
+Parity is identical on all ten cases, and ctest matches the baseline.
+
+| Case | Simulate | Target |
+|---|---:|---:|
+| mixed_codec | 2.53 s | 2.25 s |
+| mixed_throughput | 1.61 s | 2.10 s |
+| original_codec | 3.27 s | 2.58 s |
+| original_throughput | 2.14 s | 2.62 s |
+
 ### 2026-10-08 (later): report output buffering; replay measures like the campaign
 
 - **The replay tool overstated simulate.** `r37-analysis/tools/replay.py` captured output

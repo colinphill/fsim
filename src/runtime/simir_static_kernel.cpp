@@ -1346,17 +1346,30 @@ void Interpreter::Impl::StaticKernel::commit_round()
             if (!pending.single_writer) {
                 slots_[item.slot].last_writer = member_process_[item.member];
             }
-            if (!pending.touched && pending.planes == 2U
-                && item.offset + item.width <= 64U) {
+            if (!pending.touched && item.offset + item.width <= 64U) {
                 // Most assignments rewrite the value a signal already
                 // holds; one that leaves an untouched slot as it is needs
-                // neither its prior value saved nor a change check.
+                // neither its prior value saved nor a change check. (The
+                // planes compared are the ones store_planes_word writes.)
                 const auto* current = arena_.data() + pending.offset;
+                const auto words = pending.words;
                 const auto field = kernel_word::mask(item.width) << item.offset;
-                if (((current[0] ^ (item.a << item.offset)) & field) == 0U
-                    && ((current[pending.words] ^ (item.b << item.offset)) & field)
-                        == 0U) {
-                    continue;
+                const auto same = [&](const std::uint32_t plane,
+                                      const std::uint64_t bits) {
+                    return ((current[plane * words] ^ (bits << item.offset)) & field)
+                        == 0U;
+                };
+                if (pending.planes == 2U) {
+                    if (same(0U, item.a) && same(1U, item.b)) {
+                        continue;
+                    }
+                } else if (pending.planes == 4U) {
+                    const auto codes = kernel_word::logic9_planes(
+                        { item.a, item.b }, item.width, item.unknown);
+                    if (same(0U, codes.p0) && same(1U, codes.p1)
+                        && same(2U, codes.p2) && same(3U, codes.p3)) {
+                        continue;
+                    }
                 }
             }
             const auto& slot = touch(item.slot);
@@ -1971,7 +1984,7 @@ void Interpreter::Impl::StaticKernel::run(const std::uint32_t member_index)
         frame.status = 0U;
         frame.reserved = 0U;
         two_state_running_ = fast.two_state;
-        const auto status = fast.entry(&frame, fast.body->registers.data());
+        const auto status = fast.entry(&frame, fast.registers);
         two_state_running_ = false;
         if (fast.two_state) {
             ++fast_runs_[member_index].two_state_runs;
