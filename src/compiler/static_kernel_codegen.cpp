@@ -2911,12 +2911,15 @@ public:
             std::getenv("FSIM_STATIC_KERNEL_NO_FAST_ISEL") == nullptr);
         // Hot templates: the optimizing backend. Register allocation and the
         // machine passes carry most of its benefit; fast instruction
-        // selection halves its compile time for a small run-time cost
-        // (FSIM_STATIC_KERNEL_HOT_FAST_ISEL=0 selects the full selector).
+        // selection halves its compile time for a small run-time cost, so
+        // code built ahead of time (whose compile time is the elaborate
+        // step's) uses the full selector (original_codec simulate -0.09 s).
+        // FSIM_STATIC_KERNEL_HOT_FAST_ISEL=0/1 chooses either way.
         const char* hot_level = std::getenv("FSIM_STATIC_KERNEL_HOT_LEVEL");
         const char* hot_fast_isel = std::getenv("FSIM_STATIC_KERNEL_HOT_FAST_ISEL");
         hot_jit_ = make_jit(capture_, hot_level == nullptr ? 2 : std::atoi(hot_level),
-            hot_fast_isel == nullptr || std::string_view { hot_fast_isel } != "0");
+            hot_fast_isel == nullptr ? !ahead_of_time_
+                                     : std::string_view { hot_fast_isel } != "0");
         // Warm templates: full instruction selection without the optimizing
         // backend's cost.
         warm_jit_ = make_jit(capture_, 0, false);
@@ -3217,16 +3220,20 @@ private:
             builder.crossRegisterProxies(loop_analyses, function_analyses,
                 cgscc_analyses, module_analyses);
             llvm::ModulePassManager pipeline;
-            // Cold templates only need registers promoted for the fast
-            // instruction selector; further IR passes cost more compile
-            // time than they save at run time.
+            // Cold templates compiled while simulating only need registers
+            // promoted for the fast instruction selector. Ahead of time they
+            // also get their control flow simplified: the unoptimized backend
+            // spills live values at every block boundary, and simplifycfg
+            // merges straight-line blocks (original_codec simulate -0.14 s
+            // for +0.2 s of elaborate).
             const char* custom = std::getenv(tier == 2U
                     && std::getenv("FSIM_STATIC_KERNEL_HOT_PIPELINE") != nullptr
                 ? "FSIM_STATIC_KERNEL_HOT_PIPELINE" : "FSIM_STATIC_KERNEL_PIPELINE");
             if (auto error = builder.parsePassPipeline(pipeline,
-                    custom != nullptr ? custom
-                        : tier != 0U  ? "function(sroa,early-cse,simplifycfg)"
-                                      : "function(sroa)")) {
+                    custom != nullptr  ? custom
+                        : tier != 0U   ? "function(sroa,early-cse,simplifycfg)"
+                        : ahead_of_time_ ? "function(sroa,simplifycfg)"
+                                         : "function(sroa)")) {
                 throw std::runtime_error(error_text(std::move(error)));
             }
             pipeline.run(*module, module_analyses);

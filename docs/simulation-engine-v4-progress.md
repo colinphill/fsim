@@ -131,6 +131,21 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-08 (later): more codegen effort ahead of time
+
+Code built by `elaborate --aot` puts its compile time in elaborate, where the e2e
+geometric mean has room. Two new defaults apply only when building ahead of time:
+- cold templates also run `simplifycfg`;
+- hot (partition) templates use the full instruction selector.
+
+Code compiled while simulating is unchanged. The cache identity covers the knobs, not the
+mode, so AOT objects are found at simulate.
+
+original_codec, paired A/B on the same binary (old settings through a wrapper):
+simulate 2.80 → 2.65 s, elaborate +0.57 s.
+
+**Rejected:** a lower hot threshold (−0.03 s for +0.5 s).
+
 ### 2026-10-08 (later): persisted specializations and compiled member bodies
 
 `elaborate --aot` now also stores two more results beside the kernel plan, and
