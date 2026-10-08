@@ -4,6 +4,7 @@
 #include "../elaboration/elaborated_design_process_access.hpp"
 #include "../runtime/simir_static_kernel.hpp"
 #if defined(FSIM_HAS_LLVM)
+#include "application_design_artifact_codec_internal.hpp"
 #include "fsim/compiler/object_cache.hpp"
 #include "fsim/compiler/static_kernel_codegen.hpp"
 #endif
@@ -23,21 +24,74 @@ struct PersistedPlanSlot {
     std::string key;
 };
 
-PersistedPlanSlot persisted_plan_slot(const BuiltProject& built)
+PersistedPlanSlot persisted_plan_slot(const BuiltProject& built,
+    const std::string_view kind = "plan")
 {
     PersistedPlanSlot slot;
     // FSIM_STATIC_KERNEL_PLAN_CACHE=0 plans every run.
     const char* enabled = std::getenv("FSIM_STATIC_KERNEL_PLAN_CACHE");
+    // FSIM_STATIC_KERNEL_PLAN_CACHE=<kind> skips just that kind.
     if (built.cache_path.empty() || built.artifact_identity.empty()
-        || (enabled != nullptr && std::string_view { enabled } == "0")) {
+        || (enabled != nullptr
+            && (std::string_view { enabled } == "0"
+                || std::string_view { enabled } == kind))) {
         return slot;
     }
     slot.cache.emplace(built.cache_path / "static-kernel");
     compiler::CacheKeyBuilder key;
     key.add("planner", elaboration::detail::static_kernel_plan_identity());
+    if (kind == "specializations") {
+        key.add("specializer", runtime::simir::static_kernel_specializer_identity());
+    } else if (kind == "bodies") {
+        key.add("compiler", runtime::simir::static_kernel_compiler_identity());
+    }
+    key.add("kind", kind);
     key.add("design", built.artifact_identity);
     slot.key = key.finish();
     return slot;
+}
+
+/// Persisted VHDL specializations (see StaticKernelSpecializations).
+[[nodiscard]] std::string serialize_specializations(
+    const runtime::simir::StaticKernelSpecializations& specializations)
+{
+    codec_detail::Writer writer;
+    writer.write(static_cast<std::uint64_t>(specializations.members.size()));
+    for (const auto& entry : specializations.members) {
+        writer.write(entry.process);
+        writer.write(entry.original_size);
+        writer.write(entry.specialized);
+        writer.write(entry.operations);
+        writer.write(entry.origin);
+    }
+    if (!writer.complete()) {
+        return { };
+    }
+    return std::move(writer).finish();
+}
+
+[[nodiscard]] std::shared_ptr<const runtime::simir::StaticKernelSpecializations>
+restore_specializations(const std::string_view bytes)
+{
+    codec_detail::Reader reader { bytes };
+    std::uint64_t count { };
+    if (!reader.read(count) || count > bytes.size()) {
+        return nullptr;
+    }
+    auto result = std::make_shared<runtime::simir::StaticKernelSpecializations>();
+    result->members.resize(static_cast<std::size_t>(count));
+    for (auto& entry : result->members) {
+        if (!reader.read(entry.process) || !reader.read(entry.original_size)
+            || !reader.read(entry.specialized) || !reader.read(entry.operations)
+            || !reader.read(entry.origin)
+            || entry.origin.size() != entry.operations.size()) {
+            return nullptr;
+        }
+    }
+    if (reader.remaining() != 0U) {
+        return nullptr;
+    }
+    return result;
 }
 #endif
 
@@ -130,9 +184,62 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
                     compiler::StaticKernelAheadOfTimeScope::active(),
                 });
             }
-#endif
+            // VHDL specializations: recorded ahead of time, restored after.
+            const auto specializations = persisted_plan_slot(built, "specializations");
+            std::shared_ptr<runtime::simir::StaticKernelSpecializations> recorded;
+            if (specializations.cache) {
+                if (compiler::StaticKernelAheadOfTimeScope::active()) {
+                    recorded = std::make_shared<
+                        runtime::simir::StaticKernelSpecializations>();
+                    plan.spec->record_specializations = recorded;
+                } else {
+                    std::error_code error;
+                    if (const auto bytes = specializations.cache->load(
+                            specializations.key, error)) {
+                        plan.spec->specializations = restore_specializations(
+                            std::string_view { reinterpret_cast<const char*>(
+                                                   bytes->data()),
+                                bytes->size() });
+                    }
+                }
+            }
+            // Compiled member bodies, likewise.
+            const auto bodies = persisted_plan_slot(built, "bodies");
+            std::shared_ptr<std::string> recorded_bodies;
+            if (bodies.cache) {
+                if (compiler::StaticKernelAheadOfTimeScope::active()) {
+                    recorded_bodies = std::make_shared<std::string>();
+                    plan.spec->record_compiled_bodies = recorded_bodies;
+                } else {
+                    std::error_code error;
+                    if (const auto bytes = bodies.cache->load(bodies.key, error)) {
+                        plan.spec->compiled_bodies = std::make_shared<const std::string>(
+                            reinterpret_cast<const char*>(bytes->data()), bytes->size());
+                    }
+                }
+            }
+            auto interpreter = std::move(built.design).create_interpreter(
+                options, built.seed, plan);
+            if (recorded_bodies && !recorded_bodies->empty()) {
+                std::error_code error;
+                static_cast<void>(bodies.cache->store(bodies.key,
+                    std::as_bytes(std::span { recorded_bodies->data(),
+                        recorded_bodies->size() }),
+                    error));
+            }
+            if (recorded) {
+                const auto bytes = serialize_specializations(*recorded);
+                if (!bytes.empty()) {
+                    std::error_code error;
+                    static_cast<void>(specializations.cache->store(specializations.key,
+                        std::as_bytes(std::span { bytes.data(), bytes.size() }), error));
+                }
+            }
+            return interpreter;
+#else
             return std::move(built.design).create_interpreter(
                 options, built.seed, plan);
+#endif
         }
     }
     if (built.cone_fusion

@@ -351,6 +351,10 @@ void Interpreter::Impl::StaticKernel::execute_body(
                 origin, { }, { }, { }, inst.x, &body.wide_registers);
             break;
         case KOp::load_slot9:
+            // x is the slot (passed as the resolved binding), not a register.
+            registers[inst.d] = evaluate_slow(body, inst, at, member_index,
+                origin, { }, { }, { }, inst.x, &body.wide_registers);
+            break;
         case KOp::integer_binary:
         case KOp::integer_unary:
             registers[inst.d] = evaluate_slow(body, inst, at, member_index,

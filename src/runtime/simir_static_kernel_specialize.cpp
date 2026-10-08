@@ -18,6 +18,7 @@
 #include "simir_static_kernel_compiled_internal.hpp"
 
 #include <cstdlib>
+#include <string>
 #include <iostream>
 #include <unordered_map>
 
@@ -969,6 +970,22 @@ bool Interpreter::Impl::StaticKernel::specialize_member(
         renames.clear();
     }
     return finish(accepted);
+}
+
+std::string static_kernel_specializer_identity()
+{
+    // The specializer, the compiler that consumes its output, and the knobs
+    // that change what it produces.
+    std::string identity = "fsim-static-kernel-specializations-v1;" __DATE__ " " __TIME__;
+    for (const char* name : { "FSIM_STATIC_KERNEL_SPECIALIZE",
+             "FSIM_STATIC_KERNEL_SPECIALIZE_FACTOR" }) {
+        const char* value = std::getenv(name);
+        identity += ";";
+        identity += name;
+        identity += "=";
+        identity += value != nullptr ? value : "-";
+    }
+    return identity;
 }
 
 } // namespace fsim::runtime::simir

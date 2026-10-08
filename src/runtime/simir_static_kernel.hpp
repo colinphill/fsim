@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
+#include <string>
 #include <type_traits>
 #include <vector>
 
@@ -97,6 +98,28 @@ struct StaticKernelWriterRegion {
     std::uint32_t width { };
 };
 
+/// One VHDL member's specialization outcome (simir_static_kernel_specialize):
+/// elaborate --aot records them, and a later simulate of the same artifact
+/// restores them instead of specializing again.
+struct StaticKernelSpecialization {
+    ProcessId process { };
+    /// The member's operation count before specialization (checked when
+    /// restored).
+    std::uint32_t original_size { };
+    bool specialized { };
+    /// The specialized activation appended to the member's operations, and
+    /// the original operation each appended one came from.
+    std::vector<Operation> operations;
+    std::vector<InstructionIndex> origin;
+};
+
+struct StaticKernelSpecializations {
+    std::vector<StaticKernelSpecialization> members;
+};
+
+/// Identifies the specializer, for persisted specializations' cache keys.
+[[nodiscard]] std::string static_kernel_specializer_identity();
+
 struct StaticKernelRuntimeSpec {
     ProcessId host { };
     /// The host's original program; the scheduler runs the host stub.
@@ -125,7 +148,20 @@ struct StaticKernelRuntimeSpec {
     /// actuals, undriven nets). They stay inputs, but host processes cannot
     /// change them between kernel rounds.
     std::vector<SignalId> unwritten_inputs;
+    /// Specializations restored from an earlier run (members not listed are
+    /// specialized as usual).
+    std::shared_ptr<const StaticKernelSpecializations> specializations;
+    /// When set, the kernel records every VHDL member's specialization here.
+    std::shared_ptr<StaticKernelSpecializations> record_specializations;
+    /// Compiled member bodies from an earlier run of the same build
+    /// (static_kernel_compiler_identity), restored instead of compiling, and
+    /// where this run records its own; the bytes are the kernel's own.
+    std::shared_ptr<const std::string> compiled_bodies;
+    std::shared_ptr<std::string> record_compiled_bodies;
 };
+
+/// Identifies the member compiler, for persisted compiled bodies.
+[[nodiscard]] std::string static_kernel_compiler_identity();
 
 /// Operations the kernel evaluates. Structural waits, loop jumps and halts are
 /// classified separately by the planner.

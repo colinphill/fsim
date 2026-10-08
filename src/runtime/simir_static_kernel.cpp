@@ -725,6 +725,10 @@ Interpreter::Impl::StaticKernel::StaticKernel(
     }
     stage("members");
     if (std::getenv("FSIM_STATIC_KERNEL_GENERIC") == nullptr) {
+        restored_specializations_ = std::move(spec.specializations);
+        recorded_specializations_ = std::move(spec.record_specializations);
+        restored_bodies_ = std::move(spec.compiled_bodies);
+        recorded_bodies_ = std::move(spec.record_compiled_bodies);
         compile_members();
         stage("compile");
         // VHDL members defer their writes and are not partitioned.

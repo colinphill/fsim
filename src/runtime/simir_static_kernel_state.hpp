@@ -891,6 +891,13 @@ private:
     double specialize_seconds_ { };
     /// specialize_member's recipes (type-erased; see the specializer).
     std::shared_ptr<void> specialize_cache_;
+    /// Specializations from an earlier run, applied instead of specializing
+    /// (StaticKernelRuntimeSpec::specializations), and where this run
+    /// records its own (record_specializations).
+    std::shared_ptr<const StaticKernelSpecializations> restored_specializations_;
+    std::shared_ptr<StaticKernelSpecializations> recorded_specializations_;
+    std::shared_ptr<const std::string> restored_bodies_;
+    std::shared_ptr<std::string> recorded_bodies_;
     std::size_t specialize_cache_hits_ { };
     std::string compile_failure_detail_;
     std::size_t wide_members_ { };

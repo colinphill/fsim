@@ -131,6 +131,42 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-08 (later): persisted specializations and compiled member bodies
+
+`elaborate --aot` now also stores two more results beside the kernel plan, and
+`simulate` restores them:
+- **VHDL specializations** (`StaticKernelSpecializations`): each member's appended
+  specialized operations and origins, or "not specialized". The bytes are written with
+  the artifact codec's operation encoder.
+- **Compiled member bodies** (KIR): varint-encoded field by field, about 30 MB for
+  mixed_codec; a direct struct copy was 135 MB.
+
+How restore is guarded:
+- A body is restored only if its member's process and operation count match.
+- Keys cover the artifact digest and the planner, specializer and compiler builds.
+- `FSIM_STATIC_KERNEL_PLAN_CACHE=<plan|specializations|bodies>` skips one kind;
+  `=0` skips all three.
+- `FSIM_KERNEL_VERIFY_BODIES=1` also compiles each restored member and reports any
+  field that differs.
+
+mixed_codec compile stage: 302 → 66 ms.
+
+**A latent interpreter bug, now fixed.** `execute_body` treated `load_slot9`'s slot index
+as a register (`registers[inst.x]`). The value was unused, but the read could fall
+outside the register file. With the new allocation layout it segfaulted on mixed_codec;
+valgrind showed the invalid read also happened before this change.
+
+Parity is identical on all ten cases, and ctest matches the baseline.
+
+| Case | Simulate | Target |
+|---|---:|---:|
+| mixed_codec | 2.16 s | 2.25 s (**met**) |
+| original_codec | 2.66 s | 2.58 s |
+| original_throughput | 1.87 s | 2.62 s |
+| mixed_throughput | 1.48 s | 2.10 s |
+
+The machine ran faster during this measurement than in earlier ones.
+
 ### 2026-10-08 (later): trusted artifact load, persisted kernel plan
 
 **Owner decision (2026-10-08).** `fsim simulate` trusts a checksummed artifact from a
