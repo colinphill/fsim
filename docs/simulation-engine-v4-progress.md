@@ -131,6 +131,34 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-08 (later): setup costs at load and kernel construction
+
+Three setup costs that grew with instance count:
+- **Kernel compile cleared dense flags over all slots.** For each member it zeroed
+  `slots_.size()` and `families_.size()` arrays (47k slots × 100k members on
+  original_codec). These are now sorted lists of the slots and families the member
+  writes. Compile stage: 145 → 96 ms.
+- **Signal values were decoded bit by bit** (`PackedLogic4::from_msb_string`, one
+  plane-storage write per bit). They are now decoded a word at a time.
+- **The string intern pool's shards were `unordered_map<string, weak_ptr>`.** Each call
+  hashed twice and copied the key. They are now open-addressed tables of (hash, string)
+  that reuse stored hashes when they grow. Interning restores about 100k hierarchy paths
+  at load.
+
+original_codec simulate is 3.21 s (from about 3.40). The setup that remains is spread
+over many per-instance analyses of 30–120 ms each:
+
+| Item | original_codec |
+|---|---|
+| Region-graph program analyses at load (needed by the driver-inventory check and the plan) | ≈0.20 s |
+| Runtime program decode | ≈0.30 s |
+| Kernel construction | ≈0.39 s |
+| Host population | ≈0.15 s |
+| Kernel plan | ≈0.08 s |
+
+The run loop is real work: 10.7M native runs, 15M change notifications and 25M
+schedules. Slots with nothing to notify are already silent.
+
 ### 2026-10-08 (later): generated-IR quality at the cold tier
 
 Most template code is compiled at the cold tier (O0, fast instruction selection, fast

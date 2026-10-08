@@ -26,9 +26,76 @@ std::uint64_t next_operation_list_access_revision() noexcept
     }
 }
 
+/// One shard of the intern pool: an open-addressed table of (hash, string)
+/// entries. Each string is hashed once per lookup, keys are the pooled
+/// strings themselves (no copies), and growth reuses the stored hashes.
 struct InternedStringBucket {
+    struct Entry {
+        std::size_t hash { };
+        std::weak_ptr<const std::string> value;
+        bool used { };
+    };
     std::mutex mutex;
-    std::unordered_map<std::string, std::weak_ptr<const std::string>> values;
+    std::vector<Entry> entries;
+    std::size_t used { };
+
+    [[nodiscard]] std::shared_ptr<const std::string> find(
+        const std::size_t hash, const std::string_view value) const
+    {
+        if (entries.empty()) {
+            return { };
+        }
+        const auto mask = entries.size() - 1U;
+        for (auto at = hash & mask;; at = (at + 1U) & mask) {
+            const auto& entry = entries[at];
+            if (!entry.used) {
+                return { };
+            }
+            if (entry.hash == hash) {
+                if (auto existing = entry.value.lock();
+                    existing && *existing == value) {
+                    return existing;
+                }
+            }
+        }
+    }
+
+    void insert(const std::size_t hash,
+        const std::shared_ptr<const std::string>& value)
+    {
+        if (2U * (used + 1U) > entries.size()) {
+            // Rebuild without the strings no one holds any more, doubling
+            // when live strings still fill half the table.
+            std::vector<Entry> live;
+            live.reserve(used);
+            for (auto& entry : entries) {
+                if (entry.used && !entry.value.expired()) {
+                    live.push_back(std::move(entry));
+                }
+            }
+            auto size = std::max<std::size_t>(entries.size(), 64U);
+            while (2U * (live.size() + 1U) > size / 2U) {
+                size *= 2U;
+            }
+            entries.assign(size, Entry { });
+            used = 0U;
+            for (auto& entry : live) {
+                place(std::move(entry));
+            }
+        }
+        place(Entry { hash, value, true });
+    }
+
+    void place(Entry entry)
+    {
+        const auto mask = entries.size() - 1U;
+        auto at = entry.hash & mask;
+        while (entries[at].used) {
+            at = (at + 1U) & mask;
+        }
+        entries[at] = std::move(entry);
+        ++used;
+    }
 };
 
 std::array<InternedStringBucket, 64>& interned_string_buckets()
@@ -133,17 +200,16 @@ std::shared_ptr<const std::string> InternedString::intern(std::string value)
         return { };
     }
     auto& buckets = interned_string_buckets();
-    auto& bucket = buckets[std::hash<std::string_view> { }(value)
-        % buckets.size()];
+    const auto hash = std::hash<std::string_view> { }(value);
+    // The low bits pick the shard; the table probes from the rest.
+    auto& bucket = buckets[hash % buckets.size()];
+    const auto probe = hash / buckets.size();
     const std::lock_guard lock { bucket.mutex };
-    if (const auto found = bucket.values.find(value);
-        found != bucket.values.end()) {
-        if (auto existing = found->second.lock()) {
-            return existing;
-        }
+    if (auto existing = bucket.find(probe, value)) {
+        return existing;
     }
     auto result = std::make_shared<const std::string>(std::move(value));
-    bucket.values.insert_or_assign(*result, result);
+    bucket.insert(probe, result);
     return result;
 }
 

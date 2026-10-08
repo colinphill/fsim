@@ -1157,12 +1157,42 @@ bool operator==(
 PackedLogic4 PackedLogic4::from_msb_string(std::string_view value)
 {
     PackedLogic4 result(value.size(), Logic4::zero);
-    for (std::size_t offset = 0; offset < value.size(); ++offset) {
-        const auto parsed = parse_logic4(value[value.size() - offset - 1]);
-        if (!parsed) {
-            throw std::invalid_argument("four-state vector contains an invalid digit");
+    if (value.empty()) {
+        return result;
+    }
+    // Planes are written a word at a time (0: a0 b0, 1: a1 b0, Z: a0 b1,
+    // X: a1 b1), not bit by bit.
+    const auto aval = result.mutable_aval_words();
+    const auto bval = result.mutable_bval_words();
+    for (std::size_t word = 0; word < aval.size(); ++word) {
+        std::uint64_t a { };
+        std::uint64_t b { };
+        const auto first = word * bits_per_word;
+        const auto last = std::min(value.size(), first + bits_per_word);
+        for (std::size_t offset = first; offset < last; ++offset) {
+            const auto parsed = parse_logic4(value[value.size() - offset - 1]);
+            if (!parsed) {
+                throw std::invalid_argument(
+                    "four-state vector contains an invalid digit");
+            }
+            const auto bit = std::uint64_t { 1 } << (offset - first);
+            switch (*parsed) {
+            case Logic4::zero:
+                break;
+            case Logic4::one:
+                a |= bit;
+                break;
+            case Logic4::z:
+                b |= bit;
+                break;
+            case Logic4::x:
+                a |= bit;
+                b |= bit;
+                break;
+            }
         }
-        result.set(offset, *parsed);
+        aval[word] = a;
+        bval[word] = b;
     }
     return result;
 }

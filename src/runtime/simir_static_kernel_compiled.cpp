@@ -572,10 +572,12 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
             ? leaf : nullptr;
     };
     {
-        std::vector<std::uint8_t> written_family(families_.size(), 0U);
+        // Families and slots this member writes, as sorted lists: a member
+        // writes few of them, and dense flags over every slot cost more to
+        // clear than the member takes to compile.
+        std::vector<std::uint32_t> written_families;
         std::vector<std::uint32_t> definitions(register_count, 0U);
         std::vector<std::uint8_t> other_use(register_count, 0U);
-        std::vector<std::uint8_t> written_slot(slots_.size(), 0U);
         // A written slot may still be read in place when no write to it,
         // no backward jump and no call lies between the read and its last
         // selection (straight-line read-before-write, as in RAM models).
@@ -674,12 +676,11 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                         && !std::is_same_v<T, ReadSignal>) {
                         if (op.signal < family_of_signal_.size()
                             && family_of_signal_[op.signal] != no_slot) {
-                            written_family[family_of_signal_[op.signal]] = 1U;
+                            written_families.push_back(family_of_signal_[op.signal]);
                         }
                         if (op.signal < slot_of_signal_.size()
                             && slot_of_signal_[op.signal] != no_slot
                             && (!vhdl || immediate)) {
-                            written_slot[slot_of_signal_[op.signal]] = 1U;
                             slot_writes.emplace_back(slot_of_signal_[op.signal], pc);
                         }
                     }
@@ -691,6 +692,16 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 }
             }, operation);
         }
+        std::ranges::sort(written_families);
+        std::vector<std::uint32_t> written_slots;
+        written_slots.reserve(slot_writes.size());
+        for (const auto& [slot, at] : slot_writes) {
+            written_slots.push_back(slot);
+        }
+        std::ranges::sort(written_slots);
+        const auto written_slot = [&](const std::uint32_t slot) {
+            return std::ranges::binary_search(written_slots, slot);
+        };
         const auto unwritten_between = [&](const std::uint32_t reg) {
             const auto from = definition_pc[reg];
             const auto to = last_use[reg];
@@ -708,7 +719,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
         for (std::uint32_t reg = 0U; reg < register_count; ++reg) {
             if (field_slot[reg] != no_slot
                 && (definitions[reg] != 1U || other_use[reg] != 0U
-                    || (written_slot[field_slot[reg]] != 0U
+                    || (written_slot(field_slot[reg])
                         && !unwritten_between(reg)))) {
                 field_slot[reg] = no_slot;
             }
@@ -716,10 +727,6 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
         // A leaf written by this member (directly or through the proxy)
         // or a barrier between the read and its last selection could
         // change what an in-place read sees.
-        std::vector<std::uint8_t> written_leaf_slot(slots_.size(), 0U);
-        for (const auto& [slot, at] : slot_writes) {
-            written_leaf_slot[slot] = 1U;
-        }
         for (std::uint32_t reg = 0U; reg < register_count; ++reg) {
             if (field_family[reg] == no_slot) {
                 continue;
@@ -727,12 +734,13 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
             const auto& family = families_[field_family[reg]];
             const bool leaf_written = std::ranges::any_of(family.leaves,
                 [&](const FamilyLeaf& leaf) {
-                    return written_leaf_slot[leaf.slot] != 0U;
+                    return written_slot(leaf.slot);
                 });
             const auto from = definition_pc[reg];
             const auto to = last_use[reg];
             if (definitions[reg] != 1U || other_use[reg] != 0U || to <= from
-                || written_family[field_family[reg]] != 0U || leaf_written
+                || std::ranges::binary_search(written_families, field_family[reg])
+                || leaf_written
                 || std::ranges::any_of(barriers, [&](const std::uint32_t pc) {
                        return pc >= from && pc <= to;
                    })) {
