@@ -780,10 +780,10 @@ Expression VhdlParser::parse_primary()
                 selected.span = cover(name.span, part.span);
             }
         }
-        if (vhdl_simulator_api(selected.text)
-            != VhdlSimulatorApi::none) {
+        if (const auto api = vhdl_simulator_api(selected.text);
+            api != VhdlSimulatorApi::none) {
             require_vhdl_standard(
-                name, VhdlStandard::Vhdl2019,
+                name, vhdl_simulator_api_standard(api),
                 "the STD.ENV simulator, data, and time interface",
                 "select VHDL-2019 or remove the STD.ENV reference");
         }
@@ -1022,6 +1022,11 @@ Expression VhdlParser::parse_primary()
         aggregate.kind = ExpressionKind::Aggregate;
         bool named_association = false;
         bool saw_others = false;
+        // Boolean and character literal choices select array elements; they
+        // cannot be mixed with element-name (record) choices.
+        bool saw_literal_choice = false;
+        bool saw_name_choice = false;
+        bool reported_mixed_choice = false;
         const auto append_association = [&](Expression head) {
             const auto choice_with_optional_range = [&]() {
                 const auto left_span = head.span;
@@ -1058,17 +1063,31 @@ Expression VhdlParser::parse_primary()
                 named_association = true;
                 std::size_t others_count = 0;
                 for (auto& choice_expression : choices) {
-                    if (choice_expression.kind == ExpressionKind::BooleanLiteral || choice_expression.kind == ExpressionKind::LogicLiteral || choice_expression.kind == ExpressionKind::StringLiteral || choice_expression.kind == ExpressionKind::Aggregate) {
+                    // Boolean and character literals choose elements of
+                    // arrays indexed by BOOLEAN or a character type.
+                    if (choice_expression.kind == ExpressionKind::StringLiteral || choice_expression.kind == ExpressionKind::Aggregate) {
                         error(previous(), "FSIM-VHDL-PARSE-132",
                             "an aggregate choice must be a record element, "
-                            "others, or a locally static integer expression or "
+                            "others, or a locally static discrete expression or "
                             "range");
                     }
                     if (choice_expression.kind == ExpressionKind::Identifier) {
                         choice_expression.text = vhdl_name(choice_expression.text);
                         if (choice_expression.text == "others") {
                             ++others_count;
+                        } else {
+                            saw_name_choice = true;
                         }
+                    }
+                    if (choice_expression.kind == ExpressionKind::BooleanLiteral || choice_expression.kind == ExpressionKind::LogicLiteral) {
+                        saw_literal_choice = true;
+                    }
+                    if (saw_literal_choice && saw_name_choice && !reported_mixed_choice) {
+                        reported_mixed_choice = true;
+                        error(previous(), "FSIM-VHDL-PARSE-132",
+                            "an aggregate choice must be a record element, "
+                            "others, or a locally static discrete expression or "
+                            "range");
                     }
                 }
                 if (others_count != 0) {

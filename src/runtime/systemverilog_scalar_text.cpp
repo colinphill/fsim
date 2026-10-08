@@ -294,7 +294,17 @@ SystemVerilogDelayResult schedule_systemverilog_delay(
 SystemVerilogScalarResult systemverilog_time_function(
     const SystemVerilogTimeFunction function,
     const std::uint64_t current_tick,
-    const SystemVerilogTimeContext& context) noexcept {
+    const SystemVerilogTimeContext& unit_context) noexcept {
+  // Zero unit or precision names a design unit without a timescale; it runs
+  // at the project resolution, like its delays.
+  auto context = unit_context;
+  if (context.time_unit_femtoseconds == 0) {
+    context.time_unit_femtoseconds = context.project_resolution_femtoseconds;
+  }
+  if (context.time_precision_femtoseconds == 0) {
+    context.time_precision_femtoseconds =
+        context.project_resolution_femtoseconds;
+  }
   if (const auto error = context_error(context);
       error != SystemVerilogScalarError::None) return {{}, error};
   const auto ticks_per_unit = context.time_unit_femtoseconds

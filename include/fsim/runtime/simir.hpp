@@ -141,6 +141,7 @@ struct SystemVerilogMath {
     SystemVerilogScalarKind second_kind { SystemVerilogScalarKind::None };
     bool first_signed { };
     bool second_signed { };
+    // Zero means the unit has no timescale and uses the project resolution.
     std::uint64_t time_unit_femtoseconds { 1 };
     std::uint64_t time_precision_femtoseconds { 1 };
 };

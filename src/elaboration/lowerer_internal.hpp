@@ -551,6 +551,16 @@ private:
         semantic::ExpressionId expression,
         frontend::SystemVerilogScalarKind contextual_kind
         = frontend::SystemVerilogScalarKind::None) const;
+    // VHDL REAL and floating types share the IEEE double representation and
+    // runtime scalar operations of SystemVerilog real.
+    // The predefined function STD.STANDARD.NOW (IEEE 1076-2008 16.3),
+    // unless a user declaration named NOW hides it.
+    [[nodiscard]] bool hir_vhdl_now_expression(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] bool hir_vhdl_subtype_is_real(
+        const semantic::vhdl::SubtypeIndication& subtype) const;
+    [[nodiscard]] bool hir_vhdl_expression_is_real(
+        semantic::ExpressionId expression) const;
     enum class HirVhdlAttributeKind : std::uint8_t {
         length,
         position,
@@ -1397,6 +1407,15 @@ private:
         std::size_t expected_width);
     [[nodiscard]] std::optional<StringRegisterId>
     lower_hir_string_function_call(semantic::ExpressionId expression);
+    // Runtime VHDL T'IMAGE(X) (quoted character literals) and TO_STRING,
+    // TO_HSTRING and TO_OSTRING of a runtime value (IEEE 1076-2008 5.7,
+    // 16.2). `type_prefix` names T for 'IMAGE; vector_format selects the
+    // digit grouping for an array value.
+    [[nodiscard]] std::optional<StringRegisterId> lower_hir_vhdl_runtime_image(
+        semantic::ExpressionId value,
+        std::optional<semantic::ExpressionId> type_prefix,
+        runtime::simir::OutputFormat vector_format,
+        bool image_quotes);
     [[nodiscard]] std::optional<std::vector<semantic::ExpressionId>>
     bind_hir_vhdl_procedure_actuals(
         semantic::StatementId statement,
@@ -1492,6 +1511,13 @@ private:
         hir_local_container_registers_;
     std::unordered_map<std::uint32_t, ContainerType>
         hir_local_container_types_;
+    // Process-level locals while deferred callable bodies are lowered. A
+    // subprogram declared in a process shares the process register file and
+    // may name the process's variables (IEEE 1076-2008 4.3 and 10.6.2.1).
+    std::unordered_map<std::uint32_t, RegisterId>
+        hir_enclosing_local_registers_;
+    std::unordered_map<std::uint32_t, StringRegisterId>
+        hir_enclosing_local_string_registers_;
     struct HirCallableFrame {
         semantic::DeclarationId declaration;
         semantic::ScopeId scope;
@@ -1520,6 +1546,9 @@ private:
         std::unordered_map<std::uint32_t,
             std::optional<HirPackedRange>> vhdl_formal_ranges;
         std::string debug_name;
+        // Signal-class procedure formals denote their actual signal for the
+        // whole call. Frames are specialized per actual signal set.
+        std::unordered_map<std::uint32_t, HirRuntimeBinding> signal_formals;
         std::unordered_map<std::uint32_t, RegisterId> static_variables;
         std::unordered_map<std::uint32_t, StringRegisterId>
             static_string_variables;

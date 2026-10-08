@@ -1016,13 +1016,20 @@ begin
 end architecture;
 )",
                                        Language::Vhdl2008);
-  require(!missing_else.ok() &&
-              std::ranges::any_of(missing_else.diagnostics,
-                                  [](const auto &diagnostic) {
-                                    return diagnostic.code ==
-                                           "FSIM-VHDL-PARSE-115";
-                                  }),
-          "a VHDL conditional assignment without else must be diagnosed");
+  // The final `else waveform` is optional (IEEE 1076-2008 11.6): with no
+  // true condition the target is not assigned.
+  require(missing_else.ok() &&
+              !missing_else.design.units.back()
+                   .concurrent_statements.empty() &&
+              [&] {
+                const auto &statement =
+                    missing_else.design.units.back()
+                        .concurrent_statements.front();
+                return statement.kind == StatementKind::If &&
+                       statement.statements.size() == 1 &&
+                       statement.else_statements.empty();
+              }(),
+          "a VHDL conditional assignment may omit its final else");
 
   const auto incomplete_case = parse_text("case_expression_incomplete.vhd",
                                           R"(

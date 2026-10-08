@@ -954,6 +954,25 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 actual_signal.reset();
             }
         }
+        // A port whose actual has a different packed width cannot share the
+        // actual's storage; it connects through an adapter that pads or
+        // truncates like a continuous assignment (IEEE 1800-2017 23.3.3).
+        if (actual_signal && direct_name_actual && !interface_port
+            && formal_declaration.type
+            && (direction == frontend::PortDirection::Input
+                || direction == frontend::PortDirection::Output)
+            && *actual_signal < design_.signal_info_.size()) {
+            const auto formal_width
+                = hierarchy_sv_type_layout_detail::
+                    systemverilog_declaration_width(
+                        *child_interface_specialization,
+                        formal_declaration);
+            if (formal_width && *formal_width != 0U
+                && *formal_width
+                    != design_.signal_info_[*actual_signal].width) {
+                actual_signal.reset();
+            }
+        }
         if (!actual_signal && binding.expression
             && !interface_port && formal_declaration.type) {
             const auto width = hierarchy_sv_type_layout_detail::systemverilog_declaration_width(

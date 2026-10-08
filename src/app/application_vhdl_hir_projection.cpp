@@ -897,7 +897,9 @@ void VhdlHirBuilder::add_disconnection_specifications(
             parent));
     } else if (type.vhdl_array_constraints.empty()
         && type.packed_aggregate == frontend::PackedAggregateKind::None
-        && type.packed_range) {
+        && type.packed_range
+        // REAL's 64-bit packed range is its representation, not an index.
+        && type.systemverilog_scalar != frontend::SystemVerilogScalarKind::Real) {
         result.constraints.push_back(concrete_range(
             frontend::IntegerRange {
                 type.packed_range->left,

@@ -7003,6 +7003,36 @@ fsim_require_fixture_witnesses(
   fsim.runtime.fst_reader
   fsim.fst-portability-contract)
 
+# Self-checking language-compliance fixtures, one per closed LRM gap, run
+# through the CLI on every runtime engine.
+if(TARGET fsim)
+  file(GLOB compliance_fixtures CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/compliance/*.sv"
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/compliance/*.v"
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/compliance/*.vhd")
+  set(compliance_engines interpreter)
+  if(FSIM_WITH_LLVM)
+    list(APPEND compliance_engines compiled)
+  endif()
+  foreach(compliance_fixture IN LISTS compliance_fixtures)
+    get_filename_component(compliance_name "${compliance_fixture}" NAME_WE)
+    foreach(compliance_engine IN LISTS compliance_engines)
+      set(compliance_test
+        "fsim.compliance.${compliance_name}.${compliance_engine}")
+      add_test(
+        NAME "${compliance_test}"
+        COMMAND "${CMAKE_COMMAND}"
+          "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+          "-DFSIM_FIXTURE=${compliance_fixture}"
+          "-DFSIM_ENGINE=${compliance_engine}"
+          -P "${PROJECT_SOURCE_DIR}/tests/fixtures/compliance/run_compliance.cmake")
+      set_tests_properties("${compliance_test}" PROPERTIES
+        LABELS "application;compliance"
+        TIMEOUT 300)
+    endforeach()
+  endforeach()
+endif()
+
 # The scheduling contract is kept as a source-only CLI corpus so both runtime
 # engines run the same independent-oracle transcripts from fresh workspaces.
 if(TARGET fsim)

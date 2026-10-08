@@ -78,6 +78,11 @@ enum class VhdlSimulatorApi : std::uint8_t {
   get_vhdl_read_severity,
 };
 
+/// The first VHDL revision providing a STD.ENV subprogram. STOP, FINISH and
+/// RESOLUTION_LIMIT are IEEE 1076-2008 16.5; the remainder is VHDL-2019.
+[[nodiscard]] VhdlStandard vhdl_simulator_api_standard(
+    VhdlSimulatorApi api) noexcept;
+
 [[nodiscard]] VhdlSimulatorApi vhdl_simulator_api(
     std::string_view selected_name) noexcept;
 

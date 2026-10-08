@@ -605,6 +605,18 @@ SystemVerilogPackedScalarResult systemverilog_scalar_binary_payload(
     if (operation == SystemVerilogScalarBinaryOperator::Convert) {
         const auto converted = convert_systemverilog_scalar(
             lhs.value, result_kind);
+        if (converted && result_kind == SystemVerilogScalarKind::None) {
+            // An integral result is a 64-bit two's-complement payload.
+            const auto integral = converted.value.as_integral();
+            return integral
+                ? SystemVerilogPackedScalarResult {
+                      PackedLogic4::from_aval_bval(
+                          64U, static_cast<std::uint64_t>(*integral), 0U),
+                      { } }
+                : SystemVerilogPackedScalarResult {
+                      PackedLogic4 { },
+                      SystemVerilogScalarError::InvalidKind };
+        }
         return converted
             ? encode_systemverilog_scalar_payload(converted.value)
             : SystemVerilogPackedScalarResult {

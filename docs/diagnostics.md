@@ -959,21 +959,21 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-UNSUPPORTED-024` | error | A context declaration contains an item other than a library clause, use clause, or context reference. |
 | `FSIM-VHDL-UNSUPPORTED-025` | error | A `null` waveform element appears outside a guarded concurrent signal assignment. |
 | `FSIM-VHDL-UNSUPPORTED-026` | error | A bounded VHDL type or record element is outside the architecture-local, non-nested packed record subset. |
-| `FSIM-VHDL-UNSUPPORTED-027` | error | A VHDL array declaration uses an index subtype outside the retained `integer`, `natural`, or `positive` subset, or applies multiple constraints to a built-in scalar/vector subtype. |
+| `FSIM-VHDL-UNSUPPORTED-027` | error | A built-in scalar or vector subtype carries multiple array constraints. |
 | `FSIM-VHDL-UNSUPPORTED-028` | error | A VHDL interface type generic uses classified or default-like syntax outside the VHDL-2008 unclassified `type T` form. |
 | `FSIM-VHDL-UNSUPPORTED-029` | error | A bounded VHDL function formal is not constant class. |
 | `FSIM-VHDL-UNSUPPORTED-030` | error | A bounded VHDL function formal is not input mode. |
-| `FSIM-VHDL-UNSUPPORTED-031` | error | A VHDL function formal type is outside the bounded scalar integral or visible scalar-subtype profile. |
+| `FSIM-VHDL-UNSUPPORTED-031` | error | Retired catalog identity: VHDL function formals accept any subtype indication. |
 | `FSIM-VHDL-UNSUPPORTED-033` | error | A VHDL interface function uses an operator-symbol designator. |
 | `FSIM-VHDL-UNSUPPORTED-034` | error | A VHDL function result type is outside the bounded scalar integral or visible scalar-subtype profile. |
 | `FSIM-VHDL-UNSUPPORTED-035` | error | A VHDL function declarative item is outside the bounded local constant, type/subtype, variable, alias, package-instance, and callable subset. |
-| `FSIM-VHDL-UNSUPPORTED-037` | error | A bounded VHDL function body contains timing, signal updates, or another unsupported statement. |
-| `FSIM-VHDL-UNSUPPORTED-038` | error | A bounded VHDL procedure formal has signal or file class rather than constant or variable class. |
+| `FSIM-VHDL-UNSUPPORTED-037` | error | A VHDL function body contains a wait, a signal assignment, or another statement a function cannot contain. |
+| `FSIM-VHDL-UNSUPPORTED-038` | error | Retired catalog identity: signal-class procedure formals are supported. |
 | `FSIM-VHDL-UNSUPPORTED-039` | error | A bounded VHDL procedure formal uses buffer, linkage, or another unsupported mode. |
-| `FSIM-VHDL-UNSUPPORTED-040` | error | A VHDL procedure formal type is outside the bounded scalar integral or visible scalar-subtype profile. |
+| `FSIM-VHDL-UNSUPPORTED-040` | error | Retired catalog identity: VHDL procedure formals accept any subtype indication. |
 | `FSIM-VHDL-UNSUPPORTED-042` | error | A VHDL procedure uses an operator-symbol designator. |
 | `FSIM-VHDL-UNSUPPORTED-043` | error | A VHDL procedure declarative item is outside the bounded local constant, type/subtype, variable, alias, package-instance, and callable subset. |
-| `FSIM-VHDL-UNSUPPORTED-044` | error | A bounded VHDL procedure body contains a signal update or another unsupported statement other than a wait. |
+| `FSIM-VHDL-UNSUPPORTED-044` | error | A VHDL procedure body contains a statement that is not supported in procedures. |
 | `FSIM-VHDL-UNSUPPORTED-045` | error | A nested interface-package formal appears in a bounded generic subprogram template. |
 | `FSIM-VHDL-UNSUPPORTED-046` | error | A generic function instantiation carries a `pure` or `impure` prefix. |
 | `FSIM-VHDL-UNSUPPORTED-047` | error | A bounded generic function template is impure. |
@@ -2091,6 +2091,7 @@ scheduler.
 | `FSIM-ELAB-VHLEGAL-010` | error | A deferred VHDL package constant has no full declaration in the corresponding package body. |
 | `FSIM-ELAB-VHLEGAL-011` | error | A deferred VHDL package constant and its full declaration have nonconforming subtype indications. |
 | `FSIM-ELAB-VHLEGAL-012` | error | A package body redeclares a nondeferred constant from the package declaration. |
+| `FSIM-ELAB-VHIMAGE-001` | error | A runtime VHDL 'IMAGE or TO_STRING operand is not a statically sized scalar or one-dimensional array, or its type has no runtime image yet. |
 | `FSIM-ELAB-VHREPORT-001` | error | A VHDL report expression does not have string type. |
 | `FSIM-ELAB-VHREPORT-002` | error | A VHDL severity expression does not have severity_level type. |
 | `FSIM-ELAB-VHFILE-001` | error | A VHDL scope declares the same file object more than once. |
@@ -2143,6 +2144,8 @@ scheduler.
 | `FSIM-ELAB-VHPROC-019` | error | The visible VHDL procedure set exceeds the SimIR call-stack capacity. |
 | `FSIM-ELAB-VHPROC-020` | error | A VHDL procedure formal has no executable width in the bounded 1–64-bit representation. |
 | `FSIM-ELAB-VHPROC-021` | error | A VHDL procedure return is outside a procedure or carries a value. |
+| `FSIM-ELAB-VHPROC-022` | error | A signal-class VHDL procedure formal has an actual that is not a whole signal name. |
+| `FSIM-ELAB-VHPROC-023` | error | A STRING VHDL procedure formal has mode out or inout. |
 | `FSIM-ELAB-VHPKG-001` | error | An interface-package generic has no retained profile, or a nested interface-package formal appears in a bounded generic package template. |
 | `FSIM-ELAB-VHPKG-002` | error | An interface-package association crosses a non-VHDL language boundary. |
 | `FSIM-ELAB-VHPKG-003` | error | An interface-package actual is not a simple visible package-instance name. |

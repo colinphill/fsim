@@ -8,6 +8,29 @@
 
 namespace fsim::frontend {
 
+namespace {
+
+// A range bound containing an abstract real literal or a REAL attribute makes
+// a scalar type declaration a floating type.
+bool vhdl_expression_has_real_literal(const Expression &expression) {
+  if (expression.kind == ExpressionKind::IntegerLiteral &&
+      expression.systemverilog_scalar_kind == SystemVerilogScalarKind::Real) {
+    return true;
+  }
+  if (expression.text.starts_with("real'") ||
+      expression.text.starts_with("std.standard.real'")) {
+    return true;
+  }
+  for (const auto &operand : expression.operands) {
+    if (vhdl_expression_has_real_literal(operand)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
 std::shared_ptr<VhdlProtectedInfo> VhdlParser::parse_vhdl_protected_type(
     const Token &start, const std::string_view canonical_name,
     const bool body) {
@@ -476,6 +499,62 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
     }
     auto right_expression = parse_expression();
     const auto range_span = cover(range_start.span, previous().span);
+    if (!keyword("units", 0, true)) {
+      // IEEE 1076-2008 5.2.3 and 5.2.5: a range constraint without units
+      // declares an integer type, or a floating type when a bound is real.
+      const bool floating = vhdl_expression_has_real_literal(left_expression) ||
+                            vhdl_expression_has_real_literal(right_expression);
+      Type type;
+      if (floating) {
+        type.domain = ValueDomain::Bit2;
+        type.systemverilog_scalar = SystemVerilogScalarKind::Real;
+        type.is_signed = true;
+        type.packed_range = PackedRange{63, 0, true};
+        type.discrete_range_expression =
+            DiscreteRangeExpression{std::move(left_expression),
+                                    std::move(right_expression), range_span,
+                                    descending};
+      } else {
+        type = vhdl_predefined_integer_type(vhdl_standard_, "integer");
+        type.integer_base_range = type.integer_range;
+        type.integer_base_range_expression = type.integer_range_expression;
+        const auto left = simple_vhdl_integer_constant(left_expression);
+        const auto right = simple_vhdl_integer_constant(right_expression);
+        if (left && right) {
+          type.integer_range = IntegerRange{*left, *right, descending};
+        } else {
+          type.integer_range.reset();
+        }
+        type.integer_range_expression =
+            IntegerRangeExpression{std::move(left_expression),
+                                   std::move(right_expression), range_span,
+                                   descending};
+      }
+      // The declaration is retained like a subtype of its predefined base
+      // so ranges, attributes, and arithmetic follow INTEGER or REAL.
+      type.spelling = floating ? "real" : "integer";
+      type.vhdl_type_declaration = start.span.source_name + ":" +
+                                   std::to_string(start.span.begin.offset) +
+                                   ":" + canonical_name;
+      expect(TokenKind::Semicolon, "';' after scalar type declaration",
+             "FSIM-VHDL-PARSE-244");
+      if (!duplicate) {
+        if (!nested_scope) {
+          vhdl_named_types_.insert(canonical_name);
+        }
+        unit.type_aliases.push_back(
+            TypeAliasDeclaration { canonical_name,
+                std::move(type),
+                span_from(start, previous()),
+                { },
+                TypeDeclarationKind::VhdlSubtype,
+                { },
+                { },
+                { },
+                false });
+      }
+      return;
+    }
     expect_keyword("units", true, "FSIM-VHDL-PARSE-239");
 
     VhdlPhysicalInfo physical;
@@ -486,6 +565,16 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
     while (!at_end() &&
            !(keyword("end", 0, true) && keyword("units", 1, true))) {
       const auto unit_start = current();
+      if (!at(TokenKind::Identifier)) {
+        // Recover from a malformed unit without looping on the same token.
+        error(unit_start, "FSIM-VHDL-PARSE-240",
+              "expected a physical unit declaration");
+        skip_to_semicolon();
+        if (unit_start.span.begin.offset == current().span.begin.offset) {
+          break;
+        }
+        continue;
+      }
       const auto unit_name = expect_identifier("physical unit name");
       const auto canonical_unit = vhdl_name(unit_name.text);
       if (!unit_names.insert(canonical_unit).second) {
@@ -596,37 +685,70 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
     do {
       VhdlArrayDimension dimension;
       const auto index_start = current();
-      if (at(TokenKind::Identifier) && keyword("range", 1, true)) {
-        const auto index_type = advance();
-        dimension.index_subtype = vhdl_name(index_type.text);
-        dimension.index_span = index_type.span;
-        match_keyword("range", true);
-        if (match(TokenKind::Less)) {
-          dimension.unconstrained = true;
-          expect(TokenKind::Greater, "'>' in unconstrained array index '<>'",
-                 "FSIM-VHDL-PARSE-144");
+      // A type mark (possibly selected) heads an index subtype definition
+      // `T range <>`, a constrained `T range L to R`, or a bare discrete
+      // subtype `T` (IEEE 1076-2008 5.3.2.1).
+      std::size_t mark_end = 0;
+      if (at(TokenKind::Identifier)) {
+        mark_end = 1;
+        while (at(TokenKind::Dot, mark_end) &&
+               at(TokenKind::Identifier, mark_end + 1)) {
+          mark_end += 2;
+        }
+      }
+      const bool ranged_mark = mark_end != 0 && keyword("range", mark_end, true);
+      const bool bare_mark =
+          mark_end != 0 && (at(TokenKind::RightParen, mark_end) ||
+                            at(TokenKind::Comma, mark_end));
+      bool full_index_range = false;
+      if (ranged_mark || bare_mark) {
+        const auto mark_start = current();
+        std::string mark;
+        for (std::size_t part = 0; part < mark_end; ++part) {
+          const auto token = advance();
+          mark += token.kind == TokenKind::Dot ? std::string{"."}
+                                               : vhdl_name(token.text);
+        }
+        dimension.index_subtype = mark;
+        dimension.index_span = cover(mark_start.span, previous().span);
+        if (ranged_mark) {
+          match_keyword("range", true);
+          if (match(TokenKind::Less)) {
+            dimension.unconstrained = true;
+            expect(TokenKind::Greater,
+                   "'>' in unconstrained array index '<>'",
+                   "FSIM-VHDL-PARSE-144");
+          }
+        } else {
+          full_index_range = true;
         }
       } else {
         dimension.index_subtype = "integer";
         dimension.index_span = index_start.span;
       }
 
-      if (dimension.index_subtype == "integer") {
+      const auto simple_index = dimension.index_subtype.substr(
+          dimension.index_subtype.find_last_of('.') == std::string::npos
+              ? 0
+              : dimension.index_subtype.find_last_of('.') + 1);
+      if (simple_index == "integer" || simple_index == "natural" ||
+          simple_index == "positive") {
         dimension.index_base_range =
-            vhdl_predefined_integer_range(vhdl_standard_, "integer");
-      } else if (dimension.index_subtype == "natural") {
-        dimension.index_base_range =
-            vhdl_predefined_integer_range(vhdl_standard_, "natural");
-      } else if (dimension.index_subtype == "positive") {
-        dimension.index_base_range =
-            vhdl_predefined_integer_range(vhdl_standard_, "positive");
-      } else {
-        error(index_start, "FSIM-VHDL-UNSUPPORTED-027",
-              "VHDL arrays currently require integer, natural, or "
-              "positive index subtypes");
+            vhdl_predefined_integer_range(vhdl_standard_, simple_index);
       }
 
-      if (!dimension.unconstrained) {
+      if (full_index_range) {
+        // The bare discrete subtype contributes its own complete range.
+        const auto bound = [&](const std::string_view attribute) {
+          return Expression{
+              ExpressionKind::Call, std::string{"'"} + std::string{attribute},
+              {Expression{ExpressionKind::Identifier, dimension.index_subtype,
+                          {}, dimension.index_span}},
+              dimension.index_span};
+        };
+        dimension.constraint = DiscreteRangeExpression{
+            bound("left"), bound("right"), dimension.index_span, false};
+      } else if (!dimension.unconstrained) {
         auto left_expression = parse_expression();
         bool descending = false;
         if (match_keyword("downto", true)) {

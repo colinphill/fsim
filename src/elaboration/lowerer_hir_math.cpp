@@ -202,10 +202,12 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_math_call(
         process_.operations.emplace_back(SystemVerilogMath {
             .function = *function,
             .destination = destination,
+            // A unit without a timescale runs at the project resolution,
+            // which the runtime substitutes for zero.
             .time_unit_femtoseconds
-            = time_unit.value_or(1U),
+            = time_unit.value_or(0U),
             .time_precision_femtoseconds
-            = time_precision.value_or(1U),
+            = time_precision.value_or(0U),
         });
         return destination;
     }

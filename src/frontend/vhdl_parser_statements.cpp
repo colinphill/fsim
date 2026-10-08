@@ -408,13 +408,36 @@ std::optional<Statement> VhdlParser::parse_sequential_statement(
     statement.loop_variable = vhdl_name(variable.text);
     expect_keyword("in", true, "FSIM-VHDL-PARSE-100");
     statement.loop_initial = parse_expression();
+    if (statement.loop_initial.kind == ExpressionKind::Identifier
+        && keyword("range", 0, true)) {
+      // `T range L to R`: the constraint supplies the iteration bounds.
+      advance();
+      statement.loop_initial = parse_expression();
+    } else if (statement.loop_initial.kind == ExpressionKind::Identifier
+               && keyword("loop", 0, true)) {
+      // A discrete type mark iterates its whole range (IEEE 1076-2008
+      // 10.10).
+      const auto mark = statement.loop_initial;
+      statement.loop_initial = Expression{
+          ExpressionKind::Call, "'left", {mark}, mark.span};
+      statement.loop_descending = false;
+      statement.loop_limit = Expression{
+          ExpressionKind::Call, "'right", {mark}, mark.span};
+    }
+    const bool type_mark_range =
+        statement.loop_initial.kind == ExpressionKind::Call
+        && statement.loop_initial.text == "'left"
+        && statement.loop_limit.kind == ExpressionKind::Call
+        && statement.loop_limit.text == "'right";
     const bool attribute_range =
         statement.loop_initial.kind
             == ExpressionKind::Call
         && (statement.loop_initial.text == "'range"
             || statement.loop_initial.text
                 == "'reverse_range");
-    if (attribute_range) {
+    if (type_mark_range) {
+      // Bounds were synthesized from the type mark above.
+    } else if (attribute_range) {
       statement.loop_limit = Expression{
           ExpressionKind::Invalid,
           {},
@@ -638,10 +661,10 @@ VhdlParser::parse_vhdl_procedure_call() {
   Statement statement;
   statement.kind = StatementKind::ProcedureCall;
   statement.procedure_name = std::move(name);
-  if (vhdl_simulator_api(statement.procedure_name)
-      != VhdlSimulatorApi::none) {
+  if (const auto api = vhdl_simulator_api(statement.procedure_name);
+      api != VhdlSimulatorApi::none) {
     require_vhdl_standard(
-        start, VhdlStandard::Vhdl2019,
+        start, vhdl_simulator_api_standard(api),
         "the STD.ENV simulator, data, and time interface",
         "select VHDL-2019 or remove the STD.ENV call");
   }
@@ -1065,8 +1088,13 @@ Statement VhdlParser::parse_conditional_signal_assignment(Statement assignment) 
   conditional.vhdl_guarded_assignment =
       assignment.vhdl_guarded_assignment;
   conditional.condition = parse_expression();
-  expect_keyword("else", true, "FSIM-VHDL-PARSE-115");
   conditional.statements.push_back(std::move(assignment));
+  if (!match_keyword("else", true)) {
+    // The final `else` is optional (IEEE 1076-2008 11.6, 10.5.3); when no
+    // condition holds, the target is not assigned.
+    conditional.span = cover(assignment_start, previous().span);
+    return conditional;
+  }
 
   Statement alternate;
   alternate.kind = StatementKind::Assignment;

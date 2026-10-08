@@ -10,6 +10,7 @@
 #include <filesystem>
 #include <iostream>
 #include <iterator>
+#include <set>
 
 namespace fsim::elaboration {
 
@@ -4999,6 +5000,21 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
+    if (hir_vhdl_now_expression(expression_id)) {
+        // TIME values are counts of the resolution limit; a time query with
+        // no timescale returns exactly that count.
+        const auto now = allocate_register(
+            64U, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(SystemVerilogMath {
+            .function = runtime::SystemVerilogMathFunction::Time,
+            .destination = now,
+            .time_unit_femtoseconds = 0U,
+            .time_precision_femtoseconds = 0U,
+        });
+        return expected_width == 0U || expected_width == 64U
+            ? std::optional { now }
+            : resize_register(now, expected_width, true);
+    }
     if (const auto pattern_binding
         = hir_case_pattern_binding(expression_id)) {
         if (!pattern_binding->value) {
@@ -8978,6 +8994,74 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
             }
         }
         if (!expression->vhdl->text.starts_with(qualified_prefix)) {
+            // Integer and floating types are closely related (IEEE
+            // 1076-2008 9.3.6); a floating operand rounds to the nearest
+            // integer.
+            const bool target_real = (target_subtype
+                    && hir_vhdl_subtype_is_real(*target_subtype))
+                || [&] {
+                       auto name = std::string_view {
+                           expression->vhdl->text };
+                       if (const auto separator = name.find_last_of(".:");
+                           separator != std::string_view::npos) {
+                           name.remove_prefix(separator + 1U);
+                       }
+                       return same_vhdl_identifier(name, "real");
+                   }();
+            const bool operand_real = hir_vhdl_expression_is_real(operand);
+            const auto numeric_operand_domain = hir_expression_domain(
+                operand, hir_process_scope_);
+            if (target_real != operand_real
+                && (operand_real
+                    ? conversion->domain == frontend::ValueDomain::Integer
+                    : numeric_operand_domain
+                        == frontend::ValueDomain::Integer)) {
+                const auto operand_width = operand_real
+                    ? std::optional<std::size_t> { 64U }
+                    : hir_expression_width(operand, hir_process_scope_);
+                const auto lowered_operand = operand_width
+                    ? lower_hir_expression(operand, *operand_width,
+                          operand_real
+                              ? frontend::SystemVerilogScalarKind::Real
+                              : frontend::SystemVerilogScalarKind::None)
+                    : std::nullopt;
+                if (!lowered_operand) {
+                    return std::nullopt;
+                }
+                const auto operand_kind = operand_real
+                    ? frontend::SystemVerilogScalarKind::Real
+                    : frontend::SystemVerilogScalarKind::None;
+                const auto result_kind = target_real
+                    ? frontend::SystemVerilogScalarKind::Real
+                    : frontend::SystemVerilogScalarKind::None;
+                if (target_real) {
+                    const auto destination = allocate_register(
+                        64U, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(SystemVerilogMath {
+                        .function = runtime::SystemVerilogMathFunction::Itor,
+                        .destination = destination,
+                        .first = *lowered_operand,
+                        .first_width = static_cast<std::uint32_t>(
+                            register_width(*lowered_operand)),
+                        .first_signed = true,
+                    });
+                    return destination;
+                }
+                const auto destination = allocate_register(
+                    64U, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(SystemVerilogScalarBinary {
+                    runtime::SystemVerilogScalarBinaryOperator::Convert,
+                    destination,
+                    *lowered_operand,
+                    *lowered_operand,
+                    operand_kind,
+                    operand_kind,
+                    result_kind,
+                });
+                return target_real || conversion->width == 64U
+                    ? destination
+                    : resize_register(destination, conversion->width, true);
+            }
             const auto operand_domain = hir_expression_domain(
                 operand, hir_process_scope_);
             auto conversion_compatible = operand_domain
@@ -10891,6 +10975,33 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
                 result = destination;
             } else if (source.text == "+") {
                 result = *operand;
+            } else if (source.text == "abs"
+                && (scalar_kind == ScalarKind::ShortReal
+                    || scalar_kind == ScalarKind::Real
+                    || scalar_kind == ScalarKind::Realtime)) {
+                // ABS of an IEEE value clears its sign bit.
+                const auto magnitude_mask = allocate_register(
+                    scalar_width, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(LoadConstant {
+                    magnitude_mask,
+                    PackedLogic4::from_aval_bval(
+                        scalar_width,
+                        ~(std::uint64_t { 1 } << (scalar_width - 1U))
+                            & (scalar_width == 64U
+                                    ? ~std::uint64_t { 0 }
+                                    : (std::uint64_t { 1 } << scalar_width)
+                                        - 1U),
+                        0U),
+                });
+                const auto destination = allocate_register(
+                    scalar_width, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::bit_and,
+                    destination,
+                    *operand,
+                    magnitude_mask,
+                });
+                result = destination;
             } else if (source.text == "-") {
                 const auto real_scalar
                     = scalar_kind == ScalarKind::ShortReal
@@ -11471,10 +11582,12 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
             if (source.text == "/") {
                 return ScalarOperator::Divide;
             }
-            if (source.text == "==" || source.text == "===") {
+            if (source.text == "==" || source.text == "==="
+                || (expression->vhdl != nullptr && source.text == "=")) {
                 return ScalarOperator::Equal;
             }
-            if (source.text == "!=" || source.text == "!==") {
+            if (source.text == "!=" || source.text == "!=="
+                || (expression->vhdl != nullptr && source.text == "/=")) {
                 return ScalarOperator::NotEqual;
             }
             if (source.text == "<") {
@@ -11949,6 +12062,283 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
     return result;
 }
 
+std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_runtime_image(
+    const semantic::ExpressionId value_id,
+    const std::optional<semantic::ExpressionId> type_prefix,
+    const runtime::simir::OutputFormat vector_format,
+    const bool image_quotes)
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto value_expression = specialized_hir_unit_->find_expression(
+        value_id);
+    const auto span = value_expression && value_expression->vhdl != nullptr
+        ? hir_source_span(value_expression->vhdl->source)
+        : frontend::SourceSpan { };
+    // Resolve T through its declaration for 'IMAGE, else through the
+    // value's subtype, and follow subtypes to the base type definition.
+    std::optional<semantic::TypeId> type_id;
+    std::string terminal_spelling;
+    std::optional<semantic::vhdl::SubtypeIndication> subtype;
+    if (type_prefix) {
+        if (const auto selected = hir_referenced_declaration(*type_prefix)) {
+            const auto declaration = specialized_hir_unit_->find_declaration(
+                hir_actual_declaration(*selected).value_or(*selected));
+            if (declaration && declaration->vhdl != nullptr) {
+                terminal_spelling = declaration->vhdl->name;
+                if (declaration->vhdl->declared_type) {
+                    type_id = *declaration->vhdl->declared_type;
+                } else if (declaration->vhdl->subtype) {
+                    subtype = declaration->vhdl->subtype;
+                }
+            }
+        }
+        if (!type_id && !subtype) {
+            subtype = hir_vhdl_type_actual(*type_prefix);
+        }
+        if (terminal_spelling.empty()) {
+            if (const auto prefix
+                = specialized_hir_unit_->find_expression(*type_prefix);
+                prefix && prefix->vhdl != nullptr) {
+                terminal_spelling = prefix->vhdl->text;
+            }
+        }
+    } else {
+        subtype = hir_vhdl_expression_subtype(value_id);
+    }
+    if (!type_id && subtype) {
+        if (!subtype->type_mark.spelling.empty()) {
+            terminal_spelling = subtype->type_mark.spelling;
+        }
+        if (subtype->type_mark.target.valid()) {
+            type_id = subtype->type_mark.target;
+        }
+    }
+    const semantic::vhdl::TypeDefinition* definition { };
+    std::set<std::uint32_t> visited;
+    while (type_id && type_id->valid()
+        && visited.insert(type_id->value()).second) {
+        const auto type = specialized_hir_unit_->find_type(*type_id);
+        if (!type || type->vhdl == nullptr) {
+            break;
+        }
+        definition = type->vhdl;
+        if (!definition->name.empty()) {
+            terminal_spelling = definition->name;
+        }
+        if ((definition->form != semantic::vhdl::TypeForm::subtype
+                && definition->form != semantic::vhdl::TypeForm::alias)
+            || !definition->base.type_mark.target.valid()) {
+            break;
+        }
+        if (!definition->base.type_mark.spelling.empty()) {
+            terminal_spelling = definition->base.type_mark.spelling;
+        }
+        type_id = definition->base.type_mark.target;
+    }
+    std::ranges::transform(terminal_spelling, terminal_spelling.begin(),
+        [](const unsigned char character) {
+            return static_cast<char>(std::tolower(character));
+        });
+    const auto simple_type = [&] {
+        // Strip library/package selection and the @builtin: identity prefix.
+        const auto separator = terminal_spelling.find_last_of(".:");
+        return std::string_view { terminal_spelling }.substr(
+            separator == std::string::npos ? 0U : separator + 1U);
+    }();
+    const bool real_value = simple_type == "real"
+        || hir_systemverilog_scalar_kind(value_id)
+            == frontend::SystemVerilogScalarKind::Real;
+    const auto width = real_value
+        ? std::optional<std::size_t> { 64U }
+        : hir_expression_width(value_id, hir_process_scope_);
+    if (!width || *width == 0U
+        || *width > std::numeric_limits<std::uint32_t>::max()) {
+        report(
+            "FSIM-ELAB-VHIMAGE-001",
+            "the runtime image of this VHDL value requires a statically "
+            "sized scalar or one-dimensional array",
+            span);
+        return std::nullopt;
+    }
+    const auto scalar = real_value
+        ? frontend::SystemVerilogScalarKind::Real
+        : hir_systemverilog_scalar_kind(value_id);
+    const auto value = lower_hir_expression(value_id, *width, scalar);
+    if (!value) {
+        return std::nullopt;
+    }
+    const auto domain = register_domain(*value);
+    const auto destination = allocate_string_register();
+    process_.operations.emplace_back(LoadStringConstant {
+        destination, { } });
+    const auto append_constant = [&](const StringRegisterId target,
+                                     std::string text) {
+        const auto literal = allocate_string_register();
+        process_.operations.emplace_back(LoadStringConstant {
+            literal, std::move(text) });
+        process_.operations.emplace_back(ConcatenateStrings {
+            target, { target, literal } });
+    };
+    const auto append_formatted = [&](const runtime::simir::OutputFormat format,
+                                      const bool signed_decimal,
+                                      const frontend::SystemVerilogScalarKind kind) {
+        const auto width_register = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            width_register,
+            unsigned_value(static_cast<std::uint64_t>(*width), 32U) });
+        StringMethod operation;
+        operation.operation = StringMethodOperator::format_packed;
+        operation.source = destination;
+        operation.first = *value;
+        operation.second = width_register;
+        operation.format = format;
+        operation.signed_decimal = signed_decimal;
+        operation.suppress_leading_zero
+            = format == runtime::simir::OutputFormat::decimal;
+        operation.scalar_kind = kind;
+        process_.operations.emplace_back(operation);
+    };
+    const auto upper = [&]() {
+        const auto result = allocate_string_register();
+        StringMethod operation;
+        operation.operation = StringMethodOperator::toupper;
+        operation.source = destination;
+        operation.string_destination = result;
+        process_.operations.emplace_back(operation);
+        return result;
+    };
+    const auto quoted = [&](const StringRegisterId inner) {
+        if (!image_quotes) {
+            return inner;
+        }
+        const auto result = allocate_string_register();
+        process_.operations.emplace_back(LoadStringConstant {
+            result, "'" });
+        process_.operations.emplace_back(ConcatenateStrings {
+            result, { result, inner } });
+        append_constant(result, "'");
+        return result;
+    };
+
+    if (real_value) {
+        // The standard form of TEXTIO.WRITE with DIGITS = 0.
+        append_formatted(runtime::simir::OutputFormat::real_scientific, false,
+            frontend::SystemVerilogScalarKind::Real);
+        return destination;
+    }
+    const bool enumeration = definition != nullptr
+        && !definition->enumeration_literals.empty()
+        && domain != frontend::ValueDomain::Logic9;
+    const bool array_value = (definition != nullptr
+            && definition->form == semantic::vhdl::TypeForm::array)
+        || (subtype
+            && subtype->builtin_type
+                != semantic::vhdl::BuiltinTypeIdentity::none)
+        || (!enumeration && *width > 1U
+            && (domain == frontend::ValueDomain::Logic9
+                || domain == frontend::ValueDomain::Logic4
+                || domain == frontend::ValueDomain::Bit2)
+            && simple_type != "character");
+    if (array_value) {
+        // TO_STRING/TO_HSTRING/TO_OSTRING of a bit or logic vector; digits
+        // and metavalues are upper case (IEEE 1076-2008 5.3.2.4).
+        append_formatted(vector_format, false,
+            frontend::SystemVerilogScalarKind::None);
+        return upper();
+    }
+    if (domain == frontend::ValueDomain::Logic9
+        || simple_type == "bit" || simple_type == "std_ulogic"
+        || simple_type == "std_logic") {
+        append_formatted(runtime::simir::OutputFormat::binary, false,
+            frontend::SystemVerilogScalarKind::None);
+        return quoted(upper());
+    }
+    if (simple_type == "character") {
+        append_formatted(runtime::simir::OutputFormat::character, false,
+            frontend::SystemVerilogScalarKind::None);
+        return quoted(destination);
+    }
+    std::vector<std::string> images;
+    if (enumeration) {
+        for (const auto& literal : definition->enumeration_literals) {
+            auto image = literal.spelling;
+            if (image.size() >= 3U && image.front() == '\''
+                && image.back() == '\'') {
+                if (!image_quotes) {
+                    image = image.substr(1U, image.size() - 2U);
+                }
+            } else if (!image.starts_with('\\')) {
+                std::ranges::transform(image, image.begin(),
+                    [](const unsigned char character) {
+                        return static_cast<char>(std::tolower(character));
+                    });
+            }
+            images.push_back(std::move(image));
+        }
+    } else if (domain == frontend::ValueDomain::Boolean
+        || simple_type == "boolean") {
+        images = { "false", "true" };
+    }
+    if (!images.empty()) {
+        // Select the literal image by ordinal; the last literal is the
+        // fall-through for its own ordinal.
+        process_.operations.emplace_back(LoadStringConstant {
+            destination, images.back() });
+        std::vector<InstructionIndex> exits;
+        for (std::size_t ordinal = 0; ordinal + 1U < images.size();
+            ++ordinal) {
+            const auto constant = allocate_register(*width, domain);
+            process_.operations.emplace_back(LoadConstant {
+                constant,
+                unsigned_value(static_cast<std::uint64_t>(ordinal),
+                    *width) });
+            const auto matched = allocate_register(
+                1U, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::equal, matched, *value, constant });
+            const auto branch = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Branch {
+                matched, 0U, 0U, UnknownBranchPolicy::when_false });
+            const auto selected = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(LoadStringConstant {
+                destination, images[ordinal] });
+            exits.push_back(static_cast<InstructionIndex>(
+                process_.operations.size()));
+            process_.operations.emplace_back(Jump { });
+            process_.operations[branch] = Branch {
+                matched,
+                selected,
+                static_cast<InstructionIndex>(process_.operations.size()),
+                UnknownBranchPolicy::when_false,
+            };
+        }
+        const auto done = static_cast<InstructionIndex>(
+            process_.operations.size());
+        for (const auto exit : exits) {
+            process_.operations[exit] = Jump { done };
+        }
+        return destination;
+    }
+    if (domain == frontend::ValueDomain::Integer
+        && simple_type != "time" && simple_type != "delay_length") {
+        append_formatted(runtime::simir::OutputFormat::decimal, true,
+            frontend::SystemVerilogScalarKind::None);
+        return destination;
+    }
+    report(
+        "FSIM-ELAB-VHIMAGE-001",
+        "the runtime image of a value of type '"
+            + std::string { simple_type }
+            + "' is not yet supported",
+        span);
+    return std::nullopt;
+}
+
 std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
     const semantic::ExpressionId expression_id)
 {
@@ -12272,6 +12662,26 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                 destination, *source.decoded_string });
             return destination;
         }
+        if (source.kind == semantic::vhdl::ExpressionKind::call
+            && source.text == "'image" && !source.operands.empty()
+            && source.operands.size() <= 2U) {
+            if (const auto folded
+                = specialized_hir_unit_->evaluate_string_expression(
+                    expression_id)) {
+                const auto destination = allocate_string_register();
+                process_.operations.emplace_back(LoadStringConstant {
+                    destination, *folded });
+                return destination;
+            }
+            // T'IMAGE(X), or the VHDL-2019 object prefix form X'IMAGE.
+            return source.operands.size() == 2U
+                ? lower_hir_vhdl_runtime_image(source.operands.back(),
+                      source.operands.front(),
+                      runtime::simir::OutputFormat::binary, true)
+                : lower_hir_vhdl_runtime_image(source.operands.front(),
+                      std::nullopt, runtime::simir::OutputFormat::binary,
+                      true);
+        }
         if (source.kind == semantic::vhdl::ExpressionKind::binary
             && source.text == "&" && source.operands.size() == 2U) {
             const auto left = lower_hir_string_expression(
@@ -12314,6 +12724,17 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                 operand_id, hir_process_scope_);
             const auto operand = specialized_hir_unit_->find_expression(
                 operand_id);
+            if (*logic_string_function == "to_string" && operand
+                && operand->vhdl != nullptr
+                && operand->vhdl->kind
+                    != semantic::vhdl::ExpressionKind::string_literal) {
+                // TO_STRING of a scalar is its image without character
+                // literal quotes; of an array, its element characters
+                // (IEEE 1076-2008 5.7).
+                return lower_hir_vhdl_runtime_image(operand_id,
+                    std::nullopt, runtime::simir::OutputFormat::binary,
+                    false);
+            }
             std::optional<LoweredLiteral> literal;
             if (operand && operand->vhdl != nullptr && width
                 && operand->vhdl->kind
@@ -12356,6 +12777,21 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                         frontend::ValueDomain::Bit2,
                     };
                 }
+            }
+            if (!literal && width && *width != 0U && operand
+                && operand->vhdl != nullptr) {
+                // A runtime value: TO_STRING of any scalar or array, and the
+                // octal and hexadecimal forms of a bit or logic array.
+                const auto format
+                    = *logic_string_function == "to_ostring"
+                        || *logic_string_function == "to_octal_string"
+                    ? runtime::simir::OutputFormat::octal
+                    : *logic_string_function == "to_hstring"
+                        || *logic_string_function == "to_hex_string"
+                    ? runtime::simir::OutputFormat::hexadecimal
+                    : runtime::simir::OutputFormat::binary;
+                return lower_hir_vhdl_runtime_image(
+                    operand_id, std::nullopt, format, false);
             }
             if (!width || *width == 0U || !operand
                 || operand->vhdl == nullptr || !literal) {

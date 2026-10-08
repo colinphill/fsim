@@ -4391,6 +4391,19 @@ Lowerer::resolve_hir_vhdl_function_call(
                 ? hir_effective_vhdl_subtype(
                       *formal_declaration->vhdl->subtype)
                 : std::nullopt;
+            // A REAL formal accepts exactly the real-typed actuals,
+            // including abstract real literals (IEEE 1076-2008 9.3.2).
+            const bool real_formal = formal_subtype
+                && hir_vhdl_subtype_is_real(*formal_subtype);
+            if (real_formal
+                || hir_vhdl_expression_is_real((*actuals)[index])) {
+                if (!real_formal
+                    || !hir_vhdl_expression_is_real((*actuals)[index])) {
+                    compatible = false;
+                    break;
+                }
+                continue;
+            }
             const auto actual_subtype = hir_vhdl_expression_subtype(
                 (*actuals)[index]);
             const auto effective_actual_subtype = actual_subtype
@@ -4594,6 +4607,30 @@ Lowerer::resolve_hir_vhdl_procedure_call(
         bool compatible = formals.size() == actuals->size();
         for (std::size_t index { };
             compatible && index < formals.size(); ++index) {
+            const auto formal_record = specialized_hir_unit_
+                ->find_declaration(formals[index]);
+            const auto formal_subtype = formal_record
+                    && formal_record->vhdl != nullptr
+                    && formal_record->vhdl->subtype
+                ? hir_effective_vhdl_subtype(*formal_record->vhdl->subtype)
+                : std::nullopt;
+            // STRING and REAL formals accept exactly the actuals of their
+            // type, including literals of that type.
+            if (formal_subtype
+                && formal_subtype->domain
+                    == semantic::vhdl::ValueDomain::string) {
+                compatible = hir_expression_is_string(
+                    (*actuals)[index], process_scope);
+                continue;
+            }
+            const bool real_formal = formal_subtype
+                && hir_vhdl_subtype_is_real(*formal_subtype);
+            if (real_formal
+                || hir_vhdl_expression_is_real((*actuals)[index])) {
+                compatible = real_formal
+                    && hir_vhdl_expression_is_real((*actuals)[index]);
+                continue;
+            }
             const auto formal = hir_callable_formal_binding(
                 formals[index], scope, (*actuals)[index], process_scope);
             if (!formal) {
@@ -6463,10 +6500,14 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         procedure.spelling, "std.env.finish", true);
     if (set_psl_cover_assert || clear_psl_state || stop || finish) {
         const auto& associations = statement->vhdl->procedure_arguments;
-        if (vhdl_standard_ < frontend::VhdlStandard::Vhdl2019) {
+        // STOP and FINISH are VHDL-2008 (IEEE 1076-2008 16.5); the PSL
+        // state controls arrived in VHDL-2019.
+        if (vhdl_standard_ < ((stop || finish)
+                    ? frontend::VhdlStandard::Vhdl2008
+                    : frontend::VhdlStandard::Vhdl2019)) {
             report(
                 "FSIM-ELAB-VHENV-001",
-                "the STD.ENV simulator API requires VHDL-2019",
+                "this STD.ENV simulator API requires a later VHDL revision",
                 hir_source_span(statement->vhdl->source));
             return true;
         }
@@ -6622,7 +6663,47 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         declaration->vhdl->callable->formals.begin(),
         declaration->vhdl->callable->formals.end(),
     };
+    // A signal-class formal denotes its actual signal (IEEE 1076-2008
+    // 4.2.2.3): reads, attributes, waits and drivers act on the actual.
+    std::vector<std::optional<HirRuntimeBinding>> signal_actuals(
+        formals.size());
+    std::string signal_actual_key;
     for (std::size_t index { }; index < formals.size(); ++index) {
+        const auto formal = specialized_hir_unit_->find_declaration(
+            formals[index]);
+        if (!formal || formal->vhdl == nullptr
+            || formal->vhdl->object_class
+                != semantic::vhdl::ObjectClass::signal) {
+            continue;
+        }
+        const auto actual = specialized_hir_unit_->find_expression(
+            (*actuals)[index]);
+        const auto target = actual && actual->vhdl != nullptr
+                && actual->vhdl->kind == semantic::vhdl::ExpressionKind::name
+            ? hir_target_declaration((*actuals)[index])
+            : std::nullopt;
+        auto binding = target
+            ? hir_runtime_binding(*target, hir_process_scope_, false)
+            : std::nullopt;
+        if (!binding || binding->kind != HirRuntimeBindingKind::signal
+            || !binding->signal) {
+            report(
+                "FSIM-ELAB-VHPROC-022",
+                "signal-class procedure formal '" + formal->vhdl->name
+                    + "' requires a whole signal name actual",
+                actual && actual->vhdl != nullptr
+                    ? hir_source_span(actual->vhdl->source)
+                    : hir_source_span(statement->vhdl->source));
+            return true;
+        }
+        signal_actual_key += "|s" + std::to_string(index) + ":"
+            + std::to_string(*binding->signal);
+        signal_actuals[index] = std::move(binding);
+    }
+    for (std::size_t index { }; index < formals.size(); ++index) {
+        if (signal_actuals[index]) {
+            continue;
+        }
         const auto formal = specialized_hir_unit_->find_declaration(
             formals[index]);
         if (!formal || formal->vhdl == nullptr) {
@@ -6661,9 +6742,57 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         return true;
     }
 
+    // STRING formals are passed in a dynamic string register.
+    std::vector<bool> string_formals(formals.size());
+    for (std::size_t index { }; index < formals.size(); ++index) {
+        if (signal_actuals[index]) {
+            continue;
+        }
+        const auto formal = specialized_hir_unit_->find_declaration(
+            formals[index]);
+        if (!formal || formal->vhdl == nullptr || !formal->vhdl->subtype) {
+            continue;
+        }
+        const auto subtype = hir_effective_vhdl_subtype(
+            *formal->vhdl->subtype);
+        if (subtype
+            && subtype->domain == semantic::vhdl::ValueDomain::string) {
+            if (callable_direction(*formal)
+                != frontend::PortDirection::Input) {
+                report(
+                    "FSIM-ELAB-VHPROC-023",
+                    "STRING procedure formal '" + formal->vhdl->name
+                        + "' must have mode in",
+                    hir_source_span(formal->vhdl->source));
+                return true;
+            }
+            string_formals[index] = true;
+        }
+    }
+    // A locally static input actual becomes a static binding of the frame
+    // (see below), so each distinct value needs its own frame; otherwise a
+    // later call would observe the first call's value.
+    std::string constant_actual_key;
+    for (std::size_t index { }; index < formals.size(); ++index) {
+        if (signal_actuals[index]) {
+            continue;
+        }
+        const auto formal = specialized_hir_unit_->find_declaration(
+            formals[index]);
+        if (!formal || formal->vhdl == nullptr
+            || callable_direction(*formal)
+                != frontend::PortDirection::Input) {
+            continue;
+        }
+        if (const auto constant = hir_constant_integer((*actuals)[index])) {
+            constant_actual_key += "|c" + std::to_string(index) + ":"
+                + std::to_string(*constant);
+        }
+    }
     const auto callable_key = vhdl_procedure_callable_key(
         resolution->key);
-    const auto callable_key_text = std::to_string(callable_key);
+    const auto callable_key_text = std::to_string(callable_key)
+        + signal_actual_key + constant_actual_key;
     const auto found = hir_callable_indices_.find(callable_key_text);
     const auto frame_index = found != hir_callable_indices_.end()
         ? found->second
@@ -6704,6 +6833,34 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         }
         for (std::size_t index { }; index < formals.size(); ++index) {
             const auto formal = formals[index];
+            frame.argument_is_string.push_back(string_formals[index]);
+            if (string_formals[index]) {
+                frame.string_arguments.push_back(
+                    allocate_string_register());
+                frame.invocation_strings.push_back(
+                    frame.string_arguments.back());
+                frame.arguments.push_back(allocate_register(
+                    1U, frontend::ValueDomain::Bit2));
+                frame.invocation_registers.push_back(
+                    frame.arguments.back());
+                frame.directions.push_back(
+                    frontend::PortDirection::Input);
+                continue;
+            }
+            frame.string_arguments.push_back({ });
+            if (signal_actuals[index]) {
+                // No frame storage: the formal names the actual signal. A
+                // placeholder register keeps argument positions aligned.
+                frame.signal_formals.emplace(
+                    formal.value(), *signal_actuals[index]);
+                frame.arguments.push_back(allocate_register(
+                    1U, frontend::ValueDomain::Bit2));
+                frame.invocation_registers.push_back(
+                    frame.arguments.back());
+                frame.directions.push_back(
+                    frontend::PortDirection::Input);
+                continue;
+            }
             const auto record = specialized_hir_unit_->find_declaration(
                 formal);
             const auto binding = hir_callable_formal_binding(
@@ -6738,9 +6895,22 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
 
     std::vector<std::optional<RegisterId>> lowered_actuals(
         actuals->size());
+    std::vector<std::optional<StringRegisterId>> lowered_string_actuals(
+        actuals->size());
     std::vector<std::optional<HirPackedUpdateTarget>>
         copy_out_targets(actuals->size());
     for (std::size_t index { }; index < actuals->size(); ++index) {
+        if (signal_actuals[index]) {
+            continue;
+        }
+        if (string_formals[index]) {
+            lowered_string_actuals[index] = lower_hir_string_expression(
+                (*actuals)[index]);
+            if (!lowered_string_actuals[index]) {
+                return false;
+            }
+            continue;
+        }
         const auto formal = hir_callable_formal_binding(
             formals[index], scope, (*actuals)[index],
             hir_process_scope_);
@@ -6780,7 +6950,7 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
     process_.operations.emplace_back(CallableFramePush {
         frame.invocation_identity,
         frame.invocation_registers,
-        { },
+        frame.invocation_strings,
         { },
         true,
     });
@@ -6791,6 +6961,16 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         if (lowered_actuals[index]) {
             process_.operations.emplace_back(CopyRegister {
                 frame.arguments[index], *lowered_actuals[index] });
+            continue;
+        }
+        if (signal_actuals[index]) {
+            continue;
+        }
+        if (string_formals[index]) {
+            process_.operations.emplace_back(CopyStringRegister {
+                frame.string_arguments[index],
+                *lowered_string_actuals[index],
+            });
             continue;
         }
         const auto formal = hir_callable_formal_binding(
@@ -7021,8 +7201,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
         hir_class_receiver_register_ = saved_class_receiver;
     };
     hir_process_scope_ = initial_frame.scope;
-    hir_local_registers_.clear();
-    hir_local_string_registers_.clear();
+    hir_local_registers_ = hir_enclosing_local_registers_;
+    hir_local_string_registers_ = hir_enclosing_local_string_registers_;
     hir_local_container_registers_.clear();
     hir_local_container_types_.clear();
     locals_.clear();
@@ -7386,15 +7566,18 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
 
 bool Lowerer::lower_pending_hir_callables()
 {
-    while (!pending_hir_callables_.empty()) {
+    hir_enclosing_local_registers_ = hir_local_registers_;
+    hir_enclosing_local_string_registers_ = hir_local_string_registers_;
+    bool lowered = true;
+    while (lowered && !pending_hir_callables_.empty()) {
         const auto callable = pending_hir_callables_.front();
         pending_hir_callables_.pop_front();
         hir_callable_frames_[callable].queued = false;
-        if (!lower_hir_callable_body(callable)) {
-            return false;
-        }
+        lowered = lower_hir_callable_body(callable);
     }
-    return true;
+    hir_enclosing_local_registers_.clear();
+    hir_enclosing_local_string_registers_.clear();
+    return lowered;
 }
 
 } // namespace fsim::elaboration

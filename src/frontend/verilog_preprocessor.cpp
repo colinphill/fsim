@@ -776,8 +776,9 @@ namespace {
                 return;
             }
             if (name == "pragma") {
+                // `pragma is IEEE 1364-2005 clause 19.10.
                 if (!require_standard(
-                        "`pragma", StandardRevision::SystemVerilog2005,
+                        "`pragma", StandardRevision::Verilog2005,
                         name_token)) {
                     return;
                 }
@@ -863,9 +864,10 @@ namespace {
                     tokens, arguments, end, name_token, include_depth);
                 return;
             }
+            // IEEE 1364-2005 clause 19.11 introduces the keyword directives.
             if ((name == "begin_keywords" || name == "end_keywords")
                 && !require_standard(
-                    "`" + name, StandardRevision::SystemVerilog2005,
+                    "`" + name, StandardRevision::Verilog2005,
                     name_token)) {
                 return;
             }

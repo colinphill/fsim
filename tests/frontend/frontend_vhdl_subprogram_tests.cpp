@@ -152,7 +152,6 @@ end architecture;
 entity invalid_procedures is
   generic (
     procedure bad_constant(constant value : out integer);
-    procedure bad_signal(signal value : in integer);
     procedure bad_default(value : integer := 1));
 end entity;
 architecture rtl of invalid_procedures is
@@ -186,7 +185,6 @@ end architecture;
       };
   require(
       has_code("FSIM-VHDL-SEM-049")
-          && has_code("FSIM-VHDL-UNSUPPORTED-038")
           && has_code("FSIM-VHDL-SEM-056")
           && has_code("FSIM-VHDL-SEM-046")
           && !has_code("FSIM-VHDL-UNSUPPORTED-044"),

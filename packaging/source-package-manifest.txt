@@ -195,6 +195,8 @@ docs/known-issues-v2.md
 docs/known-issues-v3.md
 docs/language-support.md
 docs/legacy-pli.md
+docs/lrm-compliance-notes.md
+docs/lrm-compliance-progress.md
 docs/performance-campaign.md
 docs/performance-control-candidate-pairing.md
 docs/performance-matrix-2026-09-28.md
@@ -630,6 +632,8 @@ packaging/v3-release-record.txt
 packaging/v3-supply-chain-inventory.tsv
 scripts/audit_msvc_test_strings.py
 scripts/create_deterministic_zip.py
+scripts/lrm_corpus.py
+scripts/lrm_corpus/vunit_shim.vhd
 scripts/measure-debug-footprint.sh
 scripts/perf_campaign.py
 scripts/perf_campaign_profile.py
@@ -1964,6 +1968,14 @@ tests/feature_matrix/vhdl_revision_corpus.tsv
 tests/feature_matrix/vhdl_standard_mode_inventory.tsv
 tests/feature_matrix/vhdl_synopsys_package_corpus.tsv
 tests/feature_matrix/vhdl_synopsys_package_inventory.tsv
+tests/fixtures/compliance/run_compliance.cmake
+tests/fixtures/compliance/sv_port_width_mismatch.sv
+tests/fixtures/compliance/sv_time_without_timescale.sv
+tests/fixtures/compliance/verilog_2005_begin_keywords.v
+tests/fixtures/compliance/vhdl_now_and_string_formals.vhd
+tests/fixtures/compliance/vhdl_procedure_constant_actuals.vhd
+tests/fixtures/compliance/vhdl_real_arithmetic.vhd
+tests/fixtures/compliance/vhdl_scalar_type_declarations.vhd
 tests/fixtures/fst/complete_trace.tsv
 tests/fixtures/sdf/corpus/sdf21/mixed_resolution.sdf
 tests/fixtures/sdf/corpus/sdf21/profile.sdf

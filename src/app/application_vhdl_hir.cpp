@@ -65,6 +65,8 @@ namespace vh = semantic::vhdl;
         return vh::ObjectClass::variable;
     case frontend::InterfaceObjectClass::File:
         return vh::ObjectClass::file;
+    case frontend::InterfaceObjectClass::Signal:
+        return vh::ObjectClass::signal;
     }
     return vh::ObjectClass::constant;
 }

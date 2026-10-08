@@ -438,7 +438,13 @@ std::optional<std::string> validate_scalar_binary_metadata(
             >= runtime::SystemVerilogScalarBinaryOperator::Equal
         && operation.operation
             <= runtime::SystemVerilogScalarBinaryOperator::GreaterEqual;
-    if ((!comparison && !valid_kind(operation.result_kind))
+    // Convert may also produce a 64-bit two's-complement integral result.
+    const bool integral_conversion
+        = operation.operation
+            == runtime::SystemVerilogScalarBinaryOperator::Convert
+        && operation.result_kind == runtime::SystemVerilogScalarKind::None;
+    if ((!comparison && !integral_conversion
+            && !valid_kind(operation.result_kind))
         || (comparison
             && operation.result_kind
                 != runtime::SystemVerilogScalarKind::None))
@@ -469,11 +475,11 @@ std::optional<std::string> validate_scalar_math_metadata(
         if (operation.first_width != 0 || operation.second_width != 0
             || operation.first_kind != SystemVerilogScalarKind::None
             || operation.second_kind != SystemVerilogScalarKind::None
-            || operation.time_unit_femtoseconds == 0
-            || operation.time_precision_femtoseconds == 0
-            || operation.time_unit_femtoseconds
-                    % operation.time_precision_femtoseconds
-                != 0) {
+            || (operation.time_unit_femtoseconds != 0
+                && operation.time_precision_femtoseconds != 0
+                && operation.time_unit_femtoseconds
+                        % operation.time_precision_femtoseconds
+                    != 0)) {
             return "SystemVerilog time-query metadata is invalid";
         }
         const auto result_width

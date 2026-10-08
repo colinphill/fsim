@@ -13912,6 +13912,60 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                     *materialized_type,
                     width);
         }
+        const auto real_subtype = [&] {
+            const std::string_view mark
+                = declaration.subtype->type_mark.spelling;
+            const auto separator = mark.find_last_of(".:");
+            return (materialized_type
+                       && materialized_type->systemverilog_scalar
+                           == frontend::SystemVerilogScalarKind::Real)
+                || compiled_vhdl_name_equal(
+                    separator == std::string_view::npos
+                        ? mark
+                        : mark.substr(separator + 1U),
+                    "real");
+        }();
+        if (!static_value && real_subtype && width == 64U) {
+            // A static REAL initializer: a real literal, optionally negated.
+            const auto static_real = [&](const auto& self,
+                                         const semantic::ExpressionId id)
+                -> std::optional<double> {
+                const auto expression
+                    = working_specialization.find_expression(id);
+                if (!expression || expression->vhdl == nullptr) {
+                    return std::nullopt;
+                }
+                const auto& source = *expression->vhdl;
+                if (source.kind
+                        == semantic::vhdl::ExpressionKind::real_literal
+                    || source.kind
+                        == semantic::vhdl::ExpressionKind::integer_literal) {
+                    if (const auto real
+                        = systemverilog_real_literal(source.text)) {
+                        return real;
+                    }
+                    const auto integral = working_specialization
+                        .evaluate_integral_expression(id);
+                    return integral
+                        ? std::optional { static_cast<double>(*integral) }
+                        : std::nullopt;
+                }
+                if (source.kind == semantic::vhdl::ExpressionKind::unary
+                    && source.operands.size() == 1U
+                    && (source.text == "-" || source.text == "+")) {
+                    const auto operand = self(self, source.operands.front());
+                    return operand && source.text == "-"
+                        ? std::optional { -*operand }
+                        : operand;
+                }
+                return std::nullopt;
+            };
+            if (const auto real = static_real(
+                    static_real, *declaration.initializer)) {
+                static_value = PackedLogic4::from_aval_bval(
+                    64U, std::bit_cast<std::uint64_t>(*real), 0U);
+            }
+        }
         const auto integer_range = info.integer_range;
         if ((!value && !static_value)
             || (value && width > 64U)
@@ -15403,6 +15457,8 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
         bool constrained_array { };
         bool cyclic { };
         std::optional<semantic::TypeId> enumeration_type;
+        // REAL or a floating type derived from it.
+        bool floating { };
     };
     const auto simple_name = [](const std::string_view spelling) {
         const auto separator = spelling.find_last_of(".:");
@@ -15423,6 +15479,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                 false,
                 false,
                 std::nullopt,
+                false,
             };
             if (compiled_vhdl_name_equal(name, "natural")) {
                 result.scalar_range = frontend::IntegerRange {
@@ -15457,6 +15514,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                 false,
                 false,
                 std::nullopt,
+                false,
             };
         }
         const bool scalar
@@ -15483,6 +15541,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                 false,
                 false,
                 std::nullopt,
+                false,
             };
         }
         return SubtypeProfile {
@@ -15491,6 +15550,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
             false,
             false,
             std::nullopt,
+            compiled_vhdl_name_equal(name, "real"),
         };
     };
     const auto effective_type = [&](const semantic::TypeId id)
@@ -15645,6 +15705,8 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
             profile.type_class = array ? SubtypeClass::array
                 : enumeration          ? SubtypeClass::enumeration
                                        : SubtypeClass::scalar;
+            profile.floating = compiled_vhdl_name_equal(name, "real")
+                || name.ends_with(":real");
         }
         const auto* type = linked_subtype.type_mark.target.valid()
             ? effective_type(linked_subtype.type_mark.target)
@@ -15701,6 +15763,11 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                         == semantic::vhdl::ValueDomain::integer
                     ? SubtypeClass::integer
                     : SubtypeClass::scalar;
+                profile.floating = compiled_vhdl_name_equal(
+                                       simple_name(definition.name), "real")
+                    || compiled_vhdl_name_equal(
+                        simple_name(definition.base.type_mark.spelling),
+                        "real");
             } else if (definition.form == Form::unresolved) {
                 profile.type_class = SubtypeClass::unknown;
             } else {
@@ -15827,6 +15894,12 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
             *compiled_, architecture.id, &*specialized
         };
         for (const auto& constraint : constraints) {
+            if (profile.floating) {
+                // A floating range constraint (IEEE 1076-2008 5.2.5) has real
+                // bounds, and REAL's 64-bit packed range is its
+                // representation rather than an index constraint.
+                continue;
+            }
             if ((constraint.kind
                         == semantic::vhdl::RangeKind::integer
                     && profile.type_class

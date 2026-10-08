@@ -2365,15 +2365,15 @@ Lowerer::lower_hir_vhdl_environment_expression(
     }
     const auto& source = *expression->vhdl;
     const auto span = hir_source_span(source.source);
-    if (vhdl_standard_ < frontend::VhdlStandard::Vhdl2019) {
+    using Api = frontend::VhdlSimulatorApi;
+    const auto api = frontend::vhdl_simulator_api(source.text);
+    if (vhdl_standard_ < frontend::vhdl_simulator_api_standard(api)) {
         report(
             "FSIM-ELAB-VHENV-003",
             "STD.ENV data/time functions require VHDL-2019",
             span);
         return std::nullopt;
     }
-    using Api = frontend::VhdlSimulatorApi;
-    const auto api = frontend::vhdl_simulator_api(source.text);
     if (api == Api::file_line) {
         if ((source.kind != semantic::vhdl::ExpressionKind::name
                 && source.kind != semantic::vhdl::ExpressionKind::call)

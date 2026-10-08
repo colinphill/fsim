@@ -3,6 +3,13 @@
 
 namespace fsim::frontend {
 
+VhdlStandard vhdl_simulator_api_standard(const VhdlSimulatorApi api) noexcept {
+  return api == VhdlSimulatorApi::stop || api == VhdlSimulatorApi::finish ||
+                 api == VhdlSimulatorApi::resolution_limit
+             ? VhdlStandard::Vhdl2008
+             : VhdlStandard::Vhdl2019;
+}
+
 VhdlSimulatorApi vhdl_simulator_api(
     const std::string_view selected_name) noexcept {
   if (selected_name == "std.env.stop") {

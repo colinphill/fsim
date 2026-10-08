@@ -1844,13 +1844,10 @@ end architecture;
             fsim::project::Optimization::o0);
         config.project.top = "vhdl:work.dynamic_logic_string(rtl)";
         fsim::diagnostic::Engine diagnostics;
+        // TO_HSTRING of a runtime value formats it when the report executes.
         const auto project = fsim::app::build_project(config, diagnostics);
-        assert(!project);
-        assert(std::ranges::any_of(
-            diagnostics.diagnostics(),
-            [](const fsim::diagnostic::Diagnostic& diagnostic) {
-                return diagnostic.code == "FSIM-ELAB-VHLOGIC-003";
-            }));
+        assert(project);
+        assert(!diagnostics.has_error());
     }
 
     const auto sv_parent_source = directory.path / "sv_parent.sv";

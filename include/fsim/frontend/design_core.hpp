@@ -932,6 +932,7 @@ enum class InterfaceObjectClass {
     Constant,
     Variable,
     File,
+    Signal,
 };
 
 struct ProcedureArgument {

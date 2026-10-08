@@ -807,7 +807,6 @@ end architecture;
   require(
       has_code("FSIM-VHDL-UNSUPPORTED-029")
           && has_code("FSIM-VHDL-UNSUPPORTED-030")
-          && has_code("FSIM-VHDL-UNSUPPORTED-038")
           && has_code("FSIM-VHDL-UNSUPPORTED-039")
           && has_code("FSIM-VHDL-UNSUPPORTED-037")
           && has_code("FSIM-VHDL-PARSE-157")

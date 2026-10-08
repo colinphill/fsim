@@ -419,20 +419,7 @@ VhdlParser::parse_vhdl_function_parameters() {
           "a VHDL file interface declaration does not have a mode");
     }
 
-    const auto type_start = current();
     const auto type = parse_vhdl_type(true, true);
-    if (!type.vhdl_unspecified && type.named_type.empty()
-        && (type.packed_range
-            || (type.domain != ValueDomain::Integer
-                && type.domain != ValueDomain::Boolean
-                && type.domain != ValueDomain::Bit2
-                && type.domain != ValueDomain::Logic9))) {
-      error(
-          type_start,
-          "FSIM-VHDL-UNSUPPORTED-031",
-          "bounded VHDL function parameters require scalar integer, "
-          "Boolean, bit, std_logic, or visible scalar subtype profiles");
-    }
     std::optional<Expression> default_value;
     if (match(TokenKind::ColonEqual)) {
       default_value = parse_expression();
@@ -505,12 +492,7 @@ VhdlParser::parse_vhdl_procedure_parameters() {
     } else if (match_keyword("file", true)) {
       explicit_class = InterfaceObjectClass::File;
     } else if (match_keyword("signal", true)) {
-      supported_class = false;
-      error(
-          previous(),
-          "FSIM-VHDL-UNSUPPORTED-038",
-          "bounded VHDL procedures require constant- or variable-class "
-          "parameters");
+      explicit_class = InterfaceObjectClass::Signal;
     }
 
     std::vector<Token> names;
@@ -568,20 +550,7 @@ VhdlParser::parse_vhdl_procedure_parameters() {
           "a constant-class VHDL procedure parameter must have mode in");
     }
 
-    const auto type_start = current();
     const auto type = parse_vhdl_type(true, true);
-    if (!type.vhdl_unspecified && type.named_type.empty()
-        && (type.packed_range
-            || (type.domain != ValueDomain::Integer
-                && type.domain != ValueDomain::Boolean
-                && type.domain != ValueDomain::Bit2
-                && type.domain != ValueDomain::Logic9))) {
-      error(
-          type_start,
-          "FSIM-VHDL-UNSUPPORTED-040",
-          "bounded VHDL procedure parameters require scalar integer, "
-          "Boolean, bit, std_logic, or visible scalar subtype profiles");
-    }
     std::optional<Expression> default_value;
     if (match(TokenKind::ColonEqual)) {
       const auto default_start = previous();
@@ -669,8 +638,7 @@ ParameterDeclaration VhdlParser::parse_vhdl_interface_function(
   const auto result_start = current();
   profile.return_type = parse_vhdl_type(true, true);
   if (profile.return_type.named_type.empty()
-      && (profile.return_type.packed_range
-          || (profile.return_type.domain != ValueDomain::Integer
+      && ((profile.return_type.domain != ValueDomain::Integer
               && profile.return_type.domain != ValueDomain::Boolean
               && profile.return_type.domain != ValueDomain::Bit2
               && profile.return_type.domain != ValueDomain::Logic9
@@ -839,8 +807,7 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
     }
   }
   if (function.return_type.named_type.empty()
-      && (function.return_type.packed_range
-          || (function.return_type.domain != ValueDomain::Integer
+      && ((function.return_type.domain != ValueDomain::Integer
               && function.return_type.domain != ValueDomain::Boolean
               && function.return_type.domain != ValueDomain::Bit2
               && function.return_type.domain != ValueDomain::Logic9
@@ -1028,6 +995,8 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
                 statement.assignment_kind
                 == AssignmentKind::Blocking;
           } else {
+            // IEEE 1076-2008 4.3: a function body is any sequence of
+            // sequential statements except wait and signal assignment.
             supported =
                 statement.kind == StatementKind::If
                 || statement.kind == StatementKind::Case
@@ -1036,7 +1005,9 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
                 || statement.kind == StatementKind::Continue
                 || statement.kind == StatementKind::Null
                 || statement.kind == StatementKind::Block
-                || statement.kind == StatementKind::ProcedureCall;
+                || statement.kind == StatementKind::ProcedureCall
+                || statement.kind == StatementKind::Assert
+                || statement.kind == StatementKind::Report;
           }
           if (!supported) {
             error(
@@ -1046,8 +1017,8 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
                     statement.span,
                     {}},
                 "FSIM-VHDL-UNSUPPORTED-037",
-                "bounded VHDL function bodies must be time-free and may "
-                "only update local variables");
+                "a VHDL function body cannot wait, assign a signal, or "
+                "contain this statement");
           }
           self(self, statement.statements);
           self(self, statement.else_statements);
@@ -1229,9 +1200,8 @@ ProcedureDeclaration VhdlParser::parse_vhdl_procedure(
         for (const auto& statement : statements) {
           bool supported = true;
           if (statement.kind == StatementKind::Assignment) {
-            supported =
-                statement.assignment_kind
-                == AssignmentKind::Blocking;
+            // Variable and signal assignments are both sequential
+            // statements of a procedure body (IEEE 1076-2008 10.5, 10.6).
             const Expression* target = &statement.target;
             while ((target->kind == ExpressionKind::Index
                     || target->kind == ExpressionKind::Slice)
@@ -1269,7 +1239,9 @@ ProcedureDeclaration VhdlParser::parse_vhdl_procedure(
                 || statement.kind == StatementKind::WaitOn
                 || statement.kind == StatementKind::WaitUntil
                 || statement.kind == StatementKind::Null
-                || statement.kind == StatementKind::Block;
+                || statement.kind == StatementKind::Block
+                || statement.kind == StatementKind::Assert
+                || statement.kind == StatementKind::Report;
           }
           if (!supported) {
             error(
@@ -1279,8 +1251,8 @@ ProcedureDeclaration VhdlParser::parse_vhdl_procedure(
                     statement.span,
                     {}},
                 "FSIM-VHDL-UNSUPPORTED-044",
-                "bounded VHDL procedure bodies may wait but may only "
-                "update variables and procedure formals");
+                "this statement is not supported in a VHDL procedure "
+                "body");
           }
           self(self, statement.statements);
           self(self, statement.else_statements);

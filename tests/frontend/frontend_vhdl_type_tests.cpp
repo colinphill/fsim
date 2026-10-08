@@ -537,20 +537,30 @@ end architecture;
                   ExpressionKind::Index,
           "multidimensional targets and chained selections retain HIR");
 
-  const auto rejected = parse_text("invalid_array_index_type.vhd",
-                                   R"(
-package Invalid_Arrays is
-  type Bad_Index_T is array (boolean range <>) of bit;
+  const auto discrete_index = parse_text("discrete_array_index_type.vhd",
+                                         R"(
+package Discrete_Arrays is
+  type State_T is (Idle, Busy, Done);
+  type Flag_Index_T is array (boolean range <>) of bit;
+  type State_Map_T is array (State_T) of natural;
+  type Busy_Map_T is array (State_T range Busy to Done) of bit;
 end package;
 )",
-                                   Language::Vhdl2008);
-  require(!rejected.ok() &&
-              std::ranges::count_if(rejected.diagnostics,
-                                    [](const Diagnostic &diagnostic) {
-                                      return diagnostic.code ==
-                                             "FSIM-VHDL-UNSUPPORTED-027";
-                                    }) == 1,
-          "unsupported noninteger array index subtypes remain targeted");
+                                         Language::Vhdl2008);
+  const auto &discrete_types =
+      discrete_index.design.units.front().type_aliases;
+  require(discrete_index.ok() && discrete_types.size() == 4 &&
+              discrete_types[1].type.vhdl_array->dimensions.front()
+                      .index_subtype == "boolean" &&
+              discrete_types[1].type.vhdl_array->dimensions.front()
+                  .unconstrained &&
+              discrete_types[2].type.vhdl_array->dimensions.front()
+                      .index_subtype == "state_t" &&
+              discrete_types[2].type.vhdl_array->dimensions.front()
+                  .constraint &&
+              discrete_types[3].type.vhdl_array->dimensions.front()
+                      .index_subtype == "state_t",
+          "enumeration and BOOLEAN array index subtypes are retained");
 
   const auto invalid_aggregates = parse_text("invalid_array_aggregates.vhd",
                                              R"(

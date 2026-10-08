@@ -3151,6 +3151,15 @@ Lowerer::hir_runtime_binding(
     if (!declaration) {
         return std::nullopt;
     }
+    if (active_hir_callable_
+        && *active_hir_callable_ < hir_callable_frames_.size()) {
+        const auto& signal_formals
+            = hir_callable_frames_[*active_hir_callable_].signal_formals;
+        if (const auto found = signal_formals.find(declaration_id.value());
+            found != signal_formals.end()) {
+            return found->second;
+        }
+    }
     if (declaration->vhdl != nullptr
         && declaration->vhdl->form
             == semantic::vhdl::DeclarationForm::alias
@@ -5339,6 +5348,11 @@ bool Lowerer::hir_expression_is_string(
             return source.decoded_string.has_value();
         }
         if (source.kind == semantic::vhdl::ExpressionKind::call
+            && source.text == "'image" && !source.operands.empty()
+            && source.operands.size() <= 2U) {
+            return true;
+        }
+        if (source.kind == semantic::vhdl::ExpressionKind::call
             && vhdl_logic_string_function_name(source.text)) {
             return true;
         }
@@ -6614,6 +6628,9 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
+    if (hir_vhdl_now_expression(expression_id)) {
+        return frontend::ValueDomain::Integer;
+    }
     if (const auto binding = hir_case_pattern_binding(expression_id)) {
         return binding->domain;
     }
@@ -7231,6 +7248,140 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
     return std::nullopt;
 }
 
+bool Lowerer::hir_vhdl_now_expression(
+    const semantic::ExpressionId expression_id) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return false;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->vhdl == nullptr
+        || (expression->vhdl->kind != semantic::vhdl::ExpressionKind::name
+            && expression->vhdl->kind
+                != semantic::vhdl::ExpressionKind::call)
+        || !expression->vhdl->operands.empty()
+        || (!same_hir_identifier(expression->vhdl->text, "now", true)
+            && !same_hir_identifier(
+                expression->vhdl->text, "std.standard.now", true))) {
+        return false;
+    }
+    const auto selected = hir_referenced_declaration(expression_id);
+    if (!selected) {
+        return true;
+    }
+    const auto declaration = specialized_hir_unit_->find_declaration(
+        *selected);
+    return declaration && declaration->vhdl != nullptr
+        && declaration->vhdl->callable
+        && !declaration->vhdl->callable->defined;
+}
+
+bool Lowerer::hir_vhdl_subtype_is_real(
+    const semantic::vhdl::SubtypeIndication& subtype) const
+{
+    const auto real_name = [](const std::string_view name) {
+        const auto separator = name.find_last_of(".:");
+        return same_hir_identifier(
+            separator == std::string_view::npos
+                ? name
+                : name.substr(separator + 1U),
+            "real", true);
+    };
+    if (real_name(subtype.type_mark.spelling)) {
+        return true;
+    }
+    auto type_id = subtype.type_mark.target;
+    std::unordered_set<std::uint32_t> visited;
+    while (type_id.valid() && visited.insert(type_id.value()).second) {
+        const auto type = specialized_hir_unit_->find_type(type_id);
+        if (!type || type->vhdl == nullptr) {
+            return false;
+        }
+        if (real_name(type->vhdl->name)
+            || real_name(type->vhdl->base.type_mark.spelling)) {
+            return true;
+        }
+        if (type->vhdl->form != semantic::vhdl::TypeForm::subtype
+            && type->vhdl->form != semantic::vhdl::TypeForm::alias
+            && type->vhdl->form != semantic::vhdl::TypeForm::scalar) {
+            return false;
+        }
+        type_id = type->vhdl->base.type_mark.target;
+    }
+    return false;
+}
+
+bool Lowerer::hir_vhdl_expression_is_real(
+    const semantic::ExpressionId expression_id) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return false;
+    }
+    if (const auto actual = hir_generic_actual(expression_id)) {
+        return hir_vhdl_expression_is_real(*actual);
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->vhdl == nullptr) {
+        return false;
+    }
+    const auto& source = *expression->vhdl;
+    switch (source.kind) {
+    case semantic::vhdl::ExpressionKind::real_literal:
+        return true;
+    case semantic::vhdl::ExpressionKind::unary:
+        return source.operands.size() == 1U
+            && hir_vhdl_expression_is_real(source.operands.front());
+    case semantic::vhdl::ExpressionKind::binary:
+        // REAL op REAL, and REAL ** INTEGER (IEEE 1076-2008 9.2.7-9.2.8).
+        // TIME * REAL and REAL * TIME are physical.
+        if (source.operands.size() != 2U
+            || (source.text != "+" && source.text != "-"
+                && source.text != "*" && source.text != "/"
+                && source.text != "**")) {
+            return false;
+        }
+        return hir_vhdl_expression_is_real(source.operands.front())
+            && (source.text == "**"
+                || hir_vhdl_expression_is_real(source.operands.back()));
+    case semantic::vhdl::ExpressionKind::call: {
+        if (source.text == "'left" || source.text == "'right"
+            || source.text == "'high" || source.text == "'low"
+            || source.text == "'value") {
+            if (source.operands.empty()) {
+                return false;
+            }
+            const auto prefix = hir_vhdl_type_actual(
+                source.operands.front());
+            return prefix && hir_vhdl_subtype_is_real(*prefix);
+        }
+        if (same_hir_identifier(source.text, "real", true)
+            || same_hir_identifier(
+                source.text, "std.standard.real", true)) {
+            return true;
+        }
+        const auto resolution = resolve_hir_vhdl_function_call(
+            expression_id, hir_process_scope_, 0U);
+        if (resolution) {
+            const auto declaration = specialized_hir_unit_
+                ->find_declaration(resolution->body);
+            if (declaration && declaration->vhdl != nullptr
+                && declaration->vhdl->callable
+                && declaration->vhdl->callable->return_type) {
+                return hir_vhdl_subtype_is_real(
+                    *declaration->vhdl->callable->return_type);
+            }
+        }
+        break;
+    }
+    default:
+        break;
+    }
+    const auto subtype = hir_vhdl_expression_subtype(expression_id);
+    return subtype && hir_vhdl_subtype_is_real(*subtype);
+}
+
 frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
     const semantic::ExpressionId expression_id,
     const frontend::SystemVerilogScalarKind contextual_kind) const
@@ -7247,6 +7398,11 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
     }
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
+    if (expression && expression->vhdl != nullptr) {
+        return hir_vhdl_expression_is_real(expression_id)
+            ? Kind::Real
+            : Kind::None;
+    }
     if (!expression || expression->systemverilog == nullptr) {
         return Kind::None;
     }
@@ -7329,6 +7485,9 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
 {
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
+    }
+    if (hir_vhdl_now_expression(expression_id)) {
+        return 64U;
     }
     if (const auto binding = hir_case_pattern_binding(expression_id)) {
         return binding->width;
@@ -8632,6 +8791,11 @@ Lowerer::hir_vhdl_conversion_profile(
                 ? std::optional { frontend::IntegerRange {
                       1, maximum, false } }
                 : std::nullopt,
+        };
+    }
+    if (canonical == "real" || canonical == "std.standard.real") {
+        return HirVhdlConversionProfile {
+            64U, frontend::ValueDomain::Bit2, true, std::nullopt
         };
     }
     const auto predefined_array_domain = [&]()

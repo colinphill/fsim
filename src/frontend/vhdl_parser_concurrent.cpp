@@ -69,18 +69,39 @@ GenerateRegion VhdlParser::parse_vhdl_iterative_generate(
   result.variable = vhdl_name(variable.text);
   expect_keyword("in", true, "FSIM-VHDL-PARSE-062");
   result.initial = parse_expression();
-  bool descending = false;
-  if (match_keyword("to", true)) {
-    descending = false;
-  } else if (match_keyword("downto", true)) {
-    descending = true;
-  } else {
-    error(
-        current(),
-        "FSIM-VHDL-PARSE-063",
-        "expected 'to' or 'downto' in generate iteration range");
+  if (result.initial.kind == ExpressionKind::Identifier
+      && keyword("range", 0, true)) {
+    advance();
+    result.initial = parse_expression();
   }
-  auto limit = parse_expression();
+  bool descending = false;
+  Expression limit;
+  const bool attribute_range = result.initial.kind == ExpressionKind::Call
+      && (result.initial.text == "'range"
+          || result.initial.text == "'reverse_range")
+      && !result.initial.operands.empty();
+  if ((result.initial.kind == ExpressionKind::Identifier || attribute_range)
+      && keyword("generate", 0, true)) {
+    // A discrete type mark or an array range attribute: every value of the
+    // range is generated once, so iterate from its low to its high bound.
+    const auto prefix = attribute_range ? result.initial.operands.front()
+                                        : result.initial;
+    const auto span = result.initial.span;
+    result.initial = Expression{ExpressionKind::Call, "'low", {prefix}, span};
+    limit = Expression{ExpressionKind::Call, "'high", {prefix}, span};
+  } else {
+    if (match_keyword("to", true)) {
+      descending = false;
+    } else if (match_keyword("downto", true)) {
+      descending = true;
+    } else {
+      error(
+          current(),
+          "FSIM-VHDL-PARSE-063",
+          "expected 'to' or 'downto' in generate iteration range");
+    }
+    limit = parse_expression();
+  }
   expect_keyword("generate", true, "FSIM-VHDL-PARSE-064");
   const auto expression_span = span_from(variable, previous());
   Expression loop_variable{

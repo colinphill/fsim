@@ -622,6 +622,16 @@ module selected_ifndef_expression; endmodule
 
     PreprocessorOptions verilog_2005_options;
     verilog_2005_options.standard_revision = StandardRevision::Verilog2005;
+    const auto verilog_2005_directives = preprocess_verilog(
+        SourceText {
+            "verilog-2005-directives.v",
+            "`begin_keywords \"1364-2005\"\n`pragma example_tool_option\n"
+            "module keyword_scope; endmodule\n`end_keywords\n" },
+        Language::Verilog2005,
+        verilog_2005_options);
+    require(
+        verilog_2005_directives.ok(),
+        "IEEE 1364-2005 keyword and pragma directives are Verilog-2005 forms");
     const auto later_preprocessing = preprocess_verilog(
         SourceText {
             "later-preprocessing.v",
