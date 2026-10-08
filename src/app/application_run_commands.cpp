@@ -12,10 +12,27 @@
 
 #include <chrono>
 #include <cstdio>
+#if defined(_WIN32)
+#  include <io.h>
+#else
+#  include <unistd.h>
+#endif
 
 namespace fsim::app::application_detail {
 
 namespace {
+
+/// Reports flush standard output line by line only on a terminal; a file
+/// or pipe gets the buffering C stdio gives it (the report stream and
+/// $display output share stdio's buffer, so their order is kept).
+[[nodiscard]] bool stdout_is_terminal()
+{
+#if defined(_WIN32)
+    return ::_isatty(::_fileno(stdout)) != 0;
+#else
+    return ::isatty(STDOUT_FILENO) != 0;
+#endif
+}
 
 struct BuiltinStdoutFlush final {
     bool enabled { };
@@ -288,22 +305,24 @@ int run_built_project(
     const BuiltinStdoutFlush stdout_flush {
         sink == SimulationOutputSink::builtin_stdout
     };
+    const bool flush_reports = sink == SimulationOutputSink::builtin_stdout
+        && stdout_is_terminal();
     simulation.set_trusted_text_report_hook(
-        [&output, sink](
+        [&output, flush_reports](
             const runtime::simir::ProcessId,
             const std::string_view message,
             const runtime::simir::AssertionSeverity severity,
             const runtime::simir::SourceLocation& source,
             const SimulationTick,
             const std::uint64_t) {
-            if (sink == SimulationOutputSink::builtin_stdout) {
+            if (flush_reports) {
                 (void)std::fflush(stdout);
             }
             output << source.path << ':' << source.line << ':'
                    << source.column << ": "
                    << report_severity_name(severity)
                    << "[FSIM-HDL-REPORT]: " << message << '\n';
-            if (sink == SimulationOutputSink::builtin_stdout) {
+            if (flush_reports) {
                 output.flush();
             }
         });

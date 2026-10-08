@@ -131,6 +131,30 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-08 (later): report output buffering; replay measures like the campaign
+
+- **The replay tool overstated simulate.** `r37-analysis/tools/replay.py` captured output
+  through a pipe to Python. `perf_campaign.py` writes it to files. The tool now does the
+  same: mixed_codec read 2.90 s through the pipe and 2.66 s with a file.
+- **VHDL reports flushed standard output twice per report.** mixed_codec prints 11k
+  numeric_std metavalue warnings, which cost 11k `write` calls. They now flush only when
+  standard output is a terminal. Reports and `$display` share stdio's buffer, so their
+  order is unchanged. Write calls: 11,204 → 580. Output is byte-identical.
+- **A failed check (integer range, assertion) in two-state code** now hands over to the
+  full code too.
+
+Simulate phase, writing output to files (as the campaign does):
+
+| Case | Simulate | Target |
+|---|---:|---:|
+| original_codec | 3.16 s | 2.58 s |
+| original_throughput | 2.07 s | 2.62 s (**met**) |
+| mixed_codec | 2.59 s | 2.25 s |
+| mixed_throughput | 1.74 s | 2.10 s (**met**) |
+| codex cases | ≤0.26 s | **met** |
+
+The estimated e2e geometric mean (AOT) is about 3.5×.
+
 ### 2026-10-08 (later): two-state code hands slow paths to the full code
 
 **What changed.** In two-state VHDL code, a value that is not all 0/1 no longer goes

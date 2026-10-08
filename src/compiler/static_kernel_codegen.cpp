@@ -2478,6 +2478,14 @@ private:
     /// the instruction on the reference path first.
     void emit_checked(llvm::Value* ok, const std::uint32_t at, const Pair x)
     {
+        if (folded(ok, true)) {
+            return;
+        }
+        if (two_state_ && hand_over_slow_paths_) {
+            // The full code checks (and reports) the instruction instead.
+            read_or_hand_over(ok);
+            return;
+        }
         auto* slow = llvm::BasicBlock::Create(context_, "check", &function_);
         auto* next = llvm::BasicBlock::Create(context_, "checked", &function_);
         builder_.CreateCondBr(ok, next, slow);
