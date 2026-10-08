@@ -249,6 +249,20 @@ void Interpreter::Impl::StaticKernel::finish_native(NativeUnit& unit,
                 fail(member, members_[member].body_begin,
                     "static kernel full code could not be compiled");
             }
+            if (profile_) {
+                // Where two-state code hands over (the instruction itself,
+                // or the one after a guarded store).
+                const auto* program = static_cast<const CompiledBody*>(unit.program);
+                const auto at = frame.reserved;
+                std::string key = "two-state hand-over at op=";
+                key += at < program->code.size()
+                    ? std::to_string(static_cast<int>(program->code[at].op)) : "end";
+                if (at > 0U && at - 1U < program->code.size()) {
+                    key += " after op="
+                        + std::to_string(static_cast<int>(program->code[at - 1U].op));
+                }
+                ++profile_generic_ops_[key];
+            }
             // Mostly X or 'U' inputs: two-state code only adds detours.
             if (++state.two_state_deopts >= 16U
                 && 8U * state.two_state_deopts

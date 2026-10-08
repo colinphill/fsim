@@ -1021,7 +1021,12 @@ private:
         const std::uint32_t at, const Pair x, const Pair y,
         llvm::Value* fast_unknown = nullptr)
     {
-        if (folded(fast_ok, true)) {
+        if (folded(fast_ok, true) || (two_state_ && hand_over_slow_paths_)) {
+            // Two-state code leaves a slow path (an error or an unusual
+            // value) to the full code, which redoes the instruction.
+            if (!folded(fast_ok, true)) {
+                read_or_hand_over(fast_ok);
+            }
             last_unknown_ = fast_unknown != nullptr ? fast_unknown : constant(0U);
             return fast;
         }
@@ -1321,9 +1326,14 @@ private:
         const auto fast = select(element.in_range, loaded,
             Pair { info_field(element.info, i64_, 40U),
                 info_field(element.info, i64_, 48U) });
-        return with_fallback(builder_.CreateICmpNE(element.storage,
-                                 llvm::ConstantInt::get(i32_, 0U)),
+        // Elements outside the arena always take the slow path: two-state
+        // code keeps it rather than leaving every read to the full code.
+        hand_over_slow_paths_ = false;
+        const auto value = with_fallback(builder_.CreateICmpNE(element.storage,
+                                             llvm::ConstantInt::get(i32_, 0U)),
             fast, at, zero_pair(), index);
+        hand_over_slow_paths_ = true;
+        return value;
     }
 
     void emit_mem_write(const KInst& inst, const std::uint32_t at)
@@ -1978,7 +1988,10 @@ private:
     [[nodiscard]] Pair with_fallback3(llvm::Value* fast_ok, const Pair fast,
         const std::uint32_t at, const Pair x, const Pair y, const Pair z)
     {
-        if (folded(fast_ok, true)) {
+        if (folded(fast_ok, true) || (two_state_ && hand_over_slow_paths_)) {
+            if (!folded(fast_ok, true)) {
+                read_or_hand_over(fast_ok);
+            }
             last_unknown_ = constant(0U);
             return fast;
         }
@@ -2336,6 +2349,12 @@ private:
             auto* ok = builder_.CreateAnd(
                 builder_.CreateICmpEQ(builder_.CreateAnd(upper, m), constant(0U)),
                 builder_.CreateICmpEQ(builder_.CreateAnd(p1, m), m));
+            if (two_state_) {
+                read_or_hand_over(ok);
+                last_unknown_ = constant(0U);
+                store_register(inst.d, Pair { builder_.CreateAnd(p0, m), constant(0U) });
+                break;
+            }
             store_register(inst.d,
                 with_fallback(ok, Pair { builder_.CreateAnd(p0, m), constant(0U) },
                     at, zero_pair(), zero_pair()));
@@ -2393,6 +2412,15 @@ private:
                     m));
             if (!tracked(inst.d)) {
                 ok = builder_.CreateAnd(ok, builder_.CreateICmpEQ(u, constant(0U)));
+            }
+            if (two_state_) {
+                // Two-state code continues only with strong 0/1 values.
+                read_or_hand_over(builder_.CreateAnd(ok,
+                    builder_.CreateICmpEQ(builder_.CreateOr(builder_.CreateOr(x, high_z), u),
+                        constant(0U))));
+                last_unknown_ = constant(0U);
+                store_register(inst.d, Pair { q0, constant(0U) });
+                break;
             }
             store_register(inst.d,
                 with_fallback(ok, Pair { q0, builder_.CreateOr(x, high_z) }, at,
@@ -2797,18 +2825,41 @@ private:
     /// Exits store local registers to the register file (VHDL).
     bool flush_locals_ { };
     /// Records the instruction after the current one as a continuation.
-    std::uint32_t continue_point()
+    std::uint32_t continue_point(const std::uint32_t offset = 1U)
     {
         if (resume_points_ != nullptr
-            && std::ranges::find(*resume_points_, at_ + 1U)
+            && std::ranges::find(*resume_points_, at_ + offset)
                 == resume_points_->end()) {
-            resume_points_->push_back(at_ + 1U);
+            resume_points_->push_back(at_ + offset);
         }
-        return at_ + 1U;
+        return at_ + offset;
+    }
+
+    /// Two-state code reading a value that is not all 0/1: unless `ok`,
+    /// the full code runs the instruction instead (it has no effects yet,
+    /// and every earlier result is in the register file). Unlike a slow
+    /// path, this adds no block the fast path must merge back into.
+    void read_or_hand_over(llvm::Value* ok)
+    {
+        if (folded(ok, true)) {
+            return;
+        }
+        auto* hand_over = llvm::BasicBlock::Create(context_, "hand_over", &function_);
+        auto* next = llvm::BasicBlock::Create(context_, "read", &function_);
+        builder_.CreateCondBr(ok, next, hand_over);
+        builder_.SetInsertPoint(hand_over);
+        builder_.CreateStore(llvm::ConstantInt::get(i32_, continue_point(0U)),
+            frame_field(44U));
+        builder_.CreateStore(llvm::ConstantInt::get(i32_, 4U), frame_field(40U));
+        builder_.CreateBr(failure_block_);
+        builder_.SetInsertPoint(next);
     }
 
     /// See guard_known.
     bool two_state_ { };
+    /// Two-state code hands a with_fallback slow path to the full code
+    /// (read_or_hand_over) instead of calling the evaluate helper.
+    bool hand_over_slow_paths_ { true };
     std::vector<std::uint32_t>* resume_points_ { };
     std::uint32_t at_ { };
     llvm::Value* guarded_unknown_ { };

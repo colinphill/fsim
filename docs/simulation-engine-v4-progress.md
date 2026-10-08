@@ -131,6 +131,29 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-08 (later): two-state code hands slow paths to the full code
+
+**What changed.** In two-state VHDL code, a value that is not all 0/1 no longer goes
+through a slow path that calls the evaluate helper and merges back. Instead the full
+code takes over at that instruction (frame status 4, `reserved` = the instruction). This
+applies to Logic9 slot reads (`load_slot9`), exact field reads (`load_field9`) and every
+`with_fallback` fallback such as integer overflow.
+- This is safe because the instruction has no effects before its fallback, and every
+  earlier result is already in the register file.
+- The fast path now continues in its own block, with no merge or phis. At the cold tier
+  that block boundary was the cost.
+- **Exception:** container reads of elements outside the arena take their slow path
+  every time, so they keep it.
+- Hand-overs are rare: about 16k per mixed_codec run, all of them reads of X or 'U'
+  values. `FSIM_PROFILE_KERNEL` counts them by instruction.
+
+Results:
+
+| Case | Simulate before | Simulate after | Target |
+|---|---:|---:|---:|
+| mixed_throughput | 2.15 s | 2.03 s | 2.10 s (**met**) |
+| mixed_codec | 3.23 s | 2.86 s | 2.25 s |
+
 ### 2026-10-08 (later): setup costs at load and kernel construction
 
 Three setup costs that grew with instance count:
