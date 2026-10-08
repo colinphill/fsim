@@ -64,7 +64,12 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
 #if defined(FSIM_HAS_LLVM)
             if (const char* native = std::getenv("FSIM_STATIC_KERNEL_NATIVE");
                 native == nullptr || std::string_view { native } != "0") {
-                plan.spec->codegen = compiler::make_static_kernel_codegen();
+                plan.spec->codegen = compiler::make_static_kernel_codegen({
+                    built.cache_path.empty()
+                        ? std::filesystem::path { }
+                        : built.cache_path / "static-kernel",
+                    compiler::StaticKernelAheadOfTimeScope::active(),
+                });
             }
 #endif
             return std::move(built.design).create_interpreter(

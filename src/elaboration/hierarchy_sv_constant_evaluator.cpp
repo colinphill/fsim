@@ -46,7 +46,7 @@ using ScalarKind = frontend::SystemVerilogScalarKind;
 }
 
 [[nodiscard]] std::optional<semantic::DeclarationId>
-systemverilog_constant_name_declaration(
+resolve_constant_name_declaration(
     const semantic::SpecializedHirUnit& specialization,
     const semantic::sv::Expression& expression)
 {
@@ -72,6 +72,23 @@ systemverilog_constant_name_declaration(
         return rebound;
     }
     return selected;
+}
+
+/// The declaration a constant name selects. The result depends only on the
+/// specialization and the expression, so it is kept per specialization.
+[[nodiscard]] std::optional<semantic::DeclarationId>
+systemverilog_constant_name_declaration(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::Expression& expression)
+{
+    auto& known = specialization_cache(specialization).constants->name_declarations;
+    if (const auto found = known.find(&expression); found != known.end()) {
+        return found->second;
+    }
+    const auto result
+        = resolve_constant_name_declaration(specialization, expression);
+    known.emplace(&expression, result);
+    return result;
 }
 
 [[nodiscard]] std::optional<Scalar> parse_scalar_identity(
@@ -173,6 +190,12 @@ template <typename Integer>
     const bool unsized,
     const frontend::ValueDomain domain = frontend::ValueDomain::Logic4)
 {
+    if (width <= 64U) {
+        const auto mask = width == 64U ? ~std::uint64_t { 0 }
+                                       : (std::uint64_t { 1 } << width) - 1U;
+        return make_value(PackedLogic4::from_aval_bval(width, input & mask, 0U),
+            signed_value, unsized, domain);
+    }
     auto packed = PackedLogic4 { width, Logic4::zero };
     for (std::uint32_t bit = 0U; bit < width && bit < 64U; ++bit) {
         if (((input >> bit) & 1U) != 0U) {
@@ -234,6 +257,10 @@ template <typename Integer>
     value %= modulus;
     if (value < 0) {
         value += modulus;
+    }
+    if (width <= 64U) {
+        return PackedLogic4::from_aval_bval(
+            width, value.convert_to<std::uint64_t>(), 0U);
     }
     auto packed = PackedLogic4 { width, Logic4::zero };
     for (std::uint32_t bit = 0U; bit < width; ++bit) {
@@ -672,6 +699,57 @@ enum class Truth : std::uint8_t { false_value,
         value == Truth::true_value ? 1U : 0U, 1U, false, false);
 }
 
+/// A Logic4 value of at most 64 bits as one word per plane (aval, bval).
+struct SmallWords {
+    std::uint64_t a { };
+    std::uint64_t b { };
+};
+
+[[nodiscard]] std::uint64_t width_mask(const std::uint32_t width) noexcept
+{
+    return width >= 64U ? ~std::uint64_t { 0 }
+                        : (std::uint64_t { 1 } << width) - 1U;
+}
+
+[[nodiscard]] std::optional<SmallWords> small_words(const Value& value)
+{
+    if (value.width == 0U || value.width > 64U || value.packed.is_logic9()
+        || value.packed.width() != value.width) {
+        return std::nullopt;
+    }
+    const auto aval = value.packed.aval_words();
+    const auto bval = value.packed.bval_words();
+    const auto mask = width_mask(value.width);
+    return SmallWords { (aval.empty() ? 0U : aval[0]) & mask,
+        (bval.empty() ? 0U : bval[0]) & mask };
+}
+
+/// resized()'s planes: extended by the value's own signedness, or truncated.
+[[nodiscard]] SmallWords small_resized(SmallWords words,
+    const std::uint32_t from, const std::uint32_t to, const bool signed_value)
+{
+    if (to > from && signed_value) {
+        const auto fill = width_mask(to) & ~width_mask(from);
+        if (((words.a >> (from - 1U)) & 1U) != 0U) {
+            words.a |= fill;
+        }
+        if (((words.b >> (from - 1U)) & 1U) != 0U) {
+            words.b |= fill;
+        }
+    }
+    return { words.a & width_mask(to), words.b & width_mask(to) };
+}
+
+[[nodiscard]] std::int64_t small_signed(const std::uint64_t value,
+    const std::uint32_t width) noexcept
+{
+    if (width >= 64U) {
+        return static_cast<std::int64_t>(value);
+    }
+    const auto sign = std::uint64_t { 1 } << (width - 1U);
+    return static_cast<std::int64_t>((value ^ sign) - sign);
+}
+
 [[nodiscard]] Value common_operand(
     Value value,
     const std::uint32_t width,
@@ -816,6 +894,37 @@ void append_packed(Value& destination, const Value& operand)
     destination.packed = std::move(packed);
 }
 
+/// convert_hir_systemverilog_constant with the type's resolved width.
+[[nodiscard]] std::optional<HirSystemVerilogConstant> convert_constant_to_width(
+    HirSystemVerilogConstant value,
+    const semantic::sv::TypeReference& type,
+    std::string& error,
+    const std::optional<std::uint64_t> width)
+{
+    if (value.unbounded) {
+        error = "symbolic unbounded '$' requires an implicit parameter type";
+        return std::nullopt;
+    }
+    if (!width || *width == 0U || *width > maximum_constant_width) {
+        error = "resolved SystemVerilog integral type has no supported width";
+        return std::nullopt;
+    }
+    value = resized(
+        std::move(value),
+        static_cast<std::uint32_t>(*width));
+    value.signed_value = type.signed_value;
+    value.unsized = false;
+    value.domain = type_domain(type);
+    value.nominal_type = type.target.target.valid()
+        ? type.target.spelling
+        : std::string { };
+    value.packed_range = type.packed_range;
+    if (!type.four_state) {
+        convert_to_two_state(value);
+    }
+    return value;
+}
+
 class HirConstantEvaluator final {
 public:
     explicit HirConstantEvaluator(
@@ -829,19 +938,41 @@ public:
     [[nodiscard]] std::optional<Value> evaluate(
         const semantic::ExpressionId expression)
     {
-        if (!active_expressions_.insert(expression.value()).second) {
+        // The active expressions form a short stack; a linear scan is
+        // cheaper than hashing.
+        if (std::ranges::find(active_expressions_, expression.value())
+            != active_expressions_.end()) {
             error_ = "recursive SystemVerilog constant expression";
             return std::nullopt;
         }
-        const auto remove = [&] {
-            active_expressions_.erase(expression.value());
-        };
+        active_expressions_.push_back(expression.value());
         auto result = evaluate_impl(expression);
-        remove();
+        active_expressions_.pop_back();
         return result;
     }
 
 private:
+    /// convert_hir_systemverilog_constant for a type held by a declaration
+    /// or callable record, whose width is kept per specialization.
+    [[nodiscard]] std::optional<Value> convert_record_type(Value value,
+        const semantic::sv::TypeReference& type)
+    {
+        auto& widths = specialization_cache(specialization_)
+                           .constants->record_type_widths;
+        auto found = widths.find(&type);
+        if (found == widths.end()) {
+            std::unordered_set<std::uint32_t> visiting;
+            found = widths.emplace(&type,
+                resolved_type_width(type, &specialization_, visiting)).first;
+        }
+        return convert_constant_to_width(std::move(value), type, error_,
+            found->second);
+    }
+
+    // Hierarchy identities read so far, including through cached values
+    // that read one (value_for_declaration).
+    std::size_t hierarchy_reads_ { };
+
     struct LocalUnpackedArray {
         std::int64_t left { };
         std::int64_t right { };
@@ -1206,6 +1337,39 @@ private:
                 return found->second;
             }
         }
+        // Outside every frame, a declaration's value depends only on the
+        // specialization, and a unit-scope declaration whose evaluation reads
+        // no hierarchy identity depends only on the unit and its actuals; the
+        // latter are shared with derived occurrence specializations
+        // (derive_occurrence_specialization). A failure can depend on the
+        // remaining work budget, so only values are kept.
+        auto& constants = *specialization_cache(specialization_).constants;
+        if (const auto found = constants.declarations.find(
+                declaration.value());
+            found != constants.declarations.end()) {
+            ++hierarchy_reads_;
+            return found->second;
+        }
+        auto& unit_values = *constants.unit_declarations;
+        if (const auto found = unit_values.find(declaration.value());
+            found != unit_values.end()) {
+            return found->second;
+        }
+        const auto reads = hierarchy_reads_;
+        const auto keep = [&](std::optional<Value> value) {
+            if (value) {
+                const auto view = specialization_.find_declaration(declaration);
+                const bool unit_scope = view && view->systemverilog != nullptr
+                    && view->systemverilog->scope == specialization_.scope();
+                if (unit_scope && hierarchy_reads_ == reads) {
+                    unit_values.emplace(declaration.value(), *value);
+                } else {
+                    ++hierarchy_reads_;
+                    constants.declarations.emplace(declaration.value(), *value);
+                }
+            }
+            return value;
+        };
         const auto& actuals
             = specialization_.specialization().actual_identities;
         const auto actual = std::ranges::find(actuals, declaration,
@@ -1213,16 +1377,16 @@ private:
         if (actual != actuals.end()) {
             if (const auto scalar = parse_scalar_identity(actual->identity);
                 scalar && scalar->kind == ScalarKind::Time) {
-                return make_known(
-                    scalar->bits, 64U, false, false);
+                return keep(make_known(
+                    scalar->bits, 64U, false, false));
             }
-            if (const auto parsed = parse_canonical(actual->identity)) {
-                return parsed;
+            if (auto parsed = parse_canonical(actual->identity)) {
+                return keep(std::move(parsed));
             }
             std::string ignored;
-            if (const auto parsed = parse_literal(
+            if (auto parsed = parse_literal(
                     actual->identity, true, ignored)) {
-                return parsed;
+                return keep(std::move(parsed));
             }
         }
         if (!active_declarations_.insert(declaration.value()).second) {
@@ -1242,12 +1406,11 @@ private:
         if (result && view->systemverilog->type
             && hir_systemverilog_explicit_integral_type(
                 *view->systemverilog->type)) {
-            result = convert_hir_systemverilog_constant(
-                std::move(*result), *view->systemverilog->type, error_,
-                &specialization_);
+            result = convert_record_type(
+                std::move(*result), *view->systemverilog->type);
         }
         remove();
-        return result;
+        return keep(std::move(result));
     }
 
     [[nodiscard]] std::optional<Value> evaluate_name(
@@ -1271,6 +1434,7 @@ private:
             hierarchy_identities, record.text,
             &semantic::SpecializedHirNamedIdentity::name);
         if (hierarchy != hierarchy_identities.end()) {
+            ++hierarchy_reads_;
             if (const auto parsed = parse_canonical(hierarchy->identity)) {
                 return parsed;
             }
@@ -1390,6 +1554,135 @@ private:
         return std::nullopt;
     }
 
+    /// evaluate_binary's result for Logic4 operands of at most 64 bits, by
+    /// word arithmetic; nullopt leaves the operator to the general path
+    /// (which also reports errors).
+    [[nodiscard]] std::optional<std::optional<Value>> small_binary(
+        const std::string_view op, const Value& left, const Value& right)
+    {
+        const auto l = small_words(left);
+        const auto r = small_words(right);
+        if (!l || !r) {
+            return std::nullopt;
+        }
+        if (op == "<<" || op == "<<<" || op == ">>" || op == ">>>") {
+            if (r->b != 0U) {
+                return std::nullopt;
+            }
+            const auto count = right.signed_value
+                ? small_signed(r->a, right.width)
+                : static_cast<std::int64_t>(r->a);
+            if (count < 0 || (!right.signed_value && r->a > 0x7fffffffU)) {
+                return std::nullopt;
+            }
+            const auto width = left.width;
+            const auto amount = static_cast<std::uint64_t>(count) >= width
+                ? width : static_cast<std::uint32_t>(count);
+            const auto mask = width_mask(width);
+            SmallWords out;
+            if (op == "<<" || op == "<<<") {
+                out.a = amount >= 64U ? 0U : (l->a << amount) & mask;
+                out.b = amount >= 64U ? 0U : (l->b << amount) & mask;
+            } else {
+                out.a = amount >= 64U ? 0U : l->a >> amount;
+                out.b = amount >= 64U ? 0U : l->b >> amount;
+                if (op == ">>>" && left.signed_value && amount != 0U) {
+                    const auto fill = mask & ~width_mask(width - amount);
+                    if (((l->a >> (width - 1U)) & 1U) != 0U) {
+                        out.a |= fill;
+                    }
+                    if (((l->b >> (width - 1U)) & 1U) != 0U) {
+                        out.b |= fill;
+                    }
+                }
+            }
+            auto result = left;
+            result.packed = PackedLogic4::from_aval_bval(width, out.a, out.b);
+            return std::optional<Value> { std::move(result) };
+        }
+        const auto width = std::max(left.width, right.width);
+        const auto signed_value = left.signed_value && right.signed_value;
+        const auto lhs = small_resized(*l, left.width, width, left.signed_value);
+        const auto rhs = small_resized(*r, right.width, width, right.signed_value);
+        const auto known = lhs.b == 0U && rhs.b == 0U;
+        const auto domain = left.domain == right.domain
+            ? left.domain : frontend::ValueDomain::Logic4;
+        const auto mask = width_mask(width);
+        const auto word = [&](const std::uint64_t a) {
+            return std::optional<Value> { make_value(
+                PackedLogic4::from_aval_bval(width, a & mask, 0U),
+                signed_value, false, domain) };
+        };
+        if (op == "==" || op == "!=" || op == "=" || op == "/=") {
+            if (l->b != 0U || r->b != 0U) {
+                return std::optional<Value> { logical_result(Truth::unknown) };
+            }
+            const auto equal = (lhs.a == rhs.a) == (op == "==" || op == "=");
+            return std::optional<Value> { logical_result(
+                equal ? Truth::true_value : Truth::false_value) };
+        }
+        if (op == "===" || op == "!==") {
+            const auto equal = (lhs.a == rhs.a && lhs.b == rhs.b) == (op == "===");
+            return std::optional<Value> { logical_result(
+                equal ? Truth::true_value : Truth::false_value) };
+        }
+        if (!known) {
+            return std::nullopt;
+        }
+        if (op == "<" || op == "<=" || op == ">" || op == ">=") {
+            const auto compared = signed_value
+                ? (small_signed(lhs.a, width) < small_signed(rhs.a, width) ? -1
+                      : small_signed(lhs.a, width) > small_signed(rhs.a, width) ? 1 : 0)
+                : (lhs.a < rhs.a ? -1 : lhs.a > rhs.a ? 1 : 0);
+            const auto result = op == "<" ? compared < 0
+                : op == "<=" ? compared <= 0
+                : op == ">" ? compared > 0
+                            : compared >= 0;
+            return std::optional<Value> { logical_result(
+                result ? Truth::true_value : Truth::false_value) };
+        }
+        if (op == "&") {
+            return word(lhs.a & rhs.a);
+        }
+        if (op == "|") {
+            return word(lhs.a | rhs.a);
+        }
+        if (op == "^") {
+            return word(lhs.a ^ rhs.a);
+        }
+        if (op == "~^" || op == "^~") {
+            return word(~(lhs.a ^ rhs.a));
+        }
+        if (op == "+") {
+            return word(lhs.a + rhs.a);
+        }
+        if (op == "-") {
+            return word(lhs.a - rhs.a);
+        }
+        if (op == "*") {
+            return word(lhs.a * rhs.a);
+        }
+        if (op == "/" || op == "%") {
+            if (rhs.a == 0U) {
+                return std::nullopt;
+            }
+            if (!signed_value) {
+                return word(op == "/" ? lhs.a / rhs.a : lhs.a % rhs.a);
+            }
+            const auto dividend = small_signed(lhs.a, width);
+            const auto divisor = small_signed(rhs.a, width);
+            const auto minimum = width >= 64U
+                ? std::numeric_limits<std::int64_t>::min()
+                : -(std::int64_t { 1 } << (width - 1U));
+            if (dividend == minimum && divisor == -1) {
+                return std::nullopt;
+            }
+            return word(static_cast<std::uint64_t>(
+                op == "/" ? dividend / divisor : dividend % divisor));
+        }
+        return std::nullopt;
+    }
+
     [[nodiscard]] std::optional<Value> evaluate_binary(
         const semantic::sv::Expression& record)
     {
@@ -1414,6 +1707,9 @@ private:
             error_ = "symbolic unbounded '$' is only valid as a parameter "
                      "value or an argument to $isunbounded";
             return std::nullopt;
+        }
+        if (auto fast = small_binary(record.text, *left, *right)) {
+            return std::move(*fast);
         }
         if (record.text == "&&" || record.text == "||") {
             const auto lhs = truth(*left);
@@ -2263,9 +2559,8 @@ private:
                 && formal->systemverilog->type
                 && hir_systemverilog_explicit_integral_type(
                     *formal->systemverilog->type)) {
-                value = convert_hir_systemverilog_constant(
-                    std::move(*value), *formal->systemverilog->type, error_,
-                    &specialization_);
+                value = convert_record_type(
+                    std::move(*value), *formal->systemverilog->type);
                 if (!value) {
                     return std::nullopt;
                 }
@@ -2274,9 +2569,8 @@ private:
         }
         auto result = make_known(0U, 32U, true, false);
         if (callable.callable->return_type.executable_width) {
-            result = *convert_hir_systemverilog_constant(
-                std::move(result), callable.callable->return_type, error_,
-                &specialization_);
+            result = *convert_record_type(
+                std::move(result), callable.callable->return_type);
         }
         frame.values.emplace(callable.id, result);
         frames_.push_back(std::move(frame));
@@ -2309,9 +2603,8 @@ private:
         auto value = frames_.back().result.value_or(
             frames_.back().values.at(callable.id));
         frames_.pop_back();
-        return convert_hir_systemverilog_constant(
-            std::move(value), callable.callable->return_type, error_,
-            &specialization_);
+        return convert_record_type(
+            std::move(value), callable.callable->return_type);
     }
 
     [[nodiscard]] bool assign_target(
@@ -2372,9 +2665,8 @@ private:
                 && formal->systemverilog->type
                 && hir_systemverilog_explicit_integral_type(
                     *formal->systemverilog->type)) {
-                auto converted = convert_hir_systemverilog_constant(
-                    std::move(value), *formal->systemverilog->type, error_,
-                    &specialization_);
+                auto converted = convert_record_type(
+                    std::move(value), *formal->systemverilog->type);
                 if (!converted) {
                     return false;
                 }
@@ -2579,9 +2871,8 @@ private:
             }
             if (source.type
                 && hir_systemverilog_explicit_integral_type(*source.type)) {
-                value = convert_hir_systemverilog_constant(
-                    std::move(*value), *source.type, error_,
-                    &specialization_);
+                value = convert_record_type(
+                    std::move(*value), *source.type);
                 if (!value) {
                     return false;
                 }
@@ -2854,7 +3145,7 @@ private:
 
     const semantic::SpecializedHirUnit& specialization_;
     std::string& error_;
-    std::unordered_set<std::uint32_t> active_expressions_;
+    std::vector<std::uint32_t> active_expressions_;
     std::unordered_set<std::uint32_t> active_declarations_;
     std::vector<Frame> frames_;
     std::uint64_t work_units_used_ { };
@@ -3693,7 +3984,7 @@ evaluate_hir_systemverilog_constant(
     error.clear();
     // Evaluation depends only on the specialization and the expression;
     // instances sharing a specialization evaluate each expression once.
-    auto& results = specialization_cache(specialization).constants;
+    auto& results = specialization_cache(specialization).constants->expressions;
     if (const auto found = results.find(expression.value());
         found != results.end()) {
         error = found->second.second;
@@ -3748,26 +4039,9 @@ convert_hir_systemverilog_constant(
         return std::nullopt;
     }
     std::unordered_set<std::uint32_t> visiting;
-    const auto width = resolved_type_width(
-        type, specialization, visiting);
-    if (!width || *width == 0U || *width > maximum_constant_width) {
-        error = "resolved SystemVerilog integral type has no supported width";
-        return std::nullopt;
-    }
-    value = resized(
-        std::move(value),
-        static_cast<std::uint32_t>(*width));
-    value.signed_value = type.signed_value;
-    value.unsized = false;
-    value.domain = type_domain(type);
-    value.nominal_type = type.target.target.valid()
-        ? type.target.spelling
-        : std::string { };
-    value.packed_range = type.packed_range;
-    if (!type.four_state) {
-        convert_to_two_state(value);
-    }
-    return value;
+    return convert_constant_to_width(std::move(value), type, error,
+        resolved_type_width(type, specialization, visiting));
 }
+
 
 } // namespace fsim::elaboration

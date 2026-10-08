@@ -226,25 +226,59 @@ Interpreter::Impl::StaticKernel::StaticKernel(
                     "static kernel packed memory width is inconsistent");
             }
         } else {
-            container.element_offset = static_cast<std::uint32_t>(arena_.size());
-            arena_.resize(arena_.size()
-                    + 2U * container.element_words * container.count,
-                0U);
-            for (std::uint32_t index = 0U; index < container.count; ++index) {
-                const auto& element = initial.elements[index];
-                const auto aval = element.aval_words();
-                const auto bval = element.bval_words();
-                const auto base = container.element_offset
-                    + 2U * container.element_words * index;
-                for (std::uint32_t word = 0U; word < container.element_words;
-                     ++word) {
-                    arena_[base + word] = word < aval.size() ? aval[word] : 0U;
-                    arena_[base + container.element_words + word]
-                        = word < bval.size() ? bval[word] : 0U;
+            place_elements(container, initial);
+        }
+        containers_.push_back(std::move(container));
+    }
+    // Behavioral members own the fixed arrays they use directly (ContainerRead
+    // and ContainerWrite without a design-memory binding; see the planner).
+    std::vector<std::vector<std::pair<ContainerRegisterId, std::uint32_t>>>
+        private_containers(spec.members.size());
+    for (std::size_t index = 0U; index < spec.members.size(); ++index) {
+        const auto& member_spec = spec.members[index];
+        if (member_spec.kind != StaticKernelMemberKind::behavioral
+            || member_spec.process == spec.host) {
+            continue;
+        }
+        const auto program = impl_.processes.program_view(member_spec.process);
+        const auto& operations = program.operations();
+        std::vector<std::uint8_t> bound(program.container_register_count(), 0U);
+        std::vector<std::uint8_t> used(program.container_register_count(), 0U);
+        for (std::size_t op = 0U; op < operations.size(); ++op) {
+            const auto operation = operations.expanded(op);
+            if (const auto* read = operation_get_if<ReadContainerObject>(&operation)) {
+                if (read->destination < bound.size()) {
+                    bound[read->destination] = 1U;
+                }
+            } else if (const auto* load = operation_get_if<ContainerRead>(&operation)) {
+                if (load->source < used.size()) {
+                    used[load->source] = 1U;
+                }
+            } else if (const auto* store = operation_get_if<ContainerWrite>(&operation)) {
+                if (store->target < used.size()) {
+                    used[store->target] = 1U;
                 }
             }
         }
-        containers_.push_back(std::move(container));
+        const auto types = process_layout_detail::ProcessLayoutAccess::view(
+            program.container_register_types());
+        for (std::size_t id = 0U; id < used.size(); ++id) {
+            if (used[id] == 0U || bound[id] != 0U || id >= types.size()) {
+                continue;
+            }
+            const auto initial = impl_.default_container_register(types[id]);
+            Container container;
+            container.object = no_container_object;
+            container.type = initial->type;
+            container.count = static_cast<std::uint32_t>(initial->elements.size());
+            container.element_words = words_for(
+                static_cast<std::uint32_t>(initial->type.element_width));
+            place_elements(container, *initial);
+            private_containers[index].emplace_back(
+                static_cast<ContainerRegisterId>(id),
+                static_cast<std::uint32_t>(containers_.size()));
+            containers_.push_back(std::move(container));
+        }
     }
     // Native memory access (SystemVerilog): element slots or one packed
     // slot, one-word Logic4 elements.
@@ -278,6 +312,13 @@ Interpreter::Impl::StaticKernel::StaticKernel(
             info.packed_offset = slot.offset;
             info.packed_words = slot.words;
             info.packed_width = slot.width;
+        } else if (shape
+            && container.storage == StaticKernelContainerStorage::elements) {
+            // Kernel-held elements: nothing observes them, so native code
+            // also writes them in place.
+            info.storage = 3U;
+            info.packed_offset = container.element_offset;
+            info.packed_words = 1U;
         }
         info.count = container.count;
         info.left = type.index_left;
@@ -357,6 +398,7 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         for (std::size_t op = 0U; op < operations.size(); ++op) {
             member.operations.push_back(operations.expanded(op));
         }
+        member.body_identity = operations.body_identity();
         if (stage_profile) {
             expand_seconds += std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - expand_started).count();
@@ -374,6 +416,24 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         member.registers.assign(program.register_count(), PackedLogic4 { });
         member.container_registers.assign(
             program.container_register_count(), no_container);
+        for (const auto& [id, container] : private_containers[members_.size()]) {
+            member.container_registers[id] = container;
+        }
+        for (const auto& operation : member.operations) {
+            const auto* push = operation_get_if<CallableFramePush>(&operation);
+            if (push != nullptr
+                && std::ranges::any_of(push->containers,
+                    [&](const ContainerRegisterId id) {
+                        return id < member.container_registers.size()
+                            && member.container_registers[id] != no_container;
+                    })) {
+                member.private_frame_identities.push_back(push->identity);
+            }
+        }
+        std::ranges::sort(member.private_frame_identities);
+        member.private_frame_identities.erase(
+            std::ranges::unique(member.private_frame_identities).begin(),
+            member.private_frame_identities.end());
         const auto index = static_cast<std::uint32_t>(members_.size());
         const bool behavioral
             = member.kind == StaticKernelMemberKind::behavioral;
@@ -702,6 +762,15 @@ Interpreter::Impl::StaticKernel::~StaticKernel()
 {
     if (!profile_) {
         return;
+    }
+    for (const auto& lazy : lazy_templates_) {
+        if (lazy.code.body != nullptr && !lazy.code.body->resume_entries.empty()) {
+            std::cerr << "fsim-kernel: lazy-behavioral size="
+                      << lazy.code.body->code.size() << " work=" << lazy.work
+                      << " compiled=" << (lazy.units.empty()
+                                 || lazy.units.front()->entry != nullptr)
+                      << '\n';
+        }
     }
     std::cerr << "fsim-kernel: deopts=" << profile_deopts_
               << " generic_runs=" << profile_generic_runs_ << '\n';
@@ -1455,6 +1524,27 @@ PackedLogic4 Interpreter::Impl::StaticKernel::container_element(
         std::span<const std::uint64_t> {
             arena_.data() + base + container.element_words,
             container.element_words });
+}
+
+void Interpreter::Impl::StaticKernel::place_elements(
+    Container& container, const ContainerValue& initial)
+{
+    container.element_offset = static_cast<std::uint32_t>(arena_.size());
+    arena_.resize(arena_.size()
+            + 2U * container.element_words * container.count,
+        0U);
+    for (std::uint32_t index = 0U; index < container.count; ++index) {
+        const auto& element = initial.elements[index];
+        const auto aval = element.aval_words();
+        const auto bval = element.bval_words();
+        const auto base = container.element_offset
+            + 2U * container.element_words * index;
+        for (std::uint32_t word = 0U; word < container.element_words; ++word) {
+            arena_[base + word] = word < aval.size() ? aval[word] : 0U;
+            arena_[base + container.element_words + word]
+                = word < bval.size() ? bval[word] : 0U;
+        }
+    }
 }
 
 void Interpreter::Impl::StaticKernel::write_container_element(
@@ -2701,6 +2791,26 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_generic(
                               fixed_offset(type,
                                   static_cast<std::int32_t>(*index)));
                 }
+            } else if constexpr (std::is_same_v<T, ContainerWrite>) {
+                // A blocking element write of a private array.
+                if (op.target >= member.container_registers.size()
+                    || member.container_registers[op.target] == no_container
+                    || containers_[member.container_registers[op.target]].object
+                        != no_container_object
+                    || op.string_index) {
+                    fail(member_index, pc,
+                        "static kernel container register is not private");
+                }
+                Pending pending;
+                pending.kind = PendingKind::element;
+                pending.member = member_index;
+                pending.instruction = pc;
+                pending.target = member.container_registers[op.target];
+                pending.value = reg(op.source, pc);
+                pending.index = reg(op.index, pc);
+                pending.signed_index = op.signed_index;
+                pending.linear_index = op.linear_index;
+                write_element(pending);
             } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
                 if (op.object >= container_of_object_.size()
                     || container_of_object_[op.object] == no_container) {

@@ -7870,7 +7870,9 @@ void test_specialized_hir_vhdl_packed_array_projection()
                &replayed_work, &memo_entries)
         == 5);
     assert(memo_hits > 1U && memo_misses > 6U);
-    assert(memo_admitted == 3U && memo_entries == 3U);
+    // The ROM reads no hierarchy identity, so its entry also serves the
+    // overlay that differs only in hierarchy identities.
+    assert(memo_admitted == 2U && memo_entries == 2U);
     assert(replayed_work >= 60U * 1024U * 1024U);
 }
 

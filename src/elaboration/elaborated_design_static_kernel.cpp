@@ -52,6 +52,23 @@ void collect_container_objects(
     }, operation);
 }
 
+/// The operation's type name, for diagnostics.
+[[nodiscard]] std::string operation_type_name(const Operation& operation)
+{
+    return visit_operation([](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        int status = 0;
+        char* name = abi::__cxa_demangle(
+            typeid(T).name(), nullptr, nullptr, &status);
+        std::string text = name != nullptr ? name : "?";
+        std::free(name);
+        if (const auto colon = text.rfind("::"); colon != std::string::npos) {
+            text = text.substr(colon + 2U);
+        }
+        return text;
+    }, operation);
+}
+
 [[nodiscard]] std::optional<InstructionIndex> branch_target_outside(
     const Operation& operation, const std::size_t count)
 {
@@ -408,6 +425,11 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
             bool supported = count != 0U;
             std::size_t failed_at = count;
             const char* failed_reason = "";
+            // Container registers bound to design memories, used directly
+            // (the kernel gives each such private register its own storage),
+            // and saved by automatic frames.
+            std::set<ContainerRegisterId> bound_containers;
+            std::set<ContainerRegisterId> private_containers;
             for (std::size_t op = 0U; op < count && supported; ++op) {
                 const auto operation = operations.expanded(op);
                 failed_at = op;
@@ -434,6 +456,12 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                     if constexpr (std::is_same_v<T, Call>) {
                         supported = supported && value.target < count
                             && value.return_target < count;
+                    } else if constexpr (std::is_same_v<T, ReadContainerObject>) {
+                        bound_containers.insert(value.destination);
+                    } else if constexpr (std::is_same_v<T, ContainerRead>) {
+                        private_containers.insert(value.source);
+                    } else if constexpr (std::is_same_v<T, ContainerWrite>) {
+                        private_containers.insert(value.target);
                     } else if constexpr (std::is_same_v<T, Fork>) {
                         supported = supported
                             && std::ranges::all_of(value.branches,
@@ -461,11 +489,51 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                 }, operation);
             }
             if (supported) {
+                // A register both bound and written would alias the design
+                // memory, which the interpreter copies. Private storage must
+                // be a fixed packed array.
+                const auto types = process_layout_detail::ProcessLayoutAccess::view(
+                    view.container_register_types());
+                for (const auto id : private_containers) {
+                    if (bound_containers.contains(id)) {
+                        continue;
+                    }
+                    const bool fixed = id < types.size() && types[id].fixed
+                        && !types[id].associative
+                        && (types[id].element_kind == ContainerElementKind::Packed
+                            || types[id].element_kind
+                                == ContainerElementKind::Scalar);
+                    if (!fixed) {
+                        supported = false;
+                        failed_at = count;
+                        failed_reason = "private_container_shape";
+                        break;
+                    }
+                }
+            }
+            if (supported) {
                 candidates[index] = std::move(member);
             } else if (std::getenv("FSIM_PROFILE_KERNEL_PLAN") != nullptr) {
                 std::cerr << "fsim-kernel-plan: behavioral rejected process="
                           << view.name() << " op=" << failed_at
-                          << " reason=" << failed_reason << '\n';
+                          << " reason=" << failed_reason;
+                if (failed_at < count) {
+                    std::cerr << " kind="
+                              << operation_type_name(
+                                     operations.expanded(failed_at));
+                }
+                std::set<std::string> unsupported;
+                for (std::size_t op = 0U; op < count; ++op) {
+                    const auto operation = operations.expanded(op);
+                    if (!static_kernel_behavioral_operation_supported(
+                            operation)) {
+                        unsupported.insert(operation_type_name(operation));
+                    }
+                }
+                for (const auto& name : unsupported) {
+                    std::cerr << " unsupported=" << name;
+                }
+                std::cerr << '\n';
             }
         }
     }
@@ -884,19 +952,7 @@ StaticKernelPlan ElaboratedDesign::plan_static_kernel() const
                             : static_kernel_operation_supported(operation))
                     && !operation_holds<WaitSensitivity>(operation)
                     && !operation_holds<Halt>(operation)) {
-                    visit_operation([&](const auto& value) {
-                        using T = std::decay_t<decltype(value)>;
-                        int status = 0;
-                        char* name = abi::__cxa_demangle(
-                            typeid(T).name(), nullptr, nullptr, &status);
-                        std::string text = name != nullptr ? name : "?";
-                        std::free(name);
-                        if (const auto colon = text.rfind("::");
-                            colon != std::string::npos) {
-                            text = text.substr(colon + 2U);
-                        }
-                        unsupported.insert(text);
-                    }, operation);
+                    unsupported.insert(operation_type_name(operation));
                 }
             }
             if (!unsupported.empty()) {

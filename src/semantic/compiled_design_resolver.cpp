@@ -2775,6 +2775,17 @@ CompiledDesignResolver::effective_vhdl_subtype(
     std::function<std::optional<vhdl::SubtypeIndication>(
         vhdl::SubtypeIndication, ScopeId,
         std::vector<CompiledBindingFrame>&)> resolve;
+    // Lookups below accept only type, subtype and generic-type
+    // declarations, all of which the design indexes by identifier: a name
+    // with none (a predefined or IEEE type) cannot resolve.
+    const auto may_name_type = [&](const std::string_view spelling) {
+        const auto last = spelling.substr(spelling.rfind('.') + 1U);
+        if (last.empty() || last.find_first_of("@:") != std::string_view::npos) {
+            return true;
+        }
+        const auto declarations = design_->vhdl_type_declarations_named(last);
+        return !declarations || !declarations->empty();
+    };
     resolve = [&](vhdl::SubtypeIndication result, ScopeId scope,
                   std::vector<CompiledBindingFrame>& active_frames)
         -> std::optional<vhdl::SubtypeIndication> {
@@ -2782,7 +2793,8 @@ CompiledDesignResolver::effective_vhdl_subtype(
         const auto resolver = CompiledDesignResolver {
             *design_, selected_unit_, effective_, active_frames
         };
-        if (result.type_mark.spelling.find('.') != std::string::npos) {
+        if (result.type_mark.spelling.find('.') != std::string::npos
+            && may_name_type(result.type_mark.spelling)) {
             vhdl::Name name;
             name.spelling = result.type_mark.spelling;
             name.canonical = result.type_mark.spelling;
@@ -2861,16 +2873,18 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 name.spelling.erase(0, synthetic_vital_prefix.size());
                 name.canonical = name.spelling;
             }
-            declaration_id = resolver.resolve_vhdl(
-                name, scope, [](const CompiledDeclarationView& candidate) {
-                    if (candidate.vhdl == nullptr) {
-                        return false;
-                    }
-                    const auto form = candidate.vhdl->form;
-                    return form == vhdl::DeclarationForm::type
-                        || form == vhdl::DeclarationForm::subtype
-                        || form == vhdl::DeclarationForm::generic_type;
-                }).unique();
+            if (may_name_type(name.spelling)) {
+                declaration_id = resolver.resolve_vhdl(
+                    name, scope, [](const CompiledDeclarationView& candidate) {
+                        if (candidate.vhdl == nullptr) {
+                            return false;
+                        }
+                        const auto form = candidate.vhdl->form;
+                        return form == vhdl::DeclarationForm::type
+                            || form == vhdl::DeclarationForm::subtype
+                            || form == vhdl::DeclarationForm::generic_type;
+                    }).unique();
+            }
         }
         if (declaration_id) {
             const auto declaration = find_declaration(

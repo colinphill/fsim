@@ -771,10 +771,12 @@ template<typename SignalRecord>
 bool operation_list_detail::ShareAccess::share_impl(
     const OperationList& representative, OperationList& candidate,
     const std::span<const SignalRecord> signals,
-    OperationList::Storage* const recycled_operations)
+    OperationList::Storage* const recycled_operations,
+    const bool shareable_checked)
 {
     if (representative.size() != candidate.size()
-        || !shareable(representative) || !shareable(candidate)) {
+        || (!shareable_checked
+            && (!shareable(representative) || !shareable(candidate)))) {
         return false;
     }
     std::map<SignalId, SignalId> assigned;
@@ -1142,19 +1144,21 @@ bool operation_list_detail::ShareAccess::share_impl(
 bool operation_list_detail::ShareAccess::share(
     const OperationList& representative, OperationList& candidate,
     const std::span<const Signal> signals,
-    OperationList::Storage* const recycled_operations)
+    OperationList::Storage* const recycled_operations,
+    const bool shareable_checked)
 {
-    return share_impl(
-        representative, candidate, signals, recycled_operations);
+    return share_impl(representative, candidate, signals, recycled_operations,
+        shareable_checked);
 }
 
 bool operation_list_detail::ShareAccess::share(
     const OperationList& representative, OperationList& candidate,
     const std::span<const SignalHot> signals,
-    OperationList::Storage* const recycled_operations)
+    OperationList::Storage* const recycled_operations,
+    const bool shareable_checked)
 {
-    return share_impl(
-        representative, candidate, signals, recycled_operations);
+    return share_impl(representative, candidate, signals, recycled_operations,
+        shareable_checked);
 }
 
 bool share_process_operations(
@@ -1178,7 +1182,8 @@ bool process_program_detail::share_operations(
     const ProcessProgramView& representative,
     Process& candidate,
     const std::span<const Signal> signals,
-    OperationList::Storage* const recycled_operations)
+    OperationList::Storage* const recycled_operations,
+    const bool shareable_checked)
 {
     if (!representative.valid()
         || representative.operations().size() != candidate.operations.size()
@@ -1197,7 +1202,7 @@ bool process_program_detail::share_operations(
     }
     if (!operation_list_detail::ShareAccess::share(
             representative.operations(), candidate.operations, signals,
-            recycled_operations)) {
+            recycled_operations, shareable_checked)) {
         return false;
     }
     if (representative.expression_profiles()
@@ -1236,7 +1241,8 @@ bool process_program_detail::share_operations(
     const ProcessProgramTemplate& candidate_common,
     ProcessInstanceProgram& candidate,
     const std::span<const Signal> signals,
-    OperationList::Storage* const recycled_operations)
+    OperationList::Storage* const recycled_operations,
+    const bool shareable_checked)
 {
     // A view of the same template object matches it trivially.
     const bool same_template = &representative.language_standard()
@@ -1248,7 +1254,7 @@ bool process_program_detail::share_operations(
     }
     return operation_list_detail::ShareAccess::share(
         representative.operations(), candidate.operations, signals,
-        recycled_operations);
+        recycled_operations, shareable_checked);
 }
 
 bool process_operations_shareable(const Process& process)

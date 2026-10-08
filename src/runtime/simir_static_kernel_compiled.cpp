@@ -58,7 +58,10 @@ void Interpreter::Impl::StaticKernel::compile_members()
         }
         if (specialize && members_[index].vhdl) {
             const auto specialize_start = std::chrono::steady_clock::now();
-            specialized_members_ += specialize_member(index) ? 1U : 0U;
+            if (specialize_member(index)) {
+                ++specialized_members_;
+                members_[index].body_identity = nullptr;
+            }
             specialize_seconds_ += std::chrono::duration<double>(
                 std::chrono::steady_clock::now() - specialize_start).count();
         }
@@ -267,11 +270,6 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
             }
         }
     }
-    if (!member.container_registers.empty()
-        && member.container_registers.size() > 64U) {
-        throw reject("container_registers");
-    }
-
     // 0. VHDL: operations the compiled entry never reaches (the process
     // prologue runs only in the first, reference-evaluated run) and constant
     // loads no later read can see are left out; they would otherwise give
@@ -279,7 +277,20 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
     std::vector<std::uint8_t> skip(end, 0U);
     std::vector<std::uint64_t> live_at_entry;
     if (vhdl) {
-        prune_operations(member_index, skip, live_at_entry);
+        if (member.body_identity != nullptr) {
+            const std::tuple key { member.body_identity, member.body_begin,
+                member.body_end };
+            if (const auto found = prune_cache_.find(key);
+                found != prune_cache_.end()) {
+                skip = found->second.first;
+                live_at_entry = found->second.second;
+            } else {
+                prune_operations(member_index, skip, live_at_entry);
+                prune_cache_.emplace(key, std::pair { skip, live_at_entry });
+            }
+        } else {
+            prune_operations(member_index, skip, live_at_entry);
+        }
     }
 
     // 1. Flow-insensitive register widths.
@@ -295,8 +306,10 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
         return static_cast<std::uint32_t>(
             impl_.get_signal(signal).initial_value.width());
     };
+    // Private arrays are bound from the start; design memories bind at
+    // ReadContainerObject.
     std::vector<std::uint32_t> container_of_register(
-        member.container_registers.size(), no_container);
+        member.container_registers.begin(), member.container_registers.end());
     bool changed = true;
     std::uint32_t defining = 0U;
     for (std::size_t pass = 0U; changed; ++pass) {
@@ -531,7 +544,35 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
     // A wide owned slot read whose register only feeds narrow selections,
     // in a member that never writes the slot, is read in place.
     std::vector<std::uint32_t> field_slot(register_count, no_slot);
+    // Likewise a family proxy read whose narrow selections each lie in one
+    // leaf, in a member that never writes the family: each selection loads
+    // its leaf (family_leaf).
+    std::vector<std::uint32_t> field_family(register_count, no_slot);
+    const auto family_leaf = [&](const std::uint32_t family,
+                                 const std::uint32_t offset,
+                                 const std::uint32_t count) -> const FamilyLeaf* {
+        for (const auto& leaf : families_[family].leaves) {
+            if (leaf.offset <= offset && count <= leaf.width
+                && offset - leaf.offset <= leaf.width - count) {
+                return &leaf;
+            }
+        }
+        return nullptr;
+    };
+    // The leaf a write of `count` bits at `offset` of a family proxy
+    // replaces exactly.
+    const auto proxy_leaf = [&](const SignalId signal, const std::uint32_t offset,
+                                const std::uint32_t count) -> const FamilyLeaf* {
+        if (signal >= family_of_signal_.size()
+            || family_of_signal_[signal] == no_slot) {
+            return nullptr;
+        }
+        const auto* leaf = family_leaf(family_of_signal_[signal], offset, count);
+        return leaf != nullptr && leaf->offset == offset && leaf->width == count
+            ? leaf : nullptr;
+    };
     {
+        std::vector<std::uint8_t> written_family(families_.size(), 0U);
         std::vector<std::uint32_t> definitions(register_count, 0U);
         std::vector<std::uint8_t> other_use(register_count, 0U);
         std::vector<std::uint8_t> written_slot(slots_.size(), 0U);
@@ -578,6 +619,12 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
             visit_operation([&](const auto& op) {
                 using T = std::decay_t<decltype(op)>;
                 if constexpr (std::is_same_v<T, ReadSignal>) {
+                    if (op.signal < family_of_signal_.size()
+                        && family_of_signal_[op.signal] != no_slot
+                        && op.destination < register_count) {
+                        field_family[op.destination]
+                            = family_of_signal_[op.signal];
+                    }
                     auto slot = op.signal < slot_of_signal_.size()
                         ? slot_of_signal_[op.signal] : no_slot;
                     if (slot == no_slot && op.signal < mirror_of_signal_.size()) {
@@ -600,6 +647,18 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                             other_use[op.source] = 1U;
                         }
                     }
+                    if (op.source < register_count
+                        && field_family[op.source] != no_slot) {
+                        bool fits = false;
+                        if constexpr (std::is_same_v<T, Extract>) {
+                            fits = op.width != 0U && op.width <= 64U
+                                && family_leaf(field_family[op.source],
+                                       op.offset, op.width) != nullptr;
+                        }
+                        if (!fits) {
+                            field_family[op.source] = no_slot;
+                        }
+                    }
                     return;
                 }
                 if constexpr (requires { op.signal; }) {
@@ -613,6 +672,10 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     if constexpr (std::is_same_v<std::decay_t<decltype(op.signal)>,
                                       SignalId>
                         && !std::is_same_v<T, ReadSignal>) {
+                        if (op.signal < family_of_signal_.size()
+                            && family_of_signal_[op.signal] != no_slot) {
+                            written_family[family_of_signal_[op.signal]] = 1U;
+                        }
                         if (op.signal < slot_of_signal_.size()
                             && slot_of_signal_[op.signal] != no_slot
                             && (!vhdl || immediate)) {
@@ -648,6 +711,32 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     || (written_slot[field_slot[reg]] != 0U
                         && !unwritten_between(reg)))) {
                 field_slot[reg] = no_slot;
+            }
+        }
+        // A leaf written by this member (directly or through the proxy)
+        // or a barrier between the read and its last selection could
+        // change what an in-place read sees.
+        std::vector<std::uint8_t> written_leaf_slot(slots_.size(), 0U);
+        for (const auto& [slot, at] : slot_writes) {
+            written_leaf_slot[slot] = 1U;
+        }
+        for (std::uint32_t reg = 0U; reg < register_count; ++reg) {
+            if (field_family[reg] == no_slot) {
+                continue;
+            }
+            const auto& family = families_[field_family[reg]];
+            const bool leaf_written = std::ranges::any_of(family.leaves,
+                [&](const FamilyLeaf& leaf) {
+                    return written_leaf_slot[leaf.slot] != 0U;
+                });
+            const auto from = definition_pc[reg];
+            const auto to = last_use[reg];
+            if (definitions[reg] != 1U || other_use[reg] != 0U || to <= from
+                || written_family[field_family[reg]] != 0U || leaf_written
+                || std::ranges::any_of(barriers, [&](const std::uint32_t pc) {
+                       return pc >= from && pc <= to;
+                   })) {
+                field_family[reg] = no_slot;
             }
         }
     }
@@ -874,8 +963,15 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     }
                 } else if constexpr (std::is_same_v<T, CallableFramePush>
                     || std::is_same_v<T, CallableFramePop>) {
-                    // Isolated and nonrecursive (checked above).
-                    inst.op = KOp::nop;
+                    // Isolated and nonrecursive (checked above); frames that
+                    // save private arrays run through the generic bridge.
+                    if (member.private_frame(op.identity)) {
+                        inst.op = KOp::generic;
+                        inst.x = pc;
+                        inst.y = 0U;
+                    } else {
+                        inst.op = KOp::nop;
+                    }
                 } else if constexpr (std::is_same_v<T, Call>) {
                     inst.op = KOp::call;
                     inst.d = map_target(op.target);
@@ -929,6 +1025,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     if (op.source < register_count && width[op.source] > 64U
                         && width[op.source] != polymorphic
                         && field_slot[op.source] == no_slot
+                        && field_family[op.source] == no_slot
                         && op.destination < register_count
                         && width[op.destination] <= 64U) {
                         wide_source = op.source;
@@ -947,6 +1044,7 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 }
                 generic = generic
                     || (width[reg] > 64U && field_slot[reg] == no_slot
+                        && field_family[reg] == no_slot
                         && (!wide_source || reg != *wide_source));
             };
             // Control flow never runs generically (the bridge does not
@@ -979,7 +1077,8 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 };
                 if constexpr (std::is_same_v<T, ReadSignal>) {
                     if (op.destination < register_count
-                        && field_slot[op.destination] != no_slot) {
+                        && (field_slot[op.destination] != no_slot
+                            || field_family[op.destination] != no_slot)) {
                         return;
                     }
                     generic = generic || wide_signal(op.signal);
@@ -993,11 +1092,20 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 } else if constexpr (std::is_same_v<T, WriteBlockingSlice>
                     || std::is_same_v<T, WriteUpdateSlice>
                     || std::is_same_v<T, WriteProjectedSlice>) {
-                    // Narrow slices of wide owned slots are field stores.
+                    // Narrow slices of wide owned slots are field stores; a
+                    // SystemVerilog slice that is exactly one family leaf
+                    // stores the leaf.
                     if (op.signal >= slot_of_signal_.size()) {
                         throw reject("signal_range");
                     }
-                    generic = generic || (owned(op.signal) && proxy(op.signal));
+                    bool leaf = false;
+                    if constexpr (!std::is_same_v<T, WriteProjectedSlice>) {
+                        leaf = !vhdl && op.source < register_count
+                            && proxy_leaf(op.signal, op.offset, width[op.source])
+                                != nullptr;
+                    }
+                    generic = generic
+                        || (owned(op.signal) && proxy(op.signal) && !leaf);
                 } else if constexpr (std::is_same_v<T, WriteBlockingDynamicSlice>
                     || std::is_same_v<T, WriteUpdateDynamicSlice>
                     || std::is_same_v<T, WriteProjectedDynamicSlice>
@@ -1059,7 +1167,8 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                     }
                 } else if constexpr (std::is_same_v<T, ReadSignal>) {
                     if (op.destination < register_count
-                        && field_slot[op.destination] != no_slot) {
+                        && (field_slot[op.destination] != no_slot
+                            || field_family[op.destination] != no_slot)) {
                         // Read in place by its narrow selections.
                         inst.op = KOp::nop;
                         return;
@@ -1240,7 +1349,8 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 inst.x = narrow(op.source);
             } else if constexpr (std::is_same_v<T, ReadSignal>) {
                 if (op.destination < register_count
-                    && field_slot[op.destination] != no_slot) {
+                    && (field_slot[op.destination] != no_slot
+                        || field_family[op.destination] != no_slot)) {
                     inst.op = KOp::nop;
                     return;
                 }
@@ -1299,6 +1409,27 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 inst.offset = w(op.amount);
                 inst.flags = op.signed_amount ? flag_signed : 0U;
             } else if constexpr (std::is_same_v<T, Extract>) {
+                if (op.source < register_count
+                    && field_family[op.source] != no_slot) {
+                    const auto* leaf = family_leaf(field_family[op.source],
+                        op.offset, op.width);
+                    if (leaf == nullptr) {
+                        throw reject("extract_range");
+                    }
+                    const auto slot = leaf->slot;
+                    inst.d = narrow(op.destination);
+                    inst.x = slot;
+                    inst.offset = op.offset - leaf->offset;
+                    inst.width = op.width;
+                    inst.imm_a = slots_[slot].words;
+                    if (slots_[slot].planes == 4U) {
+                        inst.op = KOp::load_field9;
+                        inst.sub = kind_of(op.source) == ValueKind::logic9 ? 0U : 1U;
+                    } else {
+                        inst.op = KOp::load_field;
+                    }
+                    return;
+                }
                 if (op.source < register_count && field_slot[op.source] != no_slot) {
                     const auto slot = field_slot[op.source];
                     if (op.width == 0U || op.width > 64U
@@ -1515,7 +1646,17 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 inst.x = op.source;
                 inst.offset = offset;
                 inst.width = value_width;
-                if (const auto slot = owned_slot(op.signal)) {
+                if (const auto* leaf = proxy_leaf(op.signal, offset, value_width)) {
+                    // The whole leaf (see the generic decision).
+                    inst.d = leaf->slot;
+                    inst.offset = 0U;
+                    inst.sub = slots_[leaf->slot].words != 1U ? 1U : 0U;
+                    inst.imm_a = slots_[leaf->slot].words;
+                    inst.op = !blocking
+                            && domain == SignalUpdateDomain::systemverilog_nba
+                        ? KOp::store_slot_nba : KOp::store_slot;
+                    inst.flags = 0U;
+                } else if (const auto slot = owned_slot(op.signal)) {
                     // Sub 1: a narrow slice of a wide slot; imm_a is the
                     // slot's word count.
                     inst.sub = slots_[*slot].words != 1U ? 1U : 0U;
@@ -1597,6 +1738,24 @@ Interpreter::Impl::StaticKernel::compile(const std::uint32_t member_index)
                 inst.y = narrow(op.index);
                 inst.width = w(op.index);
                 inst.flags = op.linear_index ? flag_linear : 0U;
+            } else if constexpr (std::is_same_v<T, ContainerWrite>) {
+                // A blocking element write of a private array.
+                if (op.target >= container_of_register.size()
+                    || container_of_register[op.target] == no_container
+                    || containers_[container_of_register[op.target]].object
+                        != no_container_object
+                    || op.string_index) {
+                    throw reject("container_write");
+                }
+                inst.op = KOp::mem_write;
+                inst.d = container_of_register[op.target];
+                inst.x = narrow(op.source);
+                inst.y = narrow(op.index);
+                inst.width = w(op.source);
+                inst.offset = w(op.index);
+                inst.flags = static_cast<std::uint8_t>(
+                    (op.linear_index ? flag_linear : 0U)
+                    | (op.signed_index ? flag_signed : 0U));
             } else if constexpr (std::is_same_v<T, WriteContainerObjectElement>) {
                 if (op.object >= container_of_object_.size()
                     || container_of_object_[op.object] == no_container

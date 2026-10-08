@@ -24,6 +24,7 @@
 namespace fsim::elaboration {
 
 class Lowerer;
+struct SpecializationConstants;
 
 using runtime::Logic4;
 using runtime::PackedLogic4;
@@ -1631,6 +1632,13 @@ private:
     // specialization's class, or no_overlay_class when it matches nothing.
     static constexpr std::uint32_t no_overlay_class = 0xffffffffU;
     std::vector<semantic::SpecializedHirOverlay> overlay_classes_;
+    // Per class, the constant results its specializations share when their
+    // overlay determines them (null otherwise).
+    std::vector<std::shared_ptr<SpecializationConstants>>
+        overlay_class_constants_;
+    // The classes of each unit, by unit ID.
+    std::unordered_map<std::uint32_t, std::vector<std::uint32_t>>
+        overlay_classes_of_unit_;
     [[nodiscard]] std::uint32_t overlay_class(
         const semantic::SpecializedHirUnit& specialized);
     std::map<semantic::UnitId, std::vector<GenerateOccurrenceTemplate>>

@@ -1421,6 +1421,56 @@ namespace codec_detail {
                     write(*value);
                 }
             } else if constexpr (
+                std::same_as<Value, std::vector<runtime::PackedLogic4>>) {
+                // Runtime state: memories of narrow Logic4 elements of one
+                // width (the common case) are two dense bit planes.
+                u64(value.size());
+                const auto width = value.empty() ? 0U : value.front().width();
+                const bool dense = runtime_operation_body_sharing_
+                    && width != 0U && width <= 64U
+                    && std::ranges::all_of(value, [&](const runtime::PackedLogic4& item) {
+                           return item.width() == width && !item.is_logic9();
+                       });
+                if (runtime_operation_body_sharing_) {
+                    write(dense);
+                }
+                if (dense) {
+                    u64(width);
+                    const auto words = (value.size() * width + 63U) / 64U;
+                    const auto mask = width == 64U ? ~std::uint64_t { 0 }
+                                                   : (std::uint64_t { 1 } << width) - 1U;
+                    const auto plane = [&](const bool unknown) {
+                        std::vector<std::uint64_t> bits(words, 0U);
+                        bool any { };
+                        for (std::size_t index = 0U; index < value.size(); ++index) {
+                            const auto word = value[index].low_word();
+                            const auto field = (unknown ? word.bval : word.aval) & mask;
+                            any |= field != 0U;
+                            const auto at = index * width;
+                            bits[at / 64U] |= field << (at % 64U);
+                            if (at % 64U + width > 64U) {
+                                bits[at / 64U + 1U] |= field >> (64U - at % 64U);
+                            }
+                        }
+                        return std::pair { std::move(bits), any };
+                    };
+                    const auto [aval, aval_any] = plane(false);
+                    for (const auto word : aval) {
+                        u64(word);
+                    }
+                    const auto [bval, bval_any] = plane(true);
+                    write(bval_any);
+                    if (bval_any) {
+                        for (const auto word : bval) {
+                            u64(word);
+                        }
+                    }
+                } else {
+                    for (const auto& item : value) {
+                        write(item);
+                    }
+                }
+            } else if constexpr (
                 IsVector<Value>::value || IsSpan<Value>::value) {
                 u64(value.size());
                 for (const auto& item : value) {
@@ -2035,6 +2085,80 @@ namespace codec_detail {
                         return false;
                     }
                     value = decoded;
+                    return true;
+                } else if constexpr (
+                    std::same_as<Value, std::vector<runtime::PackedLogic4>>) {
+                    std::uint64_t size { };
+                    if (!u64(size) || size > value.max_size()
+                        || !consume_allocation(size, sizeof(runtime::PackedLogic4))) {
+                        return fail("design state vector exceeds the payload");
+                    }
+                    bool dense { };
+                    if (runtime_operation_body_sharing_ && !read(dense)) {
+                        return false;
+                    }
+                    value.clear();
+                    if (!dense) {
+                        if (size > static_cast<std::uint64_t>(remaining()) + 1U) {
+                            return fail("design state vector exceeds the payload");
+                        }
+                        value.reserve(static_cast<std::size_t>(size));
+                        for (std::uint64_t index = 0; index < size; ++index) {
+                            value.emplace_back();
+                            if (!read(value.back())) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    }
+                    std::uint64_t width { };
+                    if (!u64(width) || width == 0U || width > 64U
+                        || size > (std::numeric_limits<std::uint64_t>::max() - 63U) / width) {
+                        return fail("design state packed memory is malformed");
+                    }
+                    const auto words = (size * width + 63U) / 64U;
+                    if (words > static_cast<std::uint64_t>(remaining()) / 8U) {
+                        return fail("design state vector exceeds the payload");
+                    }
+                    std::vector<std::uint64_t> aval(static_cast<std::size_t>(words));
+                    for (auto& word : aval) {
+                        if (!u64(word)) {
+                            return false;
+                        }
+                    }
+                    bool bval_any { };
+                    if (!read(bval_any)) {
+                        return false;
+                    }
+                    std::vector<std::uint64_t> bval;
+                    if (bval_any) {
+                        if (words > static_cast<std::uint64_t>(remaining()) / 8U) {
+                            return fail("design state vector exceeds the payload");
+                        }
+                        bval.resize(static_cast<std::size_t>(words));
+                        for (auto& word : bval) {
+                            if (!u64(word)) {
+                                return false;
+                            }
+                        }
+                    }
+                    const auto mask = width == 64U ? ~std::uint64_t { 0 }
+                                                   : (std::uint64_t { 1 } << width) - 1U;
+                    const auto field = [&](const std::vector<std::uint64_t>& bits,
+                                           const std::uint64_t at) {
+                        auto result = bits[at / 64U] >> (at % 64U);
+                        if (at % 64U + width > 64U) {
+                            result |= bits[at / 64U + 1U] << (64U - at % 64U);
+                        }
+                        return result & mask;
+                    };
+                    value.reserve(static_cast<std::size_t>(size));
+                    for (std::uint64_t index = 0; index < size; ++index) {
+                        const auto at = index * width;
+                        value.push_back(runtime::PackedLogic4::from_aval_bval(
+                            static_cast<std::size_t>(width), field(aval, at),
+                            bval_any ? field(bval, at) : 0U));
+                    }
                     return true;
                 } else if constexpr (IsVector<Value>::value) {
                     std::uint64_t size { };

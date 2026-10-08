@@ -178,7 +178,7 @@ struct StaticKernelRuntimeSpec {
 /// Operations a behavioral member may use: the static set plus waits,
 /// fork/join, calls with automatic frames of packed registers, integer
 /// arithmetic, immediate runtime-library output, string constants and copies,
-/// plusarg queries and $finish. Postponed output and wait timeouts stay on
+/// plusarg queries, $finish and element writes of process-private arrays. Postponed output and wait timeouts stay on
 /// the host.
 [[nodiscard]] inline bool static_kernel_behavioral_operation_supported(
     const Operation& operation)
@@ -202,6 +202,9 @@ struct StaticKernelRuntimeSpec {
             return !value.postponed;
         } else if constexpr (std::is_same_v<T, Fork>) {
             return !value.branches.empty();
+        } else if constexpr (std::is_same_v<T, ContainerWrite>) {
+            // Process-private fixed arrays (see the planner).
+            return !value.string_index;
         } else {
             return std::is_same_v<T, WaitFor>
                 || std::is_same_v<T, WaitSensitivity>

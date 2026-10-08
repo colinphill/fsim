@@ -12,7 +12,7 @@ using namespace fsim::app::direct_artifact_rows_test;
 
 void test_schema_and_direct_row_roundtrip()
 {
-    assert(fsim::app::kRuntimeStateSchema == 76U);
+    assert(fsim::app::kRuntimeStateSchema == 77U);
     const auto source_bytes = encode_source_design();
     assert(source_bytes.has_value());
 
@@ -39,7 +39,7 @@ void test_schema_and_direct_row_roundtrip()
     assert(third_bytes && *third_bytes == *source_bytes);
 
     for (const std::uint32_t unsupported_schema : {
-             70U, 71U, 72U, 73U, 75U, 77U }) {
+             70U, 71U, 72U, 73U, 75U, 76U, 78U }) {
         auto invalid_bytes = *source_bytes;
         assert(invalid_bytes.size() > 8U);
         invalid_bytes[8U] = static_cast<char>(unsupported_schema);

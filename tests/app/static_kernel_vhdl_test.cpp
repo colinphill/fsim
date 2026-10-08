@@ -13,12 +13,14 @@
 // a one-delta glitch that the testbench counts and feeds back into the design
 // (each kernel round must be its own host delta).
 #include "fsim/app/application.hpp"
+#include "fsim/compiler/static_kernel_codegen.hpp"
 
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -395,10 +397,14 @@ const std::vector<std::string> internal_paths {
     "vk_top.dut.slow_r",
 };
 
+/// With a cache, the kernel's code is built ahead of time into it
+/// (`ahead_of_time`, as elaborate --aot does) or loaded from it.
 [[nodiscard]] RunCapture run(const std::filesystem::path& root,
-    const SimulationEngine engine, const bool kernel)
+    const SimulationEngine engine, const bool kernel,
+    const std::filesystem::path& cache = { }, const bool ahead_of_time = false)
 {
     auto project = build(root);
+    project.cache_path = cache;
     if (kernel) {
         const auto plan = project.design.plan_static_kernel();
         if (plan.disabled) {
@@ -410,8 +416,13 @@ const std::vector<std::string> internal_paths {
     }
     project.cone_fusion = kernel;
     ::setenv("FSIM_STATIC_KERNEL", kernel ? "1" : "0", 1);
+    std::optional<fsim::compiler::StaticKernelAheadOfTimeScope> aot;
+    if (ahead_of_time) {
+        aot.emplace();
+    }
     Simulation simulation(std::move(project), 100'000U, engine,
         SystemVerilogVpiRuntimeUpdates::omitted);
+    aot.reset();
     RunCapture capture;
     std::string pending;
     simulation.set_output_hook(
@@ -492,6 +503,22 @@ int main()
             "hidden signals must materialize their exact values mid-run");
         require(kernel.final_internal == reference.final_internal,
             "hidden signals must materialize their exact values at the end");
+        if (engine == SimulationEngine::compiled) {
+            // Code built ahead of time, then loaded instead of compiled.
+            const auto cache = root / "cache";
+            const auto built = run(root / "aot", engine, true, cache, true);
+            require(std::filesystem::exists(cache / "static-kernel")
+                    && !std::filesystem::is_empty(cache / "static-kernel"),
+                "an ahead-of-time build must store the kernel's code");
+            const auto loaded = run(root / "loaded", engine, true, cache, false);
+            for (const auto* capture : { &built, &loaded }) {
+                require(capture->lines == reference.lines,
+                    "kernel code built ahead of time must match the reference");
+                require(capture->mid_internal == reference.mid_internal
+                        && capture->final_internal == reference.final_internal,
+                    "kernel code built ahead of time must keep hidden values");
+            }
+        }
     }
     std::filesystem::remove_all(root);
     std::cout << "static kernel VHDL tests passed\n";

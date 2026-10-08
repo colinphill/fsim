@@ -12,6 +12,9 @@
 #include "fsim/app/sdf_phase_persistence.hpp"
 #include "fsim/artifact/design.hpp"
 #include "fsim/artifact/object.hpp"
+#if defined(FSIM_HAS_LLVM)
+#include "fsim/compiler/static_kernel_codegen.hpp"
+#endif
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
@@ -1668,6 +1671,10 @@ int elaborate_built_workspace(
             : BuiltProject::CompiledProcessSelection::selected;
         const auto receipt_context = aot_receipt_context(*reloaded);
         const auto receipt_cache_path = reloaded->cache_path;
+        // As a simulation without trace output or coverage sets up: the
+        // static kernel then builds its code here (in the cache).
+        reloaded->cone_fusion = !reloaded->code_coverage_enabled;
+        const compiler::StaticKernelAheadOfTimeScope static_kernel_aot;
         Simulation simulation { std::move(*reloaded), config.run.max_deltas,
             SimulationEngine::compiled,
             SystemVerilogVpiRuntimeUpdates::omitted };

@@ -673,14 +673,23 @@ std::uint32_t HierarchyBuilder::overlay_class(
         cache.overlay_class = no_overlay_class;
         return no_overlay_class;
     }
-    for (std::uint32_t index = 0U; index < overlay_classes_.size(); ++index) {
+    // A specialization its overlay determines evaluates every constant as
+    // the rest of its class does, so the class shares one result set.
+    const bool determined = overlay_determines_specialization(specialized);
+    auto& unit_classes = overlay_classes_of_unit_[overlay.unit.value()];
+    for (const auto index : unit_classes) {
         if (same_systemverilog_template_overlay(overlay_classes_[index], overlay)) {
             cache.overlay_class = index;
+            if (determined && overlay_class_constants_[index] != nullptr) {
+                cache.constants = overlay_class_constants_[index];
+            }
             return index;
         }
     }
     cache.overlay_class = static_cast<std::uint32_t>(overlay_classes_.size());
+    unit_classes.push_back(cache.overlay_class);
     overlay_classes_.push_back(overlay);
+    overlay_class_constants_.push_back(determined ? cache.constants : nullptr);
     return cache.overlay_class;
 }
 
@@ -1920,11 +1929,12 @@ void HierarchyBuilder::canonicalize_process_operations(Process& process)
     for (const auto representative : representatives) {
         const auto representative_process
             = design_.process_view(representative);
+        // Representatives passed the same shareability check.
         if (process_program_detail::share_operations(
                 representative_process,
                 process,
                 design_.signals_,
-                &operation_scratch_)) {
+                &operation_scratch_, true)) {
             return;
         }
     }
@@ -1938,6 +1948,21 @@ void HierarchyBuilder::canonicalize_process_operations(
     if (coverage_ != nullptr || common == nullptr
         || !process_program_detail::operation_list_shareable(
             instance.operations)) {
+        return;
+    }
+
+    const auto share = [&](const ProcessId representative) {
+        // Representatives passed the same shareability check.
+        return process_program_detail::share_operations(
+            design_.process_view(representative), *common, instance,
+            design_.signals_, &operation_scratch_, true);
+    };
+    // An instance of a template usually shares with the template's last
+    // representative; try it before building the grouping key.
+    const auto remembered = representative_of_template_.find(common.get());
+    if (remembered != representative_of_template_.end()
+        && remembered->second < design_.process_count()
+        && share(remembered->second)) {
         return;
     }
 
@@ -1979,17 +2004,6 @@ void HierarchyBuilder::canonicalize_process_operations(
         [&](const ProcessId representative) {
             return representative >= design_.process_count();
         });
-    const auto share = [&](const ProcessId representative) {
-        return process_program_detail::share_operations(
-            design_.process_view(representative), *common, instance,
-            design_.signals_, &operation_scratch_);
-    };
-    const auto remembered = representative_of_template_.find(common.get());
-    if (remembered != representative_of_template_.end()
-        && remembered->second < design_.process_count()
-        && share(remembered->second)) {
-        return;
-    }
     for (const auto representative : representatives) {
         if (remembered != representative_of_template_.end()
             && representative == remembered->second) {

@@ -33,6 +33,9 @@ namespace static_kernel_detail {
 
 constexpr auto no_slot = std::numeric_limits<std::uint32_t>::max();
 constexpr auto no_container = std::numeric_limits<std::uint32_t>::max();
+/// Container::object of a behavioral member's private array.
+constexpr auto no_container_object
+    = std::numeric_limits<ContainerObjectId>::max();
 constexpr std::size_t run_step_limit = 100'000'000U;
 constexpr std::size_t edge_iteration_limit = 100'000U;
 constexpr std::uint32_t partition_tag = std::uint32_t { 1 } << 31U;
@@ -170,6 +173,10 @@ private:
         /// Register value kinds (VHDL delta mode; empty means Logic4).
         std::vector<ValueKind> register_kinds;
         std::vector<std::uint32_t> container_registers;
+        /// The program's shared operation body while `operations` still
+        /// expands it (null once specialization rewrote them); members
+        /// with equal bodies share prune_operations results.
+        const void* body_identity { };
         /// Runtime-owned call stack and automatic callable frames.
         std::vector<InstructionIndex> call_stack;
         struct Frame {
@@ -186,6 +193,23 @@ private:
         };
         std::vector<Frame> frames;
         std::size_t frame_bytes { };
+        /// Contents of private arrays an automatic frame lists, saved at
+        /// CallableFramePush and restored at CallableFramePop of the
+        /// callables in private_frame_identities (sorted); those frame
+        /// operations run this bookkeeping, compiled code included. The
+        /// running thread owns the stack.
+        struct SavedArray {
+            ContainerRegisterId id { };
+            std::uint32_t container { };
+            std::vector<std::uint64_t> words;
+        };
+        std::vector<SavedArray> saved_arrays;
+        std::vector<std::size_t> saved_array_marks;
+        std::vector<std::uint32_t> private_frame_identities;
+        [[nodiscard]] bool private_frame(const std::uint32_t identity) const
+        {
+            return std::ranges::binary_search(private_frame_identities, identity);
+        }
         std::optional<CompiledBody> compiled;
         NativeUnit native;
         /// Every register's X plane and 'U' mask is zero, so two-state code
@@ -428,6 +452,8 @@ private:
     void write_container_element(Container& container, std::size_t ordinal,
         const PackedLogic4& value, std::uint32_t member,
         InstructionIndex instruction);
+    /// Arena storage for an elements-storage container, holding `initial`.
+    void place_elements(Container& container, const ContainerValue& initial);
     void write_element(const Pending& pending);
     /// Narrow element write; false when the reference path must report an
     /// error or handle an unsupported shape.
@@ -481,6 +507,14 @@ private:
     /// that became frequent once enough of them are waiting.
     void note_lazy_run(std::uint32_t lazy_template);
     void compile_lazy_templates();
+    /// A behavioral template is compiled once its threads have interpreted
+    /// about as many instructions as compiling it costs (200 + size / 10
+    /// per template instruction). Testbench code is large and mostly cold;
+    /// compiling an instruction costs about 10 µs in a small function and
+    /// 25 µs or more in a large one, against about 25-40 ns to interpret
+    /// one, so waiting until the interpretation has cost that much is never
+    /// more than about twice the better choice.
+    void note_lazy_work(std::uint32_t lazy_template, std::size_t steps);
     /// Compiles the full-semantics code of a two-state template.
     void compile_full_template(std::uint32_t full_template);
     void run_native(NativeUnit& unit, CompiledBody& body,
@@ -531,6 +565,10 @@ private:
     void prune_operations(std::uint32_t member,
         std::vector<std::uint8_t>& skip,
         std::vector<std::uint64_t>& live_at_entry) const;
+    /// prune_operations results by (body identity, body begin, body end).
+    std::map<std::tuple<const void*, std::uint32_t, std::uint32_t>,
+        std::pair<std::vector<std::uint8_t>, std::vector<std::uint64_t>>>
+        prune_cache_;
     [[nodiscard]] std::optional<CompiledBody> compile(std::uint32_t member);
     void settle();
     void check_owned_edges();
@@ -582,6 +620,8 @@ private:
         std::vector<InstructionIndex> call_stack;
         std::vector<Member::Frame> frames;
         std::size_t frame_bytes { };
+        std::vector<Member::SavedArray> saved_arrays;
+        std::vector<std::size_t> saved_array_marks;
         /// The forking thread and the fork group this child belongs to.
         std::uint32_t parent { static_kernel_detail::no_slot };
         std::uint32_t group { static_kernel_detail::no_slot };
@@ -720,6 +760,9 @@ private:
         StaticKernelTemplate code;
         std::vector<NativeUnit*> units;
         std::uint32_t runs { };
+        /// Behavioral templates: instructions interpreted so far
+        /// (note_lazy_work).
+        std::uint64_t work { };
     };
     std::vector<LazyTemplate> lazy_templates_;
     /// Two-state templates' full-semantics code, compiled on demand.
@@ -731,6 +774,8 @@ private:
     bool two_state_running_ { };
     std::vector<std::uint32_t> lazy_pending_;
     std::uint32_t lazy_threshold_ { };
+    /// Instructions the last execute_body run interpreted.
+    std::size_t executed_steps_ { };
     StaticKernelNativeHelpers native_helpers_;
     std::exception_ptr native_exception_;
     std::size_t native_units_ { };

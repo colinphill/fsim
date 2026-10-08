@@ -11356,6 +11356,9 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
             compiled_source_span(*compiled_, unit.source));
         return false;
     }
+    // Classify before evaluating any constant, so equal specializations
+    // share their constant results (overlay_class).
+    static_cast<void>(overlay_class(*specialized));
     for (const auto declaration_id : unit.declarations) {
         const auto declaration = specialized->find_declaration(
             declaration_id);

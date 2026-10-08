@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+#include "specialization_cache.hpp"
 #include "hierarchy_sv_constant_evaluator.hpp"
 #include "hierarchy_sv_generate_internal.hpp"
 #include "hierarchy_sv_parameters_internal.hpp"
@@ -107,8 +108,8 @@ CollectionResult collect_occurrences(
                 identities.push_back(
                     { generate.iterator, std::to_string(value) });
                 auto occurrence_specialization
-                    = parent_specialization.with_hierarchy_identities(
-                        identities);
+                    = derive_occurrence_specialization(
+                        parent_specialization, identities);
                 const auto condition = occurrence_specialization
                                            .evaluate_integral_expression(
                                                *generate.condition);

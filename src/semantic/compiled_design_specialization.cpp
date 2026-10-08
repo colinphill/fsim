@@ -25,6 +25,7 @@
 #include <string>
 #include <string_view>
 #include <tuple>
+#include <unordered_map>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -58,7 +59,32 @@ struct VhdlInitializerMemoContext {
         std::vector<DeclarationId> selected_generates;
         VhdlInitializerValue value;
         std::uint64_t work_delta { };
+        /// The evaluation read no hierarchy identity, so the entry also
+        /// serves overlays that differ only in hierarchy identities (other
+        /// occurrences of a generate).
+        bool hierarchy_free { };
     };
+
+    /// Overlay equality apart from hierarchy identities.
+    [[nodiscard]] static bool same_except_hierarchy(
+        const SpecializedHirOverlay& first, const SpecializedHirOverlay& second)
+    {
+        return first.unit == second.unit && first.scope == second.scope
+            && first.language == second.language
+            && first.actual_identities == second.actual_identities
+            && first.residual_expressions == second.residual_expressions
+            && first.dependent_generates == second.dependent_generates;
+    }
+
+    [[nodiscard]] static bool matches(const Entry& entry,
+        const SpecializedHirOverlay& overlay,
+        const std::span<const DeclarationId> selected_generates)
+    {
+        return std::ranges::equal(entry.selected_generates, selected_generates)
+            && (entry.hierarchy_free
+                    ? same_except_hierarchy(entry.overlay, overlay)
+                    : entry.overlay == overlay);
+    }
 
     explicit VhdlInitializerMemoContext(const CompiledDesign& design)
         : design_ { &design }
@@ -72,7 +98,8 @@ struct VhdlInitializerMemoContext {
         const UnitId unit, const DeclarationId declaration,
         const ExpressionId expression, const SpecializedHirOverlay& overlay,
         const std::span<const DeclarationId> selected_generates,
-        VhdlInitializerValue& value, std::uint64_t& work_delta)
+        VhdlInitializerValue& value, std::uint64_t& work_delta,
+        bool& hierarchy_free)
     {
         if (&design != design_) {
             return false;
@@ -83,11 +110,10 @@ struct VhdlInitializerMemoContext {
             return false;
         }
         for (const auto& entry : site->second) {
-            if (entry.overlay == overlay
-                && std::ranges::equal(
-                    entry.selected_generates, selected_generates)) {
+            if (matches(entry, overlay, selected_generates)) {
                 value = entry.value;
                 work_delta = entry.work_delta;
+                hierarchy_free = entry.hierarchy_free;
                 return true;
             }
         }
@@ -98,7 +124,8 @@ struct VhdlInitializerMemoContext {
         const DeclarationId declaration, const ExpressionId expression,
         const SpecializedHirOverlay& overlay,
         const std::span<const DeclarationId> selected_generates,
-        const VhdlInitializerValue& value, const std::uint64_t work_delta)
+        const VhdlInitializerValue& value, const std::uint64_t work_delta,
+        const bool hierarchy_free)
     {
         if (&design != design_) {
             return;
@@ -108,9 +135,7 @@ struct VhdlInitializerMemoContext {
         const auto existing = entries_.find(key);
         if (existing != entries_.end()) {
             for (const auto& entry : existing->second) {
-                if (entry.overlay == overlay
-                    && std::ranges::equal(
-                        entry.selected_generates, selected_generates)) {
+                if (matches(entry, overlay, selected_generates)) {
                     return;
                 }
             }
@@ -124,6 +149,7 @@ struct VhdlInitializerMemoContext {
             selected_generates.begin(), selected_generates.end());
         entry.value = value;
         entry.work_delta = work_delta;
+        entry.hierarchy_free = hierarchy_free;
         entries_[key].push_back(std::move(entry));
         ++entry_count_;
         if (profile_enabled_) {
@@ -166,8 +192,104 @@ struct VhdlInitializerMemoContext {
 
     static constexpr std::size_t maximum_entries { 4096U };
 
+    /// Results of pure package functions by callable and arguments
+    /// (HirIntegralEvaluator::evaluate_vhdl_callable).
+    [[nodiscard]] bool find_call(const CompiledDesign& design,
+        const std::string& key, VhdlInitializerValue& value,
+        std::uint64_t& work_delta)
+    {
+        if (&design != design_) {
+            return false;
+        }
+        std::lock_guard lock { mutex_ };
+        const auto found = calls_.find(key);
+        if (found == calls_.end()) {
+            return false;
+        }
+        value = found->second.first;
+        work_delta = found->second.second;
+        return true;
+    }
+
+    void insert_call(const CompiledDesign& design, std::string key,
+        const VhdlInitializerValue& value, const std::uint64_t work_delta)
+    {
+        if (&design != design_) {
+            return;
+        }
+        std::lock_guard lock { mutex_ };
+        if (calls_.size() < maximum_calls) {
+            calls_.try_emplace(std::move(key), value, work_delta);
+        }
+    }
+
+    [[nodiscard]] bool find_integral_call(const CompiledDesign& design,
+        const std::string& key, std::optional<std::int64_t>& value,
+        std::uint64_t& work_delta)
+    {
+        if (&design != design_) {
+            return false;
+        }
+        std::lock_guard lock { mutex_ };
+        const auto found = integral_calls_.find(key);
+        if (found == integral_calls_.end()) {
+            return false;
+        }
+        value = found->second.first;
+        work_delta = found->second.second;
+        return true;
+    }
+
+    void insert_integral_call(const CompiledDesign& design, std::string key,
+        const std::optional<std::int64_t> value,
+        const std::uint64_t work_delta)
+    {
+        if (&design != design_) {
+            return;
+        }
+        std::lock_guard lock { mutex_ };
+        if (integral_calls_.size() < maximum_calls) {
+            integral_calls_.try_emplace(std::move(key), value, work_delta);
+        }
+    }
+
+    /// Function bodies named by call expressions, for units whose actuals
+    /// cannot supply a callable (callable_declaration).
+    [[nodiscard]] bool find_callable(const CompiledDesign& design,
+        const ExpressionId expression, std::optional<DeclarationId>& callable)
+    {
+        if (&design != design_) {
+            return false;
+        }
+        std::lock_guard lock { mutex_ };
+        const auto found = callables_.find(expression.value());
+        if (found == callables_.end()) {
+            return false;
+        }
+        callable = found->second;
+        return true;
+    }
+
+    void insert_callable(const CompiledDesign& design,
+        const ExpressionId expression,
+        const std::optional<DeclarationId> callable)
+    {
+        if (&design != design_) {
+            return;
+        }
+        std::lock_guard lock { mutex_ };
+        callables_.try_emplace(expression.value(), callable);
+    }
+
+    static constexpr std::size_t maximum_calls { 65536U };
+
 private:
+    std::unordered_map<std::string,
+        std::pair<std::optional<std::int64_t>, std::uint64_t>> integral_calls_;
+    std::unordered_map<std::uint32_t, std::optional<DeclarationId>> callables_;
     const CompiledDesign* design_ { };
+    std::unordered_map<std::string,
+        std::pair<VhdlInitializerValue, std::uint64_t>> calls_;
     bool profile_enabled_ { };
     std::mutex mutex_;
     std::map<Site, std::vector<Entry>> entries_;
@@ -1450,23 +1572,8 @@ public:
                   : 0U
           }
     {
-        for (const auto& actual :
-            unit.specialization().actual_identities) {
-            actuals_.emplace(actual.declaration,
-                coerce_systemverilog_value(actual.declaration,
-                    parse_integral_identity(actual.identity)));
-            string_actuals_.emplace(actual.declaration,
-                parse_systemverilog_string_identity(actual.identity));
-            if (actual.vhdl_packed_value) {
-                actual_vhdl_packed_values_.emplace(
-                    actual.declaration, *actual.vhdl_packed_value);
-            }
-            if (actual.actual_declaration
-                && *actual.actual_declaration != actual.declaration) {
-                actual_declarations_.emplace(
-                    actual.declaration, *actual.actual_declaration);
-            }
-        }
+        // Actuals are parsed on first use (ensure_actual): most evaluations
+        // read a few of a unit's parameters.
         for (const auto& identity :
             unit.specialization().hierarchy_identities) {
             hierarchy_identities_.insert_or_assign(identity.name,
@@ -2635,6 +2742,7 @@ private:
                     : std::optional { value->second };
             }
         }
+        ensure_actual(declaration);
         if (const auto actual = actuals_.find(declaration);
             actual != actuals_.end() && actual->second) {
             return vhdl_integer_value(*actual->second);
@@ -2687,13 +2795,17 @@ private:
                 if (memo_eligible) {
                     VhdlConstantValue cached;
                     std::uint64_t work_delta { };
+                    bool cached_hierarchy_free { };
                     if (initializer_memo_context_->find(unit_.design(),
                             unit_.unit(), declaration, initializer,
                             unit_.specialization(), unit_.selected_generates(),
-                            cached, work_delta)) {
+                            cached, work_delta, cached_hierarchy_free)) {
                         if (consume_constant_work_unit(work_delta)) {
                             initializer_memo_context_->record_hit(work_delta);
                             active_vhdl_declarations_.erase(declaration);
+                            if (!cached_hierarchy_free) {
+                                ++hierarchy_reads_;
+                            }
                             return cached;
                         }
                         // Re-run the evaluator when the saved work would
@@ -2703,6 +2815,7 @@ private:
                     initializer_memo_context_->record_miss();
                 }
                 const auto work_before = constant_work_units_;
+                const auto hierarchy_reads_before = hierarchy_reads_;
                 if (profile_vhdl_initializers_) {
                     const auto begin = diagnostic::thread_cpu_now();
                     result = evaluate_vhdl_value(initializer);
@@ -2740,7 +2853,8 @@ private:
                     initializer_memo_context_->insert(unit_.design(),
                         unit_.unit(), declaration, initializer,
                         unit_.specialization(), unit_.selected_generates(),
-                        *result, work_delta);
+                        *result, work_delta,
+                        hierarchy_reads_ == hierarchy_reads_before);
                 }
             } else if (view->vhdl->deferred && view->vhdl->completion) {
                 result = evaluate_vhdl_declaration(*view->vhdl->completion);
@@ -3135,6 +3249,7 @@ private:
                     || !source.referenced_name->selected)
                 && vhdl_generate_iterator_visible(
                     source.text, source.scope)) {
+                ++hierarchy_reads_;
                 const SpecializedHirNamedIdentity* identity { };
                 for (const auto& candidate :
                     unit_.specialization().hierarchy_identities) {
@@ -3196,11 +3311,17 @@ private:
                     return evaluate_vhdl_callable(source);
                 }
             }
-            if (const auto declaration = resolve_vhdl_expression_declaration(
+            // Loop bodies evaluate the same names repeatedly.
+            auto [cached, inserted] = vhdl_value_declarations_.try_emplace(
+                expression_id.value());
+            if (inserted) {
+                cached->second = resolve_vhdl_expression_declaration(
                     expression_id, [](const CompiledDeclarationView& view) {
                         return view.vhdl != nullptr
                             && vhdl_evaluable_value_form(view.vhdl->form);
-                    })) {
+                    });
+            }
+            if (const auto declaration = cached->second) {
                 return evaluate_vhdl_declaration(*declaration);
             }
             return std::nullopt;
@@ -4064,8 +4185,107 @@ private:
             }
             actual_values.push_back(*value);
         }
+        // A pure function of a non-generic package computes its result from
+        // its arguments alone, so every specialization shares it.
+        std::string memo_key;
+        const bool memo = initializer_memo_context_ != nullptr
+            && binding_ == nullptr
+            && vhdl_package_callable(declaration)
+            && vhdl_call_memo_key(*callable_id, actual_values, memo_key);
+        if (memo) {
+            VhdlConstantValue cached;
+            std::uint64_t work_delta { };
+            if (initializer_memo_context_->find_call(
+                    unit_.design(), memo_key, cached, work_delta)
+                && consume_constant_work_unit(work_delta)) {
+                return cached;
+            }
+            // Otherwise run the body: it consumes the same partial work and
+            // fails at the same point when the budget runs out.
+        }
+        const auto work_before = constant_work_units_;
+        const auto hierarchy_reads_before = hierarchy_reads_;
+        auto result = execute_vhdl_callable(
+            *callable_id, declaration, std::move(actual_values));
+        if (memo && result && hierarchy_reads_ == hierarchy_reads_before) {
+            initializer_memo_context_->insert_call(unit_.design(),
+                std::move(memo_key), *result,
+                constant_work_units_ - work_before);
+        }
+        return result;
+    }
+
+    /// Whether `declaration` belongs to a package (declaration or body)
+    /// that has no generics.
+    [[nodiscard]] bool vhdl_package_callable(
+        const vhdl::Declaration& declaration) const
+    {
+        const auto& scopes = unit_.design().semantics.scopes();
+        const auto scope = declaration.scope;
+        if (!scope.valid() || scope.value() >= scopes.size()
+            || scopes[scope.value()].id != scope) {
+            return false;
+        }
+        const auto owner = unit_.design().find_unit(
+            scopes[scope.value()].unit);
+        if (!owner || owner->vhdl == nullptr
+            || owner->vhdl->kind != vhdl::UnitKind::package) {
+            return false;
+        }
+        const auto generic_free = [&](const vhdl::Unit& unit) {
+            return std::ranges::none_of(unit.declarations,
+                [&](const DeclarationId id) {
+                    const auto member = unit_.design().find_declaration(id);
+                    if (!member || member->vhdl == nullptr) {
+                        return true;
+                    }
+                    switch (member->vhdl->form) {
+                    case vhdl::DeclarationForm::generic_constant:
+                    case vhdl::DeclarationForm::generic_type:
+                    case vhdl::DeclarationForm::generic_function:
+                    case vhdl::DeclarationForm::generic_procedure:
+                    case vhdl::DeclarationForm::generic_package:
+                        return true;
+                    default:
+                        return false;
+                    }
+                });
+        };
+        if (!generic_free(*owner->vhdl)) {
+            return false;
+        }
+        const auto primary = unit_.design().vhdl_primary_unit(*owner->vhdl);
+        return !primary || *primary == nullptr || *primary == owner->vhdl
+            || generic_free(**primary);
+    }
+
+    /// The call memo key: callable and argument values. Only integer and
+    /// packed arguments are keyed.
+    [[nodiscard]] static bool vhdl_call_memo_key(const DeclarationId callable,
+        const std::span<const VhdlConstantValue> values, std::string& key)
+    {
+        key = std::to_string(callable.value());
+        for (const auto& value : values) {
+            if (value.kind == VhdlConstantValue::Kind::integer) {
+                key += "|i" + std::to_string(value.integer);
+            } else if (value.kind == VhdlConstantValue::Kind::packed) {
+                key += "|p" + std::to_string(value.packed.left_bound) + ":"
+                    + std::to_string(value.packed.right_bound) + ":"
+                    + value.packed.bits;
+            } else {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]] std::optional<VhdlConstantValue> execute_vhdl_callable(
+        const DeclarationId callable_id, const vhdl::Declaration& declaration,
+        std::vector<VhdlConstantValue> actual_values)
+    {
+        const auto& formals = declaration.callable->formals;
         CallFrame frame;
-        frame.callable = *callable_id;
+        frame.callable = callable_id;
         for (std::size_t index { }; index < formals.size(); ++index) {
             if (actual_values[index].kind
                 == VhdlConstantValue::Kind::integer) {
@@ -4167,10 +4387,10 @@ private:
             ? call_frames_.back().vhdl_result
             : std::nullopt;
         if (result && declaration.callable->return_type) {
-            auto cached = vhdl_callable_return_subtypes_.find(*callable_id);
+            auto cached = vhdl_callable_return_subtypes_.find(callable_id);
             if (cached == vhdl_callable_return_subtypes_.end()) {
                 cached = vhdl_callable_return_subtypes_.emplace(
-                    *callable_id,
+                    callable_id,
                     CompiledDesignResolver { unit_ }.effective_vhdl_subtype(
                         *declaration.callable->return_type,
                         declaration.scope)).first;
@@ -4954,6 +5174,7 @@ public:
                 return value->second;
             }
         }
+        ensure_actual(declaration);
         if (const auto actual = actuals_.find(declaration);
             actual != actuals_.end()) {
             if (actual->second) {
@@ -5039,6 +5260,7 @@ public:
                 return value->second;
             }
         }
+        ensure_actual(declaration);
         if (const auto actual = string_actuals_.find(declaration);
             actual != string_actuals_.end()) {
             if (actual->second) {
@@ -6255,6 +6477,17 @@ private:
                 return cached->second;
             }
         }
+        const bool shared = expression.id.valid()
+            && initializer_memo_context_ != nullptr
+            && actuals_supply_no_callable();
+        if (shared) {
+            std::optional<DeclarationId> callable;
+            if (initializer_memo_context_->find_callable(
+                    unit_.design(), expression.id, callable)) {
+                vhdl_callable_declarations_.emplace(expression.id, callable);
+                return callable;
+            }
+        }
         const auto resolved = [&]() -> std::optional<DeclarationId> {
             if (!expression.referenced_name) {
                 return std::nullopt;
@@ -6279,7 +6512,30 @@ private:
         if (expression.id.valid()) {
             vhdl_callable_declarations_.emplace(expression.id, resolved);
         }
+        if (shared) {
+            initializer_memo_context_->insert_callable(
+                unit_.design(), expression.id, resolved);
+        }
         return resolved;
+    }
+
+    /// Whether every actual of the unit is a generic constant: resolving a
+    /// callable name then ignores the unit (no subprogram, package or type
+    /// actual can name or supply one).
+    [[nodiscard]] bool actuals_supply_no_callable()
+    {
+        if (!actuals_supply_no_callable_) {
+            actuals_supply_no_callable_ = std::ranges::all_of(
+                unit_.specialization().actual_identities,
+                [&](const SpecializedHirActualIdentity& actual) {
+                    const auto formal = unit_.design().find_declaration(
+                        actual.declaration);
+                    return formal && formal->vhdl != nullptr
+                        && formal->vhdl->form
+                            == vhdl::DeclarationForm::generic_constant;
+                });
+        }
+        return *actuals_supply_no_callable_;
     }
 
     [[nodiscard]] StatementFlow execute_vhdl_statement(
@@ -6485,6 +6741,45 @@ private:
             frame.string_values.emplace(
                 formals[index], evaluate_string(expression.operands[index]));
         }
+        // As evaluate_vhdl_callable: package functions depend only on their
+        // arguments.
+        std::string memo_key;
+        const bool memo = initializer_memo_context_ != nullptr
+            && binding_ == nullptr && declaration.callable->pure
+            && vhdl_package_callable(declaration);
+        if (memo) {
+            memo_key = std::to_string(callable_id->value());
+            for (const auto formal : formals) {
+                const auto& value = frame.values.at(formal);
+                const auto& text = frame.string_values.at(formal);
+                memo_key += value ? "|i" + std::to_string(*value) : "|-";
+                memo_key += text ? "|s" + std::to_string(text->size()) + ":"
+                        + *text
+                                 : "|-";
+            }
+            std::optional<std::int64_t> cached;
+            std::uint64_t work_delta { };
+            if (initializer_memo_context_->find_integral_call(
+                    unit_.design(), memo_key, cached, work_delta)
+                && consume_constant_work_unit(work_delta)) {
+                return cached;
+            }
+        }
+        const auto work_before = constant_work_units_;
+        const auto hierarchy_reads_before = hierarchy_reads_;
+        const auto result = execute_vhdl_integral_callable(
+            declaration, std::move(frame));
+        if (memo && result && hierarchy_reads_ == hierarchy_reads_before) {
+            initializer_memo_context_->insert_integral_call(unit_.design(),
+                std::move(memo_key), result,
+                constant_work_units_ - work_before);
+        }
+        return result;
+    }
+
+    [[nodiscard]] std::optional<std::int64_t> execute_vhdl_integral_callable(
+        const vhdl::Declaration& declaration, CallFrame frame)
+    {
         call_frames_.push_back(std::move(frame));
         for (const auto child : declaration.children) {
             const auto local = unit_.find_declaration(child);
@@ -6929,6 +7224,7 @@ private:
                 if (const auto hierarchy = hierarchy_identities_.find(
                         std::string { expression.text });
                     hierarchy != hierarchy_identities_.end()) {
+                    ++hierarchy_reads_;
                     return hierarchy->second;
                 }
                 return parse_integral_identity(expression.text);
@@ -6968,7 +7264,8 @@ private:
             if (const auto hierarchy = hierarchy_identities_.find(
                     std::string { expression.text });
                 hierarchy != hierarchy_identities_.end()) {
-                return hierarchy->second;
+                ++hierarchy_reads_;
+                    return hierarchy->second;
             }
             return parse_integral_identity(expression.text);
         }
@@ -7267,7 +7564,40 @@ private:
         return std::nullopt;
     }
 
+    /// Parses `declaration`'s actual into actuals_, string_actuals_,
+    /// actual_vhdl_packed_values_ and actual_declarations_ once.
+    void ensure_actual(const DeclarationId declaration)
+    {
+        if (!resolved_actuals_.insert(declaration).second) {
+            return;
+        }
+        const auto& actuals = unit_.specialization().actual_identities;
+        const auto actual = std::ranges::find(actuals, declaration,
+            &SpecializedHirActualIdentity::declaration);
+        if (actual == actuals.end()) {
+            return;
+        }
+        actuals_.emplace(actual->declaration,
+            coerce_systemverilog_value(actual->declaration,
+                parse_integral_identity(actual->identity)));
+        string_actuals_.emplace(actual->declaration,
+            parse_systemverilog_string_identity(actual->identity));
+        if (actual->vhdl_packed_value) {
+            actual_vhdl_packed_values_.emplace(
+                actual->declaration, *actual->vhdl_packed_value);
+        }
+        if (actual->actual_declaration
+            && *actual->actual_declaration != actual->declaration) {
+            actual_declarations_.emplace(
+                actual->declaration, *actual->actual_declaration);
+        }
+    }
+
     const SpecializedHirUnit& unit_;
+    /// Hierarchy identities read, including through memo entries that read
+    /// one (VhdlInitializerMemoContext::Entry::hierarchy_free).
+    std::size_t hierarchy_reads_ { };
+    std::set<DeclarationId> resolved_actuals_;
     std::map<DeclarationId, std::optional<std::int64_t>> actuals_;
     std::map<DeclarationId, std::optional<std::string>> string_actuals_;
     std::map<DeclarationId, DeclarationId> actual_declarations_;
@@ -7282,6 +7612,10 @@ private:
     std::map<ExpressionId, bool> vhdl_bitwise_callable_candidates_;
     std::map<ExpressionId, std::optional<DeclarationId>>
         vhdl_callable_declarations_;
+    /// Value declarations named by expressions, by expression.
+    std::unordered_map<std::uint32_t, std::optional<DeclarationId>>
+        vhdl_value_declarations_;
+    std::optional<bool> actuals_supply_no_callable_;
     std::map<DeclarationId, std::optional<vhdl::SubtypeIndication>>
         vhdl_callable_return_subtypes_;
     std::map<DeclarationId, std::optional<std::string>>

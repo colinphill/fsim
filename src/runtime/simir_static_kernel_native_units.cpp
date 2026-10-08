@@ -130,6 +130,19 @@ void Interpreter::Impl::StaticKernel::note_lazy_run(
     }
 }
 
+void Interpreter::Impl::StaticKernel::note_lazy_work(
+    const std::uint32_t lazy_template, const std::size_t steps)
+{
+    auto& lazy = lazy_templates_[lazy_template];
+    const std::uint64_t size = lazy.code.body->code.size();
+    const auto threshold = size * (200U + size / 10U);
+    if (lazy.work < threshold && lazy.work + steps >= threshold) {
+        lazy_pending_.push_back(lazy_template);
+        compile_lazy_templates();
+    }
+    lazy.work += steps;
+}
+
 void Interpreter::Impl::StaticKernel::compile_lazy_templates()
 {
     std::vector<StaticKernelTemplate> batch;
@@ -674,6 +687,14 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
         const char* text = std::getenv("FSIM_STATIC_KERNEL_TWO_STATE");
         return text == nullptr || std::string_view { text } != "0";
     }();
+    // FSIM_STATIC_KERNEL_TWO_STATE=2 also gives SystemVerilog templates
+    // two-state code. It is off by default: SystemVerilog members commonly
+    // hold X until reset, so most templates then also need their full code
+    // (the throughput case compiled twice as much and ran slower).
+    static const bool two_state_sv = [] {
+        const char* text = std::getenv("FSIM_STATIC_KERNEL_TWO_STATE");
+        return text != nullptr && std::string_view { text } == "2";
+    }();
     for (std::size_t index = 0U; index < templates_.size(); ++index) {
         // Instances times size estimates how much run time a template
         // carries; only the heaviest get the slower optimizing backend.
@@ -684,8 +705,10 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
                     ? (template_partition[index] != 0U ? 2U : 1U)
                     : 0U),
             template_vhdl[index] != 0U,
-            two_state && template_vhdl[index] != 0U
-                && templates_[index]->shadow_base != 0U
+            two_state
+                && ((template_vhdl[index] != 0U
+                        && templates_[index]->shadow_base != 0U)
+                    || (two_state_sv && template_vhdl[index] == 0U))
                 && templates_[index]->resume_entries.empty()
                 && !unknown_constant(*templates_[index]) });
     }
@@ -740,15 +763,31 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
             ? static_cast<std::uint32_t>(std::strtoul(text, nullptr, 10))
             : 1024U;
     }();
-    lazy_threshold_ = lazy_threshold;
+    // An ahead-of-time build compiles every template now; code built ahead
+    // of time is used from the start.
+    const bool ahead_of_time = codegen.ahead_of_time();
+    lazy_threshold_ = ahead_of_time ? 0U : lazy_threshold;
     native_helpers_ = helpers;
+    const auto built = ahead_of_time
+        ? std::vector<StaticKernelNativeEntry>(templates.size(), nullptr)
+        : codegen.available(templates, helpers);
     std::vector<StaticKernelTemplate> eager;
     std::vector<std::size_t> eager_of;
     std::vector<std::uint32_t> lazy_of(templates.size(), no_slot);
     for (std::size_t index = 0U; index < templates.size(); ++index) {
-        if (lazy_threshold != 0U && templates[index].tier == 0U
+        if (built[index] != nullptr) {
+            continue;
+        }
+        // Behavioral templates (with resume entries) count interpreted
+        // work instead of runs (note_lazy_work);
+        // FSIM_STATIC_KERNEL_LAZY_BEHAVIORAL=0 compiles them now.
+        static const bool lazy_behavioral = [] {
+            const char* text = std::getenv("FSIM_STATIC_KERNEL_LAZY_BEHAVIORAL");
+            return text == nullptr || std::string_view { text } != "0";
+        }();
+        if (lazy_threshold_ != 0U && templates[index].tier == 0U
             && template_partition[index] == 0U
-            && templates_[index]->resume_entries.empty()) {
+            && (lazy_behavioral || templates_[index]->resume_entries.empty())) {
             lazy_of[index] = static_cast<std::uint32_t>(lazy_templates_.size());
             lazy_templates_.push_back({ templates[index], { }, 0U });
             continue;
@@ -756,7 +795,7 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
         eager_of.push_back(index);
         eager.push_back(templates[index]);
     }
-    std::vector<StaticKernelNativeEntry> entries(templates.size(), nullptr);
+    std::vector<StaticKernelNativeEntry> entries = built;
     if (!eager.empty()) {
         const auto compiled = codegen.compile(eager, helpers);
         for (std::size_t at = 0U; at < compiled.size(); ++at) {
@@ -764,13 +803,20 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
         }
     }
     std::vector<std::uint32_t> full_of(templates.size(), no_slot);
+    std::vector<StaticKernelTemplate> full_code;
     for (std::size_t index = 0U; index < templates.size(); ++index) {
         if (templates[index].two_state) {
             full_of[index] = static_cast<std::uint32_t>(full_templates_.size());
             auto code = templates[index];
             code.two_state = false;
             full_templates_.push_back({ code, { }, 0U });
+            full_code.push_back(code);
         }
+    }
+    if (ahead_of_time && !full_code.empty()) {
+        // Full code continues two-state code that leaves at one of its
+        // resume points, known now that the two-state code is compiled.
+        static_cast<void>(codegen.compile(full_code, helpers));
     }
 
     for (std::size_t unit = 0U; unit < units.size(); ++unit) {

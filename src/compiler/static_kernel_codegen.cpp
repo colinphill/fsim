@@ -9,11 +9,17 @@
 // and power, memories, host accesses and deferred stores call the runtime
 // helpers, which share the interpreter tier's implementation.
 #include "fsim/compiler/static_kernel_codegen.hpp"
+#include "fsim/compiler/object_cache.hpp"
 #include "fsim/support/native_filesystem.hpp"
 
 #include "../runtime/simir_static_kernel_native.hpp"
 
+#include <llvm/ExecutionEngine/ObjectCache.h>
+#include <llvm/ExecutionEngine/Orc/CompileUtils.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
+#include <llvm/Config/llvm-config.h>
+#include <llvm/Support/MemoryBuffer.h>
+#include <llvm/TargetParser/Host.h>
 #include <llvm/ExecutionEngine/Orc/ThreadSafeModule.h>
 #include <llvm/Analysis/InstSimplifyFolder.h>
 #include <llvm/IR/IRBuilder.h>
@@ -25,7 +31,10 @@
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include <algorithm>
 #include <array>
+#include <optional>
+#include <sstream>
 #include <chrono>
 #include <fstream>
 #include <unistd.h>
@@ -40,6 +49,7 @@
 #include <string>
 #include <string_view>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -132,20 +142,21 @@ struct Pair {
 class FunctionEmitter {
 public:
     FunctionEmitter(llvm::Module& module, llvm::Function& function,
-        const detail::CompiledBody& body, const StaticKernelNativeHelpers& helpers,
+        const detail::CompiledBody& body,
         const bool local_registers, const bool two_state,
         std::vector<std::uint32_t>* const resume_points)
         : context_(module.getContext())
+        , module_(module)
         , function_(function)
         , body_(body)
-        , helpers_(helpers)
         , builder_(context_, llvm::InstSimplifyFolder(module.getDataLayout()))
+        , entry_builder_(context_, llvm::InstSimplifyFolder(module.getDataLayout()))
         , i32_(llvm::Type::getInt32Ty(context_))
         , i64_(llvm::Type::getInt64Ty(context_))
         , i8_(llvm::Type::getInt8Ty(context_))
         , ptr_(llvm::PointerType::getUnqual(context_))
         , local_registers_(local_registers)
-        , two_state_(two_state && body.shadow_base != 0U)
+        , two_state_(two_state)
         , resume_points_(resume_points)
     {
     }
@@ -156,6 +167,7 @@ public:
         frame_ = function_.getArg(0);
         registers_ = function_.getArg(1);
         auto* entry = llvm::BasicBlock::Create(context_, "entry", &function_);
+        entry_ = entry;
         return_block_ = llvm::BasicBlock::Create(context_, "done", &function_);
         failure_block_ = llvm::BasicBlock::Create(context_, "failed", &function_);
         // Leaders: branch targets and the instructions after jumps/branches.
@@ -298,8 +310,12 @@ private:
             const char* text = std::getenv("FSIM_STATIC_KERNEL_LOCAL_REGISTERS");
             return text != nullptr && std::string_view { text } == "0";
         }();
+        // Two-state code hands over to the full code, which continues from
+        // the register file (as from a resume entry).
         if (!local_registers_ || disabled || !body_.resume_entries.empty()
-            || body_.shadow_base != 0U || body_.call_stack_base != 0U) {
+            || body_.shadow_base != 0U || body_.call_stack_base != 0U
+            || two_state_
+            || (resume_points_ != nullptr && !resume_points_->empty())) {
             return;
         }
         const auto size = static_cast<std::uint32_t>(body_.code.size());
@@ -587,12 +603,50 @@ private:
         builder_.CreateBr(failure_block_);
     }
 
+    /// Builds in the entry block (which dominates every use) once the
+    /// body's code is being emitted.
+    [[nodiscard]] llvm::IRBuilder<llvm::InstSimplifyFolder>& entry_builder()
+    {
+        if (auto* terminator = entry_->getTerminator()) {
+            entry_builder_.SetInsertPoint(terminator);
+        } else {
+            entry_builder_.SetInsertPoint(entry_);
+        }
+        return entry_builder_;
+    }
+
+    /// Bindings are fixed for a unit, so each word is read once per run.
     [[nodiscard]] llvm::Value* binding(const std::uint32_t index,
         const std::uint32_t word)
     {
-        auto* address = builder_.CreateConstInBoundsGEP1_64(i32_, bindings_,
-            static_cast<std::uint64_t>(index) * 2U + word);
-        return builder_.CreateLoad(i32_, address);
+        const auto key = static_cast<std::uint64_t>(index) * 2U + word;
+        auto& value = binding_values_[key];
+        if (value == nullptr) {
+            auto& builder = entry_builder();
+            value = builder.CreateLoad(i32_,
+                builder.CreateConstInBoundsGEP1_64(i32_, bindings_, key));
+        }
+        return value;
+    }
+
+    /// The first arena word of the slot bound at `index`.
+    [[nodiscard]] llvm::Value* slot_pointer(const std::uint32_t index)
+    {
+        auto& value = slot_pointers_[index];
+        if (value == nullptr) {
+            auto* offset = binding(index, 0U);
+            auto& builder = entry_builder();
+            value = builder.CreateInBoundsGEP(i64_, arena_,
+                builder.CreateZExt(offset, i64_));
+        }
+        return value;
+    }
+
+    /// Arena word `word` of the slot bound at `index`.
+    [[nodiscard]] llvm::Value* slot_word(const std::uint32_t index,
+        const std::uint64_t word)
+    {
+        return builder_.CreateConstInBoundsGEP1_64(i64_, slot_pointer(index), word);
     }
 
     [[nodiscard]] Pair scalar_bool(llvm::Value* condition)
@@ -765,8 +819,7 @@ private:
             // Pure: no frame, no failure status, never 'U'.
             auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
                 { i64_, i64_, i64_, i64_, i64_, ptr_ }, false);
-            auto* callee = builder_.CreateIntToPtr(
-                constant(reinterpret_cast<std::uintptr_t>(helpers_.binary)), ptr_);
+            auto* callee = helper_symbol("fsim_sk_binary", type);
             builder_.CreateCall(type, callee,
                 { constant(static_cast<std::uint64_t>(inst.sub)
                       | (static_cast<std::uint64_t>(width) << 8U)),
@@ -805,14 +858,21 @@ private:
         return x_value(1U);
     }
 
-    [[nodiscard]] Pair call_helper(void* helper, const std::uint32_t at,
+    /// A runtime helper, called by name so that code does not depend on
+    /// where this process loaded the runtime (see helper_symbols).
+    [[nodiscard]] llvm::Value* helper_symbol(const char* name,
+        llvm::FunctionType* type)
+    {
+        return module_.getOrInsertFunction(name, type).getCallee();
+    }
+
+    [[nodiscard]] Pair call_helper(const char* helper, const std::uint32_t at,
         const Pair x, const Pair y, const Pair z)
     {
         auto* out = out_;
         auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
             { ptr_, i32_, i64_, i64_, i64_, i64_, i64_, i64_, ptr_ }, false);
-        auto* callee = builder_.CreateIntToPtr(
-            constant(reinterpret_cast<std::uintptr_t>(helper)), ptr_);
+        auto* callee = helper_symbol(helper, type);
         builder_.CreateCall(type, callee,
             { frame_, llvm::ConstantInt::get(i32_, at), x.a, x.b, y.a, y.b, z.a,
                 z.b, out });
@@ -827,14 +887,14 @@ private:
     [[nodiscard]] Pair call_evaluate(const std::uint32_t at, const Pair x,
         const Pair y, const Pair z)
     {
-        return call_helper(reinterpret_cast<void*>(helpers_.evaluate), at, x, y,
+        return call_helper("fsim_sk_evaluate", at, x, y,
             z);
     }
 
     void call_effect(const std::uint32_t at, const Pair x, const Pair y,
         const Pair z)
     {
-        (void)call_helper(reinterpret_cast<void*>(helpers_.effect), at, x, y, z);
+        (void)call_helper("fsim_sk_effect", at, x, y, z);
     }
 
     void check_status()
@@ -1065,7 +1125,8 @@ private:
     }
 
     /// Storage 1: the element slot's arena offset; storage 2: the packed
-    /// slot's arena offset. Element bit offset within it (storage 2 only).
+    /// slot's arena offset; storage 3: the element's arena offset. Element
+    /// bit offset within it (storage 2 only).
     struct MemoryLocation {
         llvm::Value* arena_offset { };
         llvm::Value* words { };
@@ -1100,6 +1161,12 @@ private:
                 width));
         auto* packed_offset = builder_.CreateZExt(
             info_field(element.info, i32_, 72U), i64_);
+        auto* held = builder_.CreateICmpEQ(element.storage,
+            llvm::ConstantInt::get(i32_, 3U));
+        element_offset = builder_.CreateSelect(held,
+            builder_.CreateAdd(packed_offset,
+                builder_.CreateMul(element.ordinal, constant(2U))),
+            element_offset);
         return {
             builder_.CreateSelect(packed, packed_offset, element_offset),
             builder_.CreateSelect(packed,
@@ -1156,9 +1223,8 @@ private:
     {
         const auto value = load_register(inst.x);
         const auto index = load_register(inst.y);
-        if (inst.aux != 0U || (inst.flags & detail::flag_nba) == 0U) {
-            call_effect(at, value, index,
-                inst.aux != 0U ? load_register(inst.z) : zero_pair());
+        if (inst.aux != 0U) {
+            call_effect(at, value, index, load_register(inst.z));
             return;
         }
         const auto element = memory_element(inst.d, index, inst.offset,
@@ -1166,13 +1232,42 @@ private:
         auto* two_state = nonzero(builder_.CreateAnd(
             builder_.CreateZExt(info_field(element.info, i32_, 60U), i64_),
             constant(1U)));
-        auto* ok = builder_.CreateAnd(
-            builder_.CreateICmpNE(element.storage, llvm::ConstantInt::get(i32_, 0U)),
-            builder_.CreateAnd(element.in_range,
-                builder_.CreateICmpEQ(info_field(element.info, i32_, 56U),
-                    llvm::ConstantInt::get(i32_, inst.width))));
-        ok = builder_.CreateAnd(ok, builder_.CreateNot(
+        auto* writable = builder_.CreateAnd(element.in_range,
+            builder_.CreateICmpEQ(info_field(element.info, i32_, 56U),
+                llvm::ConstantInt::get(i32_, inst.width)));
+        writable = builder_.CreateAnd(writable, builder_.CreateNot(
             builder_.CreateAnd(two_state, nonzero(value.b))));
+        if ((inst.flags & detail::flag_nba) == 0U) {
+            // Blocking: kernel-held elements (storage 3) are stored in place.
+            // Memories other processes observe take the helper: inlining
+            // their change detection grew testbench code (and compile time)
+            // more than it saved at run time.
+            auto* held = llvm::BasicBlock::Create(context_, "mem_store", &function_);
+            auto* slow = llvm::BasicBlock::Create(context_, "mem_store_slow", &function_);
+            auto* done = llvm::BasicBlock::Create(context_, "mem_stored", &function_);
+            builder_.CreateCondBr(builder_.CreateAnd(writable,
+                                      builder_.CreateICmpEQ(element.storage,
+                                          llvm::ConstantInt::get(i32_, 3U))),
+                held, slow);
+            builder_.SetInsertPoint(held);
+            auto* offset = builder_.CreateAdd(
+                builder_.CreateZExt(info_field(element.info, i32_, 72U), i64_),
+                builder_.CreateMul(element.ordinal, constant(2U)));
+            builder_.CreateStore(value.a,
+                builder_.CreateInBoundsGEP(i64_, arena_, offset));
+            builder_.CreateStore(value.b, builder_.CreateInBoundsGEP(i64_,
+                arena_, builder_.CreateAdd(offset, constant(1U))));
+            builder_.CreateBr(done);
+            builder_.SetInsertPoint(slow);
+            call_effect(at, value, index, zero_pair());
+            builder_.CreateBr(done);
+            builder_.SetInsertPoint(done);
+            return;
+        }
+        // The nonblocking queue holds slot writes (storage 1 and 2).
+        auto* ok = builder_.CreateAnd(writable, builder_.CreateOr(
+            builder_.CreateICmpEQ(element.storage, llvm::ConstantInt::get(i32_, 1U)),
+            builder_.CreateICmpEQ(element.storage, llvm::ConstantInt::get(i32_, 2U))));
         auto* queue = builder_.CreateLoad(ptr_, frame_field(56U));
         auto* count = builder_.CreateLoad(i32_,
             builder_.CreateConstInBoundsGEP1_64(i8_, queue, 8U));
@@ -1283,18 +1378,17 @@ private:
             builder_.CreateICmpEQ(count, constant(64U)),
             constant(~std::uint64_t { 0 }),
             builder_.CreateSub(builder_.CreateShl(constant(1U), count), constant(1U)));
-        auto* slot = builder_.CreateZExt(binding(inst.x, 0U), i64_);
         auto* word = builder_.CreateLShr(offset, constant(6U));
         auto* bit = builder_.CreateAnd(offset, constant(63U));
         auto* next = builder_.CreateSelect(
             builder_.CreateICmpULT(word, constant(words - 1U)),
             builder_.CreateAdd(word, constant(1U)), word);
         const auto plane = [&](const std::uint64_t index) {
-            auto* first_word = builder_.CreateAdd(slot, constant(index * words));
-            auto* lo = builder_.CreateLoad(i64_, builder_.CreateInBoundsGEP(i64_,
-                arena_, builder_.CreateAdd(first_word, word)));
-            auto* hi = builder_.CreateLoad(i64_, builder_.CreateInBoundsGEP(i64_,
-                arena_, builder_.CreateAdd(first_word, next)));
+            auto* first_word = slot_word(inst.x, index * words);
+            auto* lo = builder_.CreateLoad(i64_,
+                builder_.CreateInBoundsGEP(i64_, first_word, word));
+            auto* hi = builder_.CreateLoad(i64_,
+                builder_.CreateInBoundsGEP(i64_, first_word, next));
             auto* spill = builder_.CreateSelect(
                 builder_.CreateICmpEQ(bit, constant(0U)), constant(0U),
                 builder_.CreateShl(hi, builder_.CreateSub(constant(64U), bit)));
@@ -1477,8 +1571,7 @@ private:
         builder_.SetInsertPoint(deopt);
         auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
             { ptr_, i32_, i32_ }, false);
-        auto* callee = builder_.CreateIntToPtr(
-            constant(reinterpret_cast<std::uintptr_t>(helpers_.fail)), ptr_);
+        auto* callee = helper_symbol("fsim_sk_fail", type);
         builder_.CreateCall(type, callee,
             { frame_, llvm::ConstantInt::get(i32_, at),
                 llvm::ConstantInt::get(i32_, 2U) });
@@ -1721,8 +1814,7 @@ private:
         builder_.SetInsertPoint(deopt);
         auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
             { ptr_, i32_, i32_ }, false);
-        auto* callee = builder_.CreateIntToPtr(
-            constant(reinterpret_cast<std::uintptr_t>(helpers_.fail)), ptr_);
+        auto* callee = helper_symbol("fsim_sk_fail", type);
         builder_.CreateCall(type, callee,
             { frame_, llvm::ConstantInt::get(i32_, at),
                 llvm::ConstantInt::get(i32_, 2U) });
@@ -1749,8 +1841,7 @@ private:
         builder_.SetInsertPoint(deopt);
         auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
             { ptr_, i32_, i32_ }, false);
-        auto* callee = builder_.CreateIntToPtr(
-            constant(reinterpret_cast<std::uintptr_t>(helpers_.fail)), ptr_);
+        auto* callee = helper_symbol("fsim_sk_fail", type);
         builder_.CreateCall(type, callee,
             { frame_, llvm::ConstantInt::get(i32_, at),
                 llvm::ConstantInt::get(i32_, 2U) });
@@ -1806,8 +1897,7 @@ private:
         case KOp::generic: {
             auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
                 { ptr_, ptr_, i32_ }, false);
-            auto* callee = builder_.CreateIntToPtr(
-                constant(reinterpret_cast<std::uintptr_t>(helpers_.generic)), ptr_);
+            auto* callee = helper_symbol("fsim_sk_generic", type);
             builder_.CreateCall(type, callee,
                 { frame_, registers_, llvm::ConstantInt::get(i32_, at) });
             // The helper reads and writes registers through the pointer.
@@ -1842,15 +1932,11 @@ private:
         case KOp::copy:
             store_register(inst.d, load_register(inst.x));
             break;
-        case KOp::load_slot: {
-            auto* offset = builder_.CreateZExt(binding(inst.x, 0U), i64_);
-            auto* low = builder_.CreateInBoundsGEP(i64_, arena_, offset);
-            auto* high = builder_.CreateInBoundsGEP(i64_, arena_,
-                builder_.CreateAdd(offset, constant(1U)));
+        case KOp::load_slot:
             store_register(inst.d,
-                { builder_.CreateLoad(i64_, low), builder_.CreateLoad(i64_, high) });
+                { builder_.CreateLoad(i64_, slot_word(inst.x, 0U)),
+                    builder_.CreateLoad(i64_, slot_word(inst.x, 1U)) });
             break;
-        }
         case KOp::binary:
             store_register(inst.d,
                 emit_binary(inst, load_register(inst.x), load_register(inst.y)));
@@ -1982,7 +2068,6 @@ private:
             }
             break;
         case KOp::load_field: {
-            auto* base = builder_.CreateZExt(binding(inst.x, 0U), i64_);
             if (inst.sub == 1U) {
                 // The bit offset is a per-instance binding: the high word is
                 // read (from an in-plane address) only when the field
@@ -2004,13 +2089,11 @@ private:
                 auto* spill_shift = builder_.CreateAnd(
                     builder_.CreateSub(constant(64U), shift), constant(63U));
                 const auto plane = [&](const std::uint64_t first) {
-                    auto* start = builder_.CreateAdd(base, constant(first));
+                    auto* start = slot_word(inst.x, first);
                     auto* low = builder_.CreateLoad(i64_,
-                        builder_.CreateInBoundsGEP(i64_, arena_,
-                            builder_.CreateAdd(start, word)));
+                        builder_.CreateInBoundsGEP(i64_, start, word));
                     auto* high = builder_.CreateLoad(i64_,
-                        builder_.CreateInBoundsGEP(i64_, arena_,
-                            builder_.CreateAdd(start, next)));
+                        builder_.CreateInBoundsGEP(i64_, start, next));
                     auto* value = builder_.CreateOr(
                         builder_.CreateLShr(low, shift),
                         builder_.CreateSelect(crosses,
@@ -2024,14 +2107,12 @@ private:
             const auto shift = inst.offset % 64U;
             const auto plane = [&](const std::uint64_t first) {
                 auto* low = builder_.CreateLoad(i64_,
-                    builder_.CreateInBoundsGEP(i64_, arena_,
-                        builder_.CreateAdd(base, constant(first + word))));
+                    slot_word(inst.x, first + word));
                 llvm::Value* value = builder_.CreateLShr(low, constant(shift));
                 if (shift != 0U && shift + inst.width > 64U
                     && word + 1U < inst.imm_a) {
                     auto* high = builder_.CreateLoad(i64_,
-                        builder_.CreateInBoundsGEP(i64_, arena_,
-                            builder_.CreateAdd(base, constant(first + word + 1U))));
+                        slot_word(inst.x, first + word + 1U));
                     value = builder_.CreateOr(value,
                         builder_.CreateShl(high, constant(64U - shift)));
                 }
@@ -2075,8 +2156,7 @@ private:
             } else {
                 auto* type = llvm::FunctionType::get(
                     llvm::Type::getVoidTy(context_), { ptr_, i32_, i32_ }, false);
-                auto* callee = builder_.CreateIntToPtr(
-                    constant(reinterpret_cast<std::uintptr_t>(helpers_.fail)), ptr_);
+                auto* callee = helper_symbol("fsim_sk_fail", type);
                 builder_.CreateCall(type, callee,
                     { frame_, llvm::ConstantInt::get(i32_, at),
                         llvm::ConstantInt::get(i32_, 1U) });
@@ -2112,10 +2192,8 @@ private:
             break;
         case KOp::load_slot9: {
             // Strong 0/1 elements: p1 set, p2 and p3 clear, p0 the value.
-            auto* offset = builder_.CreateZExt(binding(inst.x, 0U), i64_);
             const auto plane = [&](const std::uint64_t index) {
-                return builder_.CreateLoad(i64_, builder_.CreateInBoundsGEP(i64_,
-                    arena_, builder_.CreateAdd(offset, constant(index))));
+                return builder_.CreateLoad(i64_, slot_word(inst.x, index));
             };
             auto* m = constant(mask_of(inst.width));
             auto* p0 = plane(0U);
@@ -2131,20 +2209,16 @@ private:
         }
         case KOp::load_field9: {
             // Strong 0/1 fields read inline; others take the helper.
-            auto* base = builder_.CreateZExt(binding(inst.x, 0U), i64_);
             const auto word = inst.offset / 64U;
             const auto shift = inst.offset % 64U;
             const auto plane = [&](const std::uint64_t index) {
                 const auto first = index * inst.imm_a + word;
-                auto* low = builder_.CreateLoad(i64_,
-                    builder_.CreateInBoundsGEP(i64_, arena_,
-                        builder_.CreateAdd(base, constant(first))));
+                auto* low = builder_.CreateLoad(i64_, slot_word(inst.x, first));
                 llvm::Value* value = builder_.CreateLShr(low, constant(shift));
                 if (shift != 0U && shift + inst.width > 64U
                     && word + 1U < inst.imm_a) {
                     auto* high = builder_.CreateLoad(i64_,
-                        builder_.CreateInBoundsGEP(i64_, arena_,
-                            builder_.CreateAdd(base, constant(first + 1U))));
+                        slot_word(inst.x, first + 1U));
                     value = builder_.CreateOr(value,
                         builder_.CreateShl(high, constant(64U - shift)));
                 }
@@ -2457,7 +2531,6 @@ private:
     /// words per plane, as StaticKernel::write_slot_word stores it.
     void emit_store_wide_slot(const KInst& inst, const Pair value)
     {
-        auto* offset = builder_.CreateZExt(binding(inst.d, 0U), i64_);
         auto* info = binding(inst.d, 1U);
         const auto words = inst.imm_a;
         const auto word = inst.offset / 64U;
@@ -2467,8 +2540,7 @@ private:
         auto* m = constant(mask_of(inst.width));
         const auto address = [&](const std::uint64_t plane,
                                  const std::uint64_t index) {
-            return builder_.CreateInBoundsGEP(i64_, arena_,
-                builder_.CreateAdd(offset, constant(plane * words + index)));
+            return slot_word(inst.d, plane * words + index);
         };
         struct Plane {
             llvm::Value* low { };
@@ -2522,8 +2594,7 @@ private:
         builder_.SetInsertPoint(notify);
         auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
             { ptr_, i32_, i64_, i32_ }, false);
-        auto* callee = builder_.CreateIntToPtr(
-            constant(reinterpret_cast<std::uintptr_t>(helpers_.notify_field)), ptr_);
+        auto* callee = helper_symbol("fsim_sk_notify_field", type);
         builder_.CreateCall(type, callee,
             { frame_, builder_.CreateAnd(info,
                           llvm::ConstantInt::get(i32_, ~silent_bit)),
@@ -2537,11 +2608,9 @@ private:
 
     void emit_store_slot(const KInst& inst, const Pair value)
     {
-        auto* offset = builder_.CreateZExt(binding(inst.d, 0U), i64_);
         auto* info = binding(inst.d, 1U);
-        auto* low = builder_.CreateInBoundsGEP(i64_, arena_, offset);
-        auto* high = builder_.CreateInBoundsGEP(i64_, arena_,
-            builder_.CreateAdd(offset, constant(1U)));
+        auto* low = slot_word(inst.d, 0U);
+        auto* high = slot_word(inst.d, 1U);
         const Pair old { builder_.CreateLoad(i64_, low),
             builder_.CreateLoad(i64_, high) };
         const auto next = (inst.flags & detail::flag_linear) != 0U
@@ -2564,8 +2633,7 @@ private:
         builder_.SetInsertPoint(notify);
         auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
             { ptr_, i32_, i64_ }, false);
-        auto* callee = builder_.CreateIntToPtr(
-            constant(reinterpret_cast<std::uintptr_t>(helpers_.notify)), ptr_);
+        auto* callee = helper_symbol("fsim_sk_notify", type);
         builder_.CreateCall(type, callee,
             { frame_, builder_.CreateAnd(info,
                           llvm::ConstantInt::get(i32_, ~silent_bit)),
@@ -2578,12 +2646,13 @@ private:
     }
 
     llvm::LLVMContext& context_;
+    llvm::Module& module_;
     llvm::Function& function_;
     const detail::CompiledBody& body_;
-    const StaticKernelNativeHelpers& helpers_;
     // Simplifies as it builds (x | 0, x & ~0, constant branches): the cold
     // tier runs no clean-up passes.
     llvm::IRBuilder<llvm::InstSimplifyFolder> builder_;
+    llvm::IRBuilder<llvm::InstSimplifyFolder> entry_builder_;
     llvm::Type* i32_;
     llvm::Type* i64_;
     llvm::Type* i8_;
@@ -2616,6 +2685,11 @@ private:
     /// 'U' mask of a U-aware dynamic insert's result.
     llvm::Value* insert_unknown_ { };
     llvm::Value* bindings_ { };
+    llvm::BasicBlock* entry_ { };
+    /// Entry-block values: binding words by index * 2 + word, and slot
+    /// pointers by binding index.
+    std::unordered_map<std::uint64_t, llvm::Value*> binding_values_;
+    std::unordered_map<std::uint32_t, llvm::Value*> slot_pointers_;
     llvm::BasicBlock* return_block_ { };
     llvm::BasicBlock* failure_block_ { };
     std::vector<llvm::BasicBlock*> blocks_;
@@ -2625,12 +2699,17 @@ private:
 
 class LlvmStaticKernelCodegen final : public StaticKernelCodegen {
 public:
-    LlvmStaticKernelCodegen()
+    explicit LlvmStaticKernelCodegen(StaticKernelCodegenOptions options)
+        : ahead_of_time_ { options.ahead_of_time }
     {
         initialize_native_target();
+        if (!options.cache_root.empty()) {
+            cache_.emplace(options.cache_root);
+        }
+        identity_ = codegen_identity();
         const char* level = std::getenv("FSIM_STATIC_KERNEL_CODEGEN_LEVEL");
         const auto codegen_level = level == nullptr ? 0 : std::atoi(level);
-        jit_ = make_jit(codegen_level,
+        jit_ = make_jit(capture_, codegen_level,
             std::getenv("FSIM_STATIC_KERNEL_NO_FAST_ISEL") == nullptr);
         // Hot templates: the optimizing backend. Register allocation and the
         // machine passes carry most of its benefit; fast instruction
@@ -2638,11 +2717,37 @@ public:
         // (FSIM_STATIC_KERNEL_HOT_FAST_ISEL=0 selects the full selector).
         const char* hot_level = std::getenv("FSIM_STATIC_KERNEL_HOT_LEVEL");
         const char* hot_fast_isel = std::getenv("FSIM_STATIC_KERNEL_HOT_FAST_ISEL");
-        hot_jit_ = make_jit(hot_level == nullptr ? 2 : std::atoi(hot_level),
+        hot_jit_ = make_jit(capture_, hot_level == nullptr ? 2 : std::atoi(hot_level),
             hot_fast_isel == nullptr || std::string_view { hot_fast_isel } != "0");
         // Warm templates: full instruction selection without the optimizing
         // backend's cost.
-        warm_jit_ = make_jit(0, false);
+        warm_jit_ = make_jit(capture_, 0, false);
+    }
+
+    [[nodiscard]] bool ahead_of_time() const noexcept override
+    {
+        return ahead_of_time_;
+    }
+
+    std::vector<StaticKernelNativeEntry> available(
+        std::span<const StaticKernelTemplate> templates,
+        const StaticKernelNativeHelpers& helpers) override
+    {
+        std::vector<StaticKernelNativeEntry> entries(templates.size(), nullptr);
+        if (!cache_) {
+            return entries;
+        }
+        define_helpers(*jit_, helpers);
+        std::vector<std::string> keys;
+        keys.reserve(templates.size());
+        for (const auto& code : templates) {
+            keys.push_back(template_key(code));
+        }
+        load_index(index_key(keys));
+        for (std::size_t index = 0U; index < templates.size(); ++index) {
+            entries[index] = find(keys[index], templates[index]);
+        }
+        return entries;
     }
 
     std::vector<StaticKernelNativeEntry> compile(
@@ -2651,25 +2756,40 @@ public:
     {
         const auto started = std::chrono::steady_clock::now();
         std::vector<StaticKernelNativeEntry> entries(templates.size(), nullptr);
+        std::vector<std::string> keys;
+        keys.reserve(templates.size());
+        define_helpers(*jit_, helpers);
+        for (std::size_t index = 0U; index < templates.size(); ++index) {
+            keys.push_back(template_key(templates[index]));
+            entries[index] = find(keys.back(), templates[index]);
+        }
+        if (ahead_of_time_ && index_key_.empty()) {
+            // A later run asks for this same set first (available).
+            index_key_ = index_key(keys);
+        }
         std::size_t instructions = 0U;
         std::array<double, 3> tier_ms { };
         for (const std::uint8_t tier : { std::uint8_t { 0U }, std::uint8_t { 1U }, std::uint8_t { 2U } }) {
             std::vector<std::size_t> group;
             for (std::size_t index = 0U; index < templates.size(); ++index) {
-                if (templates[index].tier == tier) {
+                if (templates[index].tier == tier && entries[index] == nullptr) {
                     group.push_back(index);
                     instructions += templates[index].body->code.size();
                 }
             }
             if (!group.empty()) {
                 const auto group_started = std::chrono::steady_clock::now();
-                compile_group(tier == 2U ? *hot_jit_ : tier == 1U ? *warm_jit_ : *jit_,
-                    templates, group, helpers, entries, tier);
+                auto& jit = tier == 2U ? *hot_jit_ : tier == 1U ? *warm_jit_ : *jit_;
+                define_helpers(jit, helpers);
+                compile_group(jit, templates, keys, group, entries, tier);
                 tier_ms[tier] = std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - group_started).count();
             }
         }
         ++generation_;
+        if (ahead_of_time_ && cache_ && !index_.empty()) {
+            store_index();
+        }
         const auto finished = std::chrono::steady_clock::now();
         if (std::getenv("FSIM_STATIC_KERNEL_PERF_MAP") != nullptr) {
             // Diagnostic: a perf map for the templates. Sizes are distances to
@@ -2717,8 +2837,57 @@ public:
     }
 
 private:
+    /// The runtime helpers generated code calls by name
+    /// (FunctionEmitter::helper_symbol), defined once per JIT.
+    void define_helpers(llvm::orc::LLJIT& jit,
+        const StaticKernelNativeHelpers& helpers)
+    {
+        if (std::ranges::find(helpers_defined_, &jit) != helpers_defined_.end()) {
+            return;
+        }
+        llvm::orc::SymbolMap symbols;
+        const auto add = [&](const char* name, auto* function) {
+            symbols[jit.mangleAndIntern(name)] = llvm::orc::ExecutorSymbolDef(
+                llvm::orc::ExecutorAddr::fromPtr(
+                    reinterpret_cast<void*>(function)),
+                llvm::JITSymbolFlags::Exported | llvm::JITSymbolFlags::Callable);
+        };
+        add("fsim_sk_evaluate", helpers.evaluate);
+        add("fsim_sk_effect", helpers.effect);
+        add("fsim_sk_notify", helpers.notify);
+        add("fsim_sk_binary", helpers.binary);
+        add("fsim_sk_notify_field", helpers.notify_field);
+        add("fsim_sk_fail", helpers.fail);
+        add("fsim_sk_generic", helpers.generic);
+        if (auto error = jit.getMainJITDylib().define(
+                llvm::orc::absoluteSymbols(std::move(symbols)))) {
+            throw std::runtime_error(error_text(std::move(error)));
+        }
+        helpers_defined_.push_back(&jit);
+    }
+
+    /// Keeps the object an ahead-of-time compilation produces.
+    class ObjectCapture final : public llvm::ObjectCache {
+    public:
+        void notifyObjectCompiled(const llvm::Module*,
+            const llvm::MemoryBufferRef object) override
+        {
+            if (enabled) {
+                bytes.assign(object.getBufferStart(), object.getBufferEnd());
+            }
+        }
+
+        std::unique_ptr<llvm::MemoryBuffer> getObject(const llvm::Module*) override
+        {
+            return nullptr;
+        }
+
+        bool enabled { };
+        std::string bytes;
+    };
+
     [[nodiscard]] static std::unique_ptr<llvm::orc::LLJIT> make_jit(
-        const int codegen_level, const bool fast_isel)
+        ObjectCapture& capture, const int codegen_level, const bool fast_isel)
     {
         auto target = llvm::orc::JITTargetMachineBuilder::detectHost();
         if (!target) {
@@ -2732,6 +2901,18 @@ private:
         auto jit = llvm::orc::LLJITBuilder()
                        .setJITTargetMachineBuilder(std::move(*target))
                        .setNumCompileThreads(0U)
+                       .setCompileFunctionCreator(
+                           [&capture](llvm::orc::JITTargetMachineBuilder builder)
+                               -> llvm::Expected<std::unique_ptr<
+                                   llvm::orc::IRCompileLayer::IRCompiler>> {
+                               auto machine = builder.createTargetMachine();
+                               if (!machine) {
+                                   return machine.takeError();
+                               }
+                               return std::make_unique<
+                                   llvm::orc::TMOwningSimpleCompiler>(
+                                   std::move(*machine), &capture);
+                           })
                        .create();
         if (!jit) {
             throw std::runtime_error(error_text(jit.takeError()));
@@ -2741,10 +2922,18 @@ private:
 
     void compile_group(llvm::orc::LLJIT& jit,
         std::span<const StaticKernelTemplate> templates,
-        const std::vector<std::size_t>& group,
-        const StaticKernelNativeHelpers& helpers,
+        const std::vector<std::string>& keys,
+        const std::vector<std::size_t>& all,
         std::vector<StaticKernelNativeEntry>& entries, const std::uint8_t tier)
     {
+        // Templates with equal keys share one function.
+        std::vector<std::size_t> group;
+        std::unordered_map<std::string_view, std::size_t> first;
+        for (const auto index : all) {
+            if (first.emplace(keys[index], index).second) {
+                group.push_back(index);
+            }
+        }
         auto context = std::make_unique<llvm::LLVMContext>();
         auto module = std::make_unique<llvm::Module>("fsim_static_kernel", *context);
         module->setDataLayout(jit.getDataLayout());
@@ -2754,15 +2943,14 @@ private:
         std::vector<std::string> names;
         names.reserve(group.size());
         for (const auto index : group) {
-            names.push_back("fsim_sk_" + std::to_string(generation_) + "_"
-                + std::to_string(index));
+            names.push_back(symbol_name(keys[index]));
             auto* function = llvm::Function::Create(type,
                 llvm::Function::ExternalLinkage, names.back(), *module);
             function->addParamAttr(1, llvm::Attribute::NoAlias);
             function->addParamAttr(0, llvm::Attribute::NoAlias);
             function->addFnAttr(llvm::Attribute::NoUnwind);
             FunctionEmitter emitter(*module, *function, *templates[index].body,
-                helpers, !templates[index].vhdl, templates[index].two_state,
+                !templates[index].vhdl, templates[index].two_state,
                 templates[index].resume_points);
             emitter.emit();
         }
@@ -2813,15 +3001,308 @@ private:
                 std::move(module), std::move(context)))) {
             throw std::runtime_error(error_text(std::move(error)));
         }
+        const bool store = ahead_of_time_ && cache_;
+        capture_.enabled = store;
+        capture_.bytes.clear();
         for (std::size_t slot = 0U; slot < group.size(); ++slot) {
             auto symbol = jit.lookup(names[slot]);
             if (!symbol) {
+                capture_.enabled = false;
                 throw std::runtime_error(error_text(symbol.takeError()));
             }
-            entries[group[slot]] = symbol->toPtr<StaticKernelNativeEntry>();
+            const auto index = group[slot];
+            entries[index] = symbol->toPtr<StaticKernelNativeEntry>();
+            auto& known = known_[keys[index]];
+            known.entry = entries[index];
+            if (templates[index].two_state && templates[index].resume_points != nullptr) {
+                known.resume_points = *templates[index].resume_points;
+            }
+        }
+        capture_.enabled = false;
+        for (const auto index : all) {
+            const auto found = known_.find(keys[index]);
+            entries[index] = found->second.entry;
+            restore_resume_points(found->second, templates[index]);
+        }
+        if (store && !capture_.bytes.empty()) {
+            store_group(keys, group);
         }
     }
 
+    // --- Code built ahead of time ---------------------------------------
+    //
+    // An ahead-of-time compilation stores each group's object under a key of
+    // its templates, and for each template a record naming that object, its
+    // function and its resume points, under the template's key (its body,
+    // tier and form, and this code generator's identity).
+
+    struct Known {
+        StaticKernelNativeEntry entry { };
+        std::vector<std::uint32_t> resume_points;
+    };
+
+    [[nodiscard]] static std::string symbol_name(const std::string& key)
+    {
+        return "fsim_sk_" + key;
+    }
+
+    static void restore_resume_points(
+        const Known& known, const StaticKernelTemplate& code)
+    {
+        if (code.two_state && code.resume_points != nullptr) {
+            *code.resume_points = known.resume_points;
+        }
+    }
+
+    [[nodiscard]] static std::string codegen_identity()
+    {
+        std::string identity = "fsim-static-kernel-object-v1;";
+        identity += __DATE__ " " __TIME__ ";";
+        identity += LLVM_VERSION_STRING ";";
+        identity += llvm::sys::getProcessTriple() + ";";
+        identity += std::string { llvm::sys::getHostCPUName() } + ";";
+        for (const auto& [feature, enabled] : llvm::sys::getHostCPUFeatures()) {
+            if (enabled) {
+                identity += feature.str() + ",";
+            }
+        }
+        for (const char* name : { "FSIM_STATIC_KERNEL_LOCAL_REGISTERS",
+                 "FSIM_STATIC_KERNEL_CODEGEN_LEVEL", "FSIM_STATIC_KERNEL_NO_FAST_ISEL",
+                 "FSIM_STATIC_KERNEL_HOT_LEVEL", "FSIM_STATIC_KERNEL_HOT_FAST_ISEL",
+                 "FSIM_STATIC_KERNEL_PIPELINE", "FSIM_STATIC_KERNEL_HOT_PIPELINE" }) {
+            const char* value = std::getenv(name);
+            identity += ";";
+            identity += name;
+            identity += "=";
+            identity += value != nullptr ? value : "-";
+        }
+        return identity;
+    }
+
+    /// Everything the function emitted for a template depends on.
+    [[nodiscard]] std::string template_key(const StaticKernelTemplate& code) const
+    {
+        std::string text;
+        const auto append = [&](const auto& value) {
+            text.append(reinterpret_cast<const char*>(&value), sizeof(value));
+        };
+        const auto append_all = [&](const auto& values) {
+            append(values.size());
+            for (const auto& value : values) {
+                append(value);
+            }
+        };
+        const auto& body = *code.body;
+        append(code.tier);
+        append(code.vhdl);
+        append(code.two_state);
+        if (!code.two_state && code.resume_points != nullptr) {
+            append_all(*code.resume_points);
+        } else {
+            append(std::size_t { 0 });
+        }
+        append(body.code.size());
+        for (const auto& inst : body.code) {
+            append(inst.op);
+            append(inst.sub);
+            append(inst.flags);
+            append(inst.width);
+            append(inst.d);
+            append(inst.x);
+            append(inst.y);
+            append(inst.z);
+            append(inst.offset);
+            append(inst.aux);
+            append(inst.imm_a);
+            append(inst.imm_b);
+        }
+        append(body.registers.size());
+        append_all(body.register_widths);
+        append(body.indices.size());
+        for (const auto& index : body.indices) {
+            append(index.index);
+            append(index.left);
+            append(index.right);
+            append(index.base_offset);
+            append(index.strict);
+        }
+        append(body.parts.size());
+        for (const auto& part : body.parts) {
+            append(part.left);
+            append(part.right);
+            append(part.base);
+            append(part.base_offset);
+            append(part.width);
+            append(part.increasing);
+            append(part.source_descending);
+        }
+        append(body.concat.size());
+        for (const auto& operand : body.concat) {
+            append(operand.reg);
+            append(operand.width);
+        }
+        append(body.entry);
+        append_all(body.return_targets);
+        append(body.shadow_base);
+        append_all(body.tracked);
+        append_all(body.u_mode);
+        append_all(body.u_operand_begin);
+        append_all(body.u_operands);
+        append(body.call_stack_base);
+        append_all(body.resume_entries);
+        CacheKeyBuilder key;
+        key.add("codegen", identity_);
+        key.add("template", text);
+        return key.finish();
+    }
+
+    /// The template's function: compiled in this process or built ahead
+    /// of time (loaded from the cache); null otherwise.
+    [[nodiscard]] StaticKernelNativeEntry find(
+        const std::string& key, const StaticKernelTemplate& code)
+    {
+        if (const auto found = known_.find(key); found != known_.end()) {
+            restore_resume_points(found->second, code);
+            return found->second.entry;
+        }
+        if (!cache_ || ahead_of_time_) {
+            return nullptr;
+        }
+        const auto record = records_.find(key);
+        if (record == records_.end()) {
+            return nullptr;
+        }
+        const auto& object_key = record->second.object;
+        Known known;
+        known.resume_points = record->second.resume_points;
+        std::error_code error;
+        if (!loaded_objects_.contains(object_key)) {
+            const auto object = cache_->load(object_key, error);
+            if (!object) {
+                return nullptr;
+            }
+            auto buffer = llvm::MemoryBuffer::getMemBufferCopy(
+                llvm::StringRef { reinterpret_cast<const char*>(object->data()),
+                    object->size() },
+                "fsim-static-kernel-" + object_key);
+            if (auto failure = jit_->addObjectFile(std::move(buffer))) {
+                llvm::consumeError(std::move(failure));
+                return nullptr;
+            }
+            loaded_objects_.insert(object_key);
+        }
+        auto symbol = jit_->lookup(symbol_name(key));
+        if (!symbol) {
+            llvm::consumeError(symbol.takeError());
+            return nullptr;
+        }
+        known.entry = symbol->toPtr<StaticKernelNativeEntry>();
+        restore_resume_points(known, code);
+        return known_.emplace(key, std::move(known)).first->second.entry;
+    }
+
+    void store_group(const std::vector<std::string>& keys, const std::vector<std::size_t>& group)
+    {
+        CacheKeyBuilder object_key;
+        object_key.add("codegen", identity_);
+        for (const auto index : group) {
+            object_key.add("template", keys[index]);
+        }
+        const auto object = object_key.finish();
+        std::error_code error;
+        if (!cache_->store(object,
+                std::as_bytes(std::span { capture_.bytes.data(), capture_.bytes.size() }),
+                error)) {
+            return;
+        }
+        for (const auto index : group) {
+            index_.push_back({ keys[index], object,
+                known_.at(keys[index]).resume_points });
+        }
+    }
+
+    struct Record {
+        std::string object;
+        std::vector<std::uint32_t> resume_points;
+    };
+
+    struct IndexEntry {
+        std::string key;
+        std::string object;
+        std::vector<std::uint32_t> resume_points;
+    };
+
+    /// The index of an ahead-of-time build, by the keys of the templates
+    /// its first compilation (all of a kernel's) held.
+    [[nodiscard]] std::string index_key(const std::vector<std::string>& keys) const
+    {
+        CacheKeyBuilder key;
+        key.add("codegen", identity_);
+        key.add("index", "fsim-static-kernel-index-v1");
+        for (const auto& template_key : keys) {
+            key.add("template", template_key);
+        }
+        return key.finish();
+    }
+
+    // One line per template: "<key> <object key> <count> <resume point>...".
+    void store_index()
+    {
+        std::string text;
+        for (const auto& entry : index_) {
+            text += entry.key + " " + entry.object + " "
+                + std::to_string(entry.resume_points.size());
+            for (const auto point : entry.resume_points) {
+                text += " " + std::to_string(point);
+            }
+            text += "\n";
+        }
+        std::error_code error;
+        static_cast<void>(cache_->store(index_key_,
+            std::as_bytes(std::span { text.data(), text.size() }), error));
+    }
+
+    void load_index(const std::string& key)
+    {
+        std::error_code error;
+        const auto payload = cache_->load(key, error);
+        if (!payload) {
+            return;
+        }
+        std::istringstream lines { std::string {
+            reinterpret_cast<const char*>(payload->data()), payload->size() } };
+        std::string line;
+        while (std::getline(lines, line)) {
+            std::istringstream fields { line };
+            std::string template_key;
+            Record record;
+            std::size_t count { };
+            if (!(fields >> template_key >> record.object >> count)
+                || count > (std::size_t { 1 } << 24U)) {
+                records_.clear();
+                return;
+            }
+            record.resume_points.resize(count);
+            for (auto& point : record.resume_points) {
+                if (!(fields >> point)) {
+                    records_.clear();
+                    return;
+                }
+            }
+            records_.insert_or_assign(std::move(template_key), std::move(record));
+        }
+    }
+
+    bool ahead_of_time_ { };
+    std::optional<ObjectCache> cache_;
+    std::string identity_;
+    std::unordered_map<std::string, Known> known_;
+    std::unordered_map<std::string, Record> records_;
+    std::vector<IndexEntry> index_;
+    std::string index_key_;
+    std::unordered_set<std::string> loaded_objects_;
+    ObjectCapture capture_;
+    std::vector<const llvm::orc::LLJIT*> helpers_defined_;
     std::unique_ptr<llvm::orc::LLJIT> jit_;
     std::unique_ptr<llvm::orc::LLJIT> hot_jit_;
     std::unique_ptr<llvm::orc::LLJIT> warm_jit_;
@@ -2830,9 +3311,31 @@ private:
 
 } // namespace
 
-std::shared_ptr<runtime::simir::StaticKernelCodegen> make_static_kernel_codegen()
+std::shared_ptr<runtime::simir::StaticKernelCodegen> make_static_kernel_codegen(
+    StaticKernelCodegenOptions options)
 {
-    return std::make_shared<LlvmStaticKernelCodegen>();
+    return std::make_shared<LlvmStaticKernelCodegen>(std::move(options));
+}
+
+namespace {
+
+thread_local std::size_t ahead_of_time_scopes { };
+
+} // namespace
+
+StaticKernelAheadOfTimeScope::StaticKernelAheadOfTimeScope() noexcept
+{
+    ++ahead_of_time_scopes;
+}
+
+StaticKernelAheadOfTimeScope::~StaticKernelAheadOfTimeScope()
+{
+    --ahead_of_time_scopes;
+}
+
+bool StaticKernelAheadOfTimeScope::active() noexcept
+{
+    return ahead_of_time_scopes != 0U;
 }
 
 } // namespace fsim::compiler

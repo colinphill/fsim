@@ -41,13 +41,38 @@ xsim in the same session:
 
 The xsim figures are the preflight's single samples; the fsim figures are medians of 7
 pairs.
+- **Correction (corpus run).** With 3 xsim samples per case (`v4-corpus-1007`, below),
+  mixed_throughput's xsim median is 12.82 s. Against it, the D6 candidate reaches only
+  2.85× (4.50 s), not 3.13×. The single 15.10 s preflight sample overstated the margin.
+
+**D6 on the corpus (`v4-corpus-1007`, frozen candidate `v4cand-d6b-1007`).** These are
+`perf_campaign.py` runs, 3 samples each, CPU 9, `FSIM_STATIC_KERNEL=1`. All ten cases
+pass stimulus parity against Vivado.
+
+| Case | fsim | xsim | Speedup |
+|---|---:|---:|---:|
+| original_throughput | 4.43 s | 15.80 s | 3.57× |
+| mixed_throughput | 4.50 s | 12.82 s | 2.85× |
+| codex (6 cases) | 2.93–3.13 s | 8.74–9.89 s | 2.92–3.31× |
+| mixed_codec | 19.54 s | 25.05 s | 1.28× |
+| original_codec | 30.90 s | 27.64 s | 0.89× |
+
+D6 is therefore **not met on the corpus**: the codec cases miss widely, and
+mixed_throughput and three codex cases sit just under 3×. Work in progress is logged
+in §4 (2026-10-07: corpus).
 - **Same-session comparison.** The second campaign ran on a slower VM: the HEAD control
   took 5–7% longer. Comparing against xsim timed in the same session removes that drift.
 - **Earlier targets.** The 5.6 s and 4.6 s targets assumed 16.9 s and 13.8 s for xsim;
   the campaigns measure 15.1–19.5 s.
-- **Open.** D6's second clause (simulation within 2× of a 2-state cycle-based reference)
-  is unmeasured: no such reference (for example Verilator) is installed here. The wider
-  corpus is not assembled yet. The older table below records the 2026-10-06 state.
+- **Open: D6's second clause** (simulation within 2× of a 2-state cycle-based
+  reference) is **measured and not met** (§4, 2026-10-07 Verilator reference).
+  - Verilator 5.052 runs the Verilog throughput fixture in 0.30 s.
+  - fsim's simulate phase takes 2.65 s, 8.8× Verilator; its run phase alone takes
+    1.67 s, 5.5×.
+  - The owner deferred the clause to Phase 6 on 2026-10-07. Until then, D6 is the
+    first clause on the corpus.
+  - The wider corpus is not assembled yet. The older table below records the
+    2026-10-06 state.
 
 ### 2026-10-06 (late) state
 
@@ -105,6 +130,269 @@ per completed phase).
 | D5 whole-design fallback | done (planner disables the kernel with a reason) | `elaborated_design_static_kernel.cpp` |
 
 ## 4. Log
+
+### 2026-10-08: new exit criteria, static-kernel AOT, elaboration memos
+
+**Exit criteria (owner, plan §9 D6).**
+- The geometric mean of the per-case e2e speedups over xsim must be at least 3×.
+- In every case, `fsim simulate` must be at least 3× faster than `xsim -R`.
+- Elaborate may build the kernel's native code (`--aot`).
+- On `v4-corpus-1008a` the geometric mean was 3.63×. The simulate-phase ratios were:
+
+  | Case | Simulate-phase ratio |
+  |---|---:|
+  | mixed_codec | 1.39× |
+  | original_codec | 1.54× |
+  | mixed_throughput | 2.30× |
+  | original_throughput | 2.98× |
+  | codex | 8.7–18.6× |
+
+**Static kernel AOT.**
+- `fsim elaborate --aot` now sets up a simulation without trace or coverage. The kernel
+  is built inside it (`StaticKernelAheadOfTimeScope`), and every template is compiled,
+  including lazy and full-code templates.
+- Objects go to `<cache>/static-kernel`, one per tier group. They are stored with an
+  index named by the keys of all the kernel's templates. Each template key covers:
+  - its body, tier and form;
+  - the resume points its full code continues at;
+  - the code generator's identity: the build stamp, LLVM version, host CPU and
+    features, and the codegen environment.
+- Simulate looks up the same templates (`StaticKernelCodegen::available`). It links the
+  objects with JITLink, restores two-state resume points, and runs templates natively
+  from the start.
+- Generated code calls the runtime helpers by name (`fsim_sk_*`, defined with
+  `absoluteSymbols`) instead of by address.
+- Measured simulate phase:
+
+  | Case | Before AOT | With AOT |
+  |---|---:|---:|
+  | mixed_throughput | 2.73 s | 2.22 s |
+  | mixed_codec | 4.84 s | 3.6 s |
+  | original_codec | 5.04 s | 3.6 s |
+
+  AOT elaborate costs +1.1 s on mixed_throughput, about +5.5 s on mixed_codec and about
+  +5.4 s on original_codec. That includes the artifact reload, kernel setup and
+  compiling every template.
+- Outputs match the frozen ones.
+
+**Elaboration.**
+- **Type-mark lookups.** `effective_vhdl_subtype` skips name resolution for a type mark
+  that has no type, subtype or generic-type declaration in the design, such as a
+  predefined or IEEE type. This uses `vhdl_type_declarations_named`. Saves 0.26 s on
+  mixed_codec.
+- **Design-wide call memo.** It is shared through `VhdlInitializerMemoContext` and
+  covers:
+  - pure functions of non-generic packages, in both the typed and the integral
+    evaluator, keyed by callable and argument values, with the work replayed;
+  - the callable declaration a call expression names, for units whose actuals are all
+    generic constants;
+  - per evaluator, the value declaration a name resolves to.
+
+  mixed_codec elaborate went from 4.3 s to 3.5 s and mixed_throughput from 1.39 s to
+  1.24 s. The elaborated artifacts are byte-identical.
+- **Codegen.** Binding words and slot pointers are hoisted into the entry block: 6% less
+  codegen time.
+
+**Runtime state.**
+- Packed memories of one narrow Logic4 width are written as two dense bit planes
+  (runtime-state schema 77).
+- runtime.bin went from 88 MB to 66 MB on original_codec. Decode got 0.04–0.06 s faster.
+
+**Rejected.**
+- Word-plane encoding of every packed value: runtime.bin grew to 132 MB, and decode was
+  barely faster.
+- Compiling cold templates at LLVM Default: it crashes, and codegen took 23 s on
+  mixed_codec.
+- Lowering the hot threshold under AOT: no run-time gain.
+
+**Where mixed_codec's simulate phase goes, with AOT (3.6 s):**
+
+| Item | Time |
+|---|---:|
+| Load (decode 0.28 s) | 0.42 s |
+| Kernel setup (plan 0.05, members 0.06, KIR and member specialization 0.31, native link 0.09) | 0.58 s |
+| Interpreter start (time-zero runs, mostly on the reference evaluator) | 0.2 s |
+| Run | 2.28 s |
+
+Within the run, generated code is 53%, `commit_round` about 11% and scheduling about
+7%. The rest is generic operations and the testbench threads. The owner chose to do
+the architecture work this needs: fusing VHDL combinational members with exact
+delta-depth publication, a persisted kernel image, and load and commit cuts.
+
+### 2026-10-07: corpus (codec elaboration, testbench threads in the kernel)
+
+The corpus run above showed where the codec cases spend their time. For
+original_codec (30.9 s against 27.6 s for xsim):
+- **Elaborate: 13.5 s.** A third of it was constant folding during expression
+  lowering: 54 k fold attempts at about 110 µs each.
+- **Simulate: 16.8 s.**
+  - 7.0 s waits for the old JIT, which compiles the 11 testbench `initial` processes
+    (121 k operations at O2) with a cold cache.
+  - The kernel takes 4.7 s.
+  - The host runs the testbench for about 2.9 s.
+
+Changes:
+- **Constant evaluation caches** (`specialization_cache.hpp`).
+  - Each constant name's declaration is memoized per specialization and expression
+    record.
+  - Each declaration's value is cached. A unit-scope declaration whose evaluation reads
+    no hierarchy identity is shared with derived generate-occurrence specializations
+    (`derive_occurrence_specialization`). Values that read one stay per
+    specialization, and reading such a cached value marks the outer evaluation too.
+  - Specializations in one overlay class, when their overlay determines them, share
+    all constant results. `overlay_class` now runs as soon as an instance's
+    specialization exists.
+  - The trigger: `GEN = gen_poly(PAR)` in `rs_encoder_top` was evaluated once per
+    generate tap (145 times, 20 ms each) for only 8 distinct parameter sets.
+  - Result: folding went from 6.0 s to 0.2 s, and original_codec elaboration from
+    13.5 s to 6.6 s.
+- **Private arrays in behavioral members.**
+  - The planner admits `ContainerWrite` when its register is a fixed packed array
+    that no `ReadContainerObject` binds. The interpreter copies a bound memory into
+    the register, which the kernel would alias instead.
+  - The kernel gives each such register its own elements-storage container,
+    initialized to the type's default.
+  - `ContainerWrite` compiles to a blocking `mem_write`, and the reference path
+    handles it.
+  - Frames that list private arrays save and restore their contents, keeping
+    preserved results, exactly as the interpreter's frames do. Such a member runs every
+    frame operation through the generic bridge, compiled code included.
+  - The 64-container-register compile limit is removed; nothing depended on it.
+  - The codec testbench threads now run in the kernel. The old JIT's 7 s wait is gone,
+    and original_codec simulate went from 16.8 s to 9.95 s, of which kernel code
+    generation is now 3.0 s.
+- **Parity.**
+  - Nine cases print exactly what the frozen build printed (sorted lines).
+  - mixed_codec prints 11 fewer `numeric to_integer detected a metavalue` warnings
+    (decoder lines 263 and 265 before reset). The default engine without the kernel
+    prints the new counts (24 and 9), so the frozen v4 build's extra warnings came from
+    running the testbench on the host.
+  - Vivado prints none of these warnings.
+- **Element-net families read and written per leaf.**
+  - The codec RTL's unpacked arrays (Chien–Forney `spe`, `se`, `sigma_next`; syndrome
+    `s_mult`; encoder `fbm`; 32–33 leaves of 8 bits) are kernel families. Every whole
+    read assembled a 264-bit `PackedLogic4`, and every element write rewrote the family:
+    60% of original_codec's run.
+  - A family read whose register feeds only constant extracts, each inside one leaf,
+    now loads those leaves in place (`field_family`). This applies when the member
+    writes neither the family nor its leaves and no barrier lies between the read and
+    its last selection.
+  - A SystemVerilog slice write that covers exactly one leaf stores that leaf.
+  - original_codec's kernel run went from 5.2 s to 2.95 s, with output unchanged.
+- **Kernel-held memories in native code.**
+  - Elements-storage containers (behavioral members' private arrays) get
+    `StaticKernelContainerInfo` storage 3.
+  - Native code reads them, and writes them in place when blocking; nothing observes
+    them.
+  - Frames save private arrays per thread (the interpreter gives each fork branch its
+    own frame stack) and only for callables whose frames list one.
+- **Signal-backed memories written inline.**
+  - Blocking element writes of element-slot memories (storage 1) and packed memories
+    (storage 2) are now native.
+  - Storage 1: the element table carries each slot's silence. Storage 2: the info
+    carries the packed slot's silence (`packed_silent`). Writes follow the slot-store
+    sequence: written when changed or silent, readers notified, the packed case with
+    the field's offset.
+  - The throughput testbench's 578 k helper calls went away, with no measurable time
+    change: they were cheap.
+- **Two-state code for SystemVerilog (`FSIM_STATIC_KERNEL_TWO_STATE=2`, opt-in).**
+  - Enabling it for SystemVerilog gave wrong results, found by bisecting templates. Local
+    registers live in allocas, but the handover continues full code from the register
+    file. VHDL never hit this because its two-state templates always have a
+    `shadow_base`.
+  - Fixed: no local registers in two-state code, nor in full code with continuations.
+  - It stays off by default. SystemVerilog members commonly hold X until reset, so most
+    templates also need their full code. On the throughput case, code generation went
+    from 250 ms to 540 ms and simulate from 2.53 s to 2.96 s.
+- **Constant evaluation, continued.**
+  - Specialization actuals are parsed lazily in the semantic `HirIntegralEvaluator`.
+    Each construction used to parse every parameter.
+  - Widths of declaration and callable types are cached per specialization
+    (`record_type_widths`).
+  - Constant functions whose bodies use `if`, loops or `case` over call-free expressions
+    that only assign locals may now fold. An example is `alpha_pow_fn(PRIM_POW*apg)` in
+    a 256-way generate. Before, 3456 callable bodies were lowered per elaboration, about
+    0.57 s.
+  - The evaluator gained a word-level path for Logic4 operands up to 64 bits, matching
+    the general path's semantics (operand extension, wrap, signed division). The
+    general path handles the rest, including errors.
+  - The recursion guard is a small stack, not a hash set.
+  - original_codec elaboration went from 6.4 s to about 5.0 s.
+- **Process canonicalization.**
+  - Representatives already passed the shareability check, so `share_operations` no
+    longer rescans both lists (`shareable_checked`).
+  - A template instance tries the template's last representative before building its
+    grouping key.
+  - Canonicalization went from 13.6% of codec elaboration to 3%.
+- **Behavioral templates compile lazily, by work.**
+  - Testbench threads are large and mostly cold: the codec testbench has six templates
+    of about 11 k instructions, and almost none of the kernel's work.
+  - Their templates are now lazy. The KIR interpreter runs them until their interpreted
+    instructions reach size × (200 + size / 10), roughly the compile cost, which keeps
+    the choice within about twice the better one (`note_lazy_work`).
+    `FSIM_STATIC_KERNEL_LAZY_BEHAVIORAL=0` compiles them at once.
+  - original_codec simulate went from 6.4 s to 5.0 s. The throughput testbench template
+    (2 k instructions, 11 M instructions of work) is still compiled early, so the
+    throughput cases are neutral.
+- **Reference `binary_value` on words.**
+  - Logic4 operands of at most 64 bits use `kernel_word::binary`, as kernel-compiled
+    code does for every operator except `vhdl_match_equal`.
+  - The VHDL time-0 prologue runs on the reference path. On mixed_codec the time before
+    the interpreter starts went from 471 ms to 205 ms, and the run from 4.0 s to 3.6 s.
+- **VHDL initializer memo across generate occurrences.**
+  - Memo entries record whether their evaluation read a hierarchy identity (generate
+    parameters, named hierarchy identities). Entries that did not serve overlays that
+    differ only in hierarchy identities, with the same selected generates.
+  - The trigger: `GEN := gen_poly(...)` in `rs_encoder_top.vhd`, sliced per tap in a
+    for-generate, was evaluated 145 times (787 ms); now it is evaluated 8 times.
+  - mixed_codec elaboration went from 4.9 s to 4.15 s.
+- **Lazy codegen threshold checked.** Interpreting lazy templates instead of compiling
+  them costs far more: throughput simulate 2.5 → 3.6 s, mixed 2.7 → 5.0 s.
+- **overlay_class** indexes classes by unit; the linear scan was quadratic in the class
+  count.
+- **Diagnostics.**
+  - `FSIM_PROFILE_KERNEL_PLAN` now names the rejected operation and lists every
+    unsupported kind.
+  - New replay tool `r37-analysis/tools/replay.py`: it reruns a campaign sample's
+    recorded commands with another binary.
+
+### 2026-10-07: Verilator reference (D6 second clause)
+
+Verilator 5.052 (conda-forge, installed under `~/.local/opt/verilator`) on the Verilog
+throughput round-2 fixture:
+- **Build.** `--binary --timing -O3 --x-assign fast --x-initial fast`, C++ at
+  `-O2 -march=native`, single-threaded. The build takes 25 s.
+- **Parity.** Its `THRU` and `STIM_SUMMARY` lines match the Vivado transcript exactly.
+- **Speed.** It runs in 0.30 s on CPU 9: 4.09 G instructions, 1.49 G cycles.
+
+fsim's simulate phase on the same fixture (HEAD `d0c96e87`):
+
+| Part | Time |
+|---|---|
+| Whole phase | 2.65–2.73 s: 35.2 G instructions, 12.1 G cycles |
+| Process start | 0.08 s |
+| Design load | 0.38 s |
+| Kernel build | 0.53 s, of which code generation 0.26 s |
+| Run | 1.67 s |
+
+- **Ratios.** 8.8× Verilator for the phase, 5.5× for the run alone. The clause needs
+  at most 2×, which is about 0.6 s.
+- **Run-phase profile.**
+  - Generated code: 45%.
+  - Kernel runtime: 37% (notify, slot changes, slot writes, scheduling).
+  - Lazy cold code generation: 15%.
+  - Counts: 10.8 M native runs, 17.6 M notifications, 28.2 M schedules and 3.64 G
+    SimIR operations over 44.7 k clock cycles.
+- **Two-state code for Verilog templates fails.** Enabling the VHDL two-state path for
+  Verilog templates gave wrong results: instance 2 reported `errs=22`. It was also
+  slower: 39.9 G instructions. Reverted.
+- **What closing the gap needs.** The plan's static scheduling of synthesizable logic
+  (P2), ahead-of-time code generation at elaborate (P1), zero-copy artifact load, and a
+  known-value fast path that is exact for Verilog (P5).
+- **Commercial evidence.** Public evidence that commercial simulators reach 2× of
+  Verilator is thin: Verilator's documentation claims "similar or better performance"
+  than VCS and Xcelium, and the OpenHW CVW project reported Verilator more than twice
+  as fast as VCS. Licence terms forbid published vendor benchmarks.
 
 ### 2026-10-07: D6 qualification (`v4-d6b-pair-1007`)
 
@@ -1368,8 +1656,8 @@ boundary traffic.
 ## 6. Next steps (in order)
 
 The D6 throughput criterion is met on both throughput cases (§2). Next:
-1. Record a 2-state cycle-based reference (D6's second clause) once one is available.
-2. Assemble the wider corpus (plan Phase 0).
+1. Assemble the wider corpus (plan Phase 0) and measure D6's first clause on it.
+2. D6's second clause is deferred to Phase 6 (§4, Verilator reference).
 3. Qualify the Windows mimalloc path (redirect DLL) on a Windows host.
 4. Widen the mixed margin (3.1–3.3× xsim):
    - VHDL instance elaboration;

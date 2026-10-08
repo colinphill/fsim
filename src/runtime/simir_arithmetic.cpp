@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
+#include "simir_kernel_word_ops.hpp"
 
 namespace fsim::runtime::simir {
 
@@ -211,6 +212,24 @@ namespace fsim::runtime::simir {
   }
   if (lhs.empty()) {
     throw std::invalid_argument("binary operands must not be empty");
+  }
+  // Logic4 operands of at most 64 bits: the static kernel's word operations,
+  // which it relies on for every operator it compiles natively.
+  if (lhs.width() <= 64U && !lhs.is_logic9() && !rhs.is_logic9()
+      && operation != BinaryOperator::vhdl_match_equal) {
+    const auto plane = [](const std::span<const std::uint64_t> words) {
+      return words.empty() ? std::uint64_t { 0 } : words.front();
+    };
+    const kernel_word::Word left { plane(lhs.aval_words()),
+                                   plane(lhs.bval_words()) };
+    const kernel_word::Word right { plane(rhs.aval_words()),
+                                    plane(rhs.bval_words()) };
+    const auto width = static_cast<std::uint32_t>(lhs.width());
+    const auto result = kernel_word::binary(operation, left, right, width);
+    const bool comparison = operation >= BinaryOperator::equal
+        && operation <= BinaryOperator::greater_equal_signed;
+    return PackedLogic4::from_aval_bval(comparison ? 1U : width, result.a,
+        result.b);
   }
   if (operation == BinaryOperator::equal) {
     bool unknown = false;

@@ -37,7 +37,9 @@ static_assert(sizeof(StaticKernelWrite) == 48U);
 /// (ABI). Generated code sends every access of a memory with `storage` 0, and
 /// every write it cannot express as one word write, to the helpers.
 struct StaticKernelContainerInfo {
-    /// 0: helpers only; 1: one slot per element; 2: one packed slot.
+    /// 0: helpers only; 1: one slot per element; 2: one packed slot;
+    /// 3: kernel-held elements, two planes of one word each from
+    /// packed_offset on.
     std::uint32_t storage { };
     /// Storage 2: the packed slot.
     std::uint32_t slot { };
@@ -54,7 +56,8 @@ struct StaticKernelContainerInfo {
     std::uint32_t flags { };
     /// Storage 1: per element, its slot's arena offset and slot index.
     const std::uint32_t* elements { };
-    /// Storage 2: the packed slot's arena offset, words per plane and width.
+    /// Storage 2: the packed slot's arena offset, words per plane and width
+    /// (storage 3: the first element's arena offset).
     std::uint32_t packed_offset { };
     std::uint32_t packed_words { };
     std::uint32_t packed_width { };
@@ -166,6 +169,22 @@ public:
     [[nodiscard]] virtual std::vector<StaticKernelNativeEntry> compile(
         std::span<const StaticKernelTemplate> templates,
         const StaticKernelNativeHelpers& helpers) = 0;
+    /// Entries of templates whose code is already built (ahead of time),
+    /// without compiling any; null for the others. A two-state template's
+    /// resume points are restored with its code.
+    [[nodiscard]] virtual std::vector<StaticKernelNativeEntry> available(
+        std::span<const StaticKernelTemplate> templates,
+        const StaticKernelNativeHelpers&)
+    {
+        return std::vector<StaticKernelNativeEntry>(templates.size(), nullptr);
+    }
+    /// Ahead-of-time build (elaborate --aot): every template, including
+    /// lazy and full-code templates, is compiled now and kept for later
+    /// runs (available).
+    [[nodiscard]] virtual bool ahead_of_time() const noexcept
+    {
+        return false;
+    }
 };
 
 } // namespace fsim::runtime::simir

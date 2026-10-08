@@ -143,6 +143,8 @@ void Interpreter::Impl::StaticKernel::finish_thread(const std::uint32_t index)
     thread.alive = false;
     thread.call_stack.clear();
     thread.frames.clear();
+    thread.saved_arrays.clear();
+    thread.saved_array_marks.clear();
     const auto parent = thread.parent;
     const auto group = thread.group;
     free_threads_.push_back(index);
@@ -258,6 +260,24 @@ bool Interpreter::Impl::StaticKernel::behavioral_step(
             packed_register(op.destination) = PackedLogic4::from_aval_bval(
                 32, selected != nullptr ? 1U : 0U, 0);
         } else if constexpr (std::is_same_v<T, CallableFramePush>) {
+            if (member.private_frame(op.identity)) {
+                member.saved_array_marks.push_back(member.saved_arrays.size());
+                for (const auto id : op.containers) {
+                    if (id >= member.container_registers.size()
+                        || member.container_registers[id] == no_container) {
+                        continue;
+                    }
+                    const auto container = member.container_registers[id];
+                    const auto& storage = containers_[container];
+                    if (storage.object != no_container_object) {
+                        continue;
+                    }
+                    const auto* begin = arena_.data() + storage.element_offset;
+                    member.saved_arrays.push_back({ id, container,
+                        std::vector<std::uint64_t>(begin,
+                            begin + 2U * storage.element_words * storage.count) });
+                }
+            }
             if (member.frames_elided) {
                 return;
             }
@@ -293,6 +313,23 @@ bool Interpreter::Impl::StaticKernel::behavioral_step(
             member.frame_bytes += frame.bytes;
             member.frames.push_back(std::move(frame));
         } else if constexpr (std::is_same_v<T, CallableFramePop>) {
+            if (member.private_frame(op.identity)) {
+                if (member.saved_array_marks.empty()) {
+                    fail(member_index, pc, "automatic callable frame stack mismatch");
+                }
+                const auto mark = member.saved_array_marks.back();
+                member.saved_array_marks.pop_back();
+                for (auto entry = mark; entry < member.saved_arrays.size(); ++entry) {
+                    const auto& saved = member.saved_arrays[entry];
+                    if (std::ranges::find(op.preserve_containers, saved.id)
+                        != op.preserve_containers.end()) {
+                        continue;
+                    }
+                    std::ranges::copy(saved.words, arena_.begin()
+                        + containers_[saved.container].element_offset);
+                }
+                member.saved_arrays.resize(mark);
+            }
             if (member.frames_elided) {
                 return;
             }
@@ -458,6 +495,8 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
     std::swap(member.call_stack, threads_[index].call_stack);
     std::swap(member.frames, threads_[index].frames);
     std::swap(member.frame_bytes, threads_[index].frame_bytes);
+    std::swap(member.saved_arrays, threads_[index].saved_arrays);
+    std::swap(member.saved_array_marks, threads_[index].saved_array_marks);
     auto pc = threads_[index].pc;
     const auto size = static_cast<std::uint32_t>(member.operations.size());
     const auto park = [&](const std::uint32_t resume) {
@@ -465,6 +504,8 @@ void Interpreter::Impl::StaticKernel::run_thread(const std::uint32_t index)
         std::swap(member.call_stack, thread.call_stack);
         std::swap(member.frames, thread.frames);
         std::swap(member.frame_bytes, thread.frame_bytes);
+        std::swap(member.saved_arrays, thread.saved_arrays);
+        std::swap(member.saved_array_marks, thread.saved_array_marks);
         thread.pc = resume;
     };
     for (;;) {
@@ -533,7 +574,18 @@ std::optional<std::uint32_t> Interpreter::Impl::StaticKernel::run_behavioral_com
         if (member.native.entry != nullptr) {
             run_native(member.native, body, member_index);
         } else {
-            execute_body(body, member_index);
+            executed_steps_ = 0U;
+            try {
+                execute_body(body, member_index);
+            } catch (const KernelDeopt&) {
+                if (member.native.lazy_template != no_slot) {
+                    note_lazy_work(member.native.lazy_template, executed_steps_);
+                }
+                throw;
+            }
+            if (member.native.lazy_template != no_slot) {
+                note_lazy_work(member.native.lazy_template, executed_steps_);
+            }
         }
     } catch (const KernelDeopt& deopt) {
         pending_deopt_ = deopt;

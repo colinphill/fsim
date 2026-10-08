@@ -249,17 +249,21 @@ namespace process_program_detail {
 
 [[nodiscard]] bool operation_list_shareable(
     const OperationList& operations);
+/// `shareable_checked`: the caller verified that both operation lists are
+/// shareable (operation_list_shareable).
 [[nodiscard]] bool share_operations(
     const ProcessProgramView& representative,
     Process& candidate,
     std::span<const Signal> signals,
-    OperationList::Storage* recycled_operations = nullptr);
+    OperationList::Storage* recycled_operations = nullptr,
+    bool shareable_checked = false);
 [[nodiscard]] bool share_operations(
     const ProcessProgramView& representative,
     const ProcessProgramTemplate& candidate_common,
     ProcessInstanceProgram& candidate,
     std::span<const Signal> signals,
-    OperationList::Storage* recycled_operations = nullptr);
+    OperationList::Storage* recycled_operations = nullptr,
+    bool shareable_checked = false);
 
 } // namespace process_program_detail
 

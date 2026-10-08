@@ -18,16 +18,19 @@ namespace operation_list_detail {
 /// operation alternative and stores hierarchy-specific differences sparsely.
 struct ShareAccess {
     [[nodiscard]] static bool shareable(const OperationList& operations);
+    /// `shareable_checked`: both lists are known to be shareable.
     [[nodiscard]] static bool share(
         const OperationList& representative,
         OperationList& candidate,
         std::span<const Signal> signals,
-        OperationList::Storage* recycled_operations = nullptr);
+        OperationList::Storage* recycled_operations = nullptr,
+        bool shareable_checked = false);
     [[nodiscard]] static bool share(
         const OperationList& representative,
         OperationList& candidate,
         std::span<const SignalHot> signals,
-        OperationList::Storage* recycled_operations = nullptr);
+        OperationList::Storage* recycled_operations = nullptr,
+        bool shareable_checked = false);
 
     // Runtime-state codec access. An instance list is its shared body plus
     // per-instruction overrides plus debug-scope remaps (canonical scope of
@@ -63,7 +66,8 @@ private:
         const OperationList& representative,
         OperationList& candidate,
         std::span<const SignalRecord> signals,
-        OperationList::Storage* recycled_operations);
+        OperationList::Storage* recycled_operations,
+        bool shareable_checked);
 };
 
 } // namespace operation_list_detail

@@ -4,6 +4,7 @@
 // deoptimization, the generic bridge and the slow instruction semantics.
 #include "simir_static_kernel_compiled_internal.hpp"
 
+#include <cctype>
 #include <cxxabi.h>
 #include <iostream>
 #include <limits>
@@ -44,6 +45,11 @@ void Interpreter::Impl::StaticKernel::execute_body(
     const bool behavioral = !body.resume_entries.empty();
     std::uint32_t pc = behavioral ? behavioral_entry_ : body.entry;
     std::size_t steps = 0U;
+    struct StepRecord {
+        std::size_t& steps;
+        std::size_t& into;
+        ~StepRecord() { into = steps; }
+    } step_record { steps, executed_steps_ };
     // SimIR operation index of instruction 0.
     const auto origin = current->vhdl ? 0U : current->body_begin;
     const auto fail_at = [&](const std::uint32_t at, const std::string& message) {
@@ -535,6 +541,14 @@ bool Interpreter::Impl::StaticKernel::execute_generic(CompiledBody& body,
             }
             if (out) {
                 key += "->" + std::to_string(body.register_widths[inst.y + *out]);
+            }
+            if (member_index < profile_names_.size()) {
+                // The member, instance indices dropped (as for evaluate).
+                auto who = " " + profile_names_[member_index];
+                std::erase_if(who, [](const char c) {
+                    return std::isdigit(static_cast<unsigned char>(c)) != 0;
+                });
+                key += who;
             }
             ++profile_generic_ops_[key];
         }, operation);

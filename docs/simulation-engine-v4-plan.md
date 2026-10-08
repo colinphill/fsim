@@ -389,6 +389,8 @@ mode of working: one owner plus coding agents.
 - multi-core partitioned simulation (RepCut-style replication);
 - incremental compilation per changed specialization;
 - opt-in 2-state mode;
+- simulation time within 2× of a 2-state cycle-based reference (D6's second clause,
+  deferred here on 2026-10-07);
 - profile-guided partition layout;
 - save/restore.
 
@@ -442,3 +444,19 @@ mode of working: one owner plus coding agents.
   - on the corpus, at least 3× faster than xsim in total Wall, single-core;
   - simulation time within 2× of a 2-state cycle-based reference on
     synthesizable designs, while remaining 4-state exact.
+  - **Deferred on 2026-10-07.** The owner moved the second clause to Phase 6.
+    - Measured against Verilator 5.052, fsim was at 5.5× for the run phase and 8.8× for
+      the simulate phase (progress log, 2026-10-07 Verilator reference).
+    - Public evidence that commercial simulators come within 2× of Verilator is thin.
+    - Until Phase 6, D6 means the first clause on the corpus.
+  - **Measure (owner, 2026-10-08, superseded the same day).** Every corpus case must be
+    at least 3× faster than xsim; a geometric mean or summed wall time across the corpus
+    does not count.
+  - **Exit criteria (owner, 2026-10-08, current).** Both of the following must hold:
+    - the geometric mean, over the corpus cases, of the end-to-end (total Wall) speedup
+      over xsim is at least 3×;
+    - in every case, the simulate phase is at least 3× faster than xsim's simulate
+      phase (`fsim simulate` against `xsim -R`, each command whole).
+    - Elaborate may build the static kernel's native code, as xelab does. The corpus
+      campaign drops `--no-aot` from `fsim elaborate`, and that codegen counts in
+      end-to-end Wall.

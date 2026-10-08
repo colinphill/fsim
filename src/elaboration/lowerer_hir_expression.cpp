@@ -5943,6 +5943,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
             case semantic::sv::StatementKind::return_statement:
                 return expression_is_call_free(source.value);
             case semantic::sv::StatementKind::null_statement:
+            case semantic::sv::StatementKind::break_loop:
+            case semantic::sv::StatementKind::continue_loop:
                 return true;
             case semantic::sv::StatementKind::block:
                 return std::ranges::all_of(
@@ -5950,6 +5952,47 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
                     [&](const semantic::StatementId nested) {
                         return statement_self(statement_self, nested);
                     });
+            case semantic::sv::StatementKind::conditional:
+            case semantic::sv::StatementKind::loop:
+            case semantic::sv::StatementKind::selection: {
+                // Control flow over call-free expressions whose nested
+                // statements only assign locals: constant evaluation either
+                // completes or leaves the call to ordinary lowering.
+                const auto nested_free
+                    = [&](const std::vector<semantic::StatementId>& list) {
+                    return std::ranges::all_of(list,
+                        [&](const semantic::StatementId nested) {
+                            return statement_self(statement_self, nested);
+                        });
+                };
+                if (!expression_is_call_free(source.condition)
+                    || !expression_is_call_free(source.value)
+                    || !expression_is_call_free(source.loop_initial)
+                    || !expression_is_call_free(source.loop_limit)
+                    || !nested_free(source.statements)
+                    || !nested_free(source.else_statements)
+                    || !nested_free(source.loop_updates)) {
+                    return false;
+                }
+                if (source.kind == semantic::sv::StatementKind::loop
+                    && !source.loop_variable.empty()
+                    && !source.loop_variable_declared) {
+                    const auto target = source.loop_update_target
+                        ? hir_referenced_declaration(*source.loop_update_target)
+                        : std::nullopt;
+                    if (!target || !local_declarations.contains(target->value())) {
+                        return false;
+                    }
+                }
+                return std::ranges::all_of(source.case_alternatives,
+                    [&](const semantic::sv::CaseAlternative& alternative) {
+                        return nested_free(alternative.statements)
+                            && std::ranges::all_of(alternative.choices,
+                                [&](const semantic::ExpressionId choice) {
+                                    return expression_is_call_free(choice);
+                                });
+                    });
+            }
             default:
                 return false;
             }
