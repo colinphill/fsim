@@ -1978,6 +1978,7 @@ tests/fixtures/compliance/verilog_2005_begin_keywords.v
 tests/fixtures/compliance/vhdl_composite_constants.vhd
 tests/fixtures/compliance/vhdl_enum_index_arrays.vhd
 tests/fixtures/compliance/vhdl_now_and_string_formals.vhd
+tests/fixtures/compliance/vhdl_package_shared_variables.vhd
 tests/fixtures/compliance/vhdl_procedure_constant_actuals.vhd
 tests/fixtures/compliance/vhdl_range_constraints.vhd
 tests/fixtures/compliance/vhdl_real_arithmetic.vhd
@@ -1986,6 +1987,7 @@ tests/fixtures/compliance/vhdl_reanalysis_first.vhd.in
 tests/fixtures/compliance/vhdl_scalar_type_declarations.vhd
 tests/fixtures/compliance/vhdl_signal_formals.vhd
 tests/fixtures/compliance/vhdl_subprogram_forms.vhd
+tests/fixtures/compliance/vhdl_typed_files.vhd
 tests/fixtures/fst/complete_trace.tsv
 tests/fixtures/sdf/corpus/sdf21/mixed_resolution.sdf
 tests/fixtures/sdf/corpus/sdf21/profile.sdf

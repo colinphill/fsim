@@ -2104,8 +2104,8 @@ scheduler.
 | `FSIM-ELAB-VHFILE-008` | error | Status-form `file_open` does not have a writable `file_open_status` actual. |
 | `FSIM-ELAB-VHFILE-009` | error | `endfile` does not have exactly one visible whole file-object actual. |
 | `FSIM-ELAB-VHFILE-010` | error | Direct VHDL file `read` or `write` does not have exactly one value actual. |
-| `FSIM-ELAB-VHFILE-011` | error | Direct VHDL file I/O uses an element type outside the bounded integer subset. |
-| `FSIM-ELAB-VHFILE-012` | error | Direct VHDL file `read` does not target a writable integer variable. |
+| `FSIM-ELAB-VHFILE-011` | error | Direct VHDL file I/O uses an element type that is not an integer or physical type of at most 64 bits or a bounded two-state type (enumeration, BIT, BOOLEAN, REAL, or a composite of those). |
+| `FSIM-ELAB-VHFILE-012` | error | Direct VHDL file `read` does not target a writable variable of the file element type. |
 | `FSIM-ELAB-VHTEXTIO-001` | error | `readline` or `writeline` does not have one text-file and one writable `line` actual. |
 | `FSIM-ELAB-VHTEXTIO-002` | error | A selected TextIO `read` or `write` line actual is not writable. |
 | `FSIM-ELAB-VHTEXTIO-003` | error | A TextIO `read` or `write` profile has an invalid actual count or no value actual. |

@@ -573,6 +573,13 @@ private:
     std::optional<SignalId> compiled_vhdl_package_constant_signal(
         const semantic::SpecializedHirUnit& specialization,
         semantic::DeclarationId declaration);
+    // Shared variables of non-generic packages are design-global objects
+    // (IEEE 1076-2008 4.7): each is materialized once and bound by name in
+    // every VHDL instance's signal and container maps.
+    bool bind_compiled_vhdl_package_shared_variables(
+        const semantic::SpecializedHirUnit& specialization,
+        SignalMap& signals,
+        ContainerMap& container_objects);
 
     // Expression and path inputs borrow from the active binding worklist and
     // compiled HIR. They are consumed synchronously; returned metadata owns
@@ -1546,6 +1553,14 @@ private:
     std::unordered_set<SignalId> vhdl_unprotected_shared_signals_;
     std::unordered_map<std::uint32_t, std::optional<SignalId>>
         vhdl_package_constant_signals_;
+    struct PackageSharedVariableBindings {
+        SignalMap signals;
+        ContainerMap containers;
+    };
+    std::optional<std::vector<semantic::DeclarationId>>
+        vhdl_package_shared_variables_;
+    std::unordered_map<std::uint32_t, PackageSharedVariableBindings>
+        vhdl_package_shared_variable_bindings_;
     std::unordered_map<SignalId, std::string> resolver_by_signal_;
     std::unordered_map<std::string, ResolutionKind>
         vhdl_resolution_kinds_;

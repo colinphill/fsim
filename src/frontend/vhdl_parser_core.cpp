@@ -342,6 +342,9 @@ DesignUnit VhdlParser::parse_package(const Token& start, const bool body)
             parse_vhdl_procedure_item(unit, previous(), true);
         } else if (match_keyword("file", true)) {
             parse_vhdl_file_declaration(unit.variables, previous());
+        } else if (match_keyword("shared", true)) {
+            // Package shared variables (IEEE 1076-2008 4.7, 4.8, 6.4.2.4).
+            parse_vhdl_shared_variable(unit, previous());
         } else if (match_keyword("view", true)) {
             parse_vhdl_mode_view_declaration(
                 unit.type_aliases, previous());

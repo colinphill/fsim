@@ -301,11 +301,11 @@ end architecture;
 entity invalid_vhdl_files is end entity;
 architecture rtl of invalid_vhdl_files is
   type integer_file is file of integer;
-  type bit_file is file of bit;
+  type string_file is file of string;
 begin
   worker: process
     file integer_data : integer_file;
-    file bit_data : bit_file;
+    file string_data : string_file;
     variable status : integer;
     variable value : integer;
     variable kind : file_open_kind := read_mode;
@@ -313,7 +313,7 @@ begin
     file_close(value);
     file_open(status, integer_data, "data", read_mode);
     file_open(integer_data, "data", kind);
-    read(bit_data, value);
+    read(string_data, value);
     read(integer_data, 1);
     assert endfile(value);
     wait;

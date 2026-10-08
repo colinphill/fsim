@@ -9249,14 +9249,27 @@ namespace {
                 const auto width = declaration->systemverilog->type
                     ? width_of(*declaration->systemverilog->type, specialized)
                     : std::nullopt;
-                if (width && *width > 64U && initializer
+                const bool literal_initializer = initializer
                     && initializer->systemverilog != nullptr
                     && (initializer->systemverilog->kind
                             == ExpressionKind::integer_literal
                         || initializer->systemverilog->kind
                             == ExpressionKind::logic_literal
                         || initializer->systemverilog->kind
-                            == ExpressionKind::boolean_literal)) {
+                            == ExpressionKind::boolean_literal);
+                // A literal with X or Z digits is a constant too; a
+                // two-state parameter type converts those bits to 0
+                // (IEEE 1800-2017 6.20.2, 6.11.1).
+                const bool unknown_digits = literal_initializer
+                    && initializer->systemverilog->text.find('\'')
+                        != std::string::npos
+                    && initializer->systemverilog->text
+                               .find_first_of("xXzZ?",
+                                   initializer->systemverilog->text.find(
+                                       '\''))
+                        != std::string::npos;
+                if (literal_initializer
+                    && ((width && *width > 64U) || unknown_digits)) {
                     continue;
                 }
                 append("FSIM-ELAB-SVPKG-006",
@@ -13731,6 +13744,79 @@ std::optional<SignalId> HierarchyBuilder::compiled_vhdl_package_constant_signal(
         unit->vhdl->library + "." + unit->vhdl->name + "."
             + declaration->vhdl->name);
     return result;
+}
+
+bool HierarchyBuilder::bind_compiled_vhdl_package_shared_variables(
+    const semantic::SpecializedHirUnit& specialization,
+    SignalMap& signals,
+    ContainerMap& container_objects)
+{
+    if (!vhdl_package_shared_variables_) {
+        auto& found = vhdl_package_shared_variables_.emplace();
+        for (const auto& unit : compiled_->vhdl_hir.units()) {
+            if (unit.kind != semantic::vhdl::UnitKind::package
+                || !unit.standard_package_revision.empty()) {
+                continue;
+            }
+            const bool generic_package = std::ranges::any_of(
+                unit.declarations, [&](const semantic::DeclarationId id) {
+                    const auto member = specialization.find_declaration(id);
+                    return member && member->vhdl != nullptr
+                        && member->vhdl->form
+                            == semantic::vhdl::DeclarationForm::
+                                generic_constant;
+                });
+            if (generic_package) {
+                continue;
+            }
+            for (const auto id : unit.declarations) {
+                const auto declaration = specialization.find_declaration(id);
+                if (declaration && declaration->vhdl != nullptr
+                    && declaration->vhdl->form
+                        == semantic::vhdl::DeclarationForm::variable
+                    && declaration->vhdl->shared) {
+                    found.push_back(id);
+                }
+            }
+        }
+    }
+    for (const auto id : *vhdl_package_shared_variables_) {
+        auto bound = vhdl_package_shared_variable_bindings_.find(id.value());
+        if (bound == vhdl_package_shared_variable_bindings_.end()) {
+            const auto declaration = specialization.find_declaration(id);
+            const auto* scope = declaration && declaration->vhdl != nullptr
+                ? compiled_semantic_scope(*compiled_, declaration->vhdl->scope)
+                : nullptr;
+            const auto unit = scope != nullptr
+                ? compiled_->find_unit(scope->unit)
+                : std::nullopt;
+            if (!unit || unit->vhdl == nullptr) {
+                continue;
+            }
+            PackageSharedVariableBindings bindings;
+            ReadOnlySignalSet read_only;
+            std::unordered_set<std::string> declared;
+            std::vector<std::pair<std::string, std::string>> shapes;
+            const auto path = unit->vhdl->library + "." + unit->vhdl->name;
+            if (!materialize_compiled_vhdl_declaration(specialization, path,
+                    path, bindings.signals, read_only, declared,
+                    bindings.containers, shapes, unit->vhdl->standard,
+                    unit->vhdl->compatibility_profile, *declaration->vhdl)) {
+                return false;
+            }
+            bound = vhdl_package_shared_variable_bindings_
+                        .emplace(id.value(), std::move(bindings))
+                        .first;
+        }
+        // Declarations of the instance itself keep precedence.
+        for (const auto& [name, signal] : bound->second.signals) {
+            signals.emplace(name, signal);
+        }
+        for (const auto& [name, container] : bound->second.containers) {
+            container_objects.emplace(name, container);
+        }
+    }
+    return true;
 }
 
 bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
@@ -20028,7 +20114,9 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
         return true;
     };
     if (!add_unit_declarations(*entity)
-        || !add_unit_declarations(architecture)) {
+        || !add_unit_declarations(architecture)
+        || !bind_compiled_vhdl_package_shared_variables(
+            *specialized, signals, container_objects)) {
         return false;
     }
 

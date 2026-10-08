@@ -2759,49 +2759,77 @@ bool Lowerer::lower_hir_vhdl_file_statement(
     }
     const auto element_subtype = file_element_subtype(
         direct_file->first);
-    if (!element_subtype
-        || element_subtype->domain
-            != semantic::vhdl::ValueDomain::integer
-        || !element_subtype->executable_width
-        || *element_subtype->executable_width == 0U
-        || *element_subtype->executable_width > 32U) {
+    // Elements are stored one per line: integers (including physical
+    // types) in decimal, other two-state elements (enumerations, BIT,
+    // BOOLEAN, REAL bit images, and composites of those) as hexadecimal bit
+    // images of their executable width.
+    const auto element_width = element_subtype
+            && element_subtype->executable_width
+        ? static_cast<std::size_t>(*element_subtype->executable_width)
+        : std::size_t { };
+    const auto element_domain = element_subtype
+        ? element_subtype->domain
+        : semantic::vhdl::ValueDomain::unknown;
+    const bool integer_element
+        = element_domain == semantic::vhdl::ValueDomain::integer
+        && element_width != 0U && element_width <= 64U;
+    const bool image_element
+        = (element_domain == semantic::vhdl::ValueDomain::bit2
+              || element_domain == semantic::vhdl::ValueDomain::boolean)
+        && element_width != 0U
+        && element_width <= std::numeric_limits<std::uint32_t>::max();
+    if (!integer_element && !image_element) {
         return fail("FSIM-ELAB-VHFILE-011",
-            "direct VHDL file I/O supports bounded integer elements");
+            "direct VHDL file I/O supports integer, physical and two-state "
+            "elements");
     }
+    const auto width = static_cast<std::uint32_t>(element_width);
     if (name == "write") {
-        auto lowered = lower_hir_expression(*value, 32U);
+        // An aggregate actual takes the file element type as its context.
+        const auto value_expression
+            = specialized_hir_unit_->find_expression(*value);
+        const bool aggregate_value = value_expression
+            && value_expression->vhdl != nullptr
+            && value_expression->vhdl->kind
+                == semantic::vhdl::ExpressionKind::aggregate;
+        auto lowered = aggregate_value
+            ? lower_hir_vhdl_aggregate(
+                  *value, element_width, &*element_subtype)
+            : lower_hir_expression(*value, element_width);
         if (!lowered) {
             return false;
         }
-        if (register_width(*lowered) != 32U) {
-            lowered = resize_register(*lowered, 32U, true);
+        if (register_width(*lowered) != element_width) {
+            lowered = resize_register(
+                *lowered, element_width, integer_element);
         }
         process_.operations.emplace_back(FileWriteFormatted {
             *direct_file->second.local,
             *lowered,
-            32U,
-            OutputFormat::decimal,
+            width,
+            integer_element ? OutputFormat::decimal
+                            : OutputFormat::hexadecimal,
             { },
             { },
             true,
-            true,
+            integer_element,
         });
         return true;
     }
     const auto target = runtime_binding(*value);
-    if (!target || !target->local
-        || target->domain != frontend::ValueDomain::Integer) {
+    if (!target || !target->local || target->width != element_width) {
         return fail("FSIM-ELAB-VHFILE-012",
-            "direct VHDL file read target must be a writable integer "
-            "variable");
+            "direct VHDL file read target must be a writable variable of "
+            "the file element type");
     }
     InputScanConversion conversion;
-    conversion.format = InputScanFormat::decimal;
+    conversion.format = integer_element ? InputScanFormat::decimal
+                                        : InputScanFormat::hexadecimal;
     conversion.target = {
         InputScanTargetKind::packed_register,
         *target->local,
-        32U,
-        true,
+        width,
+        integer_element,
     };
     const auto count = allocate_register(
         32U, frontend::ValueDomain::Integer);
@@ -2814,6 +2842,14 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         { },
         true,
     });
+    // Each element occupies one line; consume its line terminator so that
+    // endfile is true after the last element.
+    const auto line_count = allocate_register(
+        32U, frontend::ValueDomain::Integer);
+    const auto rest_of_line = allocate_string_register();
+    process_.operations.emplace_back(FileReadLine {
+        line_count, *direct_file->second.local, rest_of_line, 0U,
+        FileReadKind::line });
     return true;
 }
 

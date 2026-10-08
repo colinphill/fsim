@@ -249,6 +249,47 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Corpus run 4 (after batches 4 and 5, interpreter)
+
+| Suite | Cases | Pass | Fail | Timeout | Skip | Pass rate |
+|---|---:|---:|---:|---:|---:|---:|
+| sv-tests | 1497 | 1037 | 459 | 1 | 0 | 69.3% |
+| verilator | 2415 | 435 | 1681 | 3 | 296 | 20.5% |
+| ivtest | 2826 | 1229 | 1568 | 4 | 25 | 43.9% |
+| vests | 3665 | 1854 | 1809 | 2 | 0 | 50.6% |
+| nvc | 1482 | 439 | 825 | 3 | 215 | 34.6% |
+| vhdl-compliance | 72 | 0 | 72 | 0 | 0 | 0.0% |
+
+Compared with run 3, 245 cases newly pass and 53 newly fail:
+
+- 50 are negative tests that had been rejected only by an unsupported form.
+- 3 previously passed only because `$unit` typedefs were skipped:
+  - a wildcard associative-array index (`[*]`);
+  - a typedef adding packed dimensions to a user type;
+  - a non-ANSI port whose type is declared before its direction.
+
+UVM-based sv-tests now compile the whole UVM library before reaching
+randomization, which makes the sv-tests suite much slower.
+
+### Batch 6: package shared variables, typed files
+
+- Shared variables declared in packages and package bodies (protected types,
+  IEEE 1076-2008 4.7) are design-global objects. Each is materialized once
+  and visible to every design unit through the package's subprograms. This
+  unblocks the VUnit stand-in, whose state is a package shared variable.
+- Direct VHDL file I/O handles files of integer and physical types of up to
+  64 bits, and of two-state types: enumerations, BIT, BOOLEAN, REAL, and
+  composites of those. Before, only integer files of up to 32 bits worked
+  (86 VESTs cases failed with `FSIM-ELAB-VHFILE-011`).
+  - An aggregate actual of `write` takes the file element type as context.
+  - `endfile` is true after the last element is read.
+- SystemVerilog package parameters whose default is a literal with X or Z
+  digits (`parameter int foo = 1'bx;`) no longer fail with
+  `FSIM-ELAB-SVPKG-006`.
+
+Fixtures: `vhdl_package_shared_variables.vhd`, `vhdl_typed_files.vhd`. Both
+were checked against xsim.
+
 ### Corpus run 3 (after batches 2 and 3, interpreter)
 
 | Suite | Cases | Pass | Fail | Timeout | Skip | Pass rate |
@@ -288,11 +329,13 @@ error, and each exposes an existing gap:
 | VHDL: unconstrained array ports (`port (d : in bit_vector)`) bind with width 1 (`FSIM-ELAB-BIND-020`) | VESTs, generic-width library cells |
 | VHDL: analysis-time legality (index-constraint bounds and types, slices of multidimensional arrays, labels as primaries) | about 33 VESTs negative tests exposed by batch 4, part of the 724 accepted-invalid cases |
 | SV: package-level events (`event e;` in a package or `$unit`) | Verilator fork/process tests |
-| SV: package parameter defaults that cannot be evaluated (`FSIM-ELAB-SVPKG-006`) | 18 sv-tests number cases |
+| SV: wildcard associative-array indices (`[*]`) | sv-tests typedef cases |
+| SV: typedef adding packed dimensions to a user type (`typedef T1 [7:0] T2;`) | ivtest |
+| SV: non-ANSI port type declared before its direction (`T x; output x;`) | ivtest module_nonansi_* |
+| VHDL: STRING generics and top-level `--generic` overrides (VUnit `runner_cfg`) | 50 VHDL-Compliance testbenches |
 | SV: randomization and constraint blocks (`randomize`, `constraint`, `with`) | UVM-based sv-tests, chapter 18 |
 | SV: `fork` inside functions and tasks (lowering) | sv-tests, UVM |
 | SV: hierarchical references in event controls, continuous assignments, generate processes | Verilator |
-| VHDL: package-level signals and shared variables (protected types) | VUnit library stand-in, OSVVM |
-| VHDL: top-level generic overrides and STRING generics | VUnit `runner_cfg` |
+| VHDL: package-level signals | 14 VESTs/nvc cases |
 | VHDL: VHDL-2008 STD.ENV package (`use std.env.all`) | VHDL-2008 testbenches |
 | VHDL: CHARACTER objects, TIME `'image`, user-defined attributes | VESTs |
