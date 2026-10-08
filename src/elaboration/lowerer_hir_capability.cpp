@@ -5749,6 +5749,14 @@ bool Lowerer::hir_expression_is_string(
                         operand, process_scope);
                 });
     }
+    if (source.kind == semantic::sv::ExpressionKind::replication
+        && source.operands.size() >= 2U) {
+        return std::all_of(
+            source.operands.begin() + 1, source.operands.end(),
+            [&](const semantic::ExpressionId operand) {
+                return hir_expression_is_string(operand, process_scope);
+            });
+    }
     if (source.kind == semantic::sv::ExpressionKind::call
         && source.text == "?:" && source.operands.size() == 3U) {
         return hir_expression_is_string(

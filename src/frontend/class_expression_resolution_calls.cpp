@@ -880,6 +880,40 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
             ? SystemVerilogClassMethodKind::Function
             : SystemVerilogClassMethodKind::Task;
       }
+      if (kind == SystemVerilogClassMethodKind::Function
+          && scope.class_owner == nullptr
+          && !find_methods(*class_identity(*receiver_type), name,
+                  SystemVerilogClassMethodKind::Function)
+                  .empty()) {
+        // A function method called as a statement discards its result
+        // (IEEE 1800-2017 13.4.1); outside class methods it lowers as an
+        // expression statement. Class method bodies keep the task form,
+        // which their executor runs directly.
+        // The parser's member-call form: `.name` with the receiver first.
+        Expression call{
+            ExpressionKind::Call, "." + std::string{name}, {}, statement.span};
+        call.operands.push_back(Expression{
+            ExpressionKind::Identifier,
+            statement.task_name.substr(0, dot),
+            {},
+            statement.span});
+        for (auto& argument : statement.task_arguments) {
+          call.operands.push_back(std::move(argument));
+        }
+        if (!statement.task_argument_names.empty()) {
+          call.call_argument_names.push_back(std::string{});
+          for (const auto& argument_name : statement.task_argument_names) {
+            call.call_argument_names.push_back(argument_name);
+          }
+        }
+        resolve_expression(call, scope);
+        statement.kind = StatementKind::ContainerMethod;
+        statement.value = std::move(call);
+        statement.task_name.clear();
+        statement.task_arguments.clear();
+        statement.task_argument_names.clear();
+        return;
+      }
       const auto match = select_method(
           *class_identity(*receiver_type),
           name,

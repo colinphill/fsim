@@ -11575,6 +11575,25 @@ bool Lowerer::lower_hir_statement(
             const auto call = input.value
                 ? specialized_hir_unit_->find_expression(*input.value)
                 : std::nullopt;
+            // A class function method called as a statement discards its
+            // result (IEEE 1800-2017 13.4.1).
+            if (call && call->systemverilog != nullptr
+                && (call->systemverilog->kind
+                        == semantic::sv::ExpressionKind::class_method_call
+                    || call->systemverilog->kind
+                        == semantic::sv::ExpressionKind::
+                            class_static_method_call)) {
+                if (hir_expression_is_string(
+                        *input.value, hir_process_scope_)) {
+                    return lower_hir_string_expression(*input.value)
+                        .has_value();
+                }
+                const auto width = hir_expression_width(
+                    *input.value, hir_process_scope_);
+                return lower_hir_expression(
+                           *input.value, width.value_or(1U))
+                    .has_value();
+            }
             if (!call || call->systemverilog == nullptr
                 || call->systemverilog->kind
                     != semantic::sv::ExpressionKind::call) {
@@ -11597,6 +11616,25 @@ bool Lowerer::lower_hir_statement(
                 }
                 const auto discarded_expression
                     = specialized_hir_unit_->find_expression(discarded);
+                if (discarded != *input.value && discarded_expression
+                    && discarded_expression->systemverilog != nullptr
+                    && (discarded_expression->systemverilog->kind
+                            == semantic::sv::ExpressionKind::
+                                class_method_call
+                        || discarded_expression->systemverilog->kind
+                            == semantic::sv::ExpressionKind::
+                                class_static_method_call)) {
+                    if (hir_expression_is_string(
+                            discarded, hir_process_scope_)) {
+                        return lower_hir_string_expression(discarded)
+                            .has_value();
+                    }
+                    const auto width = hir_expression_width(
+                        discarded, hir_process_scope_);
+                    return lower_hir_expression(
+                               discarded, width.value_or(1U))
+                        .has_value();
+                }
                 const auto callee = discarded_expression
                         && discarded_expression->systemverilog != nullptr
                         && discarded_expression->systemverilog->kind

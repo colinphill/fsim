@@ -1938,9 +1938,13 @@ Lowerer::hir_class_method_profile(
     const auto class_result = callable.type
         && callable.type->value_form
             == semantic::sv::TypeForm::class_handle;
+    // A void method has no result; its calls discard a one-bit placeholder
+    // (IEEE 1800-2017 13.4.1).
     const auto result_width = callable.type
-        ? hir_systemverilog_type_width(*callable.type)
-        : std::nullopt;
+            && callable.type->target.spelling == "void"
+        ? std::optional<std::size_t> { 1U }
+        : callable.type ? hir_systemverilog_type_width(*callable.type)
+                        : std::nullopt;
     if (!callable.callable || !callable.callable->function
         || !callable.type
         || (!class_result

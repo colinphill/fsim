@@ -13328,6 +13328,39 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             destination, std::move(operands) });
         return destination;
     }
+    // A string replication `{N{s, ...}}` (IEEE 1800-2017 11.4.12.2).
+    if (source.kind == semantic::sv::ExpressionKind::replication
+        && source.operands.size() >= 2U) {
+        constexpr std::int64_t maximum_repetitions { 1 << 16 };
+        const auto count = hir_constant_integer(source.operands.front());
+        if (!count || *count < 0 || *count > maximum_repetitions) {
+            return std::nullopt;
+        }
+        std::vector<StringRegisterId> items;
+        for (std::size_t index = 1U; index < source.operands.size();
+            ++index) {
+            const auto lowered
+                = lower_hir_string_expression(source.operands[index]);
+            if (!lowered) {
+                return std::nullopt;
+            }
+            items.push_back(*lowered);
+        }
+        std::vector<StringRegisterId> operands;
+        operands.reserve(items.size() * static_cast<std::size_t>(*count));
+        for (std::int64_t repeat { }; repeat < *count; ++repeat) {
+            operands.insert(operands.end(), items.begin(), items.end());
+        }
+        const auto destination = allocate_string_register();
+        if (operands.empty()) {
+            process_.operations.emplace_back(
+                LoadStringConstant { destination, std::string { } });
+        } else {
+            process_.operations.emplace_back(ConcatenateStrings {
+                destination, std::move(operands) });
+        }
+        return destination;
+    }
     if (source.kind == semantic::sv::ExpressionKind::call
         && source.text == "?:" && source.operands.size() == 3U) {
         const auto condition_width = hir_expression_width(

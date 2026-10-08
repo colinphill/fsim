@@ -324,10 +324,12 @@ endmodule : class_owner
       "overrides must retain stable virtual slots while new methods append");
   require(
       worker.methods.front().statements.size() == 2
+          // `count` is static: `this.count` denotes the class's single
+          // storage (IEEE 1800-2017 8.9).
           && worker.methods.front().statements.back().target.text
-              == "@sv-property:work::$unit::Worker::count"
-          && worker.methods.front().statements.back().target.operands.front()
-                 .text == "this"
+              == "@sv-static-property:work::$unit::Worker::count"
+          && worker.methods.front().statements.back().target.operands
+                 .empty()
           && worker.methods.front().statements.front().task_name
               == "@sv-base-constructor:work::base_pkg::Base::new"
           && worker.methods.front().statements.front().task_arguments.front()

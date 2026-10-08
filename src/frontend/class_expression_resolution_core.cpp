@@ -1086,11 +1086,21 @@ void Resolver::retain_result_type(
     const auto type = resolve_alias_type(
         match.property->declaration.type,
         match.owner->canonical_identity);
-    expression.text = (type.systemverilog_container
-            ? "@sv-container-property:"
-            : "@sv-property:")
-        + match.owner->canonical_identity + "::" + member;
-    expression.operands = {std::move(receiver)};
+    if (match.property->is_static) {
+      // A static property reached through an object handle denotes the
+      // class's single storage (IEEE 1800-2017 8.9).
+      expression.text = (type.systemverilog_container
+              ? "@sv-static-container-property:"
+              : "@sv-static-property:")
+          + match.owner->canonical_identity + "::" + member;
+      expression.operands.clear();
+    } else {
+      expression.text = (type.systemverilog_container
+              ? "@sv-container-property:"
+              : "@sv-property:")
+          + match.owner->canonical_identity + "::" + member;
+      expression.operands = {std::move(receiver)};
+    }
     retain_result_type(expression, type);
     if (const auto identity = class_identity(type)) {
       expression.nominal_type = *identity;

@@ -249,6 +249,18 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 9: SystemVerilog class statements and string replication
+
+- A class function method called as a statement (`c.set(5);`) or discarded
+  with `void'()` lowers as a method call whose result is discarded. Void
+  methods included. This was the most common failing statement in the
+  Verilator corpus.
+- A static class property reached through an object handle (`obj.count`)
+  denotes the class's single storage (IEEE 1800-2017 8.9).
+- String replication (`{3{"ab"}}`, IEEE 1800-2017 11.4.12.2).
+
+Fixture: `sv_class_statements.sv`, checked against xsim.
+
 ### Batch 8: SystemVerilog function statements and procedural writers
 
 - A void function called as a statement (`bump(2);`) and a discarded
@@ -373,6 +385,8 @@ error, and each exposes an existing gap:
 | VHDL: unconstrained array ports (`port (d : in bit_vector)`) bind with width 1 (`FSIM-ELAB-BIND-020`) | VESTs, generic-width library cells |
 | VHDL: analysis-time legality (index-constraint bounds and types, slices of multidimensional arrays, labels as primaries) | about 33 VESTs negative tests exposed by batch 4, part of the 724 accepted-invalid cases |
 | SV: package-level events (`event e;` in a package or `$unit`) | Verilator fork/process tests |
+| SV: property writes in methods of classes declared inside a module fail at run time ("class HIR assignment target is not executable", "SimIR driver assignment width mismatch"); classes at `$unit` or in packages work | sv-tests chapter 8 |
+| SV: string-valued (virtual) class methods in expressions such as `$display` | Verilator, sv-tests |
 | SV: wildcard associative-array indices (`[*]`) | sv-tests typedef cases |
 | SV: typedef adding packed dimensions to a user type (`typedef T1 [7:0] T2;`) | ivtest |
 | SV: non-ANSI port type declared before its direction (`T x; output x;`) | ivtest module_nonansi_* |
