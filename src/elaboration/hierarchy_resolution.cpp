@@ -2297,6 +2297,14 @@ void HierarchyBuilder::validate_process_drivers()
         std::vector<DriverRegion> regions;
         bool continuous { };
         bool event_controlled { };
+        bool vhdl { };
+    };
+    // Processes record their unit's standard; the VHDL revisions do not
+    // overlap the Verilog and SystemVerilog ones.
+    const auto vhdl_language_standard = [](const std::string_view standard) {
+        return standard == "1987" || standard == "1993"
+            || standard == "2000" || standard == "2002"
+            || standard == "2008" || standard == "2019";
     };
     std::unordered_map<ContainerObjectId, std::vector<SignalId>>
         writable_container_signals;
@@ -2447,7 +2455,8 @@ void HierarchyBuilder::validate_process_drivers()
             const bool event_controlled
                 = !process.static_sensitivity().empty();
             drivers[signal].push_back(ProcessDriver {
-                std::move(regions), continuous, event_controlled });
+                std::move(regions), continuous, event_controlled,
+                vhdl_language_standard(process.language_standard()) });
         }
     }
     for (SignalId signal = 0;
@@ -2513,6 +2522,14 @@ void HierarchyBuilder::validate_process_drivers()
                 != process_drivers.back().event_controlled
             && !process_drivers.front().continuous
             && !process_drivers.back().continuous) {
+            continue;
+        }
+        // A SystemVerilog variable may be written by any number of
+        // procedural statements in different processes (IEEE 1800-2017
+        // 6.5); only continuous assignments conflict with other drivers.
+        if (std::ranges::none_of(process_drivers, [](const auto& driver) {
+                return driver.continuous || driver.vhdl;
+            })) {
             continue;
         }
         report(

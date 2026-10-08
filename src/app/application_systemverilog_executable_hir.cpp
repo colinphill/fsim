@@ -1208,6 +1208,35 @@ namespace {
             output.condition = expression(
                 input.condition, child_scope, statement_origin);
             output.task = name(input.task_name, input.span, child_scope);
+            // A function called as a statement (IEEE 1800-2017 13.4.1)
+            // discards its result; it lowers like `void'(f(...))`.
+            const bool function_statement
+                = input.kind == frontend::StatementKind::TaskCall
+                && !input.task_name.empty()
+                && input.task_name.front() != '$'
+                && !output.task.overloads.empty()
+                && std::ranges::all_of(output.task.overloads,
+                    [&](const semantic::DeclarationId id) {
+                        const auto declaration = std::ranges::find(
+                            hir_.declarations(), id, &sv::Declaration::id);
+                        return declaration != hir_.declarations().end()
+                            && declaration->callable
+                            && declaration->callable->function;
+                    });
+            if (function_statement) {
+                frontend::Expression call;
+                call.kind = frontend::ExpressionKind::Call;
+                call.text = input.task_name;
+                call.span = input.span;
+                for (const auto& argument : input.task_arguments) {
+                    call.operands.push_back(argument);
+                }
+                for (const auto& argument_name : input.task_argument_names) {
+                    call.call_argument_names.push_back(argument_name);
+                }
+                output.kind = sv::StatementKind::container_method;
+                output.value = expression(call, child_scope, statement_origin);
+            }
             for (std::size_t index = 0; index < input.task_arguments.size(); ++index) {
                 const auto& argument = input.task_arguments[index];
                 sv::TaskAssociation association;

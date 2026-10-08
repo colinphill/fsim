@@ -249,6 +249,22 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 8: SystemVerilog function statements and procedural writers
+
+- A void function called as a statement (`bump(2);`) and a discarded
+  function result (`void'(f(x));`) failed to lower (IEEE 1800-2017 13.4.1).
+  This affected about 100 corpus statements.
+- A variable written by procedural statements in several processes, such as
+  two `initial` blocks, was rejected with `FSIM-ELAB-DRV-001`. IEEE
+  1800-2017 6.5 allows this; the last write determines the value.
+  `FSIM-ELAB-DRV-001` now applies only to continuous assignments that
+  conflict with other drivers, and to unresolved VHDL signals with several
+  processes.
+
+Fixture: `sv_function_statements.sv`, checked against xsim. A targeted rerun
+of the run-4 `FSIM-ELAB-HIR-001` cases: 13 more pass. Most of these tests
+also use other unsupported constructs.
+
 ### Batch 7: STRING generics, top-level overrides, VUnit stand-in
 
 - STRING generics, with or without a default, bound by a generic map or a

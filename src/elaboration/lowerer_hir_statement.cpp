@@ -11586,6 +11586,41 @@ bool Lowerer::lower_hir_statement(
                 return synchronization.succeeded;
             }
             const auto& container_call = *call->systemverilog;
+            // A function call whose result is discarded: `void'(f(...));`
+            // or a void function called as a statement (IEEE 1800-2017
+            // 13.4.1).
+            {
+                auto discarded = *input.value;
+                if (container_call.text == "@sv-cast:void"
+                    && container_call.operands.size() == 1U) {
+                    discarded = container_call.operands.front();
+                }
+                const auto discarded_expression
+                    = specialized_hir_unit_->find_expression(discarded);
+                const auto callee = discarded_expression
+                        && discarded_expression->systemverilog != nullptr
+                        && discarded_expression->systemverilog->kind
+                            == semantic::sv::ExpressionKind::call
+                    ? hir_referenced_declaration(discarded)
+                    : std::nullopt;
+                const auto record = callee
+                    ? specialized_hir_unit_->find_declaration(*callee)
+                    : std::nullopt;
+                if (record && record->systemverilog != nullptr
+                    && record->systemverilog->callable
+                    && record->systemverilog->callable->function) {
+                    if (hir_expression_is_string(
+                            discarded, hir_process_scope_)) {
+                        return lower_hir_string_function_call(discarded)
+                            .has_value();
+                    }
+                    const auto width = hir_expression_width(
+                        discarded, hir_process_scope_);
+                    return lower_hir_function_call_value(
+                               discarded, width.value_or(0U))
+                        .has_value();
+                }
+            }
             const bool string_mutation
                 = container_call.text == ".putc"
                 || container_call.text == ".itoa"

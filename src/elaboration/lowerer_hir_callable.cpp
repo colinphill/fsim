@@ -3801,6 +3801,13 @@ std::optional<Lowerer::HirCallableType> Lowerer::hir_callable_type(
         if (result.container) {
             return result;
         }
+        if (source.type->target.spelling == "void") {
+            // A void function has no result; its calls discard a one-bit
+            // placeholder (IEEE 1800-2017 13.4.1).
+            result.width = 1U;
+            result.domain = frontend::ValueDomain::Bit2;
+            return result;
+        }
         const auto width = hir_systemverilog_type_width(*source.type);
         if (!width) {
             return std::nullopt;

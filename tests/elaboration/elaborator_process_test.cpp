@@ -779,11 +779,13 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(process_drivers.ok());
-    const auto rejected_process_drivers = compile_and_elaborate(
+    // A variable may be written by procedural statements in several
+    // processes; the last write determines its value (IEEE 1800-2017 6.5).
+    const auto procedural_process_drivers = compile_and_elaborate(
         process_drivers.design, "process_drivers");
-    assert(!rejected_process_drivers.ok());
-    assert(has_diagnostic(
-        rejected_process_drivers, "FSIM-ELAB-DRV-001"));
+    assert(procedural_process_drivers.ok());
+    assert(!has_diagnostic(
+        procedural_process_drivers, "FSIM-ELAB-DRV-001"));
 
     const auto initialized_event_driver =
         fsim::frontend::parse_text(
@@ -887,13 +889,15 @@ endmodule
 )",
             fsim::frontend::Language::SystemVerilog2017);
     assert(selected_process_drivers.ok());
-    const auto rejected_selected_process_drivers =
+    // Procedural writes from several processes are legal for variables,
+    // including writes to parts of one vector (IEEE 1800-2017 6.5).
+    const auto accepted_selected_process_drivers =
         compile_and_elaborate(
             selected_process_drivers.design,
             "selected_process_drivers");
-    assert(!rejected_selected_process_drivers.ok());
-    assert(has_diagnostic(
-        rejected_selected_process_drivers,
+    assert(accepted_selected_process_drivers.ok());
+    assert(!has_diagnostic(
+        accepted_selected_process_drivers,
         "FSIM-ELAB-DRV-001"));
 
     const auto selected_continuous_drivers =

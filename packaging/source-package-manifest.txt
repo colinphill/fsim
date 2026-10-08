@@ -1970,6 +1970,7 @@ tests/feature_matrix/vhdl_synopsys_package_corpus.tsv
 tests/feature_matrix/vhdl_synopsys_package_inventory.tsv
 tests/fixtures/compliance/run_compliance.cmake
 tests/fixtures/compliance/sv_compilation_unit_declarations.sv
+tests/fixtures/compliance/sv_function_statements.sv
 tests/fixtures/compliance/sv_hierarchical_references.sv
 tests/fixtures/compliance/sv_port_width_mismatch.sv
 tests/fixtures/compliance/sv_streaming_unpack.sv

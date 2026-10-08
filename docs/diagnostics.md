@@ -1932,7 +1932,7 @@ scheduler.
 | `FSIM-ELAB-106` | error | Procedural update metadata is inconsistent with its normalized expression or captured lvalue. |
 | `FSIM-ELAB-107` | error | A callable fork would escape its frame, or a function background process (SystemVerilog-2009 or later) originates outside procedural code rooted in an `initial` block. |
 | `FSIM-ELAB-108` | error | A postponed `$strobe` operand is not yet a direct packed-signal reference. |
-| `FSIM-ELAB-DRV-001` | error | An unresolved variable has multiple process drivers. |
+| `FSIM-ELAB-DRV-001` | error | An unresolved variable has multiple process drivers that conflict: a continuous assignment with another driver, or several VHDL processes. Procedural writes from several SystemVerilog processes are legal (IEEE 1800-2017 6.5). |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |
 | `FSIM-ELAB-DEFPARAM-001` | error | A `defparam` hierarchy index or value cannot be resolved as a locally static SystemVerilog constant. |
