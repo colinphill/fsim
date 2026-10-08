@@ -5954,7 +5954,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 ? hir_constant_integer(*constraint.right_expression)
                 : std::nullopt;
             if (!left || !right
-                || (*left != *right
+                || (*left != *right && !constraint.direction_from_bounds
                     && constraint.descending != (*left > *right))) {
                 return std::nullopt;
             }
@@ -8751,7 +8751,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     ? hir_constant_integer(*range.right_expression)
                     : std::nullopt;
                 if (!left || !right || range.null
-                    || (*left != *right
+                    || (*left != *right && !range.direction_from_bounds
                         && range.descending != (*left > *right))) {
                     return std::nullopt;
                 }
@@ -9008,7 +9008,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 && *selected >= std::min(*left, *right)
                 && *selected <= std::max(*left, *right);
             if (!range || range->null || !in_range
-                || (*left != *right
+                || (*left != *right && !range->direction_from_bounds
                     && range->descending != (*left > *right))) {
                 return std::nullopt;
             }

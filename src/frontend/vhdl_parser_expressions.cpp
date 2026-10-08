@@ -961,11 +961,8 @@ Expression VhdlParser::parse_primary()
             }
             for (;;) {
                 if (match(TokenKind::LeftParen)) {
-                    require_vhdl_standard(
-                        previous(), VhdlStandard::Vhdl2008,
-                        "indexing or slicing a function-call result",
-                        "select VHDL-2008 or assign the function result to an "
-                        "intermediate object");
+                    // A function call is a prefix of an indexed name or a
+                    // slice in every revision (IEEE 1076-1993 6.1).
                     auto first = parse_expression();
                     if (match_keyword("downto", true) || match_keyword("to", true)) {
                         const auto direction = previous();
@@ -991,11 +988,8 @@ Expression VhdlParser::parse_primary()
                 if (!match(TokenKind::Dot)) {
                     break;
                 }
-                require_vhdl_standard(
-                    previous(), VhdlStandard::Vhdl2008,
-                    "selecting an element of a function-call result",
-                    "select VHDL-2008 or assign the function result to an "
-                    "intermediate object");
+                // A function call is the prefix of a selected name in
+                // every revision (IEEE 1076-1993 6.3).
                 const auto member = expect_identifier("selected record element");
                 call = Expression { ExpressionKind::Call,
                     "@vhdl-member:" + vhdl_name(member.text),

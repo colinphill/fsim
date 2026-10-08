@@ -156,6 +156,13 @@ private:
   Type parse_vhdl_type(const bool allow_integer = false,
                        const bool /*runtime_base_integer_only*/ = false);
 
+  // A range in a range constraint (`L to R`, `L downto R`, or a range
+  // attribute such as `x'range`) or, with allow_subtype_name, a discrete
+  // range in an index constraint, which may also be a discrete subtype name
+  // or `T range ...` (IEEE 1076-2008 5.2.1, 5.3.2.1).
+  std::optional<DiscreteRangeExpression>
+  parse_vhdl_discrete_range(bool allow_subtype_name);
+
   Type parse_vhdl_unspecified_type(const Token &start);
 
   void parse_vhdl_end(std::string_view expected_kind);
@@ -317,6 +324,10 @@ private:
 
   std::size_t sequential_loop_depth_{};
   std::unordered_set<std::string> vhdl_named_types_;
+  // Type and subtype names declared anywhere in this design file, collected
+  // on first use.
+  std::optional<std::unordered_set<std::string>> vhdl_source_type_names_;
+  bool vhdl_source_declares_type(const std::string &name);
   std::unordered_map<std::string, TypeDeclarationKind> vhdl_named_type_kinds_;
   std::vector<std::string> sequential_loop_labels_;
   std::vector<std::string> sequential_loop_labels_seen_;

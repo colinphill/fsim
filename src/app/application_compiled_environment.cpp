@@ -7,6 +7,7 @@
 #include "fsim/support/path.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <set>
 #include <tuple>
 
@@ -172,6 +173,46 @@ bool install_compiled_environment(CompilationWorkspace& checked,
             return false;
         }
         std::erase(selected, unit.id);
+    }
+
+    // Re-analysis replaces a library unit (IEEE 1076-2008 13.5): imported
+    // VHDL units this compilation defines again are left out, together with
+    // the secondary units of replaced primary units, which are obsolete.
+    const auto secondary_unit = [](const semantic::vhdl::Unit& unit) {
+        return unit.kind == semantic::vhdl::UnitKind::architecture
+            || (unit.kind == semantic::vhdl::UnitKind::package
+                && !unit.primary_name.empty());
+    };
+    const auto library_key = [](const std::string_view library) {
+        std::string key { library_name(library) };
+        std::ranges::transform(key, key.begin(), [](const char character) {
+            return static_cast<char>(
+                std::tolower(static_cast<unsigned char>(character)));
+        });
+        return key;
+    };
+    std::set<std::tuple<semantic::vhdl::UnitKind, std::string, std::string,
+        std::string>> redefined;
+    std::set<std::pair<std::string, std::string>> replaced_primaries;
+    for (const auto& unit : checked.vhdl_hir.units()) {
+        if (!unit.standard_package_revision.empty())
+            continue;
+        const auto library = library_key(unit.library);
+        redefined.emplace(unit.kind, library, unit.name, unit.primary_name);
+        if (!secondary_unit(unit))
+            replaced_primaries.emplace(library, unit.name);
+    }
+    for (const auto& unit : imported.vhdl_hir.units()) {
+        if (!unit.standard_package_revision.empty())
+            continue;
+        const auto library = library_key(unit.library);
+        if (redefined.contains(
+                { unit.kind, library, unit.name, unit.primary_name })
+            || (secondary_unit(unit)
+                && replaced_primaries.contains(
+                    { library, unit.primary_name }))) {
+            std::erase(selected, unit.id);
+        }
     }
 
     std::vector<std::string> classes;

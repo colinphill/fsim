@@ -121,17 +121,25 @@ private:
     {
         const auto left = static_integer(range.left);
         const auto right = static_integer(range.right);
-        const bool null = left && right
-            && (range.descending ? *left < *right : *left > *right);
+        bool from_bounds { };
+        if constexpr (requires { range.direction_from_bounds; }) {
+            from_bounds = range.direction_from_bounds;
+        }
+        const bool descending = from_bounds && left && right
+            ? *left > *right
+            : range.descending;
+        const bool null = !from_bounds && left && right
+            && (descending ? *left < *right : *left > *right);
         return {
             kind,
             left,
             right,
             expression(range.left, scope, parent),
             expression(range.right, scope, parent),
-            range.descending,
+            descending,
             null,
-            source(range.span)
+            source(range.span),
+            from_bounds,
         };
     }
 

@@ -2639,7 +2639,9 @@ namespace {
                 return std::nullopt;
             }
             return frontend::IntegerRange {
-                *left, *right, constraint.descending
+                *left, *right,
+                constraint.direction_from_bounds ? *left > *right
+                                                 : constraint.descending
             };
         };
         const auto resolved_packed_range = [&](

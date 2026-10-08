@@ -92,3 +92,18 @@ corpora (`scripts/lrm_corpus.py`). Progress and results are in
 - Template caching hazard: processes using hierarchical references must not
   be remembered or replayed (`replay_systemverilog_process_template`,
   `lower_cached_systemverilog_concurrent_statement`).
+
+## VHDL range constraints from attributes and subtype names (batch 4)
+
+- The parser (`VhdlParser::parse_vhdl_discrete_range`) rewrites `x'range`,
+  `x'reverse_range` and a discrete subtype name `T` into `'left`/`'right`
+  bound expressions with `direction_from_bounds` set
+  (`frontend::DiscreteRangeExpression`, `semantic::vhdl::RangeConstraint`).
+- Consumers that evaluate the bounds set `descending = left > right`: the
+  resolver's `materialize_boundaries`, the specialization evaluator's
+  `concrete_range`, the elaboration `compiled_vhdl_signal_type` helper and the
+  lowerer's attribute and selection paths. Sites that only compare the
+  declared direction with the bounds skip the comparison for flagged ranges.
+- Locals in subprograms fold frame-dependent bounds (`vec'left` of an
+  unconstrained formal) with `hir_constant_integer` before resolving their
+  subtype, so each call frame sizes them from its actual.

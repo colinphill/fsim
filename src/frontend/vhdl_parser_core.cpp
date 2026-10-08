@@ -1051,8 +1051,13 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
             "the predefined " + simple_name + " type",
             "select VHDL-1993 or later, or replace the file-open profile");
     }
-    if (simple_name == "boolean_vector" || simple_name == "integer_vector"
-        || simple_name == "real_vector" || simple_name == "time_vector") {
+    // These names are predefined only from VHDL-2008; earlier sources may
+    // declare their own types with the same names.
+    if ((simple_name == "boolean_vector" || simple_name == "integer_vector"
+            || simple_name == "real_vector" || simple_name == "time_vector")
+        && vhdl_standard_ < VhdlStandard::Vhdl2008
+        && (spelling.find('.') != std::string::npos
+            || !vhdl_source_declares_type(simple_name))) {
         require_vhdl_standard(
             first, VhdlStandard::Vhdl2008,
             "the predefined " + simple_name + " type",
@@ -1201,15 +1206,18 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
 
     if (match_keyword("range", true)) {
         const auto range_start = previous();
-        auto left_expression = parse_expression();
-        bool descending = false;
-        if (match_keyword("downto", true)) {
-            descending = true;
-        } else if (!match_keyword("to", true)) {
+        auto parsed_range = parse_vhdl_discrete_range(false);
+        if (!parsed_range) {
             error(current(), "FSIM-VHDL-PARSE-009",
                 "expected 'to' or 'downto' in discrete subtype constraint");
+            parsed_range.emplace();
         }
-        auto right_expression = parse_expression();
+        auto left_expression = std::move(parsed_range->left);
+        auto right_expression = std::move(parsed_range->right);
+        // A scalar range taken from a range attribute is ascending unless
+        // its bounds say otherwise; integer subtypes keep that default.
+        const bool descending = parsed_range->descending
+            && !parsed_range->direction_from_bounds;
         const auto left = simple_vhdl_integer_constant(left_expression);
         const auto right = simple_vhdl_integer_constant(right_expression);
         if (type.domain == ValueDomain::Integer) {
@@ -1227,7 +1235,8 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
         } else {
             type.discrete_range_expression = DiscreteRangeExpression {
                 std::move(left_expression), std::move(right_expression),
-                cover(range_start.span, previous().span), descending
+                cover(range_start.span, previous().span), descending,
+                parsed_range->direction_from_bounds
             };
         }
     } else if (match(TokenKind::LeftParen)) {
@@ -1238,22 +1247,14 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
                 "parenthesized range");
         }
         do {
-            const auto constraint_start = current().span;
-            auto left_expression = parse_expression();
-            bool descending = true;
-            if (match_keyword("downto", true)) {
-                descending = true;
-            } else if (match_keyword("to", true)) {
-                descending = false;
-            } else {
+            auto constraint = parse_vhdl_discrete_range(true);
+            if (!constraint) {
                 error(current(), "FSIM-VHDL-PARSE-009",
-                    "only discrete ranges are supported in a VHDL array "
-                    "constraint");
+                    "an index constraint requires a discrete range, a range "
+                    "attribute or a discrete subtype name");
+                constraint.emplace();
             }
-            auto right_expression = parse_expression();
-            type.vhdl_array_constraints.push_back(DiscreteRangeExpression {
-                std::move(left_expression), std::move(right_expression),
-                cover(constraint_start, previous().span), descending });
+            type.vhdl_array_constraints.push_back(std::move(*constraint));
         } while (match(TokenKind::Comma));
         expect(TokenKind::RightParen, "')' after range", "FSIM-VHDL-PARSE-010");
         if (type.vhdl_array_constraints.size() > 1 && type.domain != ValueDomain::Unknown) {
@@ -1275,6 +1276,72 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
         }
     }
     return type;
+}
+
+bool VhdlParser::vhdl_source_declares_type(const std::string& name)
+{
+    if (!vhdl_source_type_names_) {
+        auto& names = vhdl_source_type_names_.emplace();
+        for (std::size_t index = 0; index + 2U < tokens_.size(); ++index) {
+            const auto& marker = tokens_[index];
+            const auto& declared = tokens_[index + 1U];
+            if (marker.kind == TokenKind::Identifier
+                && declared.kind == TokenKind::Identifier
+                && (detail::ascii_lower(marker.text) == "type"
+                    || detail::ascii_lower(marker.text) == "subtype")) {
+                names.insert(vhdl_name(declared.text));
+            }
+        }
+    }
+    return vhdl_source_type_names_->contains(name);
+}
+
+std::optional<DiscreteRangeExpression> VhdlParser::parse_vhdl_discrete_range(
+    const bool allow_subtype_name)
+{
+    const auto start = current().span;
+    auto first = parse_expression();
+    const auto bounded = [&](const bool descending) {
+        auto right = parse_expression();
+        return DiscreteRangeExpression {
+            std::move(first), std::move(right),
+            cover(start, previous().span), descending };
+    };
+    if (match_keyword("downto", true)) {
+        return bounded(true);
+    }
+    if (match_keyword("to", true)) {
+        return bounded(false);
+    }
+    const bool name = allow_subtype_name
+        && first.kind == ExpressionKind::Identifier;
+    if (name && match_keyword("range", true)) {
+        // `T range <range>`: the range constraint supplies the bounds.
+        return parse_vhdl_discrete_range(false);
+    }
+    const bool attribute = first.kind == ExpressionKind::Call
+        && !first.operands.empty()
+        && (first.text == "'range" || first.text == "'reverse_range");
+    if (!attribute && !name) {
+        return std::nullopt;
+    }
+    const bool reverse = attribute && first.text == "'reverse_range";
+    std::vector<Expression> operands;
+    if (attribute) {
+        operands = first.operands;
+    } else {
+        operands.push_back(first);
+    }
+    DiscreteRangeExpression range {
+        Expression { ExpressionKind::Call, reverse ? "'right" : "'left",
+            operands, first.span },
+        Expression { ExpressionKind::Call, reverse ? "'left" : "'right",
+            operands, first.span },
+        cover(start, previous().span),
+        true,
+    };
+    range.direction_from_bounds = true;
+    return range;
 }
 
 void VhdlParser::parse_vhdl_end(std::string_view expected_kind)

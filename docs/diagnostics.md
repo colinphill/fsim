@@ -529,7 +529,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-PARSE-006` | error | Expected `;` between port declarations. |
 | `FSIM-VHDL-PARSE-007` | error | Expected `)` after port declarations. |
 | `FSIM-VHDL-PARSE-008` | error | Expected `;` after a port clause. |
-| `FSIM-VHDL-PARSE-009` | error | Expected `to` or `downto` in the supported locally static range form. |
+| `FSIM-VHDL-PARSE-009` | error | A range or index constraint is not `L to R`, `L downto R`, a range attribute (`x'range`, `x'reverse_range`), a discrete subtype name or `T range ...`. |
 | `FSIM-VHDL-PARSE-010` | error | Expected `)` after a VHDL range. |
 | `FSIM-VHDL-PARSE-012` | error | Expected `end` in a design-unit end clause. |
 | `FSIM-VHDL-PARSE-013` | error | Expected `;` after a design-unit end clause. |
@@ -1317,7 +1317,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-PARSE-367` | error | A `wait_order` success or failure action statement is missing. |
 | `FSIM-SV-PARSE-368` | error | A `ref static` task or function formal is used before the SystemVerilog-2023 profile. |
 | `FSIM-SV-PARSE-369` | error | Multiple interface-class inheritance is used before the SystemVerilog-2023 profile. |
-| `FSIM-SV-PARSE-370` | error | A streaming-concatenation or assignment-pattern target is used before the SystemVerilog-2023 profile. |
+| `FSIM-SV-PARSE-370` | error | An assignment-pattern target is used before the SystemVerilog-2023 profile. |
 | `FSIM-SV-PARSE-371` | error | An observed deferred immediate assertion uses a delay qualifier other than exact `#0`. |
 | `FSIM-SV-PARSE-372` | error | A checker instantiation omits its instance name. |
 | `FSIM-SV-PARSE-373` | error | A checker instance name is not followed by an opening parenthesis. |
@@ -2311,7 +2311,7 @@ scheduler.
 | `FSIM-ELAB-VHARRAYSEL-002` | error | A runtime multidimensional VHDL array index is not an integer-family signed 32-bit value with representable bounds. |
 | `FSIM-ELAB-VHARRAYSEL-003` | error | A multidimensional VHDL array read or target index is outside its selected source dimension. |
 | `FSIM-ELAB-VHARRAYSEL-004` | error | A multidimensional VHDL array slice has incompatible direction, bounds, placement, or contextual shape. |
-| `FSIM-ELAB-VHARRAYATTR-001` | error | A VHDL array attribute prefix is unknown, nonarray, unconstrained, null, or otherwise lacks a concrete bounded range. |
+| `FSIM-ELAB-VHARRAYATTR-001` | error | A VHDL array attribute prefix is unknown, nonarray, unconstrained (other than an interface object or function result, whose range comes from its actual), null, or otherwise lacks a concrete bounded range. |
 | `FSIM-ELAB-VHARRAYATTR-002` | error | A VHDL array attribute selects a nonstatic dimension or a dimension outside the concrete array rank. |
 | `FSIM-ELAB-VHARRAYATTR-003` | error | VHDL `range` or `reverse_range` is used as a scalar expression rather than a discrete range. |
 | `FSIM-ELAB-VHARRAYATTR-004` | error | A scalar VHDL array attribute result is outside the portable signed 32-bit integer representation. |

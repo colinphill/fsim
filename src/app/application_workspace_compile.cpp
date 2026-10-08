@@ -280,12 +280,35 @@ namespace {
         std::span<const std::string> sources,
         const std::vector<workspace::ArtifactRecord>& records)
     {
+        // Re-analysis replaces a VHDL library unit even when another source
+        // file defined it (IEEE 1076-2008 13.5); the secondary units of a
+        // replaced primary unit are obsolete.
+        const auto secondary = [](const library::UnitIndexEntry& unit) {
+            return unit.kind == "architecture" || unit.kind == "package_body";
+        };
+        std::set<std::string> replaced_units;
+        std::set<std::string> replaced_primaries;
+        for (const auto& record : records) {
+            for (const auto& owned : record.units) {
+                if (owned.unit.language != "vhdl") {
+                    continue;
+                }
+                replaced_units.insert(workspace::unit_identity(owned.unit));
+                if (!secondary(owned.unit)) {
+                    replaced_primaries.insert(owned.unit.name);
+                }
+            }
+        }
         for (auto& artifact : catalog.artifacts) {
             if (artifact.kind != workspace::ArtifactKind::Hdl) {
                 continue;
             }
             std::erase_if(artifact.units, [&](const auto& unit) {
-                return std::ranges::find(sources, unit.source_key) != sources.end();
+                return std::ranges::find(sources, unit.source_key) != sources.end()
+                    || (unit.unit.language == "vhdl"
+                        && (replaced_units.contains(workspace::unit_identity(unit.unit))
+                            || (secondary(unit.unit)
+                                && replaced_primaries.contains(unit.unit.primary_name))));
             });
         }
         std::erase_if(catalog.artifacts, [](const auto& artifact) {

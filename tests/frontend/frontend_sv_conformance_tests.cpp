@@ -980,15 +980,21 @@ interface class CombinedContract extends LeftContract, RightContract;
 endclass
 )",
         "FSIM-SV-PARSE-369");
-    require_isolated(
-        "streaming-assignment-target",
-        R"(module streaming_assignment_target;
+    // Streaming unpack targets are SystemVerilog-2005 (IEEE 1800-2017
+    // 11.4.14.3), not part of the 2023 profile.
+    const auto streaming_target = parse_verilog(
+        SourceText {
+            "streaming-assignment-target-2017.sv",
+            R"(module streaming_assignment_target;
   logic [7:0] left;
   logic [7:0] right;
   initial {<<8{left, right}} = 16'h1234;
 endmodule
-)",
-        "FSIM-SV-PARSE-370");
+)" },
+        StandardRevision::SystemVerilog2017);
+    require(streaming_target.ok(),
+        "a streaming concatenation assignment target is accepted in "
+        "SystemVerilog-2017");
     require_isolated(
         "pattern-assignment-target",
         R"(module pattern_assignment_target;

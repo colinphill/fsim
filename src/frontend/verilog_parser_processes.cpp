@@ -1465,11 +1465,10 @@ std::optional<Statement> VerilogParser::parse_statement()
         if (target.kind == ExpressionKind::Call
             && (target.text == "@stream-left"
                 || target.text == "@stream-right")) {
-            (void)require_standard(
-                "a streaming concatenation assignment target",
-                StandardRevision::SystemVerilog2023,
-                start,
-                "FSIM-SV-PARSE-370");
+            // Streaming concatenation as an assignment target unpacks the
+            // source (IEEE 1800-2005 8.17; IEEE 1800-2017 11.4.14.3).
+            require_sv2005(
+                "a streaming concatenation assignment target", start);
         } else if (target.kind == ExpressionKind::Aggregate
             && target.text == "sv-pattern") {
             (void)require_standard(

@@ -2421,6 +2421,11 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 constraint.right = evaluate_boundary(
                     constraint.right, constraint.right_expression, active);
             }
+            if (constraint.direction_from_bounds && constraint.left
+                && constraint.right) {
+                constraint.descending = *constraint.left > *constraint.right;
+                constraint.null = false;
+            }
         }
     };
     const auto standard_width = [&]() -> std::uint8_t {
@@ -2587,9 +2592,13 @@ CompiledDesignResolver::effective_vhdl_subtype(
                     result.executable_width.reset();
                     return true;
                 }
-                const auto null_range = constraint.null
-                    || (constraint.descending && *left < *right)
-                    || (!constraint.descending && *left > *right);
+                const auto descending = constraint.direction_from_bounds
+                    ? *left > *right
+                    : constraint.descending;
+                const auto null_range
+                    = (constraint.null && !constraint.direction_from_bounds)
+                    || (descending && *left < *right)
+                    || (!descending && *left > *right);
                 const auto distance = *left >= *right
                     ? static_cast<std::uint64_t>(*left)
                         - static_cast<std::uint64_t>(*right)
@@ -3096,9 +3105,14 @@ CompiledDesignResolver::effective_vhdl_subtype(
                         concrete = false;
                         break;
                     }
-                    const auto null_range = constraint.null
-                        || (constraint.descending && *left < *right)
-                        || (!constraint.descending && *left > *right);
+                    const auto descending = constraint.direction_from_bounds
+                        ? *left > *right
+                        : constraint.descending;
+                    const auto null_range
+                        = (constraint.null
+                              && !constraint.direction_from_bounds)
+                        || (descending && *left < *right)
+                        || (!descending && *left > *right);
                     const auto distance = *left >= *right
                         ? static_cast<std::uint64_t>(*left)
                             - static_cast<std::uint64_t>(*right)
@@ -3133,11 +3147,15 @@ CompiledDesignResolver::effective_vhdl_subtype(
                         concrete = false;
                         break;
                     }
-                    const auto null_range = dimension.constraint->null
-                        || (dimension.constraint->descending
-                            && *left < *right)
-                        || (!dimension.constraint->descending
-                            && *left > *right);
+                    const auto from_bounds
+                        = dimension.constraint->direction_from_bounds;
+                    const auto descending = from_bounds
+                        ? *left > *right
+                        : dimension.constraint->descending;
+                    const auto null_range
+                        = (dimension.constraint->null && !from_bounds)
+                        || (descending && *left < *right)
+                        || (!descending && *left > *right);
                     const auto distance = *left >= *right
                         ? static_cast<std::uint64_t>(*left)
                             - static_cast<std::uint64_t>(*right)

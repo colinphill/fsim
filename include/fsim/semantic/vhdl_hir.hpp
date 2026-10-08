@@ -315,6 +315,9 @@ struct RangeConstraint {
     bool descending { };
     bool null { };
     SourceSpanId source;
+    // The direction follows the evaluated bounds (a range attribute or a
+    // subtype name used as a constraint).
+    bool direction_from_bounds { };
 
     bool operator==(const RangeConstraint&) const = default;
 };

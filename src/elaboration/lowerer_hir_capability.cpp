@@ -1717,17 +1717,17 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_expression_range(
                       index_distance(*left, *right) + 1U
                   }
                 : std::nullopt;
+            const auto descending
+                = selected_range->direction_from_bounds && left && right
+                ? *left > *right
+                : selected_range->descending;
             if (left && right && count && element_width
                 && *count
                     <= std::numeric_limits<std::size_t>::max()
                         / *element_width
                 && *count * *element_width == *width
-                && (*left == *right
-                    || selected_range->descending
-                        == (*left > *right))) {
-                return HirPackedRange {
-                    *left, *right, selected_range->descending
-                };
+                && (*left == *right || descending == (*left > *right))) {
+                return HirPackedRange { *left, *right, descending };
             }
         }
     }
@@ -3746,6 +3746,28 @@ Lowerer::hir_runtime_binding(
                     }
                     if (matched_type) {
                         local_subtype->type_mark.target = *matched_type;
+                    }
+                }
+                // Bounds that depend on the active call frame, such as the
+                // range of an unconstrained formal (`bit_vector(vec'range)`),
+                // are folded per frame before the subtype is resolved.
+                if (local_subtype && active_hir_callable_) {
+                    for (auto& constraint : local_subtype->constraints) {
+                        if (!constraint.left && constraint.left_expression) {
+                            constraint.left = hir_constant_integer(
+                                *constraint.left_expression);
+                        }
+                        if (!constraint.right
+                            && constraint.right_expression) {
+                            constraint.right = hir_constant_integer(
+                                *constraint.right_expression);
+                        }
+                        if (constraint.direction_from_bounds
+                            && constraint.left && constraint.right) {
+                            constraint.descending
+                                = *constraint.left > *constraint.right;
+                            constraint.null = false;
+                        }
                     }
                 }
                 auto effective = local_subtype
@@ -5961,6 +5983,10 @@ Lowerer::hir_vhdl_attribute_profile(
         auto result = range;
         result.left = boundary(range.left, range.left_expression);
         result.right = boundary(range.right, range.right_expression);
+        if (result.direction_from_bounds && result.left && result.right) {
+            result.descending = *result.left > *result.right;
+            result.null = false;
+        }
         return result.left && result.right
             ? std::optional { std::move(result) }
             : std::nullopt;
@@ -10425,10 +10451,14 @@ Lowerer::hir_vhdl_array_selection(
             : 0U;
         if (!left || !right || count == 0U
             || count > selected_width || selected_width % count != 0U
-            || (*left != *right
+            || (*left != *right && !range->direction_from_bounds
                 && range->descending != (*left > *right))) {
             return std::nullopt;
         }
+        const auto range_descending
+            = range->direction_from_bounds && *left != *right
+            ? *left > *right
+            : range->descending;
         // An occurrence layout is authoritative for an aliased unconstrained
         // port.  Prefer its flattened stride instead of re-deriving one from
         // definition-level constraints, but only when the stride describes
@@ -10473,7 +10503,7 @@ Lowerer::hir_vhdl_array_selection(
             if (index + 1U != selectors.size()
                 || !selected_left || !selected_right
                 || (*selected_left != *selected_right
-                    && selected_descending != range->descending)
+                    && selected_descending != range_descending)
                 || *selected_left < std::min(*left, *right)
                 || *selected_left > std::max(*left, *right)
                 || *selected_right < std::min(*left, *right)
@@ -10543,7 +10573,7 @@ Lowerer::hir_vhdl_array_selection(
                 *left,
                 *right,
                 element_width,
-                range->descending,
+                range_descending,
             });
         }
         selected_width = element_width;

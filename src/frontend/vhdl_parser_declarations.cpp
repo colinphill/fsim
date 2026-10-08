@@ -781,7 +781,7 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
         element_type.spelling.find_last_of('.') == std::string::npos
             ? 0
             : element_type.spelling.find_last_of('.') + 1);
-    const bool unconstrained_builtin_element = !element_type.packed_range && (element_simple_name == "bit_vector" || element_simple_name == "std_logic_vector" || element_simple_name == "std_ulogic_vector" || element_simple_name == "signed" || element_simple_name == "unsigned" || element_simple_name == "string");
+    const bool unconstrained_builtin_element = !element_type.packed_range && !element_type.packed_range_expression && element_type.vhdl_array_constraints.empty() && (element_simple_name == "bit_vector" || element_simple_name == "std_logic_vector" || element_simple_name == "std_ulogic_vector" || element_simple_name == "signed" || element_simple_name == "unsigned" || element_simple_name == "string");
     if (unconstrained_builtin_element) {
         require_vhdl_standard(
             element_start, VhdlStandard::Vhdl2008,
@@ -1926,6 +1926,7 @@ void VhdlParser::parse_concurrent_statement(DesignUnit &unit) {
   }
   if (label_token &&
       (keyword("entity", 0, true) || keyword("configuration", 0, true) ||
+       keyword("component", 0, true) ||
        (at(TokenKind::Identifier) &&
         (keyword("port", 1, true) || keyword("generic", 1, true))))) {
     unit.instances.push_back(parse_vhdl_instance(*label_token));

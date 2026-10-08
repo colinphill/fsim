@@ -751,6 +751,7 @@ void VhdlParser::parse_vhdl_generate_branch(
     if (label && (
         keyword("entity", 0, true)
         || keyword("configuration", 0, true)
+        || keyword("component", 0, true)
         || (at(TokenKind::Identifier)
             && (keyword("port", 1, true)
                 || keyword("generic", 1, true))))) {
@@ -831,6 +832,14 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
       }
     instance.vhdl_configuration_instance = true;
   } else {
+    // The reserved word COMPONENT is optional (IEEE 1076-2008 11.7.1).
+    if (match_keyword("component", true)) {
+      (void)require_vhdl_standard(
+          previous(),
+          VhdlStandard::Vhdl1993,
+          "the reserved word component in a component instantiation",
+          "omit the reserved word in VHDL-87");
+    }
     const auto component = expect_identifier("component name");
     instance.unit_name = vhdl_name(component.text);
     instance.vhdl_component_instance = true;

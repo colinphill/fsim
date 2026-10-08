@@ -37,10 +37,63 @@ bool merge_records(LibraryCatalog& catalog,
         std::erase_if(record.units,
             [&](const auto& unit) { return sources.contains(unit.source_key); });
     }
+    // VHDL re-analysis (IEEE 1076-2008 13.5): a unit analyzed again replaces
+    // the unit of the same name even when another source defined it. The
+    // secondary units of a replaced primary unit, and objects that depend on
+    // a replaced or obsolete unit, are obsolete and leave the catalog.
+    const auto secondary = [](const library::UnitIndexEntry& unit) {
+        return unit.kind == "architecture" || unit.kind == "package_body";
+    };
+    std::set<std::string> gone;
+    std::set<std::string> replaced_primaries;
+    std::set<std::string> emptied;
+    for (const auto& record : replacements) {
+        for (const auto& owned : record.units) {
+            if (owned.unit.language != "vhdl")
+                continue;
+            gone.insert(unit_identity(owned.unit));
+            if (!secondary(owned.unit))
+                replaced_primaries.insert(owned.unit.name);
+        }
+    }
+    if (!gone.empty()) {
+        for (auto& record : catalog.artifacts) {
+            if (record.kind != ArtifactKind::Hdl)
+                continue;
+            const auto removed = std::erase_if(record.units, [&](const auto& owned) {
+                return owned.unit.language == "vhdl"
+                    && (gone.contains(unit_identity(owned.unit))
+                        || (secondary(owned.unit)
+                            && replaced_primaries.contains(
+                                owned.unit.primary_name)));
+            });
+            if (removed != 0U && record.units.empty())
+                emptied.insert(record.id);
+        }
+        for (bool changed = true; changed;) {
+            changed = false;
+            for (auto& record : catalog.artifacts) {
+                if (record.kind != ArtifactKind::Hdl || record.units.empty())
+                    continue;
+                const bool obsolete = std::ranges::any_of(
+                    record.dependencies, [&](const auto& dependency) {
+                        return dependency.library == catalog.location.name
+                            && gone.contains(unit_identity(dependency.unit));
+                    });
+                if (!obsolete)
+                    continue;
+                for (const auto& owned : record.units)
+                    gone.insert(unit_identity(owned.unit));
+                record.units.clear();
+                emptied.insert(record.id);
+                changed = true;
+            }
+        }
+    }
     std::erase_if(catalog.artifacts, [&](const auto& record) {
         if (record.kind == ArtifactKind::SystemCPlugin)
             return native_changed || plugin_changed;
-        return record.sources.empty();
+        return record.sources.empty() || emptied.contains(record.id);
     });
     std::map<std::string, std::string> owners;
     for (const auto& record : catalog.artifacts) {

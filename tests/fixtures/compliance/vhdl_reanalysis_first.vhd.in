@@ -1,0 +1,19 @@
+-- Compiled before vhdl_reanalysis.vhd into the same library. Its entity
+-- `counter` and package `limits` are analyzed again by that file.
+package limits is
+  constant maximum : natural := 3;
+end package;
+
+entity counter is
+  port (value : out natural);
+end entity;
+
+architecture first of counter is
+begin
+  value <= 1;
+end architecture;
+
+architecture second of counter is
+begin
+  value <= 2;
+end architecture;

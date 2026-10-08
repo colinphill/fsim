@@ -173,6 +173,77 @@ and their expected values were checked against xsim.
 Fixtures: `vhdl_enum_index_arrays.vhd`, `vhdl_composite_constants.vhd`.
 Both were checked against xsim.
 
+### Batch 4: range constraints, interface ranges, re-analysis
+
+VHDL:
+
+- Index and range constraints accept range attributes (`x'range`,
+  `x'reverse_range`), discrete subtype names (`mem_t(idx_t)`) and
+  `T range L to R`. The direction follows the evaluated bounds.
+  - Before: 125 nvc/VESTs cases failed with `FSIM-VHDL-PARSE-009`.
+- Array attributes of unconstrained subprogram formals and ports
+  (`vec'range`, `vec'length`) were rejected outright. Locals sized from them
+  (`variable r : bit_vector(vec'range)`) now get their bounds per call frame.
+- An element subtype constrained with non-literal bounds
+  (`bit_vector(0 to N-1)`) is no longer treated as unconstrained and gated to
+  VHDL-2008.
+- Re-analysis replaces a library unit (IEEE 1076-1993 11.4, 1076-2008 13.5),
+  even when another design file defined it.
+  - The secondary units of a replaced primary unit, and catalog objects that
+    depend on a replaced unit, become obsolete.
+  - Before: 104 VESTs cases failed with `FSIM-SEM-0003` or `FSIM-WS-001`
+    unit collisions.
+- The reserved word `component` may precede the unit name in a component
+  instantiation (VHDL-93 9.6).
+- Incorrect VHDL-2008 gates removed:
+  - A function-call result may be indexed, sliced or element-selected in
+    every revision (VHDL-93 6.1, 6.3).
+  - The names `boolean_vector`, `integer_vector`, `real_vector` and
+    `time_vector` are free for user types before VHDL-2008.
+  - Before: 84 VESTs cases failed with `FSIM-FE-VHSTD-003`.
+
+SystemVerilog:
+
+- A streaming concatenation is accepted as an assignment target (unpack) from
+  SystemVerilog-2005. It had been gated to 2023.
+
+Test harness: a compliance fixture header may name `before=<file>`, a source
+compiled into the same library first. Fixtures:
+
+- `vhdl_range_constraints.vhd`
+- `vhdl_reanalysis.vhd` (with `vhdl_reanalysis_first.vhd.in`)
+- `sv_streaming_unpack.sv`
+
+All were checked against xsim.
+
+Accepting these constraint forms exposes missing analysis-time legality
+checks in about 33 VESTs negative tests. They had been rejected only by the
+constraint parse error:
+
+- index-constraint bounds outside the index subtype;
+- slices of multidimensional arrays;
+- labels and other non-object names used as primaries.
+
+### Corpus run 3 (after batches 2 and 3, interpreter)
+
+| Suite | Cases | Pass | Fail | Timeout | Skip | Pass rate |
+|---|---:|---:|---:|---:|---:|---:|
+| sv-tests | 1497 | 989 | 503 | 5 | 0 | 66.1% |
+| verilator | 2415 | 426 | 1686 | 7 | 296 | 20.1% |
+| ivtest | 2826 | 1211 | 1586 | 4 | 25 | 43.2% |
+| vests | 3665 | 1745 | 1918 | 2 | 0 | 47.6% |
+| nvc | 1482 | 424 | 840 | 3 | 215 | 33.5% |
+| vhdl-compliance | 72 | 0 | 72 | 0 | 0 | 0.0% |
+
+Compared with run 2, 93 cases newly pass. Three negative cases newly pass
+analysis. They had been rejected only by the retired output-port-default
+error, and each exposes an existing gap:
+
+- VESTs tc112: reading a port of mode `out` before VHDL-2008.
+- nvc issue885: the default of an output port as the driver's initial
+  value.
+- nvc force3: the length check on a forced value.
+
 ## Known gaps queue (ranked by blocked corpus cases; refreshed per run)
 
 | Gap | Evidence |
@@ -184,9 +255,15 @@ Both were checked against xsim.
 | VHDL: `rising_edge`/`falling_edge` of a signal-class formal | testbench procedures |
 | VHDL: CHARACTER and STD_ULOGIC index values given as character literals (`t('H')`, `array (std_ulogic) of ...` aggregates), which need character literals resolved by type | IEEE package tables, VESTs |
 | VHDL: invalid input accepted (for example integer literals as `unsigned` aggregate elements) | sv-tests/VESTs negative cases |
-| VHDL: output-port defaults as the driver's initial value | VESTs |
-| VHDL: `x'range` in array constraints (direction from the prefix) | 120 VESTs/nvc cases |
-| VHDL: re-analysis replacing a same-named unit from another file | 103 VESTs Ashenden cases |
+| VHDL: output-port defaults as the driver's initial value | VESTs, nvc issue885 |
+| VHDL: reading an `out` port is accepted before VHDL-2008 | VESTs tc112 |
+| VHDL: individual association of formal subelements (`rec.field => x`) and formal conversion functions (`to_x(F) => S`) | 98 VESTs/nvc cases (`FSIM-VHDL-PARSE-042`) |
+| VHDL: package-level signals | 138 nvc/VESTs cases (`FSIM-VHDL-UNSUPPORTED-022`) |
+| VHDL: an array element such as `bit_vector(0 to N-1)`, constrained with non-literal bounds, was treated as unconstrained and gated to VHDL-2008 (fixed in batch 4) | 126 nvc/VESTs cases (`FSIM-FE-VHSTD-003`) |
+| VHDL: unconstrained array ports (`port (d : in bit_vector)`) bind with width 1 (`FSIM-ELAB-BIND-020`) | VESTs, generic-width library cells |
+| VHDL: analysis-time legality (index-constraint bounds and types, slices of multidimensional arrays, labels as primaries) | about 33 VESTs negative tests exposed by batch 4, part of the 724 accepted-invalid cases |
+| SV: compilation-unit (`$unit`) parameters, variables and unpacked struct/union typedefs | 218 cases (`FSIM-SV-UNSUPPORTED-001`) |
+| SV: randomization and constraint blocks (`randomize`, `constraint`, `with`) | UVM-based sv-tests, chapter 18 |
 | SV: `fork` inside functions and tasks (lowering) | sv-tests, UVM |
 | SV: hierarchical references in event controls, continuous assignments, generate processes | Verilator |
 | VHDL: package-level signals and shared variables (protected types) | VUnit library stand-in, OSVVM |

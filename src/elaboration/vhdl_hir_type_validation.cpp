@@ -1912,10 +1912,27 @@ private:
             && prefix_profile.dimensions.empty()) {
             return;
         }
+        // An unconstrained interface object (a port or subprogram formal)
+        // takes its index ranges from its actual (IEEE 1076-2008 6.5.6.3).
+        const auto interface_prefix = [&] {
+            const auto prefix_expression = specialization_.find_expression(
+                expression.operands.front());
+            if (!prefix_expression || prefix_expression->vhdl == nullptr
+                || !prefix_expression->vhdl->referenced_name
+                || !prefix_expression->vhdl->referenced_name->selected) {
+                return false;
+            }
+            const auto declaration = specialization_.find_declaration(
+                *prefix_expression->vhdl->referenced_name->selected);
+            return declaration && declaration->vhdl != nullptr
+                && declaration->vhdl->form
+                    == semantic::vhdl::DeclarationForm::port;
+        };
         const auto contextual_result
             = prefix_profile.kind == ProfileKind::array
-            && contextual_result_prefix(
-                expression.operands.front(), *prefix);
+            && (contextual_result_prefix(
+                    expression.operands.front(), *prefix)
+                || interface_prefix());
         if (prefix_profile.kind == ProfileKind::record
             || std::ranges::any_of(
                 prefix_profile.dimensions,

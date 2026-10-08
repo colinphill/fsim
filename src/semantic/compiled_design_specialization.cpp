@@ -6893,6 +6893,11 @@ private:
             if (!result.right && result.right_expression) {
                 result.right = evaluate(*result.right_expression);
             }
+            if (result.direction_from_bounds && result.left
+                && result.right) {
+                result.descending = *result.left > *result.right;
+                result.null = false;
+            }
             return result.left && result.right
                 ? std::optional { std::move(result) }
                 : std::nullopt;
