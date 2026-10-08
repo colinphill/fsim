@@ -131,6 +131,33 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-08 (later): exit criteria met — campaign `v4-corpus-1008d`
+
+Candidate 847d6c56, frozen as `v4cand-corpus-1008d`. Configuration `llvm_o2_aot`
+(elaborate `--aot --aot-scope all`), 3 samples, CPU 9, xsim measured in the same session.
+All 30 pair verdicts passed; the correctness lines are identical to xsim's.
+
+| Case | xsim total | xsim simulate | fsim total | fsim simulate | e2e | Simulate ratio |
+|---|---:|---:|---:|---:|---:|---:|
+| original_codec | 29.66 | 7.49 | 12.20 | 2.48 | 2.43× | **3.02×** |
+| original_throughput | 15.85 | 7.44 | 4.88 | 1.63 | 3.25× | 4.58× |
+| mixed_codec | 24.96 | 6.54 | 10.52 | 2.08 | 2.37× | **3.15×** |
+| mixed_throughput | 12.52 | 5.99 | 4.14 | 1.42 | 3.02× | 4.20× |
+| codex_reference_mode0_frames1 | 9.09 | 3.83 | 2.53 | 0.12 | 3.60× | 32.8× |
+| codex_reference_mode0_frames2 | 9.29 | 3.83 | 2.58 | 0.12 | 3.61× | 32.8× |
+| codex_reference_mode1_frames1 | 9.79 | 3.83 | 2.63 | 0.12 | 3.73× | 32.8× |
+| codex_reference_mode1_frames2 | 9.89 | 3.83 | 2.63 | 0.12 | 3.77× | 32.8× |
+| codex_throughput_default | 10.25 | 4.03 | 2.83 | 0.27 | 3.63× | 15.1× |
+| codex_throughput_direct_syndrome | 8.79 | 3.98 | 2.48 | 0.22 | 3.55× | 18.3× |
+
+**Both exit criteria (plan §9 D6, 2026-10-08) are met:**
+- the geometric mean of the e2e speedups is **3.25×** (≥3×);
+- every case's simulate phase is **≥3×** faster than `xsim -R`.
+
+**Margins are thin.** original_codec simulate passes at 3.02×, and the machine's speed
+drifts about 5% over hours (`1008c` measured 2.94× for nearly the same code).
+mixed_codec has 5% headroom.
+
 ### 2026-10-08 (later): plain stores for silent slots in templates
 
 **What changed.** Canonicalization marks a narrow `store_slot` to a silent slot

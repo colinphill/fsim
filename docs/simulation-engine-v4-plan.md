@@ -460,3 +460,9 @@ mode of working: one owner plus coding agents.
     - Elaborate may build the static kernel's native code, as xelab does. The corpus
       campaign drops `--no-aot` from `fsim elaborate`, and that codegen counts in
       end-to-end Wall.
+    - **Met on 2026-10-08** by campaign `v4-corpus-1008d` (candidate 847d6c56,
+      `llvm_o2_aot`):
+      - geometric mean e2e 3.25×;
+      - every case's simulate phase ≥3×, the lowest being original_codec at 3.02× and
+        mixed_codec at 3.15×.
+      - Details are in the progress log.
