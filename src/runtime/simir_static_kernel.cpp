@@ -1342,10 +1342,24 @@ void Interpreter::Impl::StaticKernel::commit_round()
     for (std::uint32_t index = 0U; index < count; ++index) {
         const auto& item = writes_.data[index];
         if (item.kind == 0U) {
-            const auto& slot = touch(item.slot);
-            if (!slot.single_writer) {
+            auto& pending = commit_slots_[item.slot];
+            if (!pending.single_writer) {
                 slots_[item.slot].last_writer = member_process_[item.member];
             }
+            if (!pending.touched && pending.planes == 2U
+                && item.offset + item.width <= 64U) {
+                // Most assignments rewrite the value a signal already
+                // holds; one that leaves an untouched slot as it is needs
+                // neither its prior value saved nor a change check.
+                const auto* current = arena_.data() + pending.offset;
+                const auto field = kernel_word::mask(item.width) << item.offset;
+                if (((current[0] ^ (item.a << item.offset)) & field) == 0U
+                    && ((current[pending.words] ^ (item.b << item.offset)) & field)
+                        == 0U) {
+                    continue;
+                }
+            }
+            const auto& slot = touch(item.slot);
             store_planes_word(arena_.data() + slot.offset, slot.words,
                 slot.planes, { item.a, item.b }, item.offset, item.width,
                 item.unknown);

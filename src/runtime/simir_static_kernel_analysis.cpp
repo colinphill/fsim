@@ -149,7 +149,8 @@ void Interpreter::Impl::StaticKernel::prune_operations(
             }
         }
     }
-    if (const char* debug = std::getenv("FSIM_KERNEL_PRUNE_DEBUG")) {
+    static const char* const prune_debug = std::getenv("FSIM_KERNEL_PRUNE_DEBUG");
+    if (const char* debug = prune_debug) {
         const auto name = impl_.processes.program_view(member.process).name();
         if (name.find(debug) != std::string::npos) {
             std::cerr << "fsim-kernel-prune: " << name << " entry=" << entry

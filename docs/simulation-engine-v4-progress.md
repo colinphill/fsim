@@ -131,6 +131,50 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-08 (later): generated-IR quality at the cold tier
+
+Most template code is compiled at the cold tier (O0, fast instruction selection, fast
+register allocator). The emitted IR was examined against what LLVM's passes remove
+(mixed_throughput's cold module: 455k IR instructions for 50k KIR instructions):
+- About 28% of the IR is GEPs, 15% loads and 14% stores.
+- The run-time cost is in block structure. The fast allocator spills every live value at
+  each block boundary, and the emitter made blocks it did not need:
+  - an X-check block before each branch on a known condition (`br i1 false`);
+  - a slow-path diamond for fast paths that are always taken;
+  - deopt checks on operands without 'U' bits.
+- Register-file loads are rare (6.5k), so the per-block value cache works. Register-file
+  stores are many (38.6k): VHDL deoptimization needs them.
+
+mixed_codec, AOT (run = interpreter time; codegen = both AOT groups):
+
+| Variant | Run | Codegen |
+|---|---:|---:|
+| Before | 2.33 s | 4.39 s |
+| Codegen O1 (fast instruction selection) | 1.76 s | 25.3 s |
+| Codegen O1 with the fast register allocator | 1.74 s | 23.5 s |
+| O0 with the greedy allocator | 1.97 s | 15.6 s |
+| Pipeline `sroa,simplifycfg` | 2.18 s | 4.76 s |
+| Pipeline `sroa,early-cse<memssa>,simplifycfg` | 2.16 s | 5.52 s |
+| Pipeline `sroa,instcombine,simplifycfg` | 1.95 s | 15.1 s |
+| **Emitter folds constant conditions (kept)** | **2.19 s** | **3.97 s** |
+| Folding plus `simplifycfg` | 2.10 s | 4.40 s |
+
+- **Register allocation is not O1's lever.** O1 with the fast allocator keeps the whole
+  gain, so the gain comes from the other machine passes.
+- **The emitter now folds conditions the builder proves constant.** A branch on a known
+  value has no X check. A `with_fallback` whose fast path always holds has no slow path.
+  A deopt or 'U' guard on operands without 'U' bits is dropped. This is faster to run
+  and faster to compile.
+- **Not taken:** removing the write-queue capacity check per deferred store; the check
+  stays.
+- **The VHDL commit skips writes that don't change the slot.** This applies to an
+  untouched slot (two planes, one word): there is no prior-value copy and no change check.
+  `commit_round`'s slot-touch time halved in the profile. The gain is within the noise on
+  mixed_throughput.
+- `FSIM_STATIC_KERNEL_LLVM_ARGS` (diagnostic) passes LLVM options. `DUMP_IR` now names
+  each function's template index. The perf map also covers code loaded from the AOT
+  cache.
+
 ### 2026-10-08: new exit criteria, static-kernel AOT, elaboration memos
 
 **Exit criteria (owner, plan §9 D6).**
@@ -1654,6 +1698,38 @@ boundary traffic.
    path. It does not affect the benchmarks.
 
 ## 6. Next steps (in order)
+
+**Current exit criteria (2026-10-08, plan §9 D6).**
+- The geometric mean of the per-case e2e speedups must be at least 3×.
+- In every case, the simulate phase must be at least 3× faster than `xsim -R`.
+
+Simulate phase with `--aot` (2026-10-08, after `201fb59f`):
+
+| Case | Simulate | Target | Load | Kernel setup | Run (incl. time 0) |
+|---|---:|---:|---:|---:|---:|
+| mixed_throughput | 2.15 s | 2.10 s | 0.11 | 0.28 | 1.83 |
+| mixed_codec | 3.2 s | 2.25 s | 0.42 | 0.58 | 2.12 |
+| original_codec | 3.6 s | 2.58 s | 1.0 | 0.6 | 1.9 |
+| original_throughput | 2.37 s | 2.62 s | — | — | — |
+
+Plan of record:
+1. **Persist the kernel plan.** AOT stores the `StaticKernelRuntimeSpec`, so simulate
+   skips planning and, when it is present, the region-graph rebuild at load. Gain: about
+   0.3 s on original_codec and 0.13 s on mixed_codec.
+2. **Template-level member compile.** KIR is compiled once per shared body and
+   substituted per instance, as specialization recipes already are. Gain: 0.1–0.2 s per
+   case.
+3. **Host population** of kernel members, which never run on the host. Gain: up to
+   0.15 s on original_codec.
+4. **Lazy design-IR decode** and the load validations. Gain: about 0.15 s on
+   original_codec.
+5. **Process-table decode and path restore** at template level. Gain: about 0.2 s on
+   original_codec.
+6. **mixed_codec's run loop** (2.1 s): commit and scheduling, and generic wide
+   operations.
+   - An optimizing backend for the many-instance templates would cut it by about 0.5 s,
+     but costs about 11 s of AOT codegen. It is off by default
+     (`FSIM_STATIC_KERNEL_OPT_MAX_SIZE`).
 
 The D6 throughput criterion is met on both throughput cases (§2). Next:
 1. Assemble the wider corpus (plan Phase 0) and measure D6's first clause on it.

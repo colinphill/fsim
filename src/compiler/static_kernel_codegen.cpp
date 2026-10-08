@@ -28,6 +28,7 @@
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/CommandLine.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
 
@@ -116,6 +117,21 @@ void initialize_native_target()
             || llvm::InitializeNativeTargetAsmPrinter()) {
             throw std::runtime_error(
                 "static kernel codegen cannot initialize the native target");
+        }
+        // Diagnostic: LLVM command-line options (space separated) for
+        // codegen experiments, e.g. "-regalloc=greedy".
+        if (const char* text = std::getenv("FSIM_STATIC_KERNEL_LLVM_ARGS")) {
+            static std::vector<std::string> words;
+            std::istringstream stream { text };
+            for (std::string word; stream >> word;) {
+                words.push_back(word);
+            }
+            std::vector<const char*> argv { "fsim" };
+            for (const auto& word : words) {
+                argv.push_back(word.c_str());
+            }
+            llvm::cl::ParseCommandLineOptions(
+                static_cast<int>(argv.size()), argv.data());
         }
     });
 }
@@ -985,6 +1001,15 @@ private:
         // Helpers may write slots; slot loads must not be reused across them.
     }
 
+    /// A condition the builder folded to `value`: its branch is never
+    /// taken the other way, so no block is created for that side (with
+    /// the unoptimized backend every block boundary spills live values).
+    [[nodiscard]] static bool folded(llvm::Value* condition, const bool value)
+    {
+        const auto* known = llvm::dyn_cast<llvm::ConstantInt>(condition);
+        return known != nullptr && known->isOne() == value;
+    }
+
     [[nodiscard]] Pair zero_pair()
     {
         return { constant(0U), constant(0U) };
@@ -996,6 +1021,10 @@ private:
         const std::uint32_t at, const Pair x, const Pair y,
         llvm::Value* fast_unknown = nullptr)
     {
+        if (folded(fast_ok, true)) {
+            last_unknown_ = fast_unknown != nullptr ? fast_unknown : constant(0U);
+            return fast;
+        }
         auto* fast_block = builder_.GetInsertBlock();
         auto* slow = llvm::BasicBlock::Create(context_, "slow", &function_);
         auto* merge = llvm::BasicBlock::Create(context_, "merge", &function_);
@@ -1643,6 +1672,9 @@ private:
              index < body_.u_operand_begin[at + 1U]; ++index) {
             any = builder_.CreateOr(any, unknown_of(body_.u_operands[index]));
         }
+        if (folded(nonzero(any), false)) {
+            return;
+        }
         auto* deopt = llvm::BasicBlock::Create(context_, "deopt", &function_);
         auto* next = llvm::BasicBlock::Create(context_, "known", &function_);
         builder_.CreateCondBr(nonzero(any), deopt, next);
@@ -1886,6 +1918,10 @@ private:
             return;
         }
         auto* any = builder_.CreateOr(unknown_of(inst.x), unknown_of(inst.y));
+        if (folded(nonzero(any), false)) {
+            insert_unknown_ = constant(0U);
+            return;
+        }
         auto* deopt = llvm::BasicBlock::Create(context_, "insert_deopt", &function_);
         auto* next = llvm::BasicBlock::Create(context_, "insert_known", &function_);
         builder_.CreateCondBr(nonzero(any), deopt, next);
@@ -1912,10 +1948,17 @@ private:
         auto* target = unknown_of(inst.x);
         auto* source = unknown_of(inst.y);
         auto* any = builder_.CreateOr(target, source);
+        auto* fails = builder_.CreateAnd(builder_.CreateNot(ok), nonzero(any));
+        if (folded(fails, false)) {
+            insert_unknown_ = builder_.CreateSelect(ok,
+                builder_.CreateOr(builder_.CreateAnd(target, keep),
+                    builder_.CreateShl(builder_.CreateAnd(source, m), safe)),
+                constant(0U));
+            return;
+        }
         auto* deopt = llvm::BasicBlock::Create(context_, "insert_deopt", &function_);
         auto* next = llvm::BasicBlock::Create(context_, "insert_known", &function_);
-        builder_.CreateCondBr(
-            builder_.CreateAnd(builder_.CreateNot(ok), nonzero(any)), deopt, next);
+        builder_.CreateCondBr(fails, deopt, next);
         builder_.SetInsertPoint(deopt);
         auto* type = llvm::FunctionType::get(llvm::Type::getVoidTy(context_),
             { ptr_, i32_, i32_ }, false);
@@ -1935,6 +1978,10 @@ private:
     [[nodiscard]] Pair with_fallback3(llvm::Value* fast_ok, const Pair fast,
         const std::uint32_t at, const Pair x, const Pair y, const Pair z)
     {
+        if (folded(fast_ok, true)) {
+            last_unknown_ = constant(0U);
+            return fast;
+        }
         auto* fast_block = builder_.GetInsertBlock();
         auto* slow = llvm::BasicBlock::Create(context_, "slow", &function_);
         auto* merge = llvm::BasicBlock::Create(context_, "merge", &function_);
@@ -2223,6 +2270,15 @@ private:
             auto* b0 = builder_.CreateTrunc(condition.b, llvm::Type::getInt1Ty(context_));
             auto* when_true = blocks_[std::min<std::size_t>(inst.y, body_.code.size())];
             auto* when_false = blocks_[std::min<std::size_t>(inst.z, body_.code.size())];
+            if (folded(b0, false)) {
+                // A known condition: no X check.
+                if (llvm::isa<llvm::ConstantInt>(a0)) {
+                    builder_.CreateBr(folded(a0, true) ? when_true : when_false);
+                } else {
+                    builder_.CreateCondBr(a0, when_true, when_false);
+                }
+                break;
+            }
             auto* known = llvm::BasicBlock::Create(context_, "known", &function_);
             auto* unknown = llvm::BasicBlock::Create(context_, "unknown", &function_);
             builder_.CreateCondBr(b0, unknown, known);
@@ -2818,6 +2874,41 @@ public:
         return ahead_of_time_;
     }
 
+    /// FSIM_STATIC_KERNEL_PERF_MAP (diagnostic): a perf map for the
+    /// templates. Sizes are distances to the next template (capped), so perf
+    /// can attribute samples.
+    static void write_perf_map(std::span<const StaticKernelTemplate> templates,
+        std::span<const StaticKernelNativeEntry> entries)
+    {
+        if (std::getenv("FSIM_STATIC_KERNEL_PERF_MAP") == nullptr) {
+            return;
+        }
+        std::vector<std::pair<std::uintptr_t, std::size_t>> ordered;
+        for (std::size_t index = 0U; index < entries.size(); ++index) {
+            if (entries[index] != nullptr) {
+                ordered.emplace_back(
+                    reinterpret_cast<std::uintptr_t>(entries[index]), index);
+            }
+        }
+        std::ranges::sort(ordered);
+        auto map = support::native_fs::open_ofstream(
+            std::filesystem::path { "/tmp/perf-" + std::to_string(::getpid())
+                + ".map" },
+            std::ios::app);
+        for (std::size_t index = 0U; index < ordered.size(); ++index) {
+            const auto size = index + 1U < ordered.size()
+                ? std::min<std::uintptr_t>(
+                      ordered[index + 1U].first - ordered[index].first, 65536U)
+                : 4096U;
+            const auto& code = templates[ordered[index].second];
+            map << std::hex << ordered[index].first << ' ' << size << std::dec
+                << " sk_template_" << ordered[index].second << "_t"
+                << static_cast<unsigned>(code.tier) << "_n"
+                << (code.body != nullptr ? code.body->code.size() : 0U)
+                << (code.two_state ? "_2s" : "") << '\n';
+        }
+    }
+
     std::vector<StaticKernelNativeEntry> available(
         std::span<const StaticKernelTemplate> templates,
         const StaticKernelNativeHelpers& helpers) override
@@ -2836,6 +2927,7 @@ public:
         for (std::size_t index = 0U; index < templates.size(); ++index) {
             entries[index] = find(keys[index], templates[index]);
         }
+        write_perf_map(templates, entries);
         return entries;
     }
 
@@ -2898,28 +2990,7 @@ public:
             store_index();
         }
         const auto finished = std::chrono::steady_clock::now();
-        if (std::getenv("FSIM_STATIC_KERNEL_PERF_MAP") != nullptr) {
-            // Diagnostic: a perf map for the templates. Sizes are distances to
-            // the next template (capped), so perf can attribute samples.
-            std::vector<std::pair<std::uintptr_t, std::size_t>> ordered;
-            for (std::size_t index = 0U; index < entries.size(); ++index) {
-                ordered.emplace_back(
-                    reinterpret_cast<std::uintptr_t>(entries[index]), index);
-            }
-            std::ranges::sort(ordered);
-            auto map = support::native_fs::open_ofstream(
-                std::filesystem::path { "/tmp/perf-" + std::to_string(::getpid())
-                    + ".map" },
-                std::ios::app);
-            for (std::size_t index = 0U; index < ordered.size(); ++index) {
-                const auto size = index + 1U < ordered.size()
-                    ? std::min<std::uintptr_t>(
-                          ordered[index + 1U].first - ordered[index].first, 65536U)
-                    : 4096U;
-                map << std::hex << ordered[index].first << ' ' << size << std::dec
-                    << " sk_template_" << ordered[index].second << '\n';
-            }
-        }
+        write_perf_map(templates, entries);
         if (std::getenv("FSIM_PROFILE_PHASES") != nullptr) {
             const auto ms = [](auto from, auto to) {
                 return std::chrono::duration<double, std::milli>(to - from).count();
@@ -3103,7 +3174,7 @@ private:
         }
         if (const char* dump = std::getenv("FSIM_STATIC_KERNEL_DUMP_IR")) {
             // Diagnostic: the IR handed to instruction selection, one file per
-            // group; function fsim_sk_<generation>_<index> is template <index>.
+            // group, preceded by the template index of each function.
             auto file = support::native_fs::open_ofstream(
                 std::filesystem::path { dump }
                 / ("static-kernel-" + std::to_string(generation_)
@@ -3111,6 +3182,10 @@ private:
             std::string text;
             llvm::raw_string_ostream stream(text);
             module->print(stream, nullptr);
+            for (std::size_t slot = 0U; slot < group.size(); ++slot) {
+                file << "; template " << group[slot] << " = @" << names[slot]
+                     << '\n';
+            }
             file << text;
         }
         if (auto error = jit.addIRModule(llvm::orc::ThreadSafeModule(
@@ -3188,7 +3263,8 @@ private:
                  "FSIM_STATIC_KERNEL_OPT_LEVEL",
                  "FSIM_STATIC_KERNEL_CODEGEN_LEVEL", "FSIM_STATIC_KERNEL_NO_FAST_ISEL",
                  "FSIM_STATIC_KERNEL_HOT_LEVEL", "FSIM_STATIC_KERNEL_HOT_FAST_ISEL",
-                 "FSIM_STATIC_KERNEL_PIPELINE", "FSIM_STATIC_KERNEL_HOT_PIPELINE" }) {
+                 "FSIM_STATIC_KERNEL_PIPELINE", "FSIM_STATIC_KERNEL_HOT_PIPELINE",
+                 "FSIM_STATIC_KERNEL_LLVM_ARGS" }) {
             const char* value = std::getenv(name);
             identity += ";";
             identity += name;
