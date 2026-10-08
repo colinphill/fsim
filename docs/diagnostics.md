@@ -953,7 +953,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-UNSUPPORTED-008` | error | Unsupported sequential statement. |
 | `FSIM-VHDL-UNSUPPORTED-014` | error | An integer-family subtype appears in a declaration context that does not yet admit scalar integer objects. |
 | `FSIM-VHDL-UNSUPPORTED-015` | error | A nested context declaration appears where only a context reference is permitted. |
-| `FSIM-VHDL-UNSUPPORTED-018` | error | A generic type is outside the bounded scalar integer, Boolean, bit, and physical-time subset. |
+| `FSIM-VHDL-UNSUPPORTED-018` | error | A generic type is outside the bounded scalar integer, Boolean, bit, STRING, and physical-time subset (for example an access type such as LINE). |
 | `FSIM-VHDL-UNSUPPORTED-020` | error | A generate branch contains an item outside the bounded constant, local-signal, assignment, process, instance, and nested-generate subset. |
 | `FSIM-VHDL-UNSUPPORTED-022` | error | A package declaration item is outside the bounded constant, type, subtype, or function subset. |
 | `FSIM-VHDL-UNSUPPORTED-024` | error | A context declaration contains an item other than a library clause, use clause, or context reference. |
@@ -2251,9 +2251,9 @@ scheduler.
 | `FSIM-ELAB-VHPHYSICAL-010` | error | A physical target receives an untyped nonphysical value without explicit conversion. |
 | `FSIM-ELAB-VHPROTECTED-001` | error | A protected body has no visible protected type declaration. |
 | `FSIM-ELAB-VHPROTECTED-002` | error | A public protected function has no conforming body. |
-| `FSIM-ELAB-VHPROTECTED-003` | error | A protected function body has no conforming public profile. |
+| `FSIM-ELAB-VHPROTECTED-003` | error | Retired catalog identity: a protected body may declare private functions (IEEE 1076-2008 5.6.3). |
 | `FSIM-ELAB-VHPROTECTED-004` | error | A public protected procedure has no conforming body. |
-| `FSIM-ELAB-VHPROTECTED-005` | error | A protected procedure body has no conforming public profile. |
+| `FSIM-ELAB-VHPROTECTED-005` | error | Retired catalog identity: a protected body may declare private procedures (IEEE 1076-2008 5.6.3). |
 | `FSIM-ELAB-VHPROTECTED-006` | error | A protected type declaration has no body. |
 | `FSIM-ELAB-VHPROTECTED-007` | error | A protected private variable lacks a bounded supported scalar or packed type. |
 | `FSIM-ELAB-VHPROTECTED-008` | error | A VHDL-2000-or-later shared variable does not have a protected type and its declaring unit has not selected legacy-unprotected-shared-variable compatibility. |
@@ -2636,6 +2636,7 @@ scheduler.
 | `FSIM-ELAB-GENERIC-006` | error | A generic-dependent packed range cannot be evaluated. |
 | `FSIM-ELAB-GENERIC-007` | error | A generic-dependent packed range width overflows the supported range. |
 | `FSIM-ELAB-GENERIC-008` | error | A generic value violates its bounded scalar subtype constraint. |
+| `FSIM-ELAB-GENERIC-009` | error | A top-level generic override (`--generic NAME=VALUE`) is not a STRING, integer or BOOLEAN value for the generic's type. |
 | `FSIM-ELAB-GENERIC-009` | error | An architecture signal conflicts with an entity generic. |
 | `FSIM-ELAB-GENERIC-010` | error | A bounded subtype-typed VHDL generic resolves outside the supported scalar, physical-time, packed, or statically constrained composite value set. |
 | `FSIM-ELAB-GENTYPE-001` | error | A required VHDL interface type generic has no associated subtype indication. |

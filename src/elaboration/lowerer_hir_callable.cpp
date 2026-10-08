@@ -4710,6 +4710,18 @@ Lowerer::resolve_hir_vhdl_procedure_call(
                 && *actual_domain == formal->domain
                 && (formal->domain == frontend::ValueDomain::Integer
                     || *actual_width == formal->width);
+            // Array actuals must belong to the formal's array type.
+            if (compatible && formal_subtype && !context_dependent_actual) {
+                const auto actual_type_subtype
+                    = hir_vhdl_expression_subtype((*actuals)[index]);
+                const auto formal_family
+                    = hir_vhdl_array_type_family(*formal_subtype);
+                const auto actual_family = actual_type_subtype
+                    ? hir_vhdl_array_type_family(*actual_type_subtype)
+                    : std::nullopt;
+                compatible = !formal_family || !actual_family
+                    || *formal_family == *actual_family;
+            }
         }
         if (!compatible) {
             continue;

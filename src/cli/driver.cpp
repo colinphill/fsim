@@ -369,6 +369,9 @@ namespace {
             return std::nullopt;
         }
         auto config = std::move(*workspace);
+        if (!invocation.generics.empty()) {
+            config.project.generics = invocation.generics;
+        }
         if (!invocation.tops.empty()) {
             config.project.tops = invocation.tops;
             config.project.top = invocation.tops.size() == 1
@@ -523,6 +526,9 @@ namespace {
 
     void apply_overrides(const Invocation& invocation, project::Config& config)
     {
+        if (!invocation.generics.empty()) {
+            config.project.generics = invocation.generics;
+        }
         if (!invocation.tops.empty()) {
             config.project.tops = invocation.tops;
             config.project.top = invocation.tops.size() == 1
@@ -877,6 +883,7 @@ namespace {
             "--snapshot",
             "--verbosity",
             "--top",
+            "--generic",
             "--lang",
             "--standard",
             "--compatibility",
@@ -1088,6 +1095,20 @@ std::optional<Invocation> parse_arguments(
                     return std::nullopt;
                 }
                 invocation.tops.push_back(parse_top_option(*value));
+            } else if (is_option(argument, "", "--generic")) {
+                const auto value = take_value(index, argc, argv, argument, "--generic", diagnostics);
+                if (!value.has_value()) {
+                    return std::nullopt;
+                }
+                const auto separator = value->find('=');
+                if (separator == std::string_view::npos || separator == 0U) {
+                    argument_error(diagnostics,
+                        "--generic requires NAME=VALUE, received '" + std::string(*value) + "'");
+                    return std::nullopt;
+                }
+                invocation.generics.emplace_back(
+                    std::string(value->substr(0U, separator)),
+                    std::string(value->substr(separator + 1U)));
             } else if (is_option(argument, "", "--lang")) {
                 const auto value = take_value(index, argc, argv, argument, "--lang", diagnostics);
                 if (!value.has_value()) {

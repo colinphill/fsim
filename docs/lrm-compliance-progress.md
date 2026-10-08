@@ -249,6 +249,34 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 7: STRING generics, top-level overrides, VUnit stand-in
+
+- STRING generics, with or without a default, bound by a generic map or a
+  top-level override. Includes `'LENGTH` and the other array attributes of
+  a STRING constant or generic, taken from its static value.
+- `fsim elaborate --generic NAME=VALUE` overrides root generics: STRING,
+  integer or BOOLEAN values, applied to every root that declares the generic.
+  This is the corpus runner's hook for VUnit `runner_cfg` and nvc generics.
+  New diagnostic: `FSIM-ELAB-GENERIC-009`.
+- A protected type body may declare private subprograms that its
+  declaration does not list (IEEE 1076-2008 5.6.3). `FSIM-ELAB-VHPROTECTED-003`
+  and `-005` are retired.
+- Procedure overload resolution distinguishes array types:
+  `STD_(U)LOGIC_VECTOR`, `UNSIGNED`, `SIGNED`, `BIT_VECTOR` and user array
+  types. Before, any two vectors of equal width matched every overload, and
+  the call was reported as ambiguous.
+- The VUnit stand-in (`scripts/lrm_corpus/vunit_shim.vhd`) keeps its state in
+  a package shared variable and selects test cases by call order, without
+  storing names. It reports failures without a test name; the runner
+  attributes each failure to the most recently started test case.
+
+VHDL-Compliance: 16 of 72 testbench files and 12 of 154 VUnit test cases
+pass. Before this batch, none did.
+
+Fixture: `vhdl_string_generics.vhd`, which uses the harness's new
+`generic=NAME=VALUE` header key. It was checked against xsim (`xelab
+-generic_top`).
+
 ### Corpus run 4 (after batches 4 and 5, interpreter)
 
 | Suite | Cases | Pass | Fail | Timeout | Skip | Pass rate |
@@ -332,7 +360,7 @@ error, and each exposes an existing gap:
 | SV: wildcard associative-array indices (`[*]`) | sv-tests typedef cases |
 | SV: typedef adding packed dimensions to a user type (`typedef T1 [7:0] T2;`) | ivtest |
 | SV: non-ANSI port type declared before its direction (`T x; output x;`) | ivtest module_nonansi_* |
-| VHDL: STRING generics and top-level `--generic` overrides (VUnit `runner_cfg`) | 50 VHDL-Compliance testbenches |
+| VHDL: function overload resolution by array type (procedures done in batch 7) | VUnit `check_equal`-style helpers |
 | SV: randomization and constraint blocks (`randomize`, `constraint`, `with`) | UVM-based sv-tests, chapter 18 |
 | SV: `fork` inside functions and tasks (lowering) | sv-tests, UVM |
 | SV: hierarchical references in event controls, continuous assignments, generate processes | Verilator |

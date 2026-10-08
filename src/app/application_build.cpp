@@ -715,7 +715,8 @@ std::optional<BuiltProject> build_checked_project(
     std::vector<elaboration::Root> elaboration_roots;
     elaboration_roots.reserve(tops.size());
     for (const auto& top : tops) {
-        elaboration_roots.push_back({ top.target, top.alias });
+        elaboration_roots.push_back(
+            { top.target, top.alias, config.project.generics });
     }
     auto elaborated = [&] {
         ScopedPhaseProfile elaboration_phase { "elaboration" };

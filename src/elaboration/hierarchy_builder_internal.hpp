@@ -75,6 +75,12 @@ public:
 
     void build(const SystemCInstanceDescription& root);
     void add_root(semantic::CompiledUnitView root, std::string path);
+    // Generic overrides (`--generic NAME=VALUE`) for the next root added.
+    void set_root_generic_overrides(
+        std::vector<std::pair<std::string, std::string>> overrides)
+    {
+        root_generic_overrides_ = std::move(overrides);
+    }
     void add_root(
         const SystemCInstanceDescription& root,
         std::string path);
@@ -1553,6 +1559,9 @@ private:
     std::unordered_set<SignalId> vhdl_unprotected_shared_signals_;
     std::unordered_map<std::uint32_t, std::optional<SignalId>>
         vhdl_package_constant_signals_;
+    std::vector<std::pair<std::string, std::string>> root_generic_overrides_;
+    std::vector<semantic::SpecializedHirActualIdentity>
+    compiled_vhdl_root_generic_actuals(const semantic::vhdl::Unit& root);
     struct PackageSharedVariableBindings {
         SignalMap signals;
         ContainerMap containers;

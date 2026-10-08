@@ -962,16 +962,18 @@ def vunit_subresults(case: Case, steps: list[StepResult], status: str) -> list[d
         stage = steps[-1].stage
         return [{"test": t, "status": "fail", "detail": f"{stage} failed"} for t in tests]
     started, failures, done = set(), collections.defaultdict(list), False
+    current = "<default>"
     for line in sim.output.splitlines():
-        match = re.search(r"VUNIT-SHIM: (start|fail|done) ?(.*)", line)
+        match = re.search(r"VUNIT-SHIM: (start|fail|done):? ?(.*)", line)
         if not match:
             continue
         kind, rest = match.groups()
         if kind == "start":
-            started.add(rest.strip())
+            current = rest.strip()
+            started.add(current)
         elif kind == "fail":
-            name, _, message = rest.partition(": ")
-            failures[name.strip()].append(message)
+            # A failure belongs to the most recently started test case.
+            failures[current].append(rest)
         else:
             done = True
     errors = [l for l in sim.output.splitlines() if HDL_ERROR_RE.search(l)]

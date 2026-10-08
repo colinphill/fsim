@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace fsim::project {
@@ -112,6 +113,9 @@ struct ProjectSection {
   // always expose the normalized ordered selection through tops.
   std::string top;
   std::vector<TopLevel> tops;
+  // Top-level generic and parameter overrides (`--generic NAME=VALUE`),
+  // applied to every root that declares a generic of that name.
+  std::vector<std::pair<std::string, std::string>> generics;
   std::string time_resolution{"auto"};
   std::uint64_t seed{1};
   bool random_seed{false};

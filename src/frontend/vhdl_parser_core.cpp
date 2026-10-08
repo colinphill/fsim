@@ -718,7 +718,7 @@ void VhdlParser::parse_vhdl_generics(DesignUnit& unit, const Token& start,
         const auto type = parse_vhdl_type(true);
         const auto packed_width = type.width();
         const bool supported_packed = type.packed_range && type.packed_members.empty() && packed_width && *packed_width != 0 && *packed_width <= std::numeric_limits<std::uint32_t>::max() && (type.domain == ValueDomain::Bit2 || type.domain == ValueDomain::Logic4 || type.domain == ValueDomain::Logic9);
-        if (type.named_type.empty() && type.nominal_type != "@builtin:time" && (type.packed_range ? !supported_packed : (type.domain != ValueDomain::Integer && type.domain != ValueDomain::Boolean && type.domain != ValueDomain::Bit2 && type.domain != ValueDomain::Logic4 && type.domain != ValueDomain::Logic9))) {
+        if (type.named_type.empty() && type.nominal_type != "@builtin:time" && (type.packed_range ? !supported_packed : (type.domain != ValueDomain::Integer && type.domain != ValueDomain::Boolean && type.domain != ValueDomain::Bit2 && type.domain != ValueDomain::Logic4 && type.domain != ValueDomain::Logic9 && (type.domain != ValueDomain::String || type.spelling.substr(type.spelling.find_last_of('.') == std::string::npos ? 0 : type.spelling.find_last_of('.') + 1) == "line")))) {
             error(names.front(), "FSIM-VHDL-UNSUPPORTED-018",
                 "this generic type is outside the scalar integer, Boolean, bit, "
                 "SimIR-representable packed logic, and physical-time subset");

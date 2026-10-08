@@ -87,6 +87,7 @@ struct Invocation {
   // Normalized ordered root selections. `top` remains the one-root
   // source-compatible view.
   std::vector<project::ProjectSection::TopLevel> tops;
+  std::vector<std::pair<std::string, std::string>> generics;
   std::optional<std::string> top;
   std::string library{"work"};
   std::vector<std::string> search_libraries;

@@ -1986,6 +1986,7 @@ tests/fixtures/compliance/vhdl_reanalysis.vhd
 tests/fixtures/compliance/vhdl_reanalysis_first.vhd.in
 tests/fixtures/compliance/vhdl_scalar_type_declarations.vhd
 tests/fixtures/compliance/vhdl_signal_formals.vhd
+tests/fixtures/compliance/vhdl_string_generics.vhd
 tests/fixtures/compliance/vhdl_subprogram_forms.vhd
 tests/fixtures/compliance/vhdl_typed_files.vhd
 tests/fixtures/fst/complete_trace.tsv

@@ -12624,7 +12624,25 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
     // string consumers such as $display and $write.  The evaluator only
     // produces a value for static expressions, so runtime string objects and
     // callable locals continue through the storage paths below.
-    if (expression->systemverilog != nullptr) {
+    // A VHDL STRING generic bound by its actual identity (for example a
+    // top-level `--generic` override) is folded the same way.
+    const bool vhdl_string_generic_actual = [&] {
+        if (expression->vhdl == nullptr
+            || expression->vhdl->kind != semantic::vhdl::ExpressionKind::name) {
+            return false;
+        }
+        const auto declaration = hir_referenced_declaration(expression_id);
+        if (!declaration) {
+            return false;
+        }
+        const auto& actuals
+            = specialized_hir_unit_->specialization().actual_identities;
+        return std::ranges::any_of(actuals, [&](const auto& actual) {
+            return actual.declaration == *declaration
+                && actual.identity.starts_with("svstring-v1;");
+        });
+    }();
+    if (expression->systemverilog != nullptr || vhdl_string_generic_actual) {
         const auto constant
             = specialized_hir_unit_->evaluate_string_expression(
                 expression_id);

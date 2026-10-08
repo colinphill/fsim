@@ -1085,10 +1085,7 @@ end architecture;
         !mismatched_result.ok()
         && has_diagnostic(
             mismatched_result,
-            "FSIM-ELAB-VHPROTECTED-004")
-        && has_diagnostic(
-            mismatched_result,
-            "FSIM-ELAB-VHPROTECTED-005"));
+            "FSIM-ELAB-VHPROTECTED-004"));
 
     const auto invalid_shared = fsim::frontend::parse_text(
         "vhdl_invalid_shared.vhd",

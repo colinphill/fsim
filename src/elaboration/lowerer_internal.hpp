@@ -364,6 +364,11 @@ private:
     [[nodiscard]] bool hir_vhdl_enumeration_index(
         semantic::ExpressionId index,
         semantic::ScopeId process_scope) const;
+    // The array type an array subtype belongs to, for overload resolution:
+    // STD_LOGIC_VECTOR and STD_ULOGIC_VECTOR, UNSIGNED, SIGNED and
+    // BIT_VECTOR are distinct (IEEE 1076-2008 4.5.2). Nullopt when unknown.
+    [[nodiscard]] std::optional<std::string> hir_vhdl_array_type_family(
+        const semantic::vhdl::SubtypeIndication& subtype) const;
     // The enumeration type a VHDL for-loop parameter iterates over, when the
     // value names one; the parameter's runtime value is the ordinal.
     [[nodiscard]] std::optional<semantic::TypeId>

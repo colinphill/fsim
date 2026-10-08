@@ -53,6 +53,9 @@ struct Binding {
 struct Root {
     std::string target;
     std::string alias;
+    // Generic and parameter overrides for this root (`--generic`), applied
+    // to the generics the root declares by that name.
+    std::vector<std::pair<std::string, std::string>> generics {};
 };
 
 /// Parser-independent identity of a class made visible by one selected

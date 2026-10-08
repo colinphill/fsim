@@ -10,7 +10,7 @@
 -- machine-readable lines that the corpus runner attributes to the active test:
 --
 --   VUNIT-SHIM: start <test name>
---   VUNIT-SHIM: fail <test name>: <message>
+--   VUNIT-SHIM: fail: <message>        (for the most recently started test)
 --   VUNIT-SHIM: done failures=<count>
 --
 -- Only the subset of the VUnit API used by the corpora is provided. Anything
@@ -68,84 +68,58 @@ package vunit_shim_pkg is
 end package;
 
 package body vunit_shim_pkg is
-  constant name_capacity : positive := 16384;
-
+  -- Each test_suite iteration runs the next test case: run() counts its
+  -- calls within the iteration and selects the call at the current index.
+  -- VUnit testbenches call run() from one if/elsif chain, so the order is
+  -- the same in every iteration and no test names need to be stored.
   type shim_state_t is protected
     procedure begin_suite;
     impure function next_iteration return boolean;
-    impure function try_run(constant name : string) return boolean;
-    procedure record_failure(constant msg : string);
+    impure function try_run return boolean;
+    procedure record_failure;
     impure function failure_count return natural;
   end protected;
 
   type shim_state_t is protected body
     variable started : boolean := false;
     variable ran_in_iteration : boolean := false;
-    variable done_names : string(1 to name_capacity);
-    variable done_length : natural := 0;
-    variable current : string(1 to 256);
-    variable current_length : natural := 0;
+    variable index : natural := 0;
+    variable calls : natural := 0;
     variable failures : natural := 0;
 
     procedure begin_suite is
     begin
-      current(1 to 9) := "<default>";
-      current_length := 9;
+      started := false;
     end procedure;
 
     impure function next_iteration return boolean is
     begin
       if not started then
         started := true;
-        ran_in_iteration := false;
-        return true;
-      end if;
-      if ran_in_iteration then
-        ran_in_iteration := false;
-        return true;
-      end if;
-      return false;
-    end function;
-
-    impure function already_ran(constant name : string) return boolean is
-      constant key : string := "|" & name & "|";
-    begin
-      if done_length < key'length then
+        index := 1;
+      elsif ran_in_iteration then
+        index := index + 1;
+      else
         return false;
       end if;
-      for start in 1 to done_length - key'length + 1 loop
-        if done_names(start to start + key'length - 1) = key then
-          return true;
-        end if;
-      end loop;
-      return false;
-    end function;
-
-    impure function try_run(constant name : string) return boolean is
-      constant key : string := "|" & name & "|";
-    begin
-      if ran_in_iteration or already_ran(name) then
-        return false;
-      end if;
-      if done_length + key'length <= name_capacity then
-        done_names(done_length + 1 to done_length + key'length) := key;
-        done_length := done_length + key'length;
-      end if;
-      ran_in_iteration := true;
-      current_length := name'length;
-      if current_length > current'length then
-        current_length := current'length;
-      end if;
-      current(1 to current_length) := name(name'left to name'left + current_length - 1);
-      report "VUNIT-SHIM: start " & name severity note;
+      calls := 0;
+      ran_in_iteration := false;
       return true;
     end function;
 
-    procedure record_failure(constant msg : string) is
+    impure function try_run return boolean is
+    begin
+      calls := calls + 1;
+      if ran_in_iteration or calls /= index then
+        return false;
+      end if;
+      ran_in_iteration := true;
+      return true;
+    end function;
+
+    procedure record_failure is
     begin
       failures := failures + 1;
-      report "VUNIT-SHIM: fail " & current(1 to current_length) & ": " & msg
-        severity note;
     end procedure;
 
     impure function failure_count return natural is
@@ -164,9 +138,10 @@ package body vunit_shim_pkg is
   end procedure;
 
   procedure test_runner_cleanup(constant runner : in runner_sync_t) is
+    variable count : natural;
   begin
-    report "VUNIT-SHIM: done failures=" & integer'image(state.failure_count)
-      severity note;
+    count := state.failure_count;
+    report "VUNIT-SHIM: done failures=" & integer'image(count) severity note;
     std.env.finish;
   end procedure;
 
@@ -176,8 +151,13 @@ package body vunit_shim_pkg is
   end function;
 
   impure function run(constant name : string) return boolean is
+    variable selected : boolean;
   begin
-    return state.try_run(name);
+    selected := state.try_run;
+    if selected then
+      report "VUNIT-SHIM: start " & name severity note;
+    end if;
+    return selected;
   end function;
 
   procedure info(constant msg : in string) is
@@ -190,14 +170,21 @@ package body vunit_shim_pkg is
     report "VUNIT-SHIM: warning " & msg severity note;
   end procedure;
 
+  -- Failures are attributed to the most recently started test case.
+  procedure fail_with(constant msg : in string) is
+  begin
+    state.record_failure;
+    report "VUNIT-SHIM: fail: " & msg severity note;
+  end procedure;
+
   procedure error(constant msg : in string) is
   begin
-    state.record_failure("error: " & msg);
+    fail_with("error: " & msg);
   end procedure;
 
   procedure failure(constant msg : in string) is
   begin
-    state.record_failure("failure: " & msg);
+    fail_with("failure: " & msg);
   end procedure;
 
   procedure check_result(
@@ -206,7 +193,7 @@ package body vunit_shim_pkg is
     constant msg : in string) is
   begin
     if not pass then
-      state.record_failure(what & " " & msg);
+      fail_with(what & " " & msg);
     end if;
   end procedure;
 

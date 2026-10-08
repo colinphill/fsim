@@ -234,6 +234,7 @@ ElaborationResult elaborate_impl(
         std::optional<semantic::CompiledUnitView> compiled_unit;
         const SystemCInstanceDescription* constructed_systemc{};
         std::optional<SystemCInstanceDescription> inferred_systemc;
+        std::vector<std::pair<std::string, std::string>> generics{};
     };
     std::vector<ResolvedRoot> resolved_roots;
     resolved_roots.reserve(normalized_roots.size());
@@ -265,7 +266,8 @@ ElaborationResult elaborate_impl(
             root_request.alias,
             std::nullopt,
             nullptr,
-            std::nullopt};
+            std::nullopt,
+            root_request.generics};
         if (systemc_top) {
             const auto constructed = std::find_if(
                 systemc_instances.begin(),
@@ -514,7 +516,9 @@ ElaborationResult elaborate_impl(
         } else if (root->inferred_systemc) {
             builder->add_root(*root->inferred_systemc, root->alias);
         } else if (root->compiled_unit) {
+            builder->set_root_generic_overrides(root->generics);
             builder->add_root(*root->compiled_unit, root->alias);
+            builder->set_root_generic_overrides({ });
         }
     }
     builder->finalize();
@@ -534,7 +538,7 @@ ElaborationResult elaborate(
     const semantic::CompiledDesign& compiled,
     const std::string_view top)
 {
-    const Root root { std::string { top }, simple_top_name(top) };
+    const Root root { std::string { top }, simple_top_name(top), { } };
     return elaborate(
         compiled,
         std::span<const Root> { &root, 1U },

@@ -13009,6 +13009,88 @@ bool HierarchyBuilder::append_compiled_systemverilog_parameter_metadata(
     return true;
 }
 
+std::vector<semantic::SpecializedHirActualIdentity>
+HierarchyBuilder::compiled_vhdl_root_generic_actuals(
+    const semantic::vhdl::Unit& root)
+{
+    std::vector<semantic::SpecializedHirActualIdentity> actuals;
+    if (root_generic_overrides_.empty() || compiled_ == nullptr) {
+        return actuals;
+    }
+    // The generics belong to the root's entity.
+    const auto* entity = &root;
+    if (root.kind == semantic::vhdl::UnitKind::architecture) {
+        const auto found = std::ranges::find_if(
+            compiled_->vhdl_units(),
+            [&](const semantic::vhdl::Unit& candidate) {
+                return candidate.kind == semantic::vhdl::UnitKind::entity
+                    && compiled_vhdl_library_equal(
+                        candidate.library, compiled_vhdl_library(root))
+                    && compiled_vhdl_name_equal(
+                        candidate.name, root.primary_name);
+            });
+        entity = found != compiled_->vhdl_units().end() ? &*found : nullptr;
+    }
+    if (entity == nullptr) {
+        return actuals;
+    }
+    for (const auto declaration_id : entity->declarations) {
+        const auto declaration = compiled_->find_declaration(declaration_id);
+        if (!declaration || declaration->vhdl == nullptr
+            || declaration->vhdl->form
+                != semantic::vhdl::DeclarationForm::generic_constant) {
+            continue;
+        }
+        const auto override_value = std::ranges::find_if(
+            root_generic_overrides_, [&](const auto& candidate) {
+                return compiled_vhdl_name_equal(
+                    candidate.first, declaration->vhdl->name);
+            });
+        if (override_value == root_generic_overrides_.end()) {
+            continue;
+        }
+        const auto& value = override_value->second;
+        const auto& subtype = declaration->vhdl->subtype;
+        std::optional<std::string> identity;
+        if (subtype
+            && subtype->domain == semantic::vhdl::ValueDomain::string) {
+            identity = semantic::systemverilog_string_identity(value);
+        } else {
+            std::string lowered;
+            for (const auto character : value) {
+                lowered.push_back(static_cast<char>(
+                    std::tolower(static_cast<unsigned char>(character))));
+            }
+            if (lowered == "true" || lowered == "false") {
+                identity = lowered == "true" ? "1" : "0";
+            } else {
+                try {
+                    std::size_t consumed { };
+                    const auto number = std::stoll(value, &consumed, 0);
+                    if (consumed == value.size()) {
+                        identity = std::to_string(number);
+                    }
+                } catch (const std::exception&) {
+                }
+            }
+        }
+        if (!identity) {
+            report(
+                "FSIM-ELAB-GENERIC-009",
+                "top-level generic override '" + declaration->vhdl->name
+                    + "=" + value
+                    + "' is not a STRING, integer or BOOLEAN value",
+                compiled_source_span(*compiled_, declaration->vhdl->source));
+            continue;
+        }
+        semantic::SpecializedHirActualIdentity actual;
+        actual.declaration = declaration_id;
+        actual.identity = std::move(*identity);
+        actuals.push_back(std::move(actual));
+    }
+    return actuals;
+}
+
 void HierarchyBuilder::add_compiled_vhdl_root(
     const semantic::CompiledUnitView root,
     std::string path)
@@ -13107,7 +13189,9 @@ void HierarchyBuilder::add_compiled_vhdl_root(
         CompiledVhdlInstantiationContext {
             .unit = root,
             .path = active_root_,
-            .actuals = { },
+            .actuals = root.vhdl != nullptr
+                ? compiled_vhdl_root_generic_actuals(*root.vhdl)
+                : std::vector<semantic::SpecializedHirActualIdentity> { },
             .port_aliases = { },
             .source_instance = std::nullopt,
             .prepared_specialization = std::nullopt,
@@ -14026,18 +14110,15 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                 = object_type->vhdl->protected_members;
             const auto& body_members
                 = protected_body->protected_members;
+            // Every public method needs a conforming body. A protected body
+            // may also declare private subprograms that the protected
+            // declaration does not list (IEEE 1076-2008 5.6.3).
             validate_profiles(public_members, body_members,
                 Form::function, "FSIM-ELAB-VHPROTECTED-002",
                 "protected function");
-            validate_profiles(body_members, public_members,
-                Form::function, "FSIM-ELAB-VHPROTECTED-003",
-                "protected function body");
             validate_profiles(public_members, body_members,
                 Form::procedure, "FSIM-ELAB-VHPROTECTED-004",
                 "protected procedure");
-            validate_profiles(body_members, public_members,
-                Form::procedure, "FSIM-ELAB-VHPROTECTED-005",
-                "protected procedure body");
             if (!profiles_valid) {
                 return false;
             }
