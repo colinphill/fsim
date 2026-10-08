@@ -12,6 +12,8 @@
 #include <cstring>
 #include <optional>
 #include <string>
+#include <string_view>
+#include <type_traits>
 #include <vector>
 
 namespace fsim::runtime::simir::static_kernel_compiled_detail {
@@ -362,5 +364,260 @@ inline void kinst_flow(const KInst& inst, const std::uint32_t at,
         break;
     }
 }
+
+/// Compiled member bodies as bytes: every integer as a LEB128 varint, field
+/// by field (most are small or zero). They are read back only by the same
+/// build (the cache key includes static_kernel_compiler_identity).
+class BodyWriter {
+public:
+    explicit BodyWriter(std::string& out) : out_ { out } { }
+
+    void put(std::uint64_t value)
+    {
+        while (value >= 0x80U) {
+            out_.push_back(static_cast<char>((value & 0x7fU) | 0x80U));
+            value >>= 7U;
+        }
+        out_.push_back(static_cast<char>(value));
+    }
+    void put_signed(const std::int64_t value)
+    {
+        // Zigzag: small negative values stay short.
+        put((static_cast<std::uint64_t>(value) << 1U)
+            ^ static_cast<std::uint64_t>(value >> 63));
+    }
+    template <typename T, typename F>
+    void list(const std::vector<T>& values, F&& each)
+    {
+        put(values.size());
+        for (const auto& value : values) {
+            each(value);
+        }
+    }
+    template <typename T>
+    void integers(const std::vector<T>& values)
+    {
+        list(values, [&](const T value) { put(static_cast<std::uint64_t>(value)); });
+    }
+    void body(const static_kernel_detail::CompiledBody& body)
+    {
+        list(body.code, [&](const KInst& inst) {
+            put(static_cast<std::uint64_t>(inst.op));
+            put(inst.sub);
+            put(inst.flags);
+            put(inst.width);
+            put(inst.d);
+            put(inst.x);
+            put(inst.y);
+            put(inst.z);
+            put(inst.offset);
+            put(inst.aux);
+            put(inst.imm_a);
+            put(inst.imm_b);
+        });
+        const bool zero = std::ranges::all_of(body.registers,
+            [](const kernel_word::Word& word) { return word.a == 0U && word.b == 0U; });
+        put(body.registers.size());
+        put(zero ? 1U : 0U);
+        if (!zero) {
+            for (const auto& word : body.registers) {
+                put(word.a);
+                put(word.b);
+            }
+        }
+        integers(body.register_widths);
+        list(body.indices, [&](const DynamicIndex& index) {
+            put(index.index);
+            put_signed(index.left);
+            put_signed(index.right);
+            put(index.base_offset);
+            put(index.strict ? 1U : 0U);
+        });
+        list(body.parts, [&](const DynamicPartIndex& part) {
+            put_signed(part.left);
+            put_signed(part.right);
+            put(part.base);
+            put(part.base_offset);
+            put(part.width);
+            put(part.increasing ? 1U : 0U);
+            put(part.source_descending ? 1U : 0U);
+        });
+        list(body.concat, [&](const ConcatOperand& operand) {
+            put(operand.reg);
+            put(operand.width);
+        });
+        integers(body.containers);
+        put(body.entry);
+        list(body.wide_registers, [&](const PackedLogic4& value) {
+            put(value.is_logic9() ? 1U : 0U);
+            const auto spelling = value.to_msb_string();
+            put(spelling.size());
+            out_.append(spelling);
+        });
+        integers(body.return_targets);
+        integers(body.live_at_entry);
+        put(body.shadow_base);
+        integers(body.tracked);
+        integers(body.u_mode);
+        integers(body.u_operand_begin);
+        integers(body.u_operands);
+        put(body.call_stack_base);
+        integers(body.resume_entries);
+    }
+
+private:
+    std::string& out_;
+};
+
+class BodyReader {
+public:
+    explicit BodyReader(std::string_view bytes) : bytes_ { bytes } { }
+
+    bool get(std::uint64_t& value)
+    {
+        const auto* data = reinterpret_cast<const unsigned char*>(bytes_.data());
+        // Most values are one byte.
+        if (at_ < bytes_.size() && data[at_] < 0x80U) {
+            value = data[at_++];
+            return true;
+        }
+        value = 0U;
+        // A varint takes at most ten bytes; with that many left, no bounds
+        // check per byte.
+        const bool room = bytes_.size() - at_ >= 10U;
+        for (unsigned shift = 0U; shift < 64U; shift += 7U) {
+            if (!room && at_ == bytes_.size()) {
+                return false;
+            }
+            const auto byte = data[at_++];
+            value |= static_cast<std::uint64_t>(byte & 0x7fU) << shift;
+            if ((byte & 0x80U) == 0U) {
+                return true;
+            }
+        }
+        return false;
+    }
+    template <typename T>
+        requires std::is_integral_v<T> || std::is_enum_v<T>
+    bool get(T& value)
+    {
+        std::uint64_t raw { };
+        if (!get(raw)) {
+            return false;
+        }
+        if constexpr (std::is_same_v<T, bool>) {
+            if (raw > 1U) {
+                return false;
+            }
+            value = raw != 0U;
+        } else if constexpr (std::is_enum_v<T>) {
+            using U = std::underlying_type_t<T>;
+            if (raw > std::numeric_limits<U>::max()) {
+                return false;
+            }
+            value = static_cast<T>(static_cast<U>(raw));
+        } else {
+            if (raw > static_cast<std::uint64_t>(std::numeric_limits<T>::max())) {
+                return false;
+            }
+            value = static_cast<T>(raw);
+        }
+        return true;
+    }
+    bool get_signed(std::int64_t& value)
+    {
+        std::uint64_t raw { };
+        if (!get(raw)) {
+            return false;
+        }
+        value = static_cast<std::int64_t>(raw >> 1U) ^ -static_cast<std::int64_t>(raw & 1U);
+        return true;
+    }
+    /// A count beyond the remaining bytes is corrupt (each item takes one).
+    template <typename T, typename F>
+    bool list(std::vector<T>& values, F&& each)
+    {
+        std::uint64_t count { };
+        if (!get(count) || count > bytes_.size() - at_) {
+            return false;
+        }
+        values.resize(static_cast<std::size_t>(count));
+        for (auto& value : values) {
+            if (!each(value)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    template <typename T>
+    bool integers(std::vector<T>& values)
+    {
+        return list(values, [&](T& value) { return get(value); });
+    }
+    bool body(static_kernel_detail::CompiledBody& body)
+    {
+        std::uint64_t registers { };
+        bool zero { };
+        if (!list(body.code, [&](KInst& inst) {
+                return get(inst.op) && get(inst.sub) && get(inst.flags)
+                    && get(inst.width) && get(inst.d) && get(inst.x) && get(inst.y)
+                    && get(inst.z) && get(inst.offset) && get(inst.aux)
+                    && get(inst.imm_a) && get(inst.imm_b);
+            })
+            || !get(registers) || !get(zero)
+            || registers > (std::uint64_t { 1 } << 32U)) {
+            return false;
+        }
+        body.registers.assign(static_cast<std::size_t>(registers), { });
+        if (!zero) {
+            for (auto& word : body.registers) {
+                if (!get(word.a) || !get(word.b)) {
+                    return false;
+                }
+            }
+        }
+        return integers(body.register_widths)
+            && list(body.indices, [&](DynamicIndex& index) {
+                   return get(index.index) && get_signed(index.left)
+                       && get_signed(index.right) && get(index.base_offset)
+                       && get(index.strict);
+               })
+            && list(body.parts, [&](DynamicPartIndex& part) {
+                   return get_signed(part.left) && get_signed(part.right)
+                       && get(part.base) && get(part.base_offset) && get(part.width)
+                       && get(part.increasing) && get(part.source_descending);
+               })
+            && list(body.concat, [&](ConcatOperand& operand) {
+                   return get(operand.reg) && get(operand.width);
+               })
+            && integers(body.containers) && get(body.entry)
+            && list(body.wide_registers, [&](PackedLogic4& value) {
+                   bool logic9 { };
+                   std::uint64_t size { };
+                   if (!get(logic9) || !get(size) || size > bytes_.size() - at_) {
+                       return false;
+                   }
+                   const auto spelling = bytes_.substr(at_, static_cast<std::size_t>(size));
+                   at_ += static_cast<std::size_t>(size);
+                   try {
+                       value = logic9 ? PackedLogic4::from_logic9_msb_string(spelling)
+                                      : PackedLogic4::from_msb_string(spelling);
+                   } catch (const std::exception&) {
+                       return false;
+                   }
+                   return true;
+               })
+            && integers(body.return_targets) && integers(body.live_at_entry)
+            && get(body.shadow_base) && integers(body.tracked)
+            && integers(body.u_mode) && integers(body.u_operand_begin)
+            && integers(body.u_operands) && get(body.call_stack_base)
+            && integers(body.resume_entries);
+    }
+    [[nodiscard]] bool done() const noexcept { return at_ == bytes_.size(); }
+
+private:
+    std::string_view bytes_;
+    std::size_t at_ { };
+};
 
 } // namespace fsim::runtime::simir::static_kernel_compiled_detail

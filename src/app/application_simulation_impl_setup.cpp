@@ -44,6 +44,8 @@ PersistedPlanSlot persisted_plan_slot(const BuiltProject& built,
         key.add("specializer", runtime::simir::static_kernel_specializer_identity());
     } else if (kind == "bodies") {
         key.add("compiler", runtime::simir::static_kernel_compiler_identity());
+    } else if (kind == "native") {
+        key.add("canonical", runtime::simir::static_kernel_canonical_identity());
     }
     key.add("kind", kind);
     key.add("design", built.artifact_identity);
@@ -70,7 +72,7 @@ PersistedPlanSlot persisted_plan_slot(const BuiltProject& built,
     return std::move(writer).finish();
 }
 
-[[nodiscard]] std::shared_ptr<const runtime::simir::StaticKernelSpecializations>
+[[nodiscard]] std::shared_ptr<runtime::simir::StaticKernelSpecializations>
 restore_specializations(const std::string_view bytes)
 {
     codec_detail::Reader reader { bytes };
@@ -218,8 +220,31 @@ std::unique_ptr<runtime::simir::Interpreter> create_simulation_interpreter(
                     }
                 }
             }
+            // Canonical templates and bindings, likewise.
+            const auto native_image = persisted_plan_slot(built, "native");
+            std::shared_ptr<std::string> recorded_native;
+            if (native_image.cache) {
+                if (compiler::StaticKernelAheadOfTimeScope::active()) {
+                    recorded_native = std::make_shared<std::string>();
+                    plan.spec->record_native_image = recorded_native;
+                } else {
+                    std::error_code error;
+                    if (const auto bytes = native_image.cache->load(
+                            native_image.key, error)) {
+                        plan.spec->native_image = std::make_shared<const std::string>(
+                            reinterpret_cast<const char*>(bytes->data()), bytes->size());
+                    }
+                }
+            }
             auto interpreter = std::move(built.design).create_interpreter(
                 options, built.seed, plan);
+            if (recorded_native && !recorded_native->empty()) {
+                std::error_code error;
+                static_cast<void>(native_image.cache->store(native_image.key,
+                    std::as_bytes(std::span { recorded_native->data(),
+                        recorded_native->size() }),
+                    error));
+            }
             if (recorded_bodies && !recorded_bodies->empty()) {
                 std::error_code error;
                 static_cast<void>(bodies.cache->store(bodies.key,

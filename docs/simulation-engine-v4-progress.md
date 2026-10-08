@@ -131,6 +131,48 @@ per completed phase).
 
 ## 4. Log
 
+### 2026-10-08 (later): persisted canonical templates; partition store forwarding
+
+- **Canonical templates and per-unit bindings are persisted** (kind `native`, keyed
+  by the canonicalization build).
+  - `build_native` skips canonicalization and grouping when a recorded image fits: the
+    unit count, the template indices and each template's code length must match.
+  - Native stage: original_codec 70 → 26 ms.
+  - Interleaved A/B against the campaign binary: original_codec 2.61 → 2.55 s,
+    mixed_codec 2.19 → 2.10 s.
+- **Partition store-to-load forwarding.** A load of a whole narrow slot that a
+  branch-free member of the same partition stored earlier in the pass becomes a register
+  copy; the store stays. 15,000 loads in original_codec, about −0.03 s.
+- **Smaller changes:**
+  - The VHDL commit's per-slot record is 16 bytes. Prior values always go to
+    `round_before_`.
+  - Restored specializations are moved, not copied.
+  - The body-image varint decoder skips per-byte bounds checks when it can.
+  - `from_aval_bval` masks inline words directly.
+
+Parity is identical on all ten cases, and ctest matches the baseline.
+
+### 2026-10-08 (later): confirming AOT campaign `v4-corpus-1008b`
+
+- Candidate a37af095, frozen as `v4cand-corpus-1008b`.
+- Configuration `llvm_o2_aot`: elaborate `--aot --aot-scope all`, simulate
+  `--compiled-processes all`.
+- 3 samples, CPU 9, xsim measured in the same session.
+- All runs pass their correctness patterns.
+
+| Case | xsim total | xsim simulate | fsim total | fsim simulate | e2e | simulate |
+|---|---:|---:|---:|---:|---:|---:|
+| original_codec | 28.04 | 7.34 | 12.50 | 2.53 | 2.24× | **2.90×** |
+| original_throughput | 15.70 | 7.44 | 4.98 | 1.78 | 3.16× | 4.19× |
+| mixed_codec | 24.19 | 6.38 | 10.46 | 2.18 | 2.31× | **2.93×** |
+| mixed_throughput | 13.53 | 6.24 | 4.45 | 1.53 | 3.04× | 4.09× |
+| codex (six cases) | 8.95–10.25 | 3.88–3.98 | 2.48–2.83 | 0.12–0.27 | 3.56–3.81× | 15–34× |
+
+- **Geometric mean e2e: 3.23×** (criterion met).
+- **Simulate ≥3×:** eight of ten cases.
+  - mixed_codec needs ≤2.13 s.
+  - original_codec needs ≤2.45 s.
+
 ### 2026-10-08 (later): more codegen effort ahead of time
 
 Code built by `elaborate --aot` puts its compile time in elaborate, where the e2e

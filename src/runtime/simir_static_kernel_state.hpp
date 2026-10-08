@@ -491,6 +491,11 @@ private:
     void run_compiled(std::uint32_t member);
     void execute(CompiledBody& body, std::uint32_t member);
     void execute_body(CompiledBody& body, std::uint32_t member);
+    /// build_partitions: forwards slot stores to later loads in a partition
+    /// pass.
+    void forward_partition_stores(CompiledBody& program,
+        const std::unordered_map<std::uint32_t, std::uint32_t>& slot_of_offset);
+    std::size_t forwarded_loads_ { };
     /// Returns whether a two-state caller got a result with X or U bits.
     /// execute_generic's in-place path for a narrow field written into a
     /// wide register; false when the reference path must run instead.
@@ -821,18 +826,18 @@ private:
     bool check_inputs_ { };
     std::uint64_t verify_mismatches_ { };
     std::vector<Slot> slots_;
-    /// What a VHDL round's commit needs of each slot, one cache line apiece
-    /// (commit_round touches nothing else for a slot that does not change).
-    struct alignas(64) CommitSlot {
+    /// What a VHDL round's commit needs of each slot, 16 bytes apiece so
+    /// four share a cache line (commit_round touches nothing else for a
+    /// slot that does not change).
+    struct CommitSlot {
         std::uint32_t offset { };
+        /// Where the round saved the slot's prior value (round_before_), once
+        /// `touched`.
+        std::uint32_t before { };
         std::uint32_t words { };
-        std::uint32_t planes { };
-        /// Written in the current round; `before` indexes the round's saved
-        /// prior value when it does not fit `small_before`.
+        std::uint8_t planes { };
         bool touched { };
         bool single_writer { };
-        std::uint32_t before { };
-        std::array<std::uint64_t, 4> small_before { };
     };
     std::vector<CommitSlot> commit_slots_;
     std::vector<std::uint32_t> slot_of_signal_;
@@ -894,10 +899,12 @@ private:
     /// Specializations from an earlier run, applied instead of specializing
     /// (StaticKernelRuntimeSpec::specializations), and where this run
     /// records its own (record_specializations).
-    std::shared_ptr<const StaticKernelSpecializations> restored_specializations_;
+    std::shared_ptr<StaticKernelSpecializations> restored_specializations_;
     std::shared_ptr<StaticKernelSpecializations> recorded_specializations_;
     std::shared_ptr<const std::string> restored_bodies_;
     std::shared_ptr<std::string> recorded_bodies_;
+    std::shared_ptr<const std::string> restored_native_;
+    std::shared_ptr<std::string> recorded_native_;
     std::size_t specialize_cache_hits_ { };
     std::string compile_failure_detail_;
     std::size_t wide_members_ { };

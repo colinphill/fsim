@@ -729,6 +729,8 @@ Interpreter::Impl::StaticKernel::StaticKernel(
         recorded_specializations_ = std::move(spec.record_specializations);
         restored_bodies_ = std::move(spec.compiled_bodies);
         recorded_bodies_ = std::move(spec.record_compiled_bodies);
+        restored_native_ = std::move(spec.native_image);
+        recorded_native_ = std::move(spec.record_native_image);
         compile_members();
         stage("compile");
         // VHDL members defer their writes and are not partitioned.
@@ -1316,7 +1318,7 @@ void Interpreter::Impl::StaticKernel::commit_round()
             auto& commit = commit_slots_[index];
             commit.offset = slots_[index].offset;
             commit.words = slots_[index].words;
-            commit.planes = slots_[index].planes;
+            commit.planes = static_cast<std::uint8_t>(slots_[index].planes);
             commit.single_writer = slots_[index].single_writer;
         }
     }
@@ -1325,18 +1327,12 @@ void Interpreter::Impl::StaticKernel::commit_round()
         if (!slot.touched) {
             slot.touched = true;
             const auto words = static_cast<std::size_t>(slot.planes) * slot.words;
-            if (words <= slot.small_before.size()) {
-                // A few words: a loop, not a library call.
-                const auto* current = arena_.data() + slot.offset;
-                for (std::size_t word = 0U; word < words; ++word) {
-                    slot.small_before[word] = current[word];
-                }
-            } else {
-                const auto at = round_before_.size();
-                slot.before = static_cast<std::uint32_t>(at);
-                round_before_.resize(at + words);
-                std::memcpy(round_before_.data() + at, arena_.data() + slot.offset,
-                    words * sizeof(std::uint64_t));
+            const auto at = round_before_.size();
+            slot.before = static_cast<std::uint32_t>(at);
+            const auto* current = arena_.data() + slot.offset;
+            // A few words: a loop, not a library call.
+            for (std::size_t word = 0U; word < words; ++word) {
+                round_before_.push_back(current[word]);
             }
             touched_.push_back(slot_index);
         }
@@ -1409,16 +1405,11 @@ void Interpreter::Impl::StaticKernel::commit_round()
         auto& slot = commit_slots_[slot_index];
         slot.touched = false;
         const auto words = static_cast<std::size_t>(slot.planes) * slot.words;
-        const auto* before = words <= slot.small_before.size()
-            ? slot.small_before.data() : round_before_.data() + slot.before;
+        const auto* before = round_before_.data() + slot.before;
         const auto* current = arena_.data() + slot.offset;
         bool same = true;
-        if (words <= slot.small_before.size()) {
-            for (std::size_t word = 0U; word < words; ++word) {
-                same = same && before[word] == current[word];
-            }
-        } else {
-            same = std::equal(before, before + words, current);
+        for (std::size_t word = 0U; word < words && same; ++word) {
+            same = before[word] == current[word];
         }
         if (!same) {
             if (trace_) {

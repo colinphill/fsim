@@ -1223,9 +1223,12 @@ PackedLogic4 PackedLogic4::from_aval_bval(
             "four-state word width must be between 1 and 64");
     }
     PackedLogic4 result(width, Logic4::zero);
-    result.inline_aval() = aval;
-    result.inline_bval() = bval;
-    result.mask_unused_bits();
+    // One inline word per plane: mask it here rather than through the
+    // general plane accessors.
+    const auto mask = width == bits_per_word
+        ? ~std::uint64_t { 0 } : (std::uint64_t { 1 } << width) - 1U;
+    result.inline_aval() = aval & mask;
+    result.inline_bval() = bval & mask;
     return result;
 }
 

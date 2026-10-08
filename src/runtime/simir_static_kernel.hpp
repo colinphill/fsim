@@ -150,7 +150,7 @@ struct StaticKernelRuntimeSpec {
     std::vector<SignalId> unwritten_inputs;
     /// Specializations restored from an earlier run (members not listed are
     /// specialized as usual).
-    std::shared_ptr<const StaticKernelSpecializations> specializations;
+    std::shared_ptr<StaticKernelSpecializations> specializations;
     /// When set, the kernel records every VHDL member's specialization here.
     std::shared_ptr<StaticKernelSpecializations> record_specializations;
     /// Compiled member bodies from an earlier run of the same build
@@ -158,7 +158,14 @@ struct StaticKernelRuntimeSpec {
     /// where this run records its own; the bytes are the kernel's own.
     std::shared_ptr<const std::string> compiled_bodies;
     std::shared_ptr<std::string> record_compiled_bodies;
+    /// Canonical templates and their units' bindings, likewise
+    /// (static_kernel_canonical_identity).
+    std::shared_ptr<const std::string> native_image;
+    std::shared_ptr<std::string> record_native_image;
 };
+
+/// Identifies the template canonicalization, for persisted native images.
+[[nodiscard]] std::string static_kernel_canonical_identity();
 
 /// Identifies the member compiler, for persisted compiled bodies.
 [[nodiscard]] std::string static_kernel_compiler_identity();
