@@ -542,76 +542,113 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
             }
         }
     }
-    const auto make_key = [&](const CompiledBody& body, const bool shape) {
-        const auto* canonical = &body;
-        std::string key;
-        const auto append = [&](const auto& value) {
-            key.append(reinterpret_cast<const char*>(&value), sizeof(value));
+    // Units are grouped by shape (constants and field offsets may differ)
+    // and then by their exact canonical body: a 64-bit hash of the fields
+    // picks the bucket and an exact comparison of the same fields decides.
+    const auto same_inst = [](const KInst& left, const KInst& right,
+                               const bool shape) {
+        const bool field = shape && left.op == KOp::load_field;
+        const bool open = shape && left.op == KOp::constant;
+        return left.op == right.op && left.sub == right.sub
+            && left.flags == right.flags && left.width == right.width
+            && left.d == right.d && left.x == right.x && left.y == right.y
+            && left.z == right.z && (field || left.offset == right.offset)
+            && left.aux == right.aux
+            && (open || (left.imm_a == right.imm_a && left.imm_b == right.imm_b));
+    };
+    const auto same_body = [&](const CompiledBody& left, const CompiledBody& right,
+                               const bool shape) {
+        if (left.code.size() != right.code.size()
+            || left.registers.size() != right.registers.size()
+            || left.entry != right.entry || left.shadow_base != right.shadow_base
+            || left.tracked != right.tracked || left.u_mode != right.u_mode
+            || left.u_operands != right.u_operands
+            || left.return_targets != right.return_targets
+            || left.indices.size() != right.indices.size()
+            || left.parts.size() != right.parts.size()
+            || left.concat.size() != right.concat.size()) {
+            return false;
+        }
+        for (std::size_t at = 0U; at < left.code.size(); ++at) {
+            if (!same_inst(left.code[at], right.code[at], shape)) {
+                return false;
+            }
+        }
+        for (std::size_t at = 0U; at < left.indices.size(); ++at) {
+            const auto& a = left.indices[at];
+            const auto& b = right.indices[at];
+            if (a.index != b.index || a.left != b.left || a.right != b.right
+                || a.base_offset != b.base_offset || a.strict != b.strict) {
+                return false;
+            }
+        }
+        for (std::size_t at = 0U; at < left.parts.size(); ++at) {
+            const auto& a = left.parts[at];
+            const auto& b = right.parts[at];
+            if (a.left != b.left || a.right != b.right || a.base != b.base
+                || a.base_offset != b.base_offset || a.width != b.width
+                || a.increasing != b.increasing
+                || a.source_descending != b.source_descending) {
+                return false;
+            }
+        }
+        for (std::size_t at = 0U; at < left.concat.size(); ++at) {
+            if (left.concat[at].reg != right.concat[at].reg
+                || left.concat[at].width != right.concat[at].width) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const auto hash_body = [](const CompiledBody& body, const bool shape) {
+        std::uint64_t hash = 0xcbf29ce484222325ULL;
+        const auto mix = [&](const std::uint64_t value) {
+            hash = (hash ^ value) * 0x100000001b3ULL;
+            hash ^= hash >> 29U;
         };
-        for (const auto& inst : canonical->code) {
-            append(inst.op);
-            append(inst.sub);
-            append(inst.flags);
-            append(inst.width);
-            append(inst.d);
-            append(inst.x);
-            append(inst.y);
-            append(inst.z);
-            // The shape also ignores field offsets, which may become bindings.
-            append(shape && inst.op == KOp::load_field
-                    ? std::uint32_t { 0 } : inst.offset);
-            append(inst.aux);
-            // The shape ignores constant values, which may become bindings.
-            const bool open = shape && inst.op == KOp::constant;
-            append(open ? std::uint64_t { 0 } : inst.imm_a);
-            append(open ? std::uint64_t { 0 } : inst.imm_b);
+        for (const auto& inst : body.code) {
+            mix(static_cast<std::uint64_t>(inst.op)
+                | static_cast<std::uint64_t>(inst.sub) << 8U
+                | static_cast<std::uint64_t>(inst.flags) << 16U
+                | static_cast<std::uint64_t>(inst.width) << 32U);
+            mix(inst.d | static_cast<std::uint64_t>(inst.x) << 32U);
+            mix(inst.y | static_cast<std::uint64_t>(inst.z) << 32U);
+            mix((shape && inst.op == KOp::load_field ? 0U : inst.offset)
+                | static_cast<std::uint64_t>(inst.aux) << 32U);
+            if (!(shape && inst.op == KOp::constant)) {
+                mix(inst.imm_a);
+                mix(inst.imm_b);
+            }
         }
-        append(canonical->registers.size());
-        append(canonical->entry);
-        append(canonical->shadow_base);
-        key.append(canonical->tracked.begin(), canonical->tracked.end());
-        key.append(canonical->u_mode.begin(), canonical->u_mode.end());
-        for (const auto reg : canonical->u_operands) {
-            append(reg);
-        }
-        for (const auto target : canonical->return_targets) {
-            append(target);
-        }
-        for (const auto& index : canonical->indices) {
-            append(index.index);
-            append(index.left);
-            append(index.right);
-            append(index.base_offset);
-            append(index.strict);
-        }
-        for (const auto& part : canonical->parts) {
-            append(part.left);
-            append(part.right);
-            append(part.base);
-            append(part.base_offset);
-            append(part.width);
-            append(part.increasing);
-            append(part.source_descending);
-        }
-        for (const auto& operand : canonical->concat) {
-            append(operand.reg);
-            append(operand.width);
-        }
-        return key;
+        mix(body.registers.size());
+        mix(body.entry | static_cast<std::uint64_t>(body.shadow_base) << 32U);
+        mix(body.u_operands.size() | body.indices.size() << 20U
+            | body.parts.size() << 40U);
+        return hash;
     };
     // 2. Units with the same shape share one template: the constants that
     // differ between them are loaded from their bindings (sub 1, x and y the
     // bindings of the aval and bval words as two 32-bit halves).
     {
-        std::unordered_map<std::string, std::vector<std::uint32_t>> by_shape;
+        std::vector<std::vector<std::uint32_t>> shapes;
+        std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> shapes_by_hash;
         for (std::size_t unit = 0U; unit < units.size(); ++unit) {
             if (units[unit].vhdl) {
                 continue;
             }
-            by_shape[make_key(*canonicals[unit].body, true)].push_back(
-                static_cast<std::uint32_t>(unit));
+            const auto& body = *canonicals[unit].body;
+            auto& bucket = shapes_by_hash[hash_body(body, true)];
+            const auto found = std::ranges::find_if(bucket, [&](const std::uint32_t shape) {
+                return same_body(*canonicals[shapes[shape].front()].body, body, true);
+            });
+            if (found != bucket.end()) {
+                shapes[*found].push_back(static_cast<std::uint32_t>(unit));
+            } else {
+                bucket.push_back(static_cast<std::uint32_t>(shapes.size()));
+                shapes.push_back({ static_cast<std::uint32_t>(unit) });
+            }
         }
-        for (const auto& [shape, group] : by_shape) {
+        for (const auto& group : shapes) {
             if (group.size() < 2U) {
                 continue;
             }
@@ -665,19 +702,25 @@ void Interpreter::Impl::StaticKernel::build_native(StaticKernelCodegen& codegen)
         }
     }
     // 3. Templates.
-    std::unordered_map<std::string, std::uint32_t> template_of_key;
+    std::unordered_map<std::uint64_t, std::vector<std::uint32_t>> templates_by_hash;
     std::vector<std::uint32_t> template_of_unit(units.size(), no_slot);
     for (std::size_t unit = 0U; unit < units.size(); ++unit) {
         auto& state = canonicals[unit];
-        auto key = make_key(*state.body, false);
-        const auto [found, inserted] = template_of_key.emplace(
-            std::move(key), static_cast<std::uint32_t>(templates_.size()));
-        if (inserted) {
+        auto& bucket = templates_by_hash[hash_body(*state.body, false)];
+        const auto found = std::ranges::find_if(bucket, [&](const std::uint32_t index) {
+            return same_body(*templates_[index], *state.body, false);
+        });
+        std::uint32_t index { };
+        if (found != bucket.end()) {
+            index = *found;
+        } else {
+            index = static_cast<std::uint32_t>(templates_.size());
+            bucket.push_back(index);
             templates_.push_back(std::move(state.body));
         }
-        template_of_unit[unit] = found->second;
+        template_of_unit[unit] = index;
         units[unit].native->bindings = std::move(state.bindings);
-        units[unit].native->program = templates_[found->second].get();
+        units[unit].native->program = templates_[index].get();
     }
     std::vector<std::size_t> template_units(templates_.size(), 0U);
     // Partitions rerun whole whenever any of their inputs changes, so their
