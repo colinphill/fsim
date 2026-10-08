@@ -171,6 +171,10 @@ mixed_codec, AOT (run = interpreter time; codegen = both AOT groups):
   untouched slot (two planes, one word): there is no prior-value copy and no change check.
   `commit_round`'s slot-touch time halved in the profile. The gain is within the noise on
   mixed_throughput.
+- **Wide part inserts no longer go through the reference path.** A narrow, known field
+  written into a wide Logic4 register at a dynamic index (`DynamicPartInsert`, 256- and
+  264-bit targets in mixed_codec, about 240k per run) is written in place. Before, the
+  reference path copied the whole value twice. mixed_codec simulate: 3.24 → 3.17 s.
 - `FSIM_STATIC_KERNEL_LLVM_ARGS` (diagnostic) passes LLVM options. `DUMP_IR` now names
   each function's template index. The perf map also covers code loaded from the AOT
   cache.

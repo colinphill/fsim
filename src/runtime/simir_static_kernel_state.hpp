@@ -492,6 +492,10 @@ private:
     void execute(CompiledBody& body, std::uint32_t member);
     void execute_body(CompiledBody& body, std::uint32_t member);
     /// Returns whether a two-state caller got a result with X or U bits.
+    /// execute_generic's in-place path for a narrow field written into a
+    /// wide register; false when the reference path must run instead.
+    bool wide_part_insert(CompiledBody& body, const Word* registers,
+        const DynamicPartInsert& insert, std::uint32_t base);
     bool execute_generic(CompiledBody& body, Word* registers,
         const static_kernel_detail::KInst& inst, std::uint32_t member,
         bool two_state_code = false);
