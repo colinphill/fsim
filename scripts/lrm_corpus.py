@@ -413,21 +413,26 @@ def verilator_cases(root: Path) -> list[Case]:
             tops = sv_root_modules([top_text])
         shell = verilator_shell(top_text) if use_shell else ""
         commands = [Command("compile", compile_args)]
+        # driver.py simulates only when the test calls test.execute(); a
+        # test that only compiles passes once the model builds.
+        executes = "test.execute(" in source
         if not compile_fails:
             elab = ["elaborate", "-q", "--no-aot"]
             for top in tops:
                 elab += ["--top", top]
             commands.append(Command("elaborate", elab))
-            commands.append(Command("simulate", ["simulate", "--engine", "{engine}"] + plusargs))
+            if executes:
+                commands.append(Command("simulate", ["simulate", "--engine", "{engine}"] + plusargs))
         cases.append(Case(
             suite="verilator",
             id=name,
             group=verilator_group(name),
             commands=commands,
             expect="fail" if (compile_fails or execute_fails) else "pass",
-            fail_by="compile" if compile_fails else "simulate",
+            fail_by="compile" if compile_fails else "simulate" if executes else "elaborate",
             checker="verilator",
-            checker_data={"check_finished": not (compile_fails or execute_fails)},
+            checker_data={"check_finished": executes
+                          and not (compile_fails or execute_fails)},
             writes=[("verilator_shell.sv", shell)] if shell else [],
             skip=skip,
         ))

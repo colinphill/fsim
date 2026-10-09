@@ -75,6 +75,10 @@ parse_output_format(const std::string_view text) {
         parsed.left_justify = left_justify;
         parsed.zero_pad = !left_justify && width_spelling.front() == '0';
       }
+    } else if (left_justify && conversion_start == width_start) {
+      // A left-justify flag without a field width prints the value in its
+      // minimal decimal width (no automatic padding), like other tools.
+      parsed.left_justify = true;
     } else if (left_justify || conversion_start != width_start) {
       result.valid = false;
       return result;

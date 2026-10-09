@@ -432,6 +432,25 @@ private:
         runtime::simir::OutputFormat format,
         bool suppress_leading_zero,
         std::uint32_t minimum_width) const;
+    // The declared type of a SystemVerilog parameter that has an explicit
+    // type or range, which its value converts to.
+    [[nodiscard]] std::optional<semantic::sv::TypeReference>
+    hir_systemverilog_parameter_type(semantic::ExpressionId expression) const;
+    // The packed dimensions of a SystemVerilog multidimensional packed array
+    // expression, outermost first: a name's declared dimensions, or those
+    // left after an element select. Empty for an ordinary vector.
+    [[nodiscard]] std::vector<HirPackedRange>
+    hir_systemverilog_packed_shape(semantic::ExpressionId expression) const;
+    // The width an index target writes: an element of a multidimensional
+    // packed array, otherwise one bit.
+    [[nodiscard]] std::optional<std::size_t> hir_index_target_width(
+        semantic::ExpressionId target) const;
+    // The bit offset, in a flattened multidimensional packed array, of the
+    // element an index selects in its outermost dimension: a signed 32-bit
+    // register that is X for an unknown index.
+    [[nodiscard]] std::optional<RegisterId>
+    lower_hir_systemverilog_element_offset(semantic::ExpressionId index,
+        const HirPackedRange& dimension, std::size_t element_width);
     // Whether a VHDL expression has the predefined CHARACTER type.
     [[nodiscard]] bool hir_vhdl_character_typed(
         semantic::ExpressionId expression) const;

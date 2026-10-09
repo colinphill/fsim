@@ -249,6 +249,49 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 14: multidimensional packed arrays, parameter typing, %-d
+
+- Selections of multidimensional packed arrays (`logic [3:0][7:0] w`) were
+  wrong. `w[2]`, `w[2:1]`, `w[3-:2]` and `w[i]` selected bits of the
+  flattened vector instead of whole elements, so reads returned wrong values
+  and dynamic writes failed to lower. The HIR now keeps every packed
+  dimension (`sv::TypeReference::packed_dimensions`). An element select has
+  the width of the remaining dimensions, and outer-dimension selects are
+  scaled by the element width (IEEE 1800-2017 7.4.5).
+  - Covered: constant and dynamic indices; nested selects (`w[1][3:0]`);
+    blocking, nonblocking and continuous writes.
+  - A dynamic element read with an unknown or out-of-range index yields X.
+  - Several Verilator CRC/checksum tests had stopped on mismatches caused by
+    this.
+- `%-d` (left-justify flag without a width) prints the minimal decimal, as
+  other simulators do. It had been rejected as an invalid format.
+- Runner: a Verilator test that never calls `test.execute()` is compiled
+  and elaborated but not simulated, as `driver.py` does. Requiring
+  `*-* All Finished *-*` from such tests was a runner artifact.
+
+- Parameter typing (IEEE 1800-2017 6.20.2):
+  - A value parameter without a type or range takes the width and
+    signedness of its value (`parameter Q = 3'd5` is 3-bit unsigned, not a
+    signed 32-bit integer). `$bits` agrees.
+  - A local parameter with a type or range keeps it. HIR normalization had
+    folded `localparam [7:0] L = 300` into the unsized literal 300. Such
+    references now stay names, and the lowerer converts the value (44).
+    `int` and `integer` local parameters whose value fits still fold.
+  - Dynamic element writes use the part-select write operations, which the
+    LLVM engine requires for writes wider than one bit.
+  - An unsized based literal (`'b1`) is 32 bits wide; an unbased unsized
+    literal (`'1`) is one bit when self-determined.
+- Assignment-pattern member values convert to the member width (10.9.2).
+- A packed structure or union may be compared for equality with an untyped
+  integral value (7.2.1). `FSIM-ELAB-SVTYPE-005` had rejected
+  `s != 6'b110011`.
+
+Corpus effect: Verilator 26.5% to 29.2% (58 newly pass, none newly fail);
+ivtest 13 newly pass; sv-tests unchanged.
+
+Fixtures: `sv_packed_multidim.sv` and `sv_parameter_types.sv`, both checked
+against xsim.
+
 ### Batch 13: formal subelements, aggregate slices, module items
 
 - Individual association of formal subelements in port maps (IEEE 1076-1993

@@ -193,6 +193,12 @@ namespace {
         output.packed_range = packed_range(
             *input.packed_range_expression, scope, parent);
     }
+    if (input.systemverilog_packed_dimensions.size() > 1U) {
+        for (const auto& dimension : input.systemverilog_packed_dimensions) {
+            output.packed_dimensions.push_back(
+                packed_range(dimension, scope, parent));
+        }
+    }
     if (input.systemverilog_container) {
         const auto& container = *input.systemverilog_container;
         output.container_form = type_form(input);

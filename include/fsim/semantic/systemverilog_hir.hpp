@@ -466,6 +466,9 @@ struct TypeReference {
     std::string systemverilog_net_type;
     std::string systemverilog_resolution_function;
     std::optional<PackedRange> packed_range;
+    // Every packed dimension, outermost first, when there is more than one
+    // (`logic [3:0][7:0]`); packed_range is then their flattened range.
+    std::vector<PackedRange> packed_dimensions;
     bool signed_value { };
     std::optional<TypeForm> container_form;
     std::optional<ExpressionId> queue_maximum;

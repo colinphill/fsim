@@ -1699,6 +1699,14 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_expression_range(
         member && member->range) {
         return member->range;
     }
+    if (expression->systemverilog != nullptr) {
+        // A multidimensional packed array is indexed by its outermost
+        // dimension.
+        const auto shape = hir_systemverilog_packed_shape(expression_id);
+        if (!shape.empty()) {
+            return shape.front();
+        }
+    }
     if (expression->vhdl != nullptr) {
         if (expression->vhdl->kind
             == semantic::vhdl::ExpressionKind::name) {
@@ -2122,15 +2130,27 @@ Lowerer::hir_constant_selection(
         return value >= std::min(range->left, range->right)
             && value <= std::max(range->left, range->right);
     };
+    // The selected dimension's element width: one bit for a vector, the
+    // width of an element for the outer dimension of a multidimensional
+    // packed array (IEEE 1800-2017 7.4.5).
+    std::size_t element_width { 1U };
+    if (expression->systemverilog != nullptr) {
+        const auto count = index_distance(range->left, range->right) + 1U;
+        if (count != 0U && count < *source_width
+            && *source_width % count == 0U) {
+            element_width = static_cast<std::size_t>(*source_width / count);
+        }
+    }
     if (index) {
         const auto selected = hir_constant_integer(operands[1]);
         if (!selected || !in_range(*selected)) {
             return std::nullopt;
         }
-        const auto offset = index_distance(*selected, range->right);
+        const auto offset = index_distance(*selected, range->right)
+            * element_width;
         return offset < *source_width
             ? std::optional { HirConstantSelection {
-                  static_cast<std::size_t>(offset), 1U } }
+                  static_cast<std::size_t>(offset), element_width } }
             : std::nullopt;
     }
 
@@ -2181,10 +2201,11 @@ Lowerer::hir_constant_selection(
         width = null ? 0U : index_distance(left, right) + 1U;
     }
     if (!in_range(left) || !in_range(right)
-        || width > std::numeric_limits<std::size_t>::max()) {
+        || width > std::numeric_limits<std::size_t>::max() / element_width) {
         return std::nullopt;
     }
-    const auto offset = index_distance(right, range->right);
+    width *= element_width;
+    const auto offset = index_distance(right, range->right) * element_width;
     if (offset > *source_width
         || (width != 0U && offset >= *source_width)
         || width > *source_width - offset) {
@@ -2280,6 +2301,10 @@ bool Lowerer::hir_expression_signed(
         return selection->signed_value;
     }
     if (const auto actual = hir_generic_actual(expression_id)) {
+        if (const auto declared = hir_systemverilog_parameter_type(
+                expression_id)) {
+            return declared->signed_value;
+        }
         return hir_expression_signed(*actual);
     }
     if (const auto actual = hir_let_actual(expression_id)) {
@@ -2403,8 +2428,18 @@ bool Lowerer::hir_expression_signed(
                 return true;
             }
             if (declaration->systemverilog != nullptr) {
-                return declaration->systemverilog->type
-                    && declaration->systemverilog->type->signed_value;
+                const auto& source = *declaration->systemverilog;
+                // A parameter without a type or a range takes the
+                // signedness of its value (IEEE 1800-2017 6.20.2).
+                if ((source.form == semantic::sv::DeclarationForm::parameter
+                        || source.form
+                            == semantic::sv::DeclarationForm::local_parameter)
+                    && source.initializer && source.type
+                    && source.type->target.spelling == "implicit"
+                    && !source.type->packed_range) {
+                    return self(self, *source.initializer);
+                }
+                return source.type && source.type->signed_value;
             }
             const auto subtype = declaration->vhdl->subtype
                 ? hir_effective_vhdl_subtype(
@@ -8005,6 +8040,114 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
     return contextual_kind;
 }
 
+std::optional<semantic::sv::TypeReference>
+Lowerer::hir_systemverilog_parameter_type(
+    const semantic::ExpressionId expression_id) const
+{
+    const auto declaration_id = hir_referenced_declaration(expression_id);
+    const auto declaration = declaration_id && specialized_hir_unit_
+        ? specialized_hir_unit_->find_declaration(*declaration_id)
+        : std::nullopt;
+    if (!declaration || declaration->systemverilog == nullptr) {
+        return std::nullopt;
+    }
+    const auto& source = *declaration->systemverilog;
+    if ((source.form != semantic::sv::DeclarationForm::parameter
+            && source.form != semantic::sv::DeclarationForm::local_parameter)
+        || !source.type
+        || (source.type->target.spelling == "implicit"
+            && !source.type->packed_range)
+        || source.type->container_form
+        || source.type->target.spelling == "string") {
+        return std::nullopt;
+    }
+    return *source.type;
+}
+
+std::vector<Lowerer::HirPackedRange>
+Lowerer::hir_systemverilog_packed_shape(
+    const semantic::ExpressionId expression_id) const
+{
+    const auto expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (!expression || expression->systemverilog == nullptr) {
+        return { };
+    }
+    const auto& source = *expression->systemverilog;
+    if (source.kind == semantic::sv::ExpressionKind::index
+        && source.operands.size() == 2U) {
+        auto outer = hir_systemverilog_packed_shape(source.operands.front());
+        if (outer.size() < 2U) {
+            return { };
+        }
+        outer.erase(outer.begin());
+        return outer;
+    }
+    if (source.kind != semantic::sv::ExpressionKind::name) {
+        return { };
+    }
+    const auto declaration_id = hir_referenced_declaration(expression_id);
+    const auto declaration = declaration_id
+        ? specialized_hir_unit_->find_declaration(*declaration_id)
+        : std::nullopt;
+    if (!declaration || declaration->systemverilog == nullptr
+        || !declaration->systemverilog->type
+        || declaration->systemverilog->type->container_form) {
+        return { };
+    }
+    // Follow typedef aliases to the declared packed dimensions.
+    const auto* type = &*declaration->systemverilog->type;
+    for (std::size_t depth { };
+        type->packed_dimensions.empty() && type->target.target.valid()
+        && depth < 16U;
+        ++depth) {
+        const auto definition
+            = specialized_hir_unit_->find_type(type->target.target);
+        if (!definition || definition->systemverilog == nullptr
+            || definition->systemverilog->form
+                != semantic::sv::TypeForm::alias) {
+            break;
+        }
+        type = &definition->systemverilog->base;
+    }
+    std::vector<HirPackedRange> shape;
+    for (const auto& dimension : type->packed_dimensions) {
+        const auto left = dimension.left ? dimension.left
+            : dimension.left_expression
+            ? hir_constant_integer(*dimension.left_expression)
+            : std::nullopt;
+        const auto right = dimension.right ? dimension.right
+            : dimension.right_expression
+            ? hir_constant_integer(*dimension.right_expression)
+            : std::nullopt;
+        if (!left || !right) {
+            return { };
+        }
+        shape.push_back(HirPackedRange { *left, *right, *left >= *right });
+    }
+    return shape;
+}
+
+std::optional<std::size_t> Lowerer::hir_index_target_width(
+    const semantic::ExpressionId target) const
+{
+    const auto expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(target)
+        : std::nullopt;
+    if (expression && expression->systemverilog != nullptr
+        && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::index
+        && expression->systemverilog->operands.size() == 2U
+        && hir_systemverilog_packed_shape(
+               expression->systemverilog->operands.front())
+                .size()
+            > 1U) {
+        return hir_expression_width(target, hir_process_scope_);
+    }
+    return std::size_t { 1U };
+}
+
 std::uint32_t Lowerer::hir_systemverilog_decimal_width(
     const semantic::ExpressionId expression,
     const runtime::simir::OutputFormat format,
@@ -8257,6 +8400,14 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
         }
     }
     if (const auto actual = hir_generic_actual(expression_id)) {
+        // A SystemVerilog parameter with a type or a range converts its
+        // value, default or override, to that type (IEEE 1800-2017 6.20.2).
+        if (const auto declared = hir_systemverilog_parameter_type(
+                expression_id)) {
+            if (const auto width = hir_systemverilog_type_width(*declared)) {
+                return width;
+            }
+        }
         return hir_expression_width(*actual, process_scope);
     }
     if (const auto actual = hir_let_actual(expression_id)) {
@@ -8284,6 +8435,25 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
     }
     if (hir_vhdl_character_literal_code(expression_id, 0U)) {
         return 8U;
+    }
+    if (expression->systemverilog != nullptr
+        && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::index) {
+        // An element select of a multidimensional packed array is as wide
+        // as the remaining dimensions.
+        const auto shape = hir_systemverilog_packed_shape(expression_id);
+        if (!shape.empty()) {
+            std::size_t width { 1U };
+            for (const auto& dimension : shape) {
+                const auto count
+                    = index_distance(dimension.left, dimension.right) + 1U;
+                if (count > std::numeric_limits<std::size_t>::max() / width) {
+                    return std::nullopt;
+                }
+                width *= static_cast<std::size_t>(count);
+            }
+            return width;
+        }
     }
     if (hir_vhdl_generate_iterator_value(
             expression_id, process_scope)) {
@@ -8526,10 +8696,14 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
         }
         const auto initializer = hir_constant_initializer(*selected);
         if (initializer && hir_constant_integer(expression_id)) {
+            // A parameter with a type or a range has that width; without
+            // either, it takes the width of its value (IEEE 1800-2017
+            // 6.20.2).
             if (declaration && declaration->systemverilog != nullptr
                 && declaration->systemverilog->type
-                && declaration->systemverilog->type->target.spelling
-                    != "implicit") {
+                && (declaration->systemverilog->type->target.spelling
+                        != "implicit"
+                    || declaration->systemverilog->type->packed_range)) {
                 if (const auto declared = hir_systemverilog_type_width(
                         *declaration->systemverilog->type)) {
                     return declared;
@@ -8664,7 +8838,14 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
             return 1U;
         }
         if (source.kind == semantic::sv::ExpressionKind::logic_literal) {
-            return literal_width(source.text, 1U);
+            // An unsized based literal ('b1, 'hff) is 32 bits; an unbased
+            // unsized one ('1, 'x) is self-determined as one bit (IEEE
+            // 1800-2017 5.7.1).
+            const auto based = source.text.size() >= 3U
+                && source.text.front() == '\''
+                && std::string_view { "bodhBODHsS" }.find(source.text[1])
+                    != std::string_view::npos;
+            return literal_width(source.text, based ? 32U : 1U);
         }
         if (source.kind == semantic::sv::ExpressionKind::integer_literal) {
             if (systemverilog_real_literal(source.text)) {

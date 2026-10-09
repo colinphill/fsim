@@ -1199,7 +1199,7 @@ bool Lowerer::lower_hir_force_release(
     }
     const auto width = constant_selection
         ? std::optional { constant_selection->width }
-        : index  ? std::optional<std::size_t> { 1U }
+        : index  ? hir_index_target_width(target)
         : member ? std::optional { member->width }
                  : std::optional { binding->width };
     if (!width || *width == 0U
@@ -4916,7 +4916,7 @@ bool Lowerer::lower_hir_statement(
         } else if (dynamic_vhdl_selection) {
             assignment_width = dynamic_vhdl_selection->width;
         } else if (index) {
-            assignment_width = 1U;
+            assignment_width = hir_index_target_width(*target);
         } else if (dynamic_part_width) {
             assignment_width = dynamic_part_width;
         } else if (!target_is_selected) {
@@ -5936,6 +5936,23 @@ bool Lowerer::lower_hir_statement(
                     static_cast<std::uint32_t>(
                         constant_selection->offset),
                 });
+            } else if (index && dynamic_selection
+                && *assignment_width > 1U) {
+                // A multidimensional packed array element.
+                process_.operations.emplace_back(DynamicPartInsert {
+                    *binding->local,
+                    *binding->local,
+                    *lowered,
+                    DynamicPartIndex {
+                        dynamic_selection->index,
+                        dynamic_selection->left,
+                        dynamic_selection->right,
+                        dynamic_selection->base_offset,
+                        static_cast<std::uint32_t>(*assignment_width),
+                        true,
+                        true,
+                    },
+                });
             } else if (index && dynamic_selection) {
                 process_.operations.emplace_back(DynamicInsert {
                     *binding->local,
@@ -6087,6 +6104,27 @@ bool Lowerer::lower_hir_statement(
                 *procedural_delay,
                 update_domain,
             });
+        } else if (index && dynamic_selection && *assignment_width > 1U
+            && procedural_delay && delayed_nonblocking_assignment) {
+            // A multidimensional packed array element: the dynamic index
+            // already holds the element's bit offset, so write the whole
+            // element as a part-select.
+            process_.operations.emplace_back(
+                WriteAfterDynamicPartSlice {
+                    *binding->signal,
+                    *lowered,
+                    DynamicPartIndex {
+                        dynamic_selection->index,
+                        dynamic_selection->left,
+                        dynamic_selection->right,
+                        dynamic_selection->base_offset,
+                        static_cast<std::uint32_t>(*assignment_width),
+                        true,
+                        true,
+                    },
+                    *procedural_delay,
+                    update_domain,
+                });
         } else if (index && dynamic_selection && procedural_delay
             && delayed_nonblocking_assignment) {
             process_.operations.emplace_back(WriteAfterDynamicSlice {
@@ -6142,6 +6180,26 @@ bool Lowerer::lower_hir_statement(
                 *lowered,
                 static_cast<std::uint32_t>(constant_selection->offset),
             });
+        } else if (index && dynamic_selection && *assignment_width > 1U) {
+            // A multidimensional packed array element (see above).
+            const auto part = DynamicPartIndex {
+                dynamic_selection->index,
+                dynamic_selection->left,
+                dynamic_selection->right,
+                dynamic_selection->base_offset,
+                static_cast<std::uint32_t>(*assignment_width),
+                true,
+                true,
+            };
+            if (update) {
+                process_.operations.emplace_back(
+                    WriteUpdateDynamicPartSlice {
+                        *binding->signal, *lowered, part, update_domain });
+            } else {
+                process_.operations.emplace_back(
+                    WriteBlockingDynamicPartSlice {
+                        *binding->signal, *lowered, part });
+            }
         } else if (index && dynamic_selection && update) {
             process_.operations.emplace_back(WriteUpdateDynamicSlice {
                 *binding->signal, *lowered, *dynamic_selection,
@@ -9612,7 +9670,7 @@ bool Lowerer::lower_hir_statement(
                 && hir_expression_signed(*expression),
             suppress_leading_zero,
             hir_systemverilog_decimal_width(*expression, runtime_format,
-                suppress_leading_zero, minimum_width),
+                suppress_leading_zero || left_justify, minimum_width),
             left_justify,
             zero_pad,
             hir_systemverilog_scalar_kind(*expression),
@@ -10971,7 +11029,8 @@ bool Lowerer::lower_hir_statement(
                     monitor_value.format = output_format(format);
                     monitor_value.minimum_width
                         = hir_systemverilog_decimal_width(*expression,
-                            monitor_value.format, suppress_leading_zero,
+                            monitor_value.format,
+                            suppress_leading_zero || left_justify,
                             minimum_width);
                     monitor_value.scalar_kind
                         = hir_systemverilog_scalar_kind(

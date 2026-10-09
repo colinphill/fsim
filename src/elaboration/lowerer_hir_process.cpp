@@ -2105,7 +2105,7 @@ bool Lowerer::lower_hir_output_actual_write(
         : std::nullopt;
     const auto write_width = constant_selection
         ? std::optional { constant_selection->width }
-        : index ? std::optional<std::size_t> { 1U }
+        : index ? hir_index_target_width(target)
         : dynamic_part_width ? dynamic_part_width
         : !selected && member_selection
         ? std::optional { member_selection->width }
@@ -2169,6 +2169,29 @@ bool Lowerer::lower_hir_output_actual_write(
             : 0U);
     if (!dynamic) {
         return false;
+    }
+    if (index && register_width(source) > 1U) {
+        // A multidimensional packed array element: the dynamic index holds
+        // the element's bit offset.
+        process_.operations.emplace_back(WriteUpdateDynamicPartSlice {
+            *binding->signal,
+            source,
+            DynamicPartIndex {
+                dynamic->index,
+                dynamic->left,
+                dynamic->right,
+                dynamic->base_offset,
+                static_cast<std::uint32_t>(register_width(source)),
+                true,
+                true,
+            },
+            process_.scheduling_domain
+                    == ProcessSchedulingDomain::systemverilog
+                ? SignalUpdateDomain::systemverilog_active
+                : SignalUpdateDomain::generic,
+        });
+        record_readonly_vhdl_output_write(*binding);
+        return true;
     }
     if (index) {
         process_.operations.emplace_back(WriteUpdateDynamicSlice {

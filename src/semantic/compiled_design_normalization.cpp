@@ -793,9 +793,27 @@ std::optional<ConstantValue> constant_name_value(
     }
     const auto* initializer = expression_for(
         expressions, *declaration->initializer);
-    return initializer != nullptr && initializer->folded
+    auto value = initializer != nullptr && initializer->folded
         && dependency_free(initializer->dependencies)
         ? constant_value(*initializer) : std::nullopt;
+    // A local parameter with a type or a range converts its value to that
+    // type (IEEE 1800-2017 6.20.2). The folded literal is a 32-bit signed
+    // integer, so only int and integer parameters whose value fits fold;
+    // other references stay names for the lowerer to convert.
+    if (value && declaration->form == sv::DeclarationForm::local_parameter
+        && declaration->type
+        && (declaration->type->target.spelling != "implicit"
+            || declaration->type->packed_range)) {
+        const auto& spelling = declaration->type->target.spelling;
+        // int and integer carry their intrinsic [31:0] range.
+        const bool integer_type = spelling == "int" || spelling == "integer";
+        if (!integer_type || value->kind != ConstantKind::integer
+            || value->integer < std::numeric_limits<std::int32_t>::min()
+            || value->integer > std::numeric_limits<std::int32_t>::max()) {
+            return std::nullopt;
+        }
+    }
+    return value;
 }
 
 template <>

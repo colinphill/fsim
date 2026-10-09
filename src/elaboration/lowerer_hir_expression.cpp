@@ -953,6 +953,33 @@ std::optional<DynamicIndex> Lowerer::lower_hir_dynamic_index(
     const std::size_t source_width,
     const std::uint32_t base_offset)
 {
+    if (const auto shape = hir_systemverilog_packed_shape(source_id);
+        shape.size() > 1U) {
+        // An element of a multidimensional packed array: the index becomes
+        // the element's bit offset within the flattened value, whose range
+        // is then [W-1:0], so writes place the whole element.
+        const auto count = index_distance(
+            shape.front().left, shape.front().right) + 1U;
+        if (source_width == 0U || count == 0U || source_width % count != 0U
+            || source_width - 1U
+                > static_cast<std::size_t>(
+                    std::numeric_limits<std::int32_t>::max())) {
+            return std::nullopt;
+        }
+        const auto offset = lower_hir_systemverilog_element_offset(
+            index_id, shape.front(),
+            static_cast<std::size_t>(source_width / count));
+        if (!offset) {
+            return std::nullopt;
+        }
+        return DynamicIndex {
+            *offset,
+            static_cast<std::int64_t>(source_width - 1U),
+            0,
+            base_offset,
+            false,
+        };
+    }
     const auto range = hir_expression_range(source_id, hir_process_scope_);
     const auto index_width = hir_expression_width(
         index_id, hir_process_scope_);
@@ -1032,6 +1059,47 @@ std::optional<DynamicIndex> Lowerer::lower_hir_dynamic_index(
         base_offset,
         true,
     };
+}
+
+std::optional<RegisterId> Lowerer::lower_hir_systemverilog_element_offset(
+    const semantic::ExpressionId index_id,
+    const HirPackedRange& dimension,
+    const std::size_t element_width)
+{
+    const auto index_width = hir_expression_width(
+        index_id, hir_process_scope_);
+    if (!index_width || *index_width == 0U || element_width == 0U
+        || element_width > std::numeric_limits<std::int32_t>::max()) {
+        return std::nullopt;
+    }
+    auto index = lower_hir_expression(index_id, *index_width);
+    if (!index) {
+        return std::nullopt;
+    }
+    if (register_width(*index) != 32U) {
+        index = resize_register(
+            *index, 32U, hir_expression_signed(index_id));
+    }
+    const auto domain = frontend::ValueDomain::Logic4;
+    const auto right = allocate_register(32U, domain);
+    process_.operations.emplace_back(LoadConstant {
+        right, integer_value(dimension.right, 32U) });
+    // The element's distance from the dimension's right bound, in elements.
+    const auto ordinal = allocate_register(32U, domain);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::subtract_signed,
+        ordinal,
+        dimension.descending ? *index : right,
+        dimension.descending ? right : *index,
+    });
+    const auto stride = allocate_register(32U, domain);
+    process_.operations.emplace_back(LoadConstant {
+        stride,
+        integer_value(static_cast<std::int64_t>(element_width), 32U) });
+    const auto offset = allocate_register(32U, domain);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::multiply_signed, offset, ordinal, stride });
+    return offset;
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_vhdl_dynamic_element_offset(
@@ -3196,7 +3264,14 @@ Lowerer::lower_hir_systemverilog_packed_pattern(
             return lower_hir_systemverilog_packed_pattern(
                 value, expected, width);
         }
-        return lower_hir_expression(value, width);
+        // A member value converts to the member's width (IEEE 1800-2017
+        // 10.9.2), as in an assignment.
+        auto lowered = lower_hir_expression(value, width);
+        if (lowered && register_width(*lowered) != width) {
+            lowered = resize_register(
+                *lowered, width, hir_expression_signed(value));
+        }
+        return lowered;
     };
     if (source.kind == semantic::sv::ExpressionKind::call
         && source.text.starts_with(tagged_prefix)) {
@@ -7958,7 +8033,30 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         const auto& call = *expression->systemverilog;
         emit_debug_point(
             DebugPointKind::call, hir_source_span(call.source));
-        const auto value = hir_systemverilog_container_query(expression_id);
+        // $bits of a parameter without a type or range is the width of its
+        // value (IEEE 1800-2017 6.20.2), not of the implicit integer type.
+        const auto implicit_parameter = [&]() -> bool {
+            if (call.text != "$bits" || call.operands.size() != 1U) {
+                return false;
+            }
+            const auto declaration_id
+                = hir_referenced_declaration(call.operands.front());
+            const auto declaration = declaration_id
+                ? specialized_hir_unit_->find_declaration(*declaration_id)
+                : std::nullopt;
+            return declaration && declaration->systemverilog != nullptr
+                && (declaration->systemverilog->form
+                        == semantic::sv::DeclarationForm::parameter
+                    || declaration->systemverilog->form
+                        == semantic::sv::DeclarationForm::local_parameter)
+                && declaration->systemverilog->type
+                && declaration->systemverilog->type->target.spelling
+                    == "implicit"
+                && !declaration->systemverilog->type->packed_range;
+        }();
+        const auto value = implicit_parameter
+            ? std::optional<std::int64_t> { }
+            : hir_systemverilog_container_query(expression_id);
         if (!value) {
             const auto receiver_type = !call.operands.empty()
                 ? hir_static_container_expression_type(
@@ -10483,6 +10581,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             : std::nullopt;
         const auto selected_width = selected_subtype
             ? vhdl_subtype_width(*selected_subtype)
+            : source.index && expression->systemverilog != nullptr
+                && !hir_systemverilog_packed_shape(source.operands[0])
+                        .empty()
+            // An element of a multidimensional packed array.
+            ? hir_expression_width(expression_id, hir_process_scope_)
             : std::nullopt;
         const auto result_width = constant_selection
             ? std::optional { constant_selection->width }
@@ -10556,6 +10659,33 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 dynamic->source_descending,
                 is_two_state_domain(register_domain(*input)),
                 dynamic->base_offset,
+            });
+        } else if (expression->systemverilog != nullptr && source.index
+            && hir_systemverilog_packed_shape(source.operands[0]).size()
+                > 1U) {
+            // An element of a multidimensional packed array: an unknown or
+            // out-of-range index reads X (IEEE 1800-2017 11.5.1).
+            const auto shape
+                = hir_systemverilog_packed_shape(source.operands[0]);
+            const auto offset = lower_hir_systemverilog_element_offset(
+                source.operands[1], shape.front(), *result_width);
+            if (!offset
+                || *source_width - 1U
+                    > static_cast<std::size_t>(
+                        std::numeric_limits<std::int64_t>::max())) {
+                return std::nullopt;
+            }
+            process_.operations.emplace_back(DynamicPartSelect {
+                destination,
+                *input,
+                *offset,
+                static_cast<std::int64_t>(*source_width - 1U),
+                0,
+                static_cast<std::uint32_t>(*result_width),
+                true,
+                true,
+                is_two_state_domain(register_domain(*input)),
+                0U,
             });
         } else {
             if (source.index && *result_width > 1U) {
@@ -13664,9 +13794,15 @@ Lowerer::capture_hir_packed_update_target(
     const auto dynamic_part_width = slice && !constant_selection
         ? hir_dynamic_part_width(target, hir_process_scope_)
         : std::nullopt;
+    const auto element_shape = index
+        ? hir_systemverilog_packed_shape(source.operands.front())
+        : std::vector<HirPackedRange> { };
+    const auto element_width = !element_shape.empty()
+        ? hir_expression_width(target, hir_process_scope_)
+        : std::optional<std::size_t> { 1U };
     const auto width = constant_selection
         ? std::optional { constant_selection->width }
-        : index              ? std::optional<std::size_t> { 1U }
+        : index              ? element_width
         : dynamic_part_width ? dynamic_part_width
         : !selected          ? std::optional {
               member ? member->width : binding->width
@@ -13709,6 +13845,21 @@ Lowerer::capture_hir_packed_update_target(
             whole,
             static_cast<std::uint32_t>(constant_selection->offset),
             static_cast<std::uint32_t>(*width),
+        });
+    } else if (index && dynamic_selection && *width > 1U) {
+        // A multidimensional packed array element: dynamic_selection's
+        // index register already holds the element's bit offset.
+        process_.operations.emplace_back(DynamicPartSelect {
+            captured,
+            whole,
+            dynamic_selection->index,
+            dynamic_selection->left,
+            dynamic_selection->right,
+            static_cast<std::uint32_t>(*width),
+            true,
+            true,
+            is_two_state_domain(domain),
+            dynamic_selection->base_offset,
         });
     } else if (index && dynamic_selection) {
         process_.operations.emplace_back(DynamicExtract {
@@ -13893,6 +14044,23 @@ bool Lowerer::write_hir_packed_update_target(
                 static_cast<std::uint32_t>(
                     target.constant_selection->offset),
             });
+        } else if (target.index && target.dynamic_selection
+            && target.width > 1U) {
+            // A multidimensional packed array element.
+            process_.operations.emplace_back(DynamicPartInsert {
+                *target.binding.local,
+                *target.binding.local,
+                value,
+                DynamicPartIndex {
+                    target.dynamic_selection->index,
+                    target.dynamic_selection->left,
+                    target.dynamic_selection->right,
+                    target.dynamic_selection->base_offset,
+                    static_cast<std::uint32_t>(target.width),
+                    true,
+                    true,
+                },
+            });
         } else if (target.index && target.dynamic_selection) {
             process_.operations.emplace_back(DynamicInsert {
                 *target.binding.local,
@@ -13933,6 +14101,22 @@ bool Lowerer::write_hir_packed_update_target(
             value,
             static_cast<std::uint32_t>(
                 target.constant_selection->offset),
+        });
+    } else if (target.index && target.dynamic_selection
+        && target.width > 1U) {
+        // A multidimensional packed array element.
+        process_.operations.emplace_back(WriteBlockingDynamicPartSlice {
+            *target.binding.signal,
+            value,
+            DynamicPartIndex {
+                target.dynamic_selection->index,
+                target.dynamic_selection->left,
+                target.dynamic_selection->right,
+                target.dynamic_selection->base_offset,
+                static_cast<std::uint32_t>(target.width),
+                true,
+                true,
+            },
         });
     } else if (target.index && target.dynamic_selection) {
         process_.operations.emplace_back(WriteBlockingDynamicSlice {
@@ -14551,7 +14735,7 @@ bool Lowerer::lower_hir_packed_copy_out(
         : std::nullopt;
     const auto target_width = constant_selection
         ? std::optional { constant_selection->width }
-        : index              ? std::optional<std::size_t> { 1U }
+        : index              ? hir_index_target_width(target)
         : dynamic_part_width ? dynamic_part_width
         : !selected          ? std::optional {
               member ? member->width : binding->width
@@ -14605,6 +14789,22 @@ bool Lowerer::lower_hir_packed_copy_out(
                 static_cast<std::uint32_t>(
                     constant_selection->offset),
             });
+        } else if (index && dynamic_selection && *target_width > 1U) {
+            // A multidimensional packed array element.
+            process_.operations.emplace_back(DynamicPartInsert {
+                *binding->local,
+                *binding->local,
+                copy_source,
+                DynamicPartIndex {
+                    dynamic_selection->index,
+                    dynamic_selection->left,
+                    dynamic_selection->right,
+                    dynamic_selection->base_offset,
+                    static_cast<std::uint32_t>(*target_width),
+                    true,
+                    true,
+                },
+            });
         } else if (index && dynamic_selection) {
             process_.operations.emplace_back(DynamicInsert {
                 *binding->local,
@@ -14642,6 +14842,21 @@ bool Lowerer::lower_hir_packed_copy_out(
             *binding->signal,
             copy_source,
             static_cast<std::uint32_t>(constant_selection->offset),
+        });
+    } else if (index && dynamic_selection && *target_width > 1U) {
+        // A multidimensional packed array element.
+        process_.operations.emplace_back(WriteBlockingDynamicPartSlice {
+            *binding->signal,
+            copy_source,
+            DynamicPartIndex {
+                dynamic_selection->index,
+                dynamic_selection->left,
+                dynamic_selection->right,
+                dynamic_selection->base_offset,
+                static_cast<std::uint32_t>(*target_width),
+                true,
+                true,
+            },
         });
     } else if (index && dynamic_selection) {
         process_.operations.emplace_back(WriteBlockingDynamicSlice {

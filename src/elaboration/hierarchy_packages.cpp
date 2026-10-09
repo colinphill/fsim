@@ -9032,16 +9032,20 @@ namespace {
             if ((!left && !right) || (left && right && *left == *right)) {
                 continue;
             }
-            // An enumeration value may be compared with an ordinary
-            // integral expression. Distinct enumeration types remain
-            // nominally incompatible, as do packed aggregates compared
-            // with untyped packed operands.
+            // An enumeration value, or a packed structure or union (an
+            // integral value, IEEE 1800-2017 7.2.1), may be compared with
+            // an ordinary integral expression. Distinct nominal types remain
+            // incompatible.
             if (left.has_value() != right.has_value()) {
                 const auto nominal = compiled.find_type(
                     left ? *left : *right);
                 if (nominal && nominal->systemverilog != nullptr
-                    && nominal->systemverilog->form
-                        == TypeForm::enumeration) {
+                    && (nominal->systemverilog->form
+                            == TypeForm::enumeration
+                        || nominal->systemverilog->form
+                            == TypeForm::packed_structure
+                        || nominal->systemverilog->form
+                            == TypeForm::packed_union)) {
                     continue;
                 }
             }
