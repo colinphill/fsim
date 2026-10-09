@@ -2410,6 +2410,27 @@ bool Lowerer::hir_expression_signed(
         if (const auto element = hir_container_element_binding(candidate)) {
             return element->signed_value;
         }
+        if (expression->systemverilog != nullptr
+            && expression->systemverilog->kind
+                == semantic::sv::ExpressionKind::name) {
+            // A port read through its connected actual still has the
+            // port's declared signedness (IEEE 1800-2017 23.3.3.7).
+            const semantic::CompiledDesignResolver resolver {
+                *specialized_hir_unit_, hir_generic_binding_frames_
+            };
+            const auto formal
+                = resolver.resolve_systemverilog_expression(candidate)
+                      .unique();
+            const auto port = formal
+                ? specialized_hir_unit_->find_declaration(*formal)
+                : std::nullopt;
+            if (port && port->systemverilog != nullptr
+                && port->systemverilog->form
+                    == semantic::sv::DeclarationForm::port
+                && port->systemverilog->type) {
+                return port->systemverilog->type->signed_value;
+            }
+        }
         if (const auto declaration_id = hir_referenced_declaration(candidate)) {
             const auto declaration = specialized_hir_unit_->find_declaration(
                 *declaration_id);
@@ -3068,6 +3089,22 @@ Lowerer::hir_referenced_declaration(
             || hir_local_container_registers_.contains(
                 declaration->value())) {
             return declaration;
+        }
+        // A value parameter with an explicit type or range converts its
+        // actual (or default) to that type, so a name actual is a value
+        // source rather than an alias (IEEE 1800-2017 6.20.2).
+        const auto source = specialized_hir_unit_->find_declaration(
+            *declaration);
+        if (source && source->systemverilog != nullptr) {
+            const auto& value = *source->systemverilog;
+            if ((value.form == semantic::sv::DeclarationForm::parameter
+                    || value.form
+                        == semantic::sv::DeclarationForm::local_parameter)
+                && value.type
+                && (value.type->target.spelling != "implicit"
+                    || value.type->packed_range)) {
+                return declaration;
+            }
         }
         return resolver.actual_declaration(*declaration)
             .value_or(*declaration);
@@ -5346,6 +5383,11 @@ Lowerer::hir_systemverilog_container_query(
         return std::nullopt;
     }
     const auto receiver = call.operands.front();
+    // A member selection references its aggregate's declaration; its size
+    // is the member's, which the expression-width path provides.
+    if (bits_query && hir_systemverilog_member_selection(receiver)) {
+        return std::nullopt;
+    }
     const auto receiver_expression
         = specialized_hir_unit_->find_expression(receiver);
     const auto named_type_declaration
@@ -7348,7 +7390,17 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
             }
         }
         const auto initializer = hir_constant_initializer(*selected);
-        if (initializer && hir_constant_integer(expression_id)) {
+        // An x or z valued parameter has no integer value but still has
+        // its declared or initializer type.
+        const auto systemverilog_value_parameter = declaration
+            && declaration->systemverilog != nullptr
+            && (declaration->systemverilog->form
+                    == semantic::sv::DeclarationForm::parameter
+                || declaration->systemverilog->form
+                    == semantic::sv::DeclarationForm::local_parameter);
+        if (initializer
+            && (systemverilog_value_parameter
+                || hir_constant_integer(expression_id))) {
             if (declaration && declaration->systemverilog != nullptr
                 && declaration->systemverilog->type
                 && declaration->systemverilog->type->target.spelling
@@ -8707,7 +8759,17 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
             }
         }
         const auto initializer = hir_constant_initializer(*selected);
-        if (initializer && hir_constant_integer(expression_id)) {
+        // An x or z valued parameter has no integer value but still has
+        // its declared or initializer type.
+        const auto systemverilog_value_parameter = declaration
+            && declaration->systemverilog != nullptr
+            && (declaration->systemverilog->form
+                    == semantic::sv::DeclarationForm::parameter
+                || declaration->systemverilog->form
+                    == semantic::sv::DeclarationForm::local_parameter);
+        if (initializer
+            && (systemverilog_value_parameter
+                || hir_constant_integer(expression_id))) {
             // A parameter with a type or a range has that width; without
             // either, it takes the width of its value (IEEE 1800-2017
             // 6.20.2).

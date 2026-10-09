@@ -1078,6 +1078,36 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
             "FSIM-SV-SEM-004",
             "duplicate port declaration '" + declaration.name + "'");
       }
+      // `int i; output i;` declares one port whose data type is the
+      // earlier declaration's (IEEE 1800-2017 23.2.2.1).
+      if (existing_port != unit.ports.end()
+          && port_type_refinements_.contains(declaration.name)) {
+        const auto port_signed = declaration.type.is_signed;
+        declaration.type = existing_port->type;
+        declaration.type.is_signed = declaration.type.is_signed
+            || port_signed;
+        declaration.net_delay = existing_port->net_delay;
+        declaration.drive_strength = existing_port->drive_strength;
+        declaration.charge_strength = existing_port->charge_strength;
+        declaration.charge_decay = existing_port->charge_decay;
+      } else if (const auto prior = std::ranges::find(
+                     unit.signals, declaration.name,
+                     &SignalDeclaration::name);
+          prior != unit.signals.end()
+          && non_ansi_ports_.contains(declaration.name)
+          && port_type_refinements_.insert(declaration.name).second) {
+        // The data declaration preceded every port declaration, so it was
+        // recorded as a signal; it becomes the port's data type.
+        const auto port_signed = declaration.type.is_signed;
+        declaration.type = prior->type;
+        declaration.type.is_signed = declaration.type.is_signed
+            || port_signed;
+        declaration.net_delay = prior->net_delay;
+        declaration.drive_strength = prior->drive_strength;
+        declaration.charge_strength = prior->charge_strength;
+        declaration.charge_decay = prior->charge_decay;
+        unit.signals.erase(prior);
+      }
       update_or_add_port(unit, std::move(declaration));
     } else if (existing_port != unit.ports.end()) {
       // In a non-ANSI declaration, `output q; reg q;` describes one port,

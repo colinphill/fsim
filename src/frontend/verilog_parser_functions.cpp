@@ -28,7 +28,7 @@ FunctionDeclaration VerilogParser::parse_function(
         "FSIM-SV-PARSE-347");
     function.lifetime_explicit = true;
   } else {
-    function.automatic = default_automatic;
+    function.automatic = default_automatic || unit_default_automatic_;
     function.lifetime_explicit = false;
   }
 
@@ -600,7 +600,7 @@ TaskDeclaration VerilogParser::parse_task(
         "FSIM-SV-PARSE-347");
     task.lifetime_explicit = true;
   } else {
-    task.automatic = default_automatic;
+    task.automatic = default_automatic || unit_default_automatic_;
     task.lifetime_explicit = false;
   }
 

@@ -5604,6 +5604,17 @@ Lowerer::lower_hir_function_call_value(
         } else {
             frame.result = allocate_register(type->width, type->domain);
             frame.invocation_registers.push_back(frame.result);
+            // The implicit result variable of a 4-state function starts
+            // unknown; a body that never assigns it returns x (IEEE
+            // 1800-2017 13.4.1, 6.8 Table 6-7).
+            if (language_ != frontend::Language::Vhdl2008
+                && (type->domain == frontend::ValueDomain::Logic4
+                    || type->domain == frontend::ValueDomain::Integer)) {
+                process_.operations.emplace_back(LoadConstant {
+                    frame.result,
+                    PackedLogic4(type->width, Logic4::x),
+                });
+            }
         }
         frame.invocation_identity = next_callable_invocation_identity_++;
         if (frame.invocation_identity == 0U) {

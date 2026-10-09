@@ -5225,6 +5225,33 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
     const std::size_t expected_width,
     const frontend::SystemVerilogScalarKind scalar_context)
 {
+    const auto unsigned_extension
+        = std::exchange(hir_unsigned_extension_, false);
+    const auto unsigned_expression = unsigned_extension
+            && expected_width != 0U
+            && scalar_context == frontend::SystemVerilogScalarKind::None
+            && specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (unsigned_expression && unsigned_expression->systemverilog != nullptr
+        && hir_expression_signed(expression_id)) {
+        const auto& source = *unsigned_expression->systemverilog;
+        if (source.kind == semantic::sv::ExpressionKind::binary
+            || (source.kind == semantic::sv::ExpressionKind::unary
+                && (source.text == "+" || source.text == "-"
+                    || source.text == "~"))) {
+            hir_unsigned_operation_ = true;
+        } else if (const auto width = hir_expression_width(
+                       expression_id, hir_process_scope_);
+            width && *width != 0U && *width < expected_width) {
+            const auto narrow = lower_hir_expression(
+                expression_id, *width, scalar_context);
+            return narrow && register_width(*narrow) < expected_width
+                ? std::optional { resize_register(
+                      *narrow, expected_width, false) }
+                : narrow;
+        }
+    }
     const auto diagnostics_before = diagnostics_.size();
     auto result = lower_hir_expression_impl(
         expression_id, expected_width, scalar_context);
@@ -5262,6 +5289,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     const std::size_t expected_width,
     const frontend::SystemVerilogScalarKind scalar_context)
 {
+    const auto unsigned_operation
+        = std::exchange(hir_unsigned_operation_, false);
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
@@ -5760,8 +5789,13 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         });
         record_implicit_signal_dependency(*signal);
         if (expected_width != 0U && expected_width != info.width) {
+            // A collapsed port shares its actual's signal but keeps its
+            // own declared signedness.
             destination = resize_register(
-                destination, expected_width, info.is_signed);
+                destination, expected_width,
+                expression->systemverilog != nullptr
+                    ? hir_expression_signed(expression_id)
+                    : info.is_signed);
         }
         return destination;
     }
@@ -6643,6 +6677,37 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             });
             return destination;
         }
+    }
+    // A string literal in a packed context is an unsigned integral value
+    // of eight bits per character, the last character least significant;
+    // it zero-extends or keeps its rightmost characters (IEEE 1800-2017
+    // 5.9, 11.10).
+    if (expression->systemverilog != nullptr
+        && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::string_literal
+        && expression->systemverilog->decoded_string
+        && scalar_context == frontend::SystemVerilogScalarKind::None) {
+        const auto& text = *expression->systemverilog->decoded_string;
+        const auto width = expected_width != 0U
+            ? expected_width
+            : std::max<std::size_t>(text.size() * 8U, 8U);
+        auto bits = PackedLogic4(width, Logic4::zero);
+        std::size_t bit { };
+        for (auto character = text.rbegin();
+             character != text.rend() && bit < width; ++character) {
+            const auto byte = static_cast<unsigned char>(*character);
+            for (unsigned index { }; index < 8U && bit < width;
+                 ++index, ++bit) {
+                if (((byte >> index) & 1U) != 0U) {
+                    bits.set(bit, Logic4::one);
+                }
+            }
+        }
+        const auto destination = allocate_register(
+            width, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            destination, std::move(bits) });
+        return destination;
     }
     const auto source = expression_leaf(*expression);
     std::optional<frontend::SystemVerilogScalarConstant> scalar_literal;
@@ -11407,13 +11472,15 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             && scalar_width == 0U && expected_width > operand_width
             && (source.text == "-" || source.text == "~"
                 || source.text == "+");
+        hir_unsigned_extension_ = unsigned_operation;
         auto operand = lower_hir_expression(
             source.operands[0],
             context_unary ? expected_width : operand_width, scalar_kind);
         if (operand && context_unary
             && register_width(*operand) < expected_width) {
             operand = resize_register(*operand, expected_width,
-                hir_expression_signed(source.operands[0]));
+                hir_expression_signed(source.operands[0])
+                    && !unsigned_operation);
         }
         if (operand) {
             if (expression->vhdl != nullptr && source.text == "??") {
@@ -12129,6 +12196,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 ? std::max(lhs_width,
                       std::max<std::size_t>(expected_width, 1U))
                 : lhs_width;
+            hir_unsigned_extension_ = unsigned_operation;
             auto value = lower_hir_expression(
                 source.operands[0], value_width);
             const auto amount = lower_hir_expression(
@@ -12140,7 +12208,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 && register_width(*value) != value_width) {
                 value = resize_register(
                     *value, value_width,
-                    hir_expression_signed(source.operands.front()));
+                    hir_expression_signed(source.operands.front())
+                        && !unsigned_operation);
             }
             if (language_ == frontend::Language::Vhdl2008
                 && register_domain(*amount)
@@ -12165,7 +12234,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             process_.operations.emplace_back(Shift {
                 lowered_shift_operator(
                     source.text,
-                    hir_expression_signed(source.operands.front())),
+                    hir_expression_signed(source.operands.front())
+                        && !unsigned_operation),
                 destination,
                 *value,
                 *amount,
@@ -12226,10 +12296,21 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                       std::max<std::size_t>(expected_width, 1U))
                 : std::max({ lhs_width, rhs_width,
                       std::max<std::size_t>(expected_width, 1U) });
+            // Context-determined SystemVerilog operands extend by the
+            // operation's signedness, which is signed only when both
+            // operands are (IEEE 1800-2017 11.8.1).
+            const auto operands_signed
+                = hir_expression_signed(source.operands[0])
+                && hir_expression_signed(source.operands[1])
+                && (scalar_result || !unsigned_operation);
+            const auto unsigned_operands = expression->systemverilog != nullptr
+                && source.text != "&&" && source.text != "||"
+                && !operands_signed;
             const auto lower_operand = [&](
                                            const semantic::ExpressionId operand,
                                            const std::size_t width,
-                                           const semantic::ExpressionId context) {
+                                           const semantic::ExpressionId context,
+                                           const bool unsigned_extension) {
                 const auto selected
                     = specialized_hir_unit_->find_expression(operand);
                 const auto subtype = language_
@@ -12249,20 +12330,28 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                         return std::optional { destination };
                     }
                 }
-                return selected && selected->vhdl != nullptr
-                        && selected->vhdl->kind
-                            == semantic::vhdl::ExpressionKind::aggregate
-                        && subtype
-                    ? lower_hir_vhdl_aggregate(
-                          operand, width, &*subtype)
-                    : lower_hir_expression(operand, width);
+                if (selected && selected->vhdl != nullptr
+                    && selected->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::aggregate
+                    && subtype) {
+                    return lower_hir_vhdl_aggregate(
+                        operand, width, &*subtype);
+                }
+                hir_unsigned_extension_ = unsigned_extension;
+                return lower_hir_expression(operand, width);
             };
+            // The exponent of ** is self-determined, so only the base and
+            // the enclosing context decide how the base extends (11.6.1).
             auto lhs = lower_operand(
-                source.operands[0], operand_width, source.operands[1]);
+                source.operands[0], operand_width, source.operands[1],
+                systemverilog_power
+                    ? !hir_expression_signed(source.operands[0])
+                        || unsigned_operation
+                    : unsigned_operands);
             auto rhs = lower_operand(
                 source.operands[1],
                 systemverilog_power ? rhs_width : operand_width,
-                source.operands[0]);
+                source.operands[0], unsigned_operands && !systemverilog_power);
             if (lhs && rhs) {
                 const auto packed_domain = [](const frontend::ValueDomain domain) {
                     return domain == frontend::ValueDomain::Bit2
@@ -12312,9 +12401,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     });
                     result = destination;
                 } else {
-                    const auto signed_operands
-                        = hir_expression_signed(source.operands[0])
-                        && hir_expression_signed(source.operands[1]);
+                    const auto signed_operands = operands_signed;
                     auto integer_operation
                         = std::optional<IntegerBinaryOperator> { };
                     if (language_ == frontend::Language::Vhdl2008

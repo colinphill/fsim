@@ -309,6 +309,17 @@ void Interpreter::Impl::execute_random_distribution(
     const auto second = operation.second
         ? integer_operand(*operation.second)
         : std::nullopt;
+    // $dist_uniform with start >= end returns start without reading the
+    // seed (IEEE 1800-2017 Annex N, rtl_dist_uniform).
+    if (!seed && first && second
+        && operation.kind == RandomDistributionKind::uniform
+        && *first >= *second) {
+        write_process_register(
+            process, operation.destination,
+            PackedLogic4::from_aval_bval(
+                32U, std::bit_cast<std::uint32_t>(*first), 0U));
+        return;
+    }
     if (!seed || !first || (operation.second && !second)) {
         report_warning(
             "random distribution arguments must not contain X or Z");

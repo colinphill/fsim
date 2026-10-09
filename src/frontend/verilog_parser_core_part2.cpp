@@ -618,6 +618,7 @@ DesignUnit VerilogParser::parse_module(
             };
     }
     update_unit_time(unit);
+    unit_default_automatic_ = false;
     if (keyword("automatic") || keyword("static")
         || (at(TokenKind::Identifier)
             && (current().text == "automatic"
@@ -627,6 +628,7 @@ DesignUnit VerilogParser::parse_module(
             std::string(unit_kind) + " lifetime '" + lifetime.text + "'",
             StandardRevision::SystemVerilog2005,
             lifetime);
+        unit_default_automatic_ = lifetime.text == "automatic";
     }
     const auto name = expect_identifier(
         std::string { unit_kind } + " name");
@@ -681,6 +683,7 @@ DesignUnit VerilogParser::parse_module(
 
     if (extern_declaration) {
         unit.span = span_from(start, previous());
+        unit_default_automatic_ = false;
         return unit;
     }
 
@@ -1217,6 +1220,7 @@ DesignUnit VerilogParser::parse_module(
     pending_systemverilog_fsm_pragma_target_position_.reset();
     program_generate_context_ = previous_program_generate_context;
     unit.span = span_from(start, previous());
+    unit_default_automatic_ = false;
     return unit;
 }
 

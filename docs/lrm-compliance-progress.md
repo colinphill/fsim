@@ -249,6 +249,45 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 17: operand signedness, port data types, parameter values
+
+These were wrong values from Verilator `$stop` triage. Each was checked
+against xsim. Fixture: `sv_operand_signedness.sv`.
+
+- An operation is signed only when all of its context-determined operands
+  are, and those operands extend by the operation's signedness (11.8.1,
+  11.8.2). Before, operands extended by their own signedness, so
+  `u8 + s4` sign-extended `s4`. The flag also reaches nested operators,
+  shifts, unary operators and comparisons. The base of `**` keeps its own
+  signedness, because the exponent is self-determined.
+- A port read through its connected actual keeps the port's declared
+  signedness, including a `wire signed` redeclaration of a non-ANSI port.
+- `int i; output i;`: a port direction declared after the data declaration
+  forms one port of that type (23.2.2.1). Before, it formed a 1-bit port plus
+  a separate signal, which also broke positional connections.
+- A value parameter with an explicit type or range is no longer an alias of
+  a name default or actual: `parameter [3:0] P = Q` has width 4 (6.20.2).
+- A leftmost x or z digit fills the remaining bits of an elaboration-time
+  based literal (`2'b?` is `zz`, 5.7.1). Untyped parameters with x/z values
+  keep their literal width.
+- `$bits` of a struct member is the member's width.
+- An unassigned 4-state function result is x, both at run time and in
+  constant evaluation (13.4.1, Table 6-7).
+- `module automatic` / `package automatic` make tasks and functions
+  automatic by default (6.21).
+- A multi-character string literal in a packed context is eight bits per
+  character (5.9).
+- `$dist_uniform` with `start >= end` returns `start` without reading the
+  seed, even when the seed is x (Annex N).
+- Runner: a Verilator test whose compile fails only under Verilator
+  (`fails=test.vlt_all`) may end at its unconditional `$stop`.
+
+Triage of the remaining Verilator stops (2-state expectations, scheduling
+races, Verilator-only flags) is in `lrm-compliance-notes.md`.
+
+Corpus effect (interpreter, no case newly fails): sv-tests +8 (1098/1497),
+ivtest +33 (1339/2801), Verilator +32 over runs 21 and 22 (685/2119).
+
 ### Batch 16: $stop reporting and Verilator driver fidelity
 
 - `fsim simulate` prints `$stop paused the simulation` after the status line

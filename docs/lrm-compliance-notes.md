@@ -127,3 +127,24 @@ corpora (`scripts/lrm_corpus.py`). Progress and results are in
   module-local class reports a SimIR driver width mismatch. This suggests
   the call reaches the method body through module task lowering instead of
   the class executor.
+
+## Verilator expectations outside the LRM (batch 17 triage)
+
+These Verilator test_regress cases stop at `$stop` under fsim. Their
+expectations rely on Verilator's 2-state values or on its scheduler. xsim
+gives fsim's result in each case checked.
+
+- t_select_plus STOP22: a partly out-of-range `-:` write writes its in-range
+  bits (11.5.1). The test expects the write to be dropped. xsim agrees with
+  fsim.
+- t_sys_system STOP2: `$system` returns the C `system()` status (Annex D,
+  2560 for `exit 10`), as xsim does; Verilator returns the exit code.
+- t_unconnected STOP1: `` `unconnected_drive`` is applied at the instance
+  site. xsim also stops here.
+- t_math_eq STOP3, t_opt_inline_varxref_inlineddots STOP1,
+  t_scheduling_5 STOP1: these depend on process order within a time step
+  (4.7) or on a process retriggering on its own writes. Verilator settles
+  combinational logic first.
+- t_split_var_4 STOP2, t_opt_split_no STOP5: an x from an uninitialized
+  register reaches the checksum or the `if` (xsim agrees: sum is x).
+- t_fourstate_no_fourstate: runs with `--no-fourstate`.

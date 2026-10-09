@@ -367,6 +367,10 @@ def verilator_cases(root: Path) -> list[Case]:
             skip = skip or "lint-only test"
         if re.search(r"have_solver|have_sc\b|test\.pli_filename|vpi|dpi|sc_main", source, re.I):
             skip = skip or "requires solver, SystemC, PLI/VPI or DPI harness"
+        # fails=test.vlt_all marks a Verilator-only diagnostic; other
+        # simulators run the model, which may end in an unconditional $stop.
+        verilator_only_failure = bool(re.search(
+            r"test\.compile\([^)]*fails\s*=\s*test\.vlt", source, re.S))
         compile_fails = bool(re.search(r"test\.compile\([^)]*fails\s*=\s*True", source, re.S))
         execute_fails = bool(re.search(r"test\.execute\([^)]*fails\s*=\s*True", source, re.S))
         flags: list[str] = []
@@ -434,7 +438,8 @@ def verilator_cases(root: Path) -> list[Case]:
             # driver.py's execute() checks for "*-* All Finished *-*" only
             # with check_finished=True; otherwise a run passes unless it
             # stops ($stop) or reports %Error.
-            checker_data={"check_finished": executes
+            checker_data={"allow_stop": verilator_only_failure,
+                          "check_finished": executes
                           and not (compile_fails or execute_fails)
                           and bool(re.search(
                               r"test\.execute\([^)]*check_finished\s*=\s*True",
@@ -937,7 +942,8 @@ def check_outcome(case: Case, steps: list[StepResult], workdir: Path) -> tuple[s
     if case.checker == "verilator":
         if "%Error" in sim_output:
             return "fail", "test reported %Error"
-        if re.search(r"^\$stop paused the simulation", sim_output, re.M):
+        if re.search(r"^\$stop paused the simulation", sim_output, re.M) \
+                and not case.checker_data.get("allow_stop"):
             return "fail", "test stopped ($stop)"
         if case.checker_data.get("check_finished") and "*-* All Finished *-*" not in sim_output:
             return "fail", "missing *-* All Finished *-*"

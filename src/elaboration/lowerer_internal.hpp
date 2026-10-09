@@ -770,6 +770,12 @@ private:
     // diagnostic while the current statement was lowered; named in the
     // statement's FSIM-ELAB-HIR-001 report.
     std::optional<std::string> hir_unlowered_expression_;
+    // An unsigned SystemVerilog operation zero-extends its signed
+    // context-determined operands (IEEE 1800-2017 11.8.2): the next lowered
+    // operand extends without sign, and an operator propagates that to its
+    // own operands.
+    bool hir_unsigned_extension_ = false;
+    bool hir_unsigned_operation_ = false;
     struct HirSynchronizationAttempt {
         bool handled { };
         bool succeeded { };

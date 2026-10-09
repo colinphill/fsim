@@ -712,6 +712,9 @@ class VerilogParser final : private detail::ParserBase {
   KeywordSet keyword_set_;
   std::vector<KeywordSet> keyword_stack_;
   std::unordered_set<std::string> non_ansi_ports_;
+  // The design unit's default lifetime for its tasks and functions
+  // (`module automatic m;`, IEEE 1800-2017 6.21).
+  bool unit_default_automatic_ = false;
   std::unordered_set<std::string> body_port_declarations_;
   std::unordered_set<std::string> port_type_refinements_;
   std::unordered_set<std::string> current_procedural_names_;

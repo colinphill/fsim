@@ -1977,6 +1977,7 @@ tests/fixtures/compliance/sv_function_statements.sv
 tests/fixtures/compliance/sv_hierarchical_references.sv
 tests/fixtures/compliance/sv_module_items.sv
 tests/fixtures/compliance/sv_net_data_types.sv
+tests/fixtures/compliance/sv_operand_signedness.sv
 tests/fixtures/compliance/sv_packed_multidim.sv
 tests/fixtures/compliance/sv_parameter_types.sv
 tests/fixtures/compliance/sv_port_width_mismatch.sv

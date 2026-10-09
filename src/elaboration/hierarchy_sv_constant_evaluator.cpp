@@ -669,6 +669,17 @@ void convert_to_two_state(Value& value)
             }
         }
     }
+    // A leftmost x or z digit extends through the remaining bits
+    // (IEEE 1800-2017 5.7.1).
+    if (!digits.empty()) {
+        const auto leading = ascii_lower(digits.front());
+        if (leading == 'x' || leading == 'z' || leading == '?') {
+            for (; output_bit < width; ++output_bit) {
+                packed.set(output_bit,
+                    leading == 'x' ? Logic4::x : Logic4::z);
+            }
+        }
+    }
     return make_value(
         std::move(packed), signed_value, !explicit_width);
 }
@@ -2571,6 +2582,13 @@ private:
         if (callable.callable->return_type.executable_width) {
             result = *convert_record_type(
                 std::move(result), callable.callable->return_type);
+        }
+        // A 4-state result variable starts unknown (IEEE 1800-2017 6.8
+        // Table 6-7), so a body that never assigns it yields x.
+        if (callable.callable->return_type.four_state
+            && (result.domain == frontend::ValueDomain::Logic4
+                || result.domain == frontend::ValueDomain::Integer)) {
+            result.packed = PackedLogic4 { result.width, Logic4::x };
         }
         frame.values.emplace(callable.id, result);
         frames_.push_back(std::move(frame));

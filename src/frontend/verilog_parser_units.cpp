@@ -53,6 +53,18 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
   active_package_imports_ =
       unit.systemverilog_imports;
   update_unit_time(unit);
+  unit_default_automatic_ = false;
+  if (keyword("automatic") || keyword("static")
+      || (at(TokenKind::Identifier)
+          && (current().text == "automatic"
+              || current().text == "static"))) {
+    const auto lifetime = advance();
+    (void)require_standard(
+        "package lifetime '" + lifetime.text + "'",
+        StandardRevision::SystemVerilog2005,
+        lifetime);
+    unit_default_automatic_ = lifetime.text == "automatic";
+  }
   const auto name = expect_identifier("package name");
   unit.name = name.text;
   if (unit.name == "std") {
@@ -277,6 +289,7 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
       unit.functions,
       unit.tasks);
   unit.span = span_from(start, previous());
+  unit_default_automatic_ = false;
   return unit;
 }
 
