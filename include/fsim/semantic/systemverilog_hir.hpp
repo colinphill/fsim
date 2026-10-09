@@ -521,6 +521,10 @@ struct Instance {
     std::vector<ActualAssociation> parameters;
     std::vector<ActualAssociation> ports;
     std::optional<Delay> udp_delay;
+    // Instance-array bounds evaluated during elaboration when they are not
+    // literals; array_indices is then empty.
+    std::optional<ExpressionId> array_left;
+    std::optional<ExpressionId> array_right;
     std::optional<std::uint8_t> drive_zero;
     std::optional<std::uint8_t> drive_one;
     UnconnectedDrive unconnected_drive { UnconnectedDrive::none };

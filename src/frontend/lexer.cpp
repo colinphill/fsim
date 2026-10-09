@@ -363,6 +363,25 @@ class Lexer {
     emit(TokenKind::Identifier, begin);
   }
 
+  // Whitespace may separate a base specifier from its digits, as in
+  // `'b 0` (IEEE 1800-2017 5.7.1); it is consumed when a digit follows.
+  bool skip_based_digit_space() {
+    std::size_t count = 0;
+    while (peek(count) == ' ' || peek(count) == '\t') {
+      ++count;
+    }
+    if (count == 0
+        || !(std::isxdigit(static_cast<unsigned char>(peek(count)))
+            || peek(count) == 'x' || peek(count) == 'X' || peek(count) == 'z'
+            || peek(count) == 'Z' || peek(count) == '?')) {
+      return false;
+    }
+    for (std::size_t index = 0; index < count; ++index) {
+      advance();
+    }
+    return true;
+  }
+
   void lex_number() {
     const auto begin = current_location();
 
@@ -371,9 +390,13 @@ class Lexer {
       if (peek() == 's' || peek() == 'S') {
         advance();
       }
+      bool spaced = false;
       if (std::isalpha(static_cast<unsigned char>(peek())) ||
           std::isdigit(static_cast<unsigned char>(peek()))) {
+        const bool base = std::string_view { "bBoOdDhH" }.find(peek())
+            != std::string_view::npos;
         advance();
+        spaced = base && skip_based_digit_space();
       }
       while (std::isalnum(static_cast<unsigned char>(peek())) ||
              peek() == '_' || peek() == '?' || peek() == 'x' ||
@@ -381,6 +404,12 @@ class Lexer {
         advance();
       }
       emit(TokenKind::Number, begin);
+      if (spaced) {
+        auto& text = result_.tokens.back().text;
+        std::erase_if(text, [](const char character) {
+          return character == ' ' || character == '\t';
+        });
+      }
       return;
     }
 
@@ -388,6 +417,7 @@ class Lexer {
            peek() == '_') {
       advance();
     }
+    bool sized_spaced = false;
 
     if (is_vhdl() && vhdl_standard_ < VhdlStandard::Vhdl2008) {
         std::size_t letters = 0;
@@ -427,7 +457,10 @@ class Lexer {
       }
       if (std::isalpha(static_cast<unsigned char>(peek())) ||
           std::isdigit(static_cast<unsigned char>(peek()))) {
+        const bool base = std::string_view { "bBoOdDhH" }.find(peek())
+            != std::string_view::npos;
         advance();
+        sized_spaced = base && skip_based_digit_space();
       }
       while (std::isalnum(static_cast<unsigned char>(peek())) ||
              peek() == '_' || peek() == '?' || peek() == 'x' ||
@@ -455,6 +488,12 @@ class Lexer {
       }
     }
     emit(TokenKind::Number, begin);
+    if (sized_spaced) {
+      auto& text = result_.tokens.back().text;
+      std::erase_if(text, [](const char character) {
+        return character == ' ' || character == '\t';
+      });
+    }
   }
 
   void lex_string() {

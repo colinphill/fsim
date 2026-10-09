@@ -362,6 +362,11 @@ std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
     const std::string_view close_message,
     std::string close_code)
 {
+    ++constraint_parse_depth_;
+    struct ConstraintDepth {
+        std::size_t& depth;
+        ~ConstraintDepth() { --depth; }
+    } constraint_depth { constraint_parse_depth_ };
     std::function<Expression()> parse_constraint_item;
     std::function<Expression()> parse_constraint_set;
     const auto parse_plain_constraint = [&]() {
@@ -736,8 +741,22 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
     return base;
   };
 
+  // Arguments after the base class name are passed to the base
+  // constructor, as by `super.new(...)` (IEEE 1800-2017 8.17).
+  std::vector<Token> base_constructor_arguments;
   if (match_keyword("extends")) {
     declaration.base = parse_base();
+    if (!interface_class && at(TokenKind::LeftParen)) {
+      std::size_t depth {};
+      do {
+        if (at(TokenKind::LeftParen)) {
+          ++depth;
+        } else if (at(TokenKind::RightParen)) {
+          --depth;
+        }
+        base_constructor_arguments.push_back(advance());
+      } while (depth != 0U && !at_end());
+    }
     if (interface_class) {
       while (match(TokenKind::Comma)) {
         (void)require_standard(
@@ -767,6 +786,10 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
       "FSIM-SV-PARSE-258");
 
   while (!at_end() && !keyword("endclass")) {
+    // An empty class item (IEEE 1800-2017 8.3).
+    if (match(TokenKind::Semicolon)) {
+      continue;
+    }
     if (keyword("localparam") || keyword("parameter")) {
       const auto parameter_start = advance();
       DesignUnit parameter_owner;
@@ -1026,6 +1049,58 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
         "class members are implemented after the class declaration "
         "foundation");
     skip_to_semicolon();
+  }
+
+  if (!base_constructor_arguments.empty()) {
+    const auto& anchor = base_constructor_arguments.front();
+    const auto synthetic = [&](const TokenKind kind, std::string text) {
+      Token token;
+      token.kind = kind;
+      token.text = std::move(text);
+      token.span = anchor.span;
+      return token;
+    };
+    auto constructor = std::ranges::find_if(
+        declaration.methods,
+        [](const SystemVerilogClassMethod& method) {
+          return method.kind == SystemVerilogClassMethodKind::Constructor;
+        });
+    std::vector<Token> tokens;
+    if (constructor == declaration.methods.end()) {
+      tokens = {synthetic(TokenKind::Identifier, "function"),
+          synthetic(TokenKind::Identifier, "new"),
+          synthetic(TokenKind::LeftParen, "("),
+          synthetic(TokenKind::RightParen, ")"),
+          synthetic(TokenKind::Semicolon, ";")};
+    }
+    tokens.push_back(synthetic(TokenKind::Identifier, "super"));
+    tokens.push_back(synthetic(TokenKind::Dot, "."));
+    tokens.push_back(synthetic(TokenKind::Identifier, "new"));
+    tokens.insert(tokens.end(), base_constructor_arguments.begin(),
+        base_constructor_arguments.end());
+    tokens.push_back(synthetic(TokenKind::Semicolon, ";"));
+    if (constructor == declaration.methods.end()) {
+      tokens.push_back(synthetic(TokenKind::Identifier, "endfunction"));
+    }
+    tokens.push_back(synthetic(TokenKind::EndOfFile, ""));
+    auto saved_tokens = std::move(tokens_);
+    const auto saved_index = index_;
+    tokens_ = std::move(tokens);
+    index_ = 0;
+    if (constructor == declaration.methods.end()) {
+      const auto method_start = advance();
+      declaration.methods.push_back(parse_class_method(
+          method_start,
+          SystemVerilogClassMethodKind::Function,
+          SystemVerilogClassVisibility::Public,
+          false, false, false, false, false,
+          declaration.canonical_identity));
+    } else if (auto call = parse_statement()) {
+      constructor->statements.insert(
+          constructor->statements.begin(), std::move(*call));
+    }
+    tokens_ = std::move(saved_tokens);
+    index_ = saved_index;
   }
 
   expect_keyword("endclass", false, "FSIM-SV-PARSE-259");

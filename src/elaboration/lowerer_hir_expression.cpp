@@ -7974,6 +7974,29 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         result = destination;
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::call
+        && expression->systemverilog->text == "@sv-shallow-copy"
+        && expression->systemverilog->operands.size() == 1U) {
+        const auto original = lower_hir_expression(
+            expression->systemverilog->operands.front(), 64U);
+        if (!original || register_width(*original) != 64U) {
+            return std::nullopt;
+        }
+        const auto destination = allocate_register(
+            64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ClassMethodCall {
+            destination,
+            *original,
+            "@shallow-copy",
+            { },
+            { },
+            { },
+            64U,
+            false,
+        });
+        result = destination;
+    } else if (expression->systemverilog != nullptr
+        && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::class_allocation) {
         const auto& allocation = *expression->systemverilog;
         if (allocation.class_identity.empty()) {
@@ -8020,6 +8043,63 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             std::move(names),
         });
         result = destination;
+    } else if (expression->systemverilog != nullptr
+        && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::call
+        && expression->systemverilog->text == "@sv-dollar-cast"
+        && expression->systemverilog->operands.size() == 2U) {
+        // `$cast(dest, value)` to an integral or enumeration destination
+        // (IEEE 1800-2017 6.24.2): an enumeration accepts only one of its
+        // literal values; the call returns whether the assignment happened.
+        const auto& cast = *expression->systemverilog;
+        const auto target = cast.operands.front();
+        const auto width = hir_expression_width(target, hir_process_scope_);
+        const auto declaration = hir_target_declaration(target);
+        if (!width || *width == 0U || *width > 64U || !declaration) {
+            return std::nullopt;
+        }
+        auto value = lower_hir_expression(cast.operands.back(), *width);
+        auto current = lower_hir_expression(target, *width);
+        if (!value || !current) {
+            return std::nullopt;
+        }
+        if (register_width(*value) != *width) {
+            value = resize_register(*value, *width,
+                hir_expression_signed(cast.operands.back()));
+        }
+        const auto accepted = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        const auto enumeration = hir_systemverilog_enumeration_profile(
+            HirEnumerationMethod { }, *declaration);
+        if (enumeration) {
+            process_.operations.emplace_back(LoadConstant {
+                accepted, unsigned_value(0U, 1U) });
+            for (const auto literal : enumeration->values) {
+                const auto constant = allocate_register(
+                    *width, register_domain(*value));
+                process_.operations.emplace_back(LoadConstant {
+                    constant, unsigned_value(literal, *width) });
+                const auto equal = allocate_register(
+                    1U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::case_equal, equal, *value, constant });
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::bit_or, accepted, accepted, equal });
+            }
+        } else {
+            process_.operations.emplace_back(LoadConstant {
+                accepted, unsigned_value(1U, 1U) });
+        }
+        const auto stored = allocate_register(
+            *width, register_domain(*current));
+        process_.operations.emplace_back(ConditionalSelect {
+            stored, accepted, *value, *current });
+        if (!lower_hir_packed_copy_out(target, stored)) {
+            return std::nullopt;
+        }
+        result = expected_width > 1U
+            ? std::optional { resize_register(accepted, expected_width, false) }
+            : std::optional { accepted };
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::class_cast) {

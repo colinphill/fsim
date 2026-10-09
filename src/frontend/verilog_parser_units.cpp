@@ -131,6 +131,9 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
             "a let declaration", StandardRevision::SystemVerilog2009,
             previous(), "FSIM-SV-PARSE-348");
         parse_let_declaration(unit, previous());
+    } else if (match_keyword("event")) {
+        module_has_non_time_item_ = true;
+        parse_event_declaration(unit, previous());
     } else if (match_keyword("typedef")) {
         module_has_non_time_item_ = true;
         const auto declaration = previous();
@@ -1458,6 +1461,10 @@ Type VerilogParser::parse_type_parameter_actual() {
       || keyword("process")) {
     return parse_parameter_type();
   }
+  if (keyword("virtual")) {
+    const auto start = advance();
+    return parse_virtual_interface_type(start);
+  }
   if (keyword("byte") || keyword("shortint")
       || keyword("longint") || keyword("time")
       || keyword("shortreal") || keyword("real")
@@ -1886,12 +1893,25 @@ std::vector<Instance> VerilogParser::parse_instances() {
   }
   if (match(TokenKind::LeftBracket)) {
     const auto range = previous();
-    const auto left_expression = parse_expression();
-    expect(
-        TokenKind::Colon,
-        "':' in instance-array range",
-        "FSIM-SV-PARSE-217");
-    const auto right_expression = parse_expression();
+    auto left_expression = parse_expression();
+    Expression right_expression;
+    if (at(TokenKind::RightBracket)) {
+      // A C-style size `[N]` declares the range `[0:N-1]` (IEEE 1800-2017
+      // 23.3.3.5).
+      right_expression = Expression{
+          ExpressionKind::Binary, "-",
+          {std::move(left_expression),
+           Expression{ExpressionKind::IntegerLiteral, "1", {}, range.span}},
+          range.span};
+      left_expression
+          = Expression{ExpressionKind::IntegerLiteral, "0", {}, range.span};
+    } else {
+      expect(
+          TokenKind::Colon,
+          "':' in instance-array range",
+          "FSIM-SV-PARSE-217");
+      right_expression = parse_expression();
+    }
     expect(
         TokenKind::RightBracket,
         "']' after instance-array range",
@@ -1902,6 +1922,17 @@ std::vector<Instance> VerilogParser::parse_instances() {
             -> std::optional<std::int64_t> {
           if (expression.kind == ExpressionKind::IntegerLiteral) {
             return detail::decimal_i64(expression.text);
+          }
+          if (expression.kind == ExpressionKind::Binary
+              && expression.operands.size() == 2
+              && (expression.text == "+" || expression.text == "-")) {
+            const auto lhs = self(self, expression.operands[0]);
+            const auto rhs = self(self, expression.operands[1]);
+            if (lhs && rhs && std::abs(*lhs) < (std::int64_t{1} << 40)
+                && std::abs(*rhs) < (std::int64_t{1} << 40)) {
+              return expression.text == "+" ? *lhs + *rhs : *lhs - *rhs;
+            }
+            return std::nullopt;
           }
           if (expression.kind == ExpressionKind::Unary
               && expression.operands.size() == 1
@@ -1920,11 +1951,9 @@ std::vector<Instance> VerilogParser::parse_instances() {
     const auto left = literal_value(literal_value, left_expression);
     const auto right = literal_value(literal_value, right_expression);
     if (!left || !right) {
-      error(
-          range,
-          "FSIM-SV-SEM-120",
-          "instance-array bounds must be decimal locally static integers "
-          "in this bounded slice");
+      // Bounds that name parameters expand during elaboration.
+      instance.array_left = std::move(left_expression);
+      instance.array_right = std::move(right_expression);
     } else {
       const auto distance = *left >= *right
           ? static_cast<std::uint64_t>(*left)

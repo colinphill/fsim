@@ -1878,7 +1878,11 @@ SignalChangeOrigin Interpreter::Impl::capture_signal_change_origin(
 {
     const auto process_origin = processes.scheduling_origin(process);
     const auto process_domain = process_origin.process_domain;
-    const auto phase = process_origin.phase;
+    // A process that moved to a later region, such as an assertion action
+    // block resumed in the Reactive region, writes from that region.
+    const auto phase = process_origin.phase == SchedulerPhase::observed
+        ? scheduler.current_phase().value_or(process_origin.phase)
+        : process_origin.phase;
     if (update_domain != SignalUpdateDomain::generic
         && process_domain != ProcessSchedulingDomain::systemverilog) {
         throw std::logic_error {

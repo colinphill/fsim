@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <set>
+#include <unordered_map>
 #include <tuple>
 #include <unordered_set>
 
@@ -985,12 +986,37 @@ std::string class_hir_error(const Model& semantics,
         return "SystemVerilog generated-class ownership is invalid: "
             + error;
     }
+    // Whether a scope lies inside a class callable, by one walk up its
+    // ancestors, memoized per scope.
+    std::unordered_map<std::uint32_t, bool> within_callable_cache;
+    const auto within_callable = [&](const ScopeId start) {
+        if (!start.valid()) {
+            return false;
+        }
+        if (const auto cached = within_callable_cache.find(start.value());
+            cached != within_callable_cache.end()) {
+            return cached->second;
+        }
+        bool result = false;
+        auto scope = start;
+        std::size_t steps { };
+        while (scope.valid() && scope.value() < semantics.scopes().size()
+            && steps++ <= semantics.scopes().size()) {
+            if (closure.callable_scopes.contains(scope)) {
+                result = true;
+                break;
+            }
+            const auto parent = semantics.scopes()[scope.value()].parent;
+            if (!parent) {
+                break;
+            }
+            scope = *parent;
+        }
+        within_callable_cache.emplace(start.value(), result);
+        return result;
+    };
     const auto class_owned_scope = [&](const ScopeId scope) {
-        return closure.class_scopes.contains(scope)
-            || std::ranges::any_of(closure.callable_scopes,
-                [&](const ScopeId callable) {
-                    return scope_within(semantics, scope, callable);
-                });
+        return closure.class_scopes.contains(scope) || within_callable(scope);
     };
     for (const auto& declaration : declarations) {
         if (declaration.form != DeclarationForm::enumeration_literal
@@ -1029,21 +1055,13 @@ std::string class_hir_error(const Model& semantics,
         }
     }
     for (const auto& statement : semantics.statement_identities()) {
-        if (std::ranges::any_of(closure.callable_scopes,
-                [&](const ScopeId callable) {
-                    return scope_within(semantics,
-                        statement.scope, callable);
-                })
+        if (within_callable(statement.scope)
             && !closure.claimed_statements.contains(statement.id)) {
             return "SystemVerilog class statement is orphaned";
         }
     }
     for (const auto& statement : statements) {
-        if (std::ranges::any_of(closure.callable_scopes,
-                [&](const ScopeId callable) {
-                    return scope_within(semantics,
-                        statement.scope, callable);
-                })
+        if (within_callable(statement.scope)
             && !closure.claimed_statements.contains(statement.id)) {
             return "SystemVerilog class statement record is orphaned";
         }

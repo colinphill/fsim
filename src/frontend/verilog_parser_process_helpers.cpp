@@ -248,8 +248,11 @@ Statement VerilogParser::parse_case_statement(
                 parse_choice();
             }
         }
-        expect(TokenKind::Colon, "':' after case item",
-            "FSIM-SV-PARSE-048");
+        // The colon after `default` is optional (IEEE 1800-2017 12.5).
+        if (!alternative.is_default || at(TokenKind::Colon)) {
+            expect(TokenKind::Colon, "':' after case item",
+                "FSIM-SV-PARSE-048");
+        }
         if (auto body = parse_statement()) {
             alternative.statements.push_back(std::move(*body));
         }
@@ -288,6 +291,9 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start)
         TokenKind::LeftParen,
         "'(' after procedural for",
         "FSIM-SV-PARSE-095");
+    // `var` introduces a loop variable declaration (IEEE 1800-2017 6.8).
+    const bool var_declaration = language_ == Language::SystemVerilog2017
+        && keyword("var") && (advance(), true);
     const bool built_in_loop_type = keyword("byte") || keyword("shortint")
         || keyword("int") || keyword("longint")
         || keyword("integer") || keyword("time")
@@ -296,8 +302,16 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start)
         || keyword("unsigned") || at(TokenKind::LeftBracket);
     const bool named_loop_type = at(TokenKind::Identifier)
         && at(TokenKind::Identifier, 1);
-    const bool inline_variable = built_in_loop_type || named_loop_type;
-    if (inline_variable) {
+    if (var_declaration
+        && ((!built_in_loop_type && !named_loop_type)
+            || at(TokenKind::LeftBracket))) {
+        // A for-loop declaration names a data type (IEEE 1800-2017 12.7.1).
+        error(current(), "FSIM-SV-SEM-404",
+            "a for-loop variable declaration requires a data type");
+    }
+    const bool inline_variable = built_in_loop_type || named_loop_type
+        || var_declaration;
+    if (inline_variable && (built_in_loop_type || named_loop_type)) {
         (void)require_standard(
             "an inline procedural loop declaration",
             StandardRevision::SystemVerilog2005,

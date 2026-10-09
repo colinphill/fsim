@@ -447,6 +447,51 @@ void Resolver::resolve_generate_body(GenerateBody& body, const Scope& inherited)
   }
   return nullptr;
 }
+bool Resolver::class_assignable(
+    const std::string_view from, const std::string_view to) const {
+  std::set<std::string> visited;
+  std::vector<const SystemVerilogClassDeclaration*> pending;
+  const auto* start = find_class(from);
+  const auto* target = find_class(to);
+  // Only plain classes named by their own declarations are compared;
+  // parameterized classes and typedef names are left to elaboration.
+  const auto plain = [](const SystemVerilogClassDeclaration* declaration,
+                         std::string_view identity) {
+    return declaration != nullptr && declaration->parameters.empty()
+        && declaration->canonical_identity == identity;
+  };
+  if (!plain(start, from) || !plain(target, to)
+      || has_specialization_dependent_base(from)) {
+    return true;
+  }
+  pending.push_back(start);
+  while (!pending.empty()) {
+    const auto* current = pending.back();
+    pending.pop_back();
+    if (current == nullptr || !current->parameters.empty()) {
+      return true;
+    }
+    if (!visited.insert(current->canonical_identity).second) {
+      continue;
+    }
+    if (current->canonical_identity == to) {
+      return true;
+    }
+    if (current->base) {
+      const auto* base = find_base_class(*current);
+      // A base that depends on a parameter is not known here.
+      if (base == nullptr) {
+        return true;
+      }
+      pending.push_back(base);
+    }
+    if (!current->implemented_interfaces.empty()
+        || !current->extended_interfaces.empty()) {
+      return true;
+    }
+  }
+  return false;
+}
 [[nodiscard]] const SystemVerilogClassDeclaration* Resolver::find_base_class(
     const SystemVerilogClassDeclaration& declaration) const {
   if (!declaration.base) return nullptr;
@@ -487,7 +532,15 @@ void Resolver::resolve_generate_body(GenerateBody& body, const Scope& inherited)
 }
 [[nodiscard]] Type Resolver::resolve_alias_type(
     Type type, std::string lexical_identity) const {
-  if ((class_identity(type) && !type.systemverilog_container)
+  // A handle type named by its class needs no alias lookup; a typedef name
+  // that also carries the class identity may denote an array of handles.
+  const auto names_class = [&] {
+    const auto& identity = type.systemverilog_class_declaration;
+    return identity == type.named_type
+        || identity.ends_with("::" + type.named_type);
+  };
+  if ((class_identity(type) && !type.systemverilog_container
+          && names_class())
       || type.named_type.empty()) {
     return type;
   }
@@ -1123,6 +1176,9 @@ void Resolver::retain_result_type(
     // a parameterized class, `C#(...)::name` (IEEE 1800-2017 8.25.1).
     if (owners.size() == 1U && scope.class_owner == nullptr
         && owner_name.find('#') == std::string::npos
+        // A typedef of a specialization already supplies the values.
+        && (owner_name == owners.front()->name
+            || owner_name.ends_with("::" + owners.front()->name))
         && std::ranges::any_of(
             owners.front()->parameters,
             [](const ParameterDeclaration& parameter) {

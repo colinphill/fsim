@@ -86,6 +86,10 @@ class Resolver final {
   void resolve_generate_body(GenerateBody& body, const Scope& inherited);
   [[nodiscard]] const SystemVerilogClassDeclaration* find_class(
       std::string_view identity) const;
+  // Whether a handle of class `from` may be assigned to one of class `to`;
+  // true when the relation cannot be determined.
+  [[nodiscard]] bool class_assignable(
+      std::string_view from, std::string_view to) const;
   [[nodiscard]] const SystemVerilogClassDeclaration* find_base_class(
       const SystemVerilogClassDeclaration& declaration) const;
   [[nodiscard]] bool has_specialization_dependent_base(

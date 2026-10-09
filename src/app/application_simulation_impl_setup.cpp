@@ -601,6 +601,22 @@ Simulation::Impl::Impl(
             const bool virtual_dispatch) {
             const auto before = packed_class_snapshot();
             const auto static_before = packed_static_snapshot();
+            // `new handle` copies the object's properties into a new object
+            // of the same class (IEEE 1800-2017 8.12).
+            if (method == "@shallow-copy") {
+                if (handle == 0U) {
+                    throw std::invalid_argument {
+                        "shallow copy of a null class handle"
+                    };
+                }
+                const auto source = class_heap.object(handle);
+                const auto copy = allocate_class(
+                    source.specialization_identity, source.declared_type,
+                    source.random_root_identity);
+                class_heap.object(copy).properties = source.properties;
+                notify_class_changes(before);
+                return runtime::PackedLogic4::from_aval_bval(64U, copy, 0U);
+            }
             if (method.starts_with(string_property_prefix)) {
                 auto result = access_string_property(
                     class_heap.property(handle,

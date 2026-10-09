@@ -1365,9 +1365,12 @@ VerilogParser::parse_assertion_declaration(
                     : directive.text == "cover"
                     ? SystemVerilogConcurrentAssertionKind::Cover
                     : SystemVerilogConcurrentAssertionKind::Restrict;
+                auto parsed_assertion = parse_concurrent_assertion(
+                    directive, assertion_kind, std::move(label));
+                declare_inline_property(
+                    parsed_assertion, declaration.checker_declarations);
                 declaration.checker_assertions.push_back(
-                    parse_concurrent_assertion(
-                        directive, assertion_kind, std::move(label)));
+                    std::move(parsed_assertion));
             } else if (at(TokenKind::Backtick)) {
                 parse_directive();
             } else {
@@ -1437,6 +1440,134 @@ VerilogParser::parse_assertion_declaration(
     }
     declaration.span = span_from(start, previous());
     return declaration;
+}
+
+std::optional<Expression> VerilogParser::assertion_expression(
+    const std::span<const Token> tokens)
+{
+    if (auto simple = assertion_resolution_detail::scalar_expression(tokens)) {
+        return simple;
+    }
+    if (tokens.empty()) {
+        return std::nullopt;
+    }
+    static const std::unordered_set<std::string_view> temporal_keywords {
+        "throughout", "within", "intersect", "first_match", "until",
+        "s_until", "until_with", "s_until_with", "implies", "nexttime",
+        "s_nexttime", "always", "s_always", "eventually", "s_eventually",
+        "accept_on", "reject_on", "sync_accept_on", "sync_reject_on", "not",
+        "and", "or", "strong", "weak", "iff", "if", "case", "disable",
+    };
+    for (std::size_t index = 0; index < tokens.size(); ++index) {
+        const auto& token = tokens[index];
+        const auto next = index + 1U < tokens.size()
+            ? tokens[index + 1U].kind : TokenKind::EndOfFile;
+        if (token.kind == TokenKind::Hash
+            || (token.kind == TokenKind::Pipe
+                && (next == TokenKind::ThinArrow || next == TokenKind::Arrow))
+            || (token.kind == TokenKind::PipeAssign
+                && next == TokenKind::Greater)
+            || (token.kind == TokenKind::LeftBracket
+                && (next == TokenKind::Star || next == TokenKind::Assign
+                    || next == TokenKind::ThinArrow))
+            || (token.kind == TokenKind::Identifier
+                && temporal_keywords.contains(token.text))) {
+            return std::nullopt;
+        }
+    }
+    auto saved_tokens = std::move(tokens_);
+    const auto saved_index = index_;
+    const auto saved_diagnostics = diagnostics_.size();
+    tokens_.assign(tokens.begin(), tokens.end());
+    Token end;
+    end.kind = TokenKind::EndOfFile;
+    end.span = tokens.back().span;
+    tokens_.push_back(std::move(end));
+    index_ = 0;
+    std::optional<Expression> result;
+    auto parsed = parse_expression();
+    if (at_end() && diagnostics_.size() == saved_diagnostics) {
+        result = std::move(parsed);
+    }
+    diagnostics_.resize(saved_diagnostics);
+    tokens_ = std::move(saved_tokens);
+    index_ = saved_index;
+    return result;
+}
+
+void VerilogParser::declare_inline_property(
+    SystemVerilogConcurrentAssertion& assertion,
+    std::vector<SystemVerilogAssertionDeclaration>& declarations)
+{
+    if (assertion.form != SystemVerilogConcurrentAssertionForm::Property
+        || assertion.property_tokens.empty()
+        || (assertion.property_tokens.front().kind != TokenKind::At
+            && !(assertion.property_tokens.front().kind
+                    == TokenKind::Identifier
+                && assertion.property_tokens.front().text == "disable"))) {
+        return;
+    }
+    // `disable iff (c) @(e) p` names the same property as
+    // `@(e) disable iff (c) p` (16.12).
+    auto& tokens = assertion.property_tokens;
+    const auto group_end = [&](std::size_t open) -> std::optional<std::size_t> {
+        if (open >= tokens.size() || tokens[open].kind != TokenKind::LeftParen) {
+            return std::nullopt;
+        }
+        int depth { };
+        for (auto index = open; index < tokens.size(); ++index) {
+            if (tokens[index].kind == TokenKind::LeftParen) {
+                ++depth;
+            } else if (tokens[index].kind == TokenKind::RightParen
+                && --depth == 0) {
+                return index;
+            }
+        }
+        return std::nullopt;
+    };
+    if (tokens.size() > 3U && tokens[0].text == "disable"
+        && tokens[1].text == "iff") {
+        const auto disable_end = group_end(2U);
+        if (disable_end && *disable_end + 1U < tokens.size()
+            && tokens[*disable_end + 1U].kind == TokenKind::At) {
+            if (const auto clock_end = group_end(*disable_end + 2U)) {
+                std::vector<Token> reordered(
+                    tokens.begin() + static_cast<std::ptrdiff_t>(*disable_end + 1U),
+                    tokens.begin() + static_cast<std::ptrdiff_t>(*clock_end + 1U));
+                reordered.insert(reordered.end(), tokens.begin(),
+                    tokens.begin() + static_cast<std::ptrdiff_t>(*disable_end + 1U));
+                reordered.insert(reordered.end(),
+                    tokens.begin() + static_cast<std::ptrdiff_t>(*clock_end + 1U),
+                    tokens.end());
+                tokens = std::move(reordered);
+            }
+        }
+    }
+    SystemVerilogAssertionDeclaration declaration;
+    declaration.kind = SystemVerilogAssertionDeclarationKind::Property;
+    const auto& first = assertion.property_tokens.front();
+    declaration.name = "$inline_property$"
+        + std::to_string(first.span.begin.offset) + "$"
+        + std::to_string(declarations.size());
+    declaration.name_span = first.span;
+    declaration.body_tokens = assertion.property_tokens;
+    auto terminator = assertion.property_tokens.back();
+    terminator.kind = TokenKind::Semicolon;
+    terminator.text = ";";
+    declaration.body_tokens.push_back(std::move(terminator));
+    declaration.body_span = span_from(
+        declaration.body_tokens.front(), declaration.body_tokens.back());
+    const auto expression_position = structure_assertion_locals(declaration);
+    structure_assertion_clock_and_disable(declaration, expression_position);
+    structure_assertion_endpoints(declaration);
+    structure_sequence_expression(declaration);
+    structure_property_expression(declaration);
+    declaration.span = declaration.body_span;
+    auto name = first;
+    name.kind = TokenKind::Identifier;
+    name.text = declaration.name;
+    assertion.property_tokens = { std::move(name) };
+    declarations.push_back(std::move(declaration));
 }
 
 SystemVerilogConcurrentAssertion
@@ -1584,6 +1715,7 @@ VerilogParser::parse_concurrent_assertion(
             present = true;
             const auto action_start = current();
             reject_illegal_action(action_start, failure);
+            const auto action_index = index_;
             if (!consume_action(tokens, span)) {
                 error(
                     action_start,
@@ -1591,6 +1723,22 @@ VerilogParser::parse_concurrent_assertion(
                     failure
                         ? "expected a complete concurrent assertion failure action"
                         : "expected a complete concurrent assertion pass action");
+                return;
+            }
+            // Parse the action block again as an ordinary procedural
+            // statement (IEEE 1800-2017 16.14.1).
+            const auto end_index = index_;
+            const auto diagnostics_before = diagnostics_.size();
+            index_ = action_index;
+            auto statement = parse_statement();
+            if (statement && index_ == end_index
+                && diagnostics_.size() == diagnostics_before) {
+                (failure ? assertion.failure_action_statements
+                         : assertion.pass_action_statements)
+                    .push_back(std::move(*statement));
+            } else {
+                diagnostics_.resize(diagnostics_before);
+                index_ = end_index;
             }
         };
 

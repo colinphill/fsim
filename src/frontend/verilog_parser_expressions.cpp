@@ -12,6 +12,13 @@ verilog_system_service_standard(std::string_view name);
 
 DelayAlternative VerilogParser::parse_verilog_delay_alternative()
 {
+    // `#1 ->e;` triggers an event after the delay; `->` is not an
+    // implication inside a delay value.
+    ++constraint_parse_depth_;
+    struct DelayDepth {
+        std::size_t& depth;
+        ~DelayDepth() { --depth; }
+    } delay_depth { constraint_parse_depth_ };
     DelayAlternative alternative;
     const auto start = current();
     if (at(TokenKind::Colon) || at(TokenKind::Comma)
@@ -466,6 +473,19 @@ Expression VerilogParser::parse_expression(int minimum_precedence)
         left = Expression { ExpressionKind::Unary, "!",
             { std::move(different) }, combined };
     }
+    // Logical implication `a -> b` (IEEE 1800-2017 11.4.7) is !a || b; it
+    // binds loosest and associates to the right.
+    if (minimum_precedence == 0 && language_ == Language::SystemVerilog2017
+        && constraint_parse_depth_ == 0 && at(TokenKind::ThinArrow)
+        && !at(TokenKind::LeftBrace, 1)) {
+        advance();
+        Expression right = parse_expression();
+        const auto combined = cover(left.span, right.span);
+        Expression left_false { ExpressionKind::Unary, "!",
+            { std::move(left) }, combined };
+        left = Expression { ExpressionKind::Binary, "||",
+            { std::move(left_false), std::move(right) }, combined };
+    }
     return left;
 }
 
@@ -755,6 +775,30 @@ Expression VerilogParser::parse_primary()
                 && at(TokenKind::Identifier)
                 && find_systemverilog_standard_package_declaration(
                        standard_revision_, current().text) != nullptr;
+            // `C::new` names a typed constructor (IEEE 1800-2017 8.8).
+            if (keyword("new")) {
+                const auto constructor = advance();
+                Expression typed {
+                    ExpressionKind::Call,
+                    "@sv-new-typed:"
+                        + canonical.substr(0, canonical.size() - 2U),
+                    { },
+                    cover(name.span, constructor.span)
+                };
+                if (match(TokenKind::LeftParen)) {
+                    while (!at_end() && !at(TokenKind::RightParen)) {
+                        typed.operands.push_back(parse_expression());
+                        if (!match(TokenKind::Comma)) {
+                            break;
+                        }
+                    }
+                    expect(TokenKind::RightParen,
+                        "')' after typed constructor arguments",
+                        "FSIM-SV-PARSE-391");
+                    typed.span = cover(typed.span, previous().span);
+                }
+                return typed;
+            }
             canonical += (standard_member
                 ? advance()
                 : expect_identifier("package-scoped name")).text;
@@ -1275,6 +1319,18 @@ Expression VerilogParser::parse_primary()
                     "FSIM-SV-PARSE-349")) {
                 return parse_postfix(std::move(expression));
             }
+            // `new handle` makes a shallow copy (IEEE 1800-2017 8.12).
+            if (language_ == Language::SystemVerilog2017
+                && at(TokenKind::Identifier)
+                && (keyword("this")
+                    || !keyword_reserved(keyword_set_, current().text))) {
+                auto source = parse_unary();
+                const auto span = cover(name.span, source.span);
+                return Expression {
+                    ExpressionKind::Call, "@sv-shallow-copy",
+                    { std::move(source) }, span
+                };
+            }
             return Expression {
                 ExpressionKind::Call, "@sv-new", { }, name.span
             };
@@ -1317,7 +1373,56 @@ Expression VerilogParser::parse_primary()
     }
     if (match(TokenKind::LeftParen)) {
         const auto open = previous();
+        const auto inner_begin = index_;
         Expression expression = parse_expression();
+        const auto assignment_operator = at(TokenKind::Assign)
+            || at(TokenKind::PlusAssign) || at(TokenKind::MinusAssign)
+            || at(TokenKind::StarAssign) || at(TokenKind::SlashAssign)
+            || at(TokenKind::PercentAssign) || at(TokenKind::AmpersandAssign)
+            || at(TokenKind::PipeAssign) || at(TokenKind::CaretAssign)
+            || at(TokenKind::ShiftLeftAssign)
+            || at(TokenKind::ShiftRightAssign)
+            || at(TokenKind::ArithmeticShiftLeftAssign)
+            || at(TokenKind::ArithmeticShiftRightAssign);
+        if (assignment_operator && statement_hoist_depth_ != 0U
+            && language_ == Language::SystemVerilog2017
+            && constraint_parse_depth_ == 0U) {
+            // An assignment within an expression (IEEE 1800-2017 11.3.6)
+            // runs before the enclosing statement; its value is the
+            // target's new value.
+            index_ = inner_begin;
+            std::vector<Token> tokens;
+            std::size_t depth = 1U;
+            while (!at_end()) {
+                if (at(TokenKind::LeftParen)) {
+                    ++depth;
+                } else if (at(TokenKind::RightParen) && --depth == 0U) {
+                    break;
+                }
+                tokens.push_back(advance());
+            }
+            Token terminator;
+            terminator.kind = TokenKind::Semicolon;
+            terminator.text = ";";
+            terminator.span = current().span;
+            tokens.push_back(std::move(terminator));
+            expect(TokenKind::RightParen, "')' after expression",
+                "FSIM-SV-PARSE-029");
+            const auto close = previous();
+            auto assignment = parse_generated_statement(
+                std::move(tokens), span_from(open, close));
+            if (assignment) {
+                const Statement* last = &*assignment;
+                while (last->kind == StatementKind::Block
+                    && !last->statements.empty()) {
+                    last = &last->statements.back();
+                }
+                expression = last->target;
+                hoisted_statements_.push_back(std::move(*assignment));
+            }
+            expression.span = span_from(open, close);
+            return parse_postfix(std::move(expression));
+        }
         expect(TokenKind::RightParen, "')' after expression",
             "FSIM-SV-PARSE-029");
         expression.span = span_from(open, previous());

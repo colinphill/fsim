@@ -22,7 +22,9 @@ void VerilogParser::parse_parameter_overrides(
         || keyword("integer") || keyword("int")
         || keyword("logic") || keyword("reg") || keyword("bit")
         || keyword("signed") || keyword("unsigned")
-        || keyword("string") || at(TokenKind::LeftBracket);
+        || keyword("string") || keyword("virtual")
+        || keyword("struct") || keyword("union") || keyword("enum")
+        || at(TokenKind::LeftBracket);
   };
   const auto parse_actual = [&](ParameterOverride& override) {
     if (begins_unambiguous_type_actual()) {

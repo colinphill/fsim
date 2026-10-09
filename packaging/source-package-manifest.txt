@@ -1073,6 +1073,7 @@ src/frontend/verilog_coverage_conditions.cpp
 src/frontend/verilog_coverage_points.cpp
 src/frontend/verilog_parser.cpp
 src/frontend/verilog_parser_annex.cpp
+src/frontend/verilog_parser_assertion_engine.cpp
 src/frontend/verilog_parser_assertion_formals.cpp
 src/frontend/verilog_parser_assertion_locals.cpp
 src/frontend/verilog_parser_assertion_resolution.cpp
@@ -1099,6 +1100,7 @@ src/frontend/verilog_parser_hierarchy.cpp
 src/frontend/verilog_parser_internal.hpp
 src/frontend/verilog_parser_process_helpers.cpp
 src/frontend/verilog_parser_processes.cpp
+src/frontend/verilog_parser_randsequence.cpp
 src/frontend/verilog_parser_specify.cpp
 src/frontend/verilog_parser_standard_support.cpp
 src/frontend/verilog_parser_strength.cpp
@@ -1971,6 +1973,7 @@ tests/feature_matrix/vhdl_synopsys_package_inventory.tsv
 tests/fixtures/compliance/run_compliance.cmake
 tests/fixtures/compliance/sv_class_statements.sv
 tests/fixtures/compliance/sv_compilation_unit_declarations.sv
+tests/fixtures/compliance/sv_copies_and_constructors.sv
 tests/fixtures/compliance/sv_delays_packages_and_classes.sv
 tests/fixtures/compliance/sv_display_arguments.sv
 tests/fixtures/compliance/sv_enum_methods.sv
@@ -1984,7 +1987,9 @@ tests/fixtures/compliance/sv_packed_multidim.sv
 tests/fixtures/compliance/sv_parameter_types.sv
 tests/fixtures/compliance/sv_patterns_and_aggregates.sv
 tests/fixtures/compliance/sv_port_width_mismatch.sv
+tests/fixtures/compliance/sv_randsequence.sv
 tests/fixtures/compliance/sv_real_values_and_events.sv
+tests/fixtures/compliance/sv_sequence_properties.sv
 tests/fixtures/compliance/sv_streaming_unpack.sv
 tests/fixtures/compliance/sv_string_containers.sv
 tests/fixtures/compliance/sv_time_without_timescale.sv

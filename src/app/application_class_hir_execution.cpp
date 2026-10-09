@@ -979,9 +979,18 @@ void SystemVerilogClassHirExecution::invoke_constructor_impl(
     const std::span<const runtime::PackedLogic4> actuals,
     const std::span<const std::string> actual_names)
 {
-    const auto constructor = std::ranges::find(
-        selected.methods, semantic::sv::ClassMethodKind::constructor,
-        &semantic::sv::SpecializedClassMethod::kind);
+    // A specialization also lists inherited methods; the class's own
+    // constructor is the one declared by this class.
+    auto constructor = std::ranges::find_if(
+        selected.methods, [&](const semantic::sv::SpecializedClassMethod& method) {
+            return method.kind == semantic::sv::ClassMethodKind::constructor
+                && method.owner_identity == selected.declaration_identity;
+        });
+    if (constructor == selected.methods.end()) {
+        constructor = std::ranges::find(
+            selected.methods, semantic::sv::ClassMethodKind::constructor,
+            &semantic::sv::SpecializedClassMethod::kind);
+    }
     PackedEnvironment environment;
     if (constructor != selected.methods.end()) {
         environment = bind_actuals(

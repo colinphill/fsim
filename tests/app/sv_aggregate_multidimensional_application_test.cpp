@@ -81,9 +81,11 @@ package aggregate_types;
     logic [15:0] wide;
     logic [7:0] narrow;
   } tagged_t;
+  // Packed structure members take no defaults (IEEE 1800-2017 7.2.2); the
+  // variable below carries the same values in its initializer.
   typedef struct packed {
-    logic [7:0] payload = 8'ha5;
-    inner_t nested = '{code: TWO, valid: 1'b1};
+    logic [7:0] payload;
+    inner_t nested;
   } initialized_t;
   localparam outer_t NESTED_CONSTANT = '{
     prefix: 1'b1,
@@ -211,7 +213,8 @@ module aggregate_multidimensional_top #(
   logic [7:0] tagged_active_observed;
   logic [15:0] tagged_inactive_observed;
   logic [3:0] tagged_compare_observed;
-  initialized_t initialized_default;
+  initialized_t initialized_default
+      = '{payload: 8'ha5, nested: '{code: TWO, valid: 1'b1}};
   enum { ANON_START = 5, ANON_NEXT } anonymous_enum_value;
   logic [10:0] initialized_default_observed;
   logic [5:0] nested_constant_observed;

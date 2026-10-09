@@ -249,6 +249,80 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 21: sequence properties, randsequence, class construction, UVM compile time
+
+Fixtures: `sv_copies_and_constructors.sv` (passes on xsim),
+`sv_randsequence.sv` and `sv_sequence_properties.sv` (xsim 2025.2 does not
+simulate `randsequence` or most of these property forms; their expected
+values follow from the LRM and the stimulus).
+
+Concurrent assertions (16.7-16.14):
+- Properties outside the specialized slices run on a general sequence
+  engine (`verilog_parser_assertion_engine.cpp`): `not`, `if`/`else`,
+  `strong`/`weak`, `|->`, `|=>`, `#-#`, `#=#`, `or`, `and`, `intersect`,
+  `within`, `throughout`, `##n`, `##[m:n]`, `##[m:$]`, `[*n]`, `[*m:n]`,
+  `[+]`, `[=n]`, `[->n]`, `first_match` and named sequence instances with
+  arguments, and unclocked property instances. The directive's process
+  advances all attempts once per clock, with each automaton state a vector
+  of attempt slots, so overlapping attempts keep separate state.
+- Action blocks are ordinary statements, so nonblocking writes, counters
+  and `$error($sformatf(...))` work there; a vacuous success runs the pass
+  action.
+- Inline `@(clk) disable iff (...)` properties on `assert`/`cover` and in
+  checkers. A property instance with actuals is restructured from its
+  substituted tokens; the specialized slices read the declaration's own
+  tokens, leaving the formals unbound.
+- A second `WaitRegion` to the current region stopped the process, dropping
+  later actions of the same tick.
+
+Classes (8.3, 8.8, 8.12, 8.15, 8.17, 8.21):
+- `class C extends B(args);` passes the arguments to the base
+  constructor; empty class items (`;`) are accepted.
+- A derived constructor without formals that calls `super.new(...)` ran
+  the base class's constructor in its place.
+- Typed constructors `C::new(...)` and shallow copies `new h`.
+- `new` of a virtual class (`SV-CLASS-024`) and assigning a handle of an
+  unrelated class (`SV-CLASS-025`) are rejected.
+- `#(virtual ifc)` type actuals, and `$cast` to non-class destinations
+  (enums) as a task and as a function.
+- Typedefs of a specialization (`typedef C#(4) T; T::name`) are not taken
+  for an unparameterized class scope.
+
+Statements and expressions (11.3.6, 12.5, 12.7, 18.16, 18.17):
+- `randcase` and `randsequence` (weights, `if`, `case`, `repeat`,
+  `rand join`, `break`, `return`, production arguments).
+- Assignments inside expressions (`a = (b = (c = 5))`, `(x -= 1)`).
+- `default` case items without a colon; `for (var int i = ...)`; `var`
+  function and task formals.
+- An `always` whose only timing is a nonblocking intra-assignment control
+  (`always v <= @(e) c;`) is rejected (`SV-SEM-106`): it never suspends.
+- A classic function formal declared without a type takes the type of a
+  later declaration (`input x; real x;`).
+- `void` functions used as values (`SVFUNC-014`) and procedural
+  assignments of incompatible unpacked arrays (`SVASSIGN-004`) are
+  rejected; `mailbox`/`semaphore` `new` in assignments.
+- White space between a literal's base and its digits (`'b 0`).
+
+Hierarchy and packages:
+- Instance arrays with C-style or parameter-dependent ranges.
+- `event` declarations in packages; package `export` validation across all
+  packages (`SV-SEM-399`); `always`/instances in a program, packed
+  structure member defaults, and Verilog declarations in unnamed blocks are
+  rejected (`SV-SEM-400` to `402`).
+
+UVM compile time: compiling the UVM package took about six minutes and now
+takes about 20 s. Workspace dependency indexing was cubic, class HIR error
+checks recomputed scope containment, and each class statement copied its
+scope.
+
+Corpus effect (interpreter, against Batch 20): ivtest +55 (1937/2826),
+Verilator +63 (829/2415), sv-tests +71 (1205/1497), nvc +1 (480/1482);
+VESTs and VHDL Compliance-Tests unchanged. 190 cases closed. Three
+negative cases that failed only because a construct did not parse now
+compile, since their remaining error is not yet checked (ivtest
+`sv_wildcard_import4`, sv-tests `18.17.2--if-else-production-statements_{0,2}_fail`;
+see the notes).
+
 ### Batch 20: delays, memory part-selects, package variables, patterns
 
 Fixtures: `sv_patterns_and_aggregates.sv` and

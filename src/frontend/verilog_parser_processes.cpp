@@ -148,6 +148,52 @@ Process VerilogParser::parse_final()
 
 std::optional<Statement> VerilogParser::parse_statement()
 {
+    if (language_ == Language::SystemVerilog2017
+        && (keyword("randcase") || keyword("randsequence"))) {
+        const auto start = advance();
+        return start.text == "randcase" ? parse_randcase(start)
+                                        : parse_randsequence(start);
+    }
+    // The statement is returned in place; deeply nested statements recurse
+    // through here, so the block construction stays out of this frame.
+    const auto mark = hoisted_statements_.size();
+    ++statement_hoist_depth_;
+    auto statement = parse_statement_unhoisted();
+    --statement_hoist_depth_;
+    if (hoisted_statements_.size() != mark) {
+        prepend_hoisted_statements(statement, mark);
+    }
+    return statement;
+}
+
+void VerilogParser::prepend_hoisted_statements(
+    std::optional<Statement>& statement, const std::size_t mark)
+{
+    std::vector<Statement> hoisted(
+        std::make_move_iterator(hoisted_statements_.begin()
+            + static_cast<std::ptrdiff_t>(mark)),
+        std::make_move_iterator(hoisted_statements_.end()));
+    hoisted_statements_.resize(mark);
+    if (!statement) {
+        return;
+    }
+    if (statement->kind == StatementKind::Loop) {
+        error(Token { TokenKind::Identifier, "", hoisted.front().span, { } },
+            "FSIM-SV-UNSUPPORTED-047",
+            "an assignment inside a loop control expression is not "
+            "supported");
+        return;
+    }
+    auto block = std::make_unique<Statement>();
+    block->kind = StatementKind::Block;
+    block->span = statement->span;
+    block->statements = std::move(hoisted);
+    block->statements.push_back(std::move(*statement));
+    statement = std::move(*block);
+}
+
+std::optional<Statement> VerilogParser::parse_statement_unhoisted()
+{
     if (const auto required = verilog_system_service_standard(current().text)) {
         note_system_service_standard(current().text, *required, current());
     }
@@ -529,6 +575,14 @@ std::optional<Statement> VerilogParser::parse_statement()
                     current_procedural_types_.insert_or_assign(alias.name, alias.type);
                 }
             } else if (is_declaration_start()) {
+              // Verilog declares block items only in named blocks
+              // (IEEE 1364-2005 9.8.3).
+              if (language_ != Language::SystemVerilog2017
+                  && block.label.empty()) {
+                  error(current(), "FSIM-SV-SEM-402",
+                      "a declaration in an unnamed block requires "
+                      "SystemVerilog");
+              }
                 parse_procedural_declaration(block);
             } else if (auto child = parse_statement()) {
                 block.statements.push_back(std::move(*child));
@@ -1595,8 +1649,11 @@ std::optional<Statement> VerilogParser::parse_statement()
             require_sv2005(
                 "an increment or decrement statement", *prefix_update);
         }
+        // A concatenation target is a primary; parsing a whole expression
+        // would read `{a, b} <= v` as a comparison.
         Expression target = at(TokenKind::LeftBrace)
-                || at(TokenKind::Apostrophe)
+            ? parse_primary()
+            : at(TokenKind::Apostrophe)
             ? parse_expression()
             : parse_lvalue();
         if (target.kind == ExpressionKind::Call

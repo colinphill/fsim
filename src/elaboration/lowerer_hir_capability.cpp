@@ -9907,6 +9907,24 @@ Lowerer::hir_systemverilog_cast_profile(
     if (builtin) {
         return builtin;
     }
+    // `signed'(x)` and `unsigned'(x)` change only the signedness, and
+    // `const'(x)` nothing; the operand keeps its width (6.24.1).
+    if (type_name == "signed" || type_name == "unsigned"
+        || type_name == "const") {
+        const auto operand = source.operands.front();
+        const auto width = hir_expression_width(operand, hir_process_scope_);
+        if (!width || *width == 0U) {
+            return std::nullopt;
+        }
+        return HirSystemVerilogCastProfile {
+            *width,
+            hir_expression_domain(operand, hir_process_scope_)
+                .value_or(frontend::ValueDomain::Logic4),
+            type_name == "const" ? hir_expression_signed(operand)
+                                 : type_name == "signed",
+            std::nullopt,
+        };
+    }
 
     // SystemVerilog sized casts use a decimal constant as the type spelling,
     // for example `3'(value)`.  The frontend retains that spelling in the

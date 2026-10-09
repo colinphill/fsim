@@ -413,6 +413,32 @@ ParseResult VerilogParser::run() {
                 previous(),
                 "FSIM-SV-PARSE-348");
             auto package = parse_package(previous());
+            // An export names an item imported into the package from that
+            // package (IEEE 1800-2017 26.6).
+            for (const auto& exported : package.systemverilog_exports) {
+                if (exported.package == "*") {
+                    continue;
+                }
+                const bool imported = std::ranges::any_of(
+                    package.systemverilog_imports,
+                    [&](const SystemVerilogImport& candidate) {
+                        return candidate.package == exported.package
+                            && (exported.name.empty()
+                                || candidate.name.empty()
+                                || candidate.name == exported.name);
+                    });
+                if (!imported) {
+                    Token anchor;
+                    anchor.kind = TokenKind::Identifier;
+                    anchor.text = exported.package;
+                    anchor.span = exported.span;
+                    error(anchor, "FSIM-SV-SEM-399",
+                        "package export '" + exported.package + "::"
+                            + (exported.name.empty() ? std::string { "*" }
+                                                     : exported.name)
+                            + "' is not backed by an import of that package");
+                }
+            }
             auto& exports = package_constant_names_[package.name];
             for (const auto& parameter : package.parameters) {
                 exports.insert(parameter.name);

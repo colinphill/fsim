@@ -102,6 +102,11 @@ Type VerilogParser::parse_systemverilog_aggregate_type()
             }
             std::optional<Expression> member_initializer;
             if (match(TokenKind::Assign)) {
+                // Only unpacked structure members take defaults (7.2.2).
+                if (packed) {
+                    error(previous(), "FSIM-SV-SEM-401",
+                        "a packed structure member cannot have a default value");
+                }
                 member_initializer = parse_expression();
             }
             if (!member_names.insert(member.text).second) {
@@ -582,6 +587,11 @@ void VerilogParser::parse_typedef(
                 }
                 std::optional<Expression> member_initializer;
                 if (match(TokenKind::Assign)) {
+                    // Only unpacked structure members take defaults (7.2.2).
+                    if (packed) {
+                        error(previous(), "FSIM-SV-SEM-401",
+                            "a packed structure member cannot have a default value");
+                    }
                     member_initializer = parse_expression();
                 }
                 if (!member_names.insert(member.text).second) {

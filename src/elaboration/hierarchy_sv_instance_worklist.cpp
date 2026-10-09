@@ -173,6 +173,47 @@ HierarchyBuilder::collect_compiled_systemverilog_bound_instances(
     return result;
 }
 
+std::vector<std::int64_t> HierarchyBuilder::compiled_instance_array_indices(
+    const semantic::sv::Instance& instance,
+    const semantic::SpecializedHirUnit& specialization)
+{
+    if (!instance.array_indices.empty()
+        || !instance.array_left || !instance.array_right) {
+        return instance.array_indices;
+    }
+    const auto left = specialization.evaluate_integral_expression(
+        *instance.array_left);
+    const auto right = specialization.evaluate_integral_expression(
+        *instance.array_right);
+    if (!left || !right
+        || (*left > *right ? *left - *right : *right - *left)
+            >= std::int64_t { 1 } << 20) {
+        frontend::SourceSpan span;
+        const auto& spans = compiled_->semantics.source_spans();
+        if (instance.source.valid() && instance.source.value() < spans.size()) {
+            const auto& source = spans[instance.source.value()];
+            span.source_name = source.logical_name;
+            span.begin = { static_cast<std::size_t>(source.begin.offset),
+                source.begin.line, source.begin.column };
+            span.end = { static_cast<std::size_t>(source.end.offset),
+                source.end.line, source.end.column };
+        }
+        report("FSIM-SV-SEM-120",
+            "instance-array bounds of '" + instance.name
+                + "' must be constant integers",
+            std::move(span));
+        return { };
+    }
+    std::vector<std::int64_t> indices;
+    for (auto index = *left;; index += *left >= *right ? -1 : 1) {
+        indices.push_back(index);
+        if (index == *right) {
+            break;
+        }
+    }
+    return indices;
+}
+
 HierarchyBuilder::CompiledSystemVerilogInstanceWorklistResult
 HierarchyBuilder::collect_compiled_systemverilog_instance_materializations(
     const semantic::sv::Unit& unit,
@@ -199,11 +240,12 @@ HierarchyBuilder::collect_compiled_systemverilog_instance_materializations(
                                      const bool bound) {
         if (const auto instance
             = working_specialization.find_instance(id)) {
-            if (instance->systemverilog != nullptr
-                && !instance->systemverilog
-                    ->array_indices.empty()) {
-                for (const auto index :
-                    instance->systemverilog->array_indices) {
+            const auto array_indices = instance->systemverilog != nullptr
+                ? compiled_instance_array_indices(
+                      *instance->systemverilog, working_specialization)
+                : std::vector<std::int64_t> { };
+            if (!array_indices.empty()) {
+                for (const auto index : array_indices) {
                     result.instances.push_back({
                         *instance,
                         &working_specialization,

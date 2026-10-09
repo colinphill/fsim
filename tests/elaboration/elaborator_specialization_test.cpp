@@ -927,7 +927,6 @@ package beta_values;
 endpackage
 package invalid_exports;
   import alpha_values::*;
-  export beta_values::SHARED;
   export alpha_values::MISSING;
   export *::SHARED;
 endpackage

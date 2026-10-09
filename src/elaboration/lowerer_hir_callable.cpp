@@ -5390,6 +5390,26 @@ Lowerer::lower_hir_function_call_value(
         ? specialized_hir_unit_->find_expression(expression_id)
         : std::nullopt;
     const auto callable = hir_referenced_declaration(expression_id);
+    // A void function has no value (IEEE 1800-2017 13.4.1); only a call
+    // statement may invoke it.
+    const bool discarded = discarding_call_result_;
+    discarding_call_result_ = false;
+    if (!discarded && callable && expression
+        && expression->systemverilog != nullptr) {
+        const auto record = specialized_hir_unit_->find_declaration(*callable);
+        if (record && record->systemverilog != nullptr
+            && record->systemverilog->callable
+            && record->systemverilog->callable->function
+            && record->systemverilog->type
+            && record->systemverilog->type->target.spelling == "void") {
+            report(
+                "FSIM-ELAB-SVFUNC-014",
+                "void function '" + record->systemverilog->name
+                    + "' cannot be used as a value",
+                hir_source_span(expression->systemverilog->source));
+            return std::nullopt;
+        }
+    }
     const auto interface_callable = !callable && expression
             && expression->systemverilog != nullptr
         ? hir_interface_function_profile(

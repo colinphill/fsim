@@ -1382,6 +1382,11 @@ private:
         const SystemVerilogPackedFallbackResolver&
             packed_fallback_resolver);
 
+    // The element indices of an instance array in declared order: literal
+    // bounds from the parser, or bounds evaluated in the specialization.
+    std::vector<std::int64_t> compiled_instance_array_indices(
+        const semantic::sv::Instance& instance,
+        const semantic::SpecializedHirUnit& specialization);
     std::optional<SystemVerilogAliasPlan>
     build_systemverilog_alias_plan(
         const semantic::SpecializedHirUnit& specialization,

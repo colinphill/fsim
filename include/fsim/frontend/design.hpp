@@ -952,6 +952,10 @@ struct SystemVerilogConcurrentAssertion {
     bool has_failure_action { };
     std::vector<Token> failure_action_tokens;
     SourceSpan failure_action_span;
+    // The action blocks parsed as procedural statements; empty when an
+    // action is only a null statement or could not be parsed.
+    std::vector<Statement> pass_action_statements;
+    std::vector<Statement> failure_action_statements;
     SystemVerilogAssertionRegion sampling_region {
         SystemVerilogAssertionRegion::Preponed
     };

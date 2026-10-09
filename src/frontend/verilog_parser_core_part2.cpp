@@ -945,9 +945,12 @@ DesignUnit VerilogParser::parse_module(
                 : directive.text == "cover"
                 ? SystemVerilogConcurrentAssertionKind::Cover
                 : SystemVerilogConcurrentAssertionKind::Restrict;
+            auto parsed_assertion = parse_concurrent_assertion(
+                directive, assertion_kind, std::move(label));
+            declare_inline_property(
+                parsed_assertion, unit.systemverilog_assertion_declarations);
             unit.systemverilog_concurrent_assertions.push_back(
-                parse_concurrent_assertion(
-                    directive, assertion_kind, std::move(label)));
+                std::move(parsed_assertion));
         } else if (match_keyword("function")) {
             module_has_non_time_item_ = true;
             auto function = parse_function(previous());
@@ -1105,6 +1108,12 @@ DesignUnit VerilogParser::parse_module(
                     || current().text == "always_comb"
                     || current().text == "always_latch"))) {
             module_has_non_time_item_ = true;
+            // A program contains no always procedures (IEEE 1800-2017 24.3).
+            if (program_unit) {
+                error(current(), "FSIM-SV-SEM-400",
+                    "a program block cannot contain an always procedure or "
+                    "a module, interface, or program instance");
+            }
             unit.processes.push_back(parse_always());
         } else if (keyword("initial")) {
             module_has_non_time_item_ = true;
@@ -1175,6 +1184,11 @@ DesignUnit VerilogParser::parse_module(
             }
         } else if (instance_start()) {
             module_has_non_time_item_ = true;
+            if (program_unit) {
+                error(current(), "FSIM-SV-SEM-400",
+                    "a program block cannot contain an always procedure or "
+                    "a module, interface, or program instance");
+            }
             auto instances = parse_instances();
             unit.instances.insert(
                 unit.instances.end(),

@@ -6966,8 +6966,41 @@ namespace {
             visit_package(visit_package, *package);
         }
 
-        for (const auto* package : packages) {
+        // Export legality is checked for every package of the design, not
+        // only those this unit imports (26.6).
+        auto export_packages = packages;
+        for (const auto& candidate : compiled.systemverilog_hir.units()) {
+            if (candidate.kind == semantic::sv::UnitKind::package
+                && !candidate.exports.empty()
+                && !package_ids.contains(candidate.id.value())) {
+                export_packages.push_back(&candidate);
+            }
+        }
+        for (const auto* package : export_packages) {
             for (const auto& exported : package->exports) {
+                if (exported.member) {
+                    // An exported name cannot collide with a declaration of
+                    // the exporting package.
+                    const bool local = std::ranges::any_of(
+                        package->declarations,
+                        [&](const semantic::DeclarationId id) {
+                            const auto declaration
+                                = compiled.find_declaration(id);
+                            return declaration
+                                && declaration->systemverilog != nullptr
+                                && declaration->systemverilog->name
+                                    == exported.member->spelling;
+                        });
+                    if (local) {
+                        append("FSIM-ELAB-SVPKG-008",
+                            "package export '" + exported.package.spelling
+                                + "::" + exported.member->spelling
+                                + "' conflicts with a declaration of package '"
+                                + package->name + "'",
+                            exported.source);
+                        continue;
+                    }
+                }
                 if (exported.package.spelling == "*" && exported.member) {
                     append("FSIM-ELAB-SVPKG-007",
                         "a wildcard export package must use the form *::*",
@@ -7801,11 +7834,16 @@ namespace {
                             << (*base_width - 1U));
                         in_range = *value >= minimum && *value <= maximum;
                     }
+                } else if (*value < 0) {
+                    // An unsized negative integer is a 32-bit int; it
+                    // converts without loss to an unsigned base at least as
+                    // wide (`UVM_CVR_ALL = -1` on `bit [31:0]`, 6.19).
+                    in_range = *base_width >= 32U
+                        && *value >= std::numeric_limits<std::int32_t>::min();
                 } else {
-                    in_range = *value >= 0
-                        && (*base_width == 64U
-                            || static_cast<std::uint64_t>(*value)
-                                < (std::uint64_t { 1 } << *base_width));
+                    in_range = *base_width == 64U
+                        || static_cast<std::uint64_t>(*value)
+                            < (std::uint64_t { 1 } << *base_width);
                 }
                 const auto mask = *base_width == 64U
                     ? std::numeric_limits<std::uint64_t>::max()
@@ -8115,11 +8153,23 @@ namespace {
                                 association.value, diagnostic, context)
                         && valid;
                 }
+                const auto union_members
+                    = definition.form == TypeForm::packed_union
+                    || definition.form == TypeForm::unpacked_union
+                    || definition.form == TypeForm::tagged_union;
+                // Without `default`, a structure pattern covers every
+                // member (IEEE 1800-2017 10.9.2).
+                if (!default_value && !union_members && valid
+                    && std::ranges::any_of(bound, [](const bool covered) {
+                           return !covered;
+                       })) {
+                    append("FSIM-ELAB-SVAGG-003",
+                        "assignment pattern omits a structure member",
+                        value.source);
+                    valid = false;
+                }
                 if (default_value) {
-                    const auto union_aggregate
-                        = definition.form == TypeForm::packed_union
-                        || definition.form == TypeForm::unpacked_union
-                        || definition.form == TypeForm::tagged_union;
+                    const auto union_aggregate = union_members;
                     if (union_aggregate) {
                         append("FSIM-ELAB-SVAGG-002",
                             "a union assignment pattern must select exactly "
@@ -9678,7 +9728,7 @@ namespace {
                                        '\''))
                         != std::string::npos;
                 if (literal_initializer
-                    && ((width && *width > 64U) || unknown_digits)) {
+                    && ((width && *width >= 64U) || unknown_digits)) {
                     continue;
                 }
                 append("FSIM-ELAB-SVPKG-006",
@@ -12711,11 +12761,13 @@ void HierarchyBuilder::reserve_compiled_systemverilog_interface_occurrences(
                 child_path,
                 occurrence->linked_target->systemverilog->name);
         };
-        if (record.array_indices.empty()) {
+        const auto array_indices
+            = compiled_instance_array_indices(record, owner);
+        if (array_indices.empty()) {
             reserve(occurrence_path);
             return;
         }
-        for (const auto index : record.array_indices) {
+        for (const auto index : array_indices) {
             reserve(occurrence_path + "[" + std::to_string(index) + "]");
         }
     };

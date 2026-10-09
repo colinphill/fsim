@@ -894,7 +894,12 @@ void Interpreter::Impl::handle_boundary(
     if (const auto* wait = fsim::runtime::simir::operation_get_if<WaitRegion>(&operation)) {
         clear_wait_timeout(process);
         const auto current = scheduler.current_phase();
-        if (!current || wait->phase <= *current) {
+        // A process already in the target region continues there.
+        if (current && wait->phase == *current) {
+            queue_current(process.id);
+            return;
+        }
+        if (!current || wait->phase < *current) {
             process.pc = instruction;
             fail(process, "WaitRegion must target a later scheduler region");
         }

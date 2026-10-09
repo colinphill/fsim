@@ -90,6 +90,19 @@ enum class SystemVerilogAnnexConstruct {
 [[nodiscard]] std::optional<KeywordSet> parse_keyword_set(
     std::string_view spelling);
 
+struct GeneralPropertyActions {
+  std::vector<Statement> success;
+  std::vector<Statement> failure;
+  std::vector<Statement> vacuous;
+  // Distinguishes the evaluation's state variables from other directives'.
+  std::string name_prefix { "__fsim_a" };
+  // `disable iff` aborts every running attempt and runs `abort`.
+  std::optional<Expression> disable;
+  std::vector<Statement> abort;
+  support::RareVector<Sensitivity> clock;
+  SourceSpan span;
+};
+
 class VerilogParser final : private detail::ParserBase {
  public:
   VerilogParser(LexResult lexed, bool system_verilog);
@@ -282,6 +295,20 @@ class VerilogParser final : private detail::ParserBase {
       const Token& start,
       SystemVerilogAssertionDeclarationKind kind);
 
+  // A concurrent property evaluated by a general sequence automaton: the
+  // returned statement runs one attempt from the current clock tick and
+  // executes the success, failure, or vacuous statements.
+  std::optional<Statement> general_property_evaluation(
+      std::span<const Token> tokens, const DesignUnit& unit,
+      const GeneralPropertyActions& actions);
+  // A boolean assertion operand parsed as an ordinary expression; empty
+  // when the tokens use sequence or property operators.
+  std::optional<Expression> assertion_expression(std::span<const Token> tokens);
+  // A clocked inline property `assert property (@(e) ...)` becomes a
+  // synthesized property declaration that the directive names.
+  void declare_inline_property(
+      SystemVerilogConcurrentAssertion& assertion,
+      std::vector<SystemVerilogAssertionDeclaration>& declarations);
   SystemVerilogConcurrentAssertion parse_concurrent_assertion(
       const Token& start,
       SystemVerilogConcurrentAssertionKind kind,
@@ -668,6 +695,22 @@ class VerilogParser final : private detail::ParserBase {
       const Token& task);
 
   std::optional<Statement> parse_statement();
+  std::optional<Statement> parse_statement_unhoisted();
+  [[gnu::noinline]] void prepend_hoisted_statements(
+      std::optional<Statement>& statement, std::size_t mark);
+  std::optional<Statement> parse_randcase(const Token& start);
+  std::optional<Statement> parse_randsequence(const Token& start);
+  [[nodiscard]] std::vector<Token> synthetic_tokens(
+      std::string_view text, const SourceSpan& span) const;
+  std::optional<Statement> parse_generated_statement(
+      std::vector<Token> tokens, const SourceSpan& span);
+  std::vector<Token> balanced_tokens(TokenKind open, TokenKind close);
+  // Rewritten randcase/randsequence blocks get distinct generated names.
+  std::size_t generated_statement_counter_ {};
+  // Assignments nested in expressions (IEEE 1800-2017 11.3.6) run as
+  // statements ahead of the statement that contains them.
+  std::size_t statement_hoist_depth_ {};
+  std::vector<Statement> hoisted_statements_;
 
   struct DecimalRatio {
     std::uint64_t numerator{};
@@ -736,6 +779,9 @@ class VerilogParser final : private detail::ParserBase {
   // Design-unit-level dynamic arrays, queues and associative arrays, whose
   // built-in methods may omit empty parentheses (IEEE 1800-2017 13.4.5).
   std::unordered_set<std::string> unit_container_names_;
+  // Nonzero while parsing a constraint block or a delay value, where `->`
+  // is not the logical implication operator.
+  std::size_t constraint_parse_depth_ { };
   std::unordered_set<std::string> current_function_arguments_;
   std::string current_function_name_;
   bool in_function_{};

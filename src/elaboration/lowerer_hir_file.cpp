@@ -1585,7 +1585,9 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                 && source.output_values.empty()
                 && !source.output_format
                 && !specialized_hir_unit_->evaluate_string_expression(
-                    *source.value)) {
+                    *source.value)
+                && !(source.kind == semantic::sv::StatementKind::report
+                    && hir_expression_is_string(*source.value, source.scope))) {
                 statement_fail("FSIM-ELAB-SVSTRING-003",
                     "report message is not a constant string expression");
             } else if (hir_string_format_task_status(

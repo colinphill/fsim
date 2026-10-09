@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <set>
+#include <optional>
+#include <unordered_map>
 #include <tuple>
 
 namespace fsim::app::application_detail {
@@ -63,9 +65,35 @@ namespace {
         return reference.target ? design.find_unit(*reference.target) : std::nullopt;
     }
 
+    // Classes by declaration identity, with their owning unit, built once
+    // per dependency walk instead of scanned per reference and unit.
+    struct ClassOwnerEntry {
+        semantic::UnitId owner;
+        const semantic::sv::ClassDeclaration* declaration { };
+    };
+    using ClassIdentityIndex
+        = std::unordered_multimap<std::string, ClassOwnerEntry>;
+
+    ClassIdentityIndex class_identity_index(
+        const semantic::CompiledDesign& design)
+    {
+        ClassIdentityIndex index;
+        index.reserve(design.systemverilog_hir.classes().size());
+        for (const auto& declaration : design.systemverilog_hir.classes()) {
+            const auto* owner = compiled_class_owner(design, declaration);
+            if (owner == nullptr) {
+                continue;
+            }
+            index.emplace(semantic::sv::class_declaration_identity(declaration),
+                ClassOwnerEntry { owner->id, &declaration });
+        }
+        return index;
+    }
+
     bool reference_matches(const semantic::CompiledDesign& design,
         const semantic::CompiledReference& reference,
-        const library::UnitIndexEntry& unit)
+        const library::UnitIndexEntry& unit,
+        const ClassIdentityIndex& classes)
     {
         const auto target = reference_target(design, reference);
         if (!target || !target->identity) {
@@ -99,14 +127,15 @@ namespace {
             if (unit.kind != "class") {
                 return false;
             }
-            return std::ranges::any_of(design.systemverilog_hir.classes(),
-                [&](const auto& declaration) {
-                    const auto* owner = compiled_class_owner(design, declaration);
-                    return owner && owner->id == target->identity->id
-                        && semantic::sv::class_declaration_identity(declaration) == unit.name
+            {
+                const auto [first, last] = classes.equal_range(unit.name);
+                return std::any_of(first, last, [&](const auto& entry) {
+                    return entry.second.owner == target->identity->id
                         && (unit.name == reference.secondary_name
-                            || declaration.canonical_identity == reference.secondary_name);
+                            || entry.second.declaration->canonical_identity
+                                == reference.secondary_name);
                 });
+            }
         default:
             return false;
         }
@@ -272,15 +301,26 @@ std::vector<workspace::UnitDependency> workspace_dependencies(
             result.push_back(dependency);
         }
     };
+    std::unordered_map<std::uint32_t,
+        std::vector<const semantic::CompiledReference*>>
+        references_by_owner;
+    for (const auto& reference : design.references()) {
+        if (dependency_reference(reference)) {
+            references_by_owner[reference.owner.value()].push_back(&reference);
+        }
+    }
+    std::optional<ClassIdentityIndex> classes;
     for (std::size_t index = 0; index < pending_units.size(); ++index) {
         const auto owner = pending_units[index];
         if (!visited_units.insert(owner).second) {
             continue;
         }
-        for (const auto& reference : design.references()) {
-            if (reference.owner != owner || !dependency_reference(reference)) {
-                continue;
-            }
+        const auto owned_references = references_by_owner.find(owner.value());
+        if (owned_references == references_by_owner.end()) {
+            continue;
+        }
+        for (const auto* reference_pointer : owned_references->second) {
+            const auto& reference = *reference_pointer;
             const auto target = reference_target(design, reference);
             if (!target || !target->identity) {
                 continue;
@@ -305,7 +345,11 @@ std::vector<workspace::UnitDependency> workspace_dependencies(
                 }
                 for (const auto& artifact : catalog.artifacts) {
                     for (const auto& owned : artifact.units) {
-                        if (!reference_matches(design, reference, owned.unit)) {
+                        if (!classes) {
+                            classes = class_identity_index(design);
+                        }
+                        if (!reference_matches(
+                                design, reference, owned.unit, *classes)) {
                             continue;
                         }
                         append({ catalog.location.name, owned.unit, artifact.fingerprint });

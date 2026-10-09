@@ -338,7 +338,8 @@ module enum_and_member_defaults;
     bit [1:0] code;
     logic valid;
   } initialized_inner_t;
-  typedef struct packed {
+  // Only unpacked structure members take defaults (IEEE 1800-2017 7.2.2).
+  typedef struct {
     logic [7:0] payload = 8'ha5;
     initialized_inner_t nested = '{code: 2'b01, valid: 1'b0};
   } initialized_t;

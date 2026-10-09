@@ -15,6 +15,12 @@ Statement VerilogParser::parse_fork_statement(const Token& start) {
          && current().text != "join_none") {
     const auto before = position();
     if (is_declaration_start()) {
+      // Verilog declares block items only in named blocks (IEEE 1364-2005
+      // 9.8.3).
+      if (language_ != Language::SystemVerilog2017 && statement.label.empty()) {
+        error(current(), "FSIM-SV-SEM-402",
+            "a declaration in an unnamed block requires SystemVerilog");
+      }
       parse_procedural_declaration(statement);
     } else if (auto branch = parse_statement()) {
       statement.statements.push_back(std::move(*branch));

@@ -2352,6 +2352,64 @@ bool Lowerer::lower_hir_statement(
                       << " value=" << value->value() << '\n';
         };
         trace_generated("target-expression");
+        // A whole unpacked array receives only an unpacked array value
+        // (IEEE 1800-2017 7.6).
+        if (target_expression->systemverilog != nullptr
+            && target_expression->systemverilog->kind
+                == semantic::sv::ExpressionKind::name
+            && assignment_value_expression
+            && assignment_value_expression->systemverilog != nullptr) {
+            const auto unpacked_rank = [&](semantic::ExpressionId id)
+                -> std::size_t {
+                const auto declaration = hir_target_declaration(id);
+                const auto record = declaration
+                    ? specialized_hir_unit_->find_declaration(*declaration)
+                    : std::nullopt;
+                if (!record || record->systemverilog == nullptr
+                    || !record->systemverilog->type
+                    || record->systemverilog->type->container_form
+                        != semantic::sv::TypeForm::static_array) {
+                    return 0U;
+                }
+                return record->systemverilog->type->unpacked_dimensions.size();
+            };
+            const auto& value_source = *assignment_value_expression->systemverilog;
+            const auto value_kind = value_source.kind;
+            const bool scalar_value
+                = value_kind == semantic::sv::ExpressionKind::binary
+                || value_kind == semantic::sv::ExpressionKind::unary
+                || value_kind == semantic::sv::ExpressionKind::integer_literal
+                || value_kind == semantic::sv::ExpressionKind::logic_literal
+                || (value_kind == semantic::sv::ExpressionKind::index
+                    && value_source.operands.size() == 2U
+                    && unpacked_rank(value_source.operands.front()) == 1U)
+                || (value_kind == semantic::sv::ExpressionKind::name
+                    && [&] {
+                           const auto declaration = hir_target_declaration(
+                               *value);
+                           const auto record = declaration
+                               ? specialized_hir_unit_->find_declaration(
+                                     *declaration)
+                               : std::nullopt;
+                           return record && record->systemverilog != nullptr
+                               && record->systemverilog->type
+                               && !record->systemverilog->type->container_form
+                               && record->systemverilog->type
+                                      ->unpacked_dimensions.empty()
+                               && (record->systemverilog->form
+                                       == semantic::sv::DeclarationForm::variable
+                                   || record->systemverilog->form
+                                       == semantic::sv::DeclarationForm::net);
+                       }());
+            if (scalar_value && unpacked_rank(*target) != 0U) {
+                report(
+                    "FSIM-ELAB-SVASSIGN-004",
+                    "an unpacked array target requires an unpacked array "
+                    "value",
+                    span);
+                return true;
+            }
+        }
         // The target of a blocking or nonblocking procedural assignment is
         // a variable, never a net (IEEE 1800-2017 10.4).
         if (statement->systemverilog != nullptr
@@ -6542,6 +6600,26 @@ bool Lowerer::lower_hir_statement(
             disconnected_value = destination;
         }
         const auto diagnostics_before = diagnostics_.size();
+        // `m = new(4)` constructs a mailbox or semaphore of the target's
+        // type (IEEE 1800-2017 15.3, 15.4).
+        if (!disconnected_value && value_expression
+            && value_expression->systemverilog != nullptr
+            && value_expression->systemverilog->kind
+                == semantic::sv::ExpressionKind::call
+            && value_expression->systemverilog->text.starts_with(
+                "@sv-sync-new:")
+            && target_declaration && target_declaration->systemverilog != nullptr
+            && target_declaration->systemverilog->type) {
+            const auto synchronization = lower_hir_synchronization_expression(
+                *value, *assignment_width,
+                &*target_declaration->systemverilog->type);
+            if (synchronization.handled) {
+                if (!synchronization.succeeded) {
+                    return true;
+                }
+                disconnected_value = synchronization.value;
+            }
+        }
         auto lowered = disconnected_value
             ? disconnected_value
             : packed_pattern
@@ -12244,6 +12322,31 @@ bool Lowerer::lower_hir_statement(
                 ? specialized_hir_unit_->evaluate_string_expression(
                       *input.value)
                 : std::optional<std::string> { };
+            // A message computed at run time, `$error($sformatf(...))`.
+            if (input.value && !report_text
+                && hir_expression_is_string(*input.value, hir_process_scope_)) {
+                const auto message = lower_hir_string_expression(*input.value);
+                if (!message) {
+                    return false;
+                }
+                const auto severity = allocate_register(
+                    2U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(LoadConstant {
+                    severity,
+                    unsigned_value(static_cast<std::uint64_t>(
+                        assertion_severity(input.assertion_severity)), 2U) });
+                process_.operations.emplace_back(StringReport {
+                    *message,
+                    severity,
+                    SourceLocation {
+                        span.source_name.str(),
+                        static_cast<std::uint32_t>(span.begin.line),
+                        static_cast<std::uint32_t>(span.begin.column),
+                    },
+                    true,
+                });
+                return true;
+            }
             process_.operations.emplace_back(Report {
                 report_text.value_or(input.output_text),
                 assertion_severity(input.assertion_severity),
@@ -12789,6 +12892,14 @@ bool Lowerer::lower_hir_statement(
                 }
                 const auto discarded_expression
                     = specialized_hir_unit_->find_expression(discarded);
+                if (discarded_expression
+                    && discarded_expression->systemverilog != nullptr
+                    && discarded_expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::call
+                    && discarded_expression->systemverilog->text
+                        == "@sv-dollar-cast") {
+                    return lower_hir_expression(discarded, 1U).has_value();
+                }
                 if (discarded != *input.value && discarded_expression
                     && discarded_expression->systemverilog != nullptr
                     && (discarded_expression->systemverilog->kind
@@ -12827,6 +12938,8 @@ bool Lowerer::lower_hir_statement(
                     }
                     const auto width = hir_expression_width(
                         discarded, hir_process_scope_);
+                    // `void'(f())` requires a function with a value.
+                    discarding_call_result_ = discarded == *input.value;
                     return lower_hir_function_call_value(
                                discarded, width.value_or(0U))
                         .has_value();

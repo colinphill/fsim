@@ -329,7 +329,10 @@ bool VerilogParser::cycle_paths_are_safe(
           || child.kind == StatementKind::Finish
           || child.kind == StatementKind::Return
           || child.kind == StatementKind::Break
+          // A nonblocking intra-assignment control does not suspend
+          // the process (IEEE 1800-2017 9.4.5).
           || (child.kind == StatementKind::Assignment
+              && child.assignment_kind != AssignmentKind::NonBlocking
               && child.procedural_assignment_control
                   != ProceduralAssignmentControl::None)) {
         next = safe_terminal;
@@ -378,7 +381,10 @@ bool VerilogParser::cycle_paths_are_safe(
           || child.kind == StatementKind::TaskCall
           || child.kind == StatementKind::Pause
           || child.kind == StatementKind::Finish
+          // A nonblocking intra-assignment control does not suspend
+          // the process (IEEE 1800-2017 9.4.5).
           || (child.kind == StatementKind::Assignment
+              && child.assignment_kind != AssignmentKind::NonBlocking
               && child.procedural_assignment_control
                   != ProceduralAssignmentControl::None)) {
         return true;

@@ -211,6 +211,51 @@ void Resolver::retain_task_profile(
         SystemVerilogScalarKind::Chandle;
     return chandle_type();
   }
+  if (expression.text == "@sv-shallow-copy"
+      && expression.operands.size() == 1U) {
+    auto type = resolve_expression(expression.operands.front(), scope);
+    if (!type || !class_identity(*type)) {
+      diagnose(
+          diagnostics_,
+          "FSIM-SV-CLASS-027",
+          "a shallow copy requires a class handle operand",
+          expression.span);
+      return std::nullopt;
+    }
+    expression.nominal_type = *class_identity(*type);
+    return type;
+  }
+  constexpr std::string_view typed_new{"@sv-new-typed:"};
+  if (expression.text.starts_with(typed_new)) {
+    const auto name = expression.text.substr(typed_new.size());
+    const auto owners = resolve_class_name(name, scope);
+    if (owners.size() != 1U) {
+      diagnose(
+          diagnostics_,
+          "FSIM-SV-CLASS-026",
+          "typed constructor '" + name + "::new' does not name a class",
+          expression.span);
+      return std::nullopt;
+    }
+    const auto& constructed = owners.front()->canonical_identity;
+    // The constructed class must be assignable to the destination
+    // (IEEE 1800-2017 8.8).
+    if (expected_class && *expected_class != constructed
+        && !class_assignable(constructed, *expected_class)) {
+      diagnose(
+          diagnostics_,
+          "FSIM-SV-CLASS-025",
+          "a handle of class '" + constructed
+              + "' cannot be assigned to a variable of class '"
+              + *expected_class + "'",
+          expression.span);
+      return std::nullopt;
+    }
+    expression.text = "@sv-new";
+    return resolve_expression(
+        expression, scope, constructed,
+        SystemVerilogScalarKind::None);
+  }
   if (expression.text == "@sv-new") {
     if (!expected_class) {
       diagnose(
@@ -231,6 +276,16 @@ void Resolver::retain_task_profile(
       deferred.spelling = *expected_class;
       deferred.named_type = *expected_class;
       return deferred;
+    }
+    // An abstract class cannot be constructed (IEEE 1800-2017 8.21).
+    if (expected_declaration->is_virtual || expected_declaration->is_interface) {
+      diagnose(
+          diagnostics_,
+          "FSIM-SV-CLASS-024",
+          "class '" + *expected_class + "' is virtual and cannot be "
+              "constructed with new",
+          expression.span);
+      return std::nullopt;
     }
     const auto method = select_method(
         *expected_class,
@@ -756,6 +811,22 @@ std::optional<Type> Resolver::resolve_expression(
           expression.operands[0], scope, std::nullopt,
           SystemVerilogScalarKind::Chandle);
     }
+    // `p.status` and `p.status()` of a process handle are its state
+    // enumeration, not the handle (IEEE 1800-2017 9.7).
+    const auto process_status = [](const Expression& operand) {
+      return (operand.kind == ExpressionKind::Identifier
+                 || operand.kind == ExpressionKind::Call)
+          && (operand.text.ends_with(".status")
+              || operand.text.ends_with("::status"));
+    };
+    if (process_status(expression.operands[0])) {
+      left = Type{
+          ValueDomain::Integer, "int", PackedRange{31, 0, true}, true};
+    }
+    if (process_status(expression.operands[1])) {
+      right = Type{
+          ValueDomain::Integer, "int", PackedRange{31, 0, true}, true};
+    }
     if (chandle(left) || chandle(right)) {
       const bool equality = expression.text == "=="
           || expression.text == "!=" || expression.text == "==="
@@ -1089,13 +1160,98 @@ void Resolver::resolve_statement(
     const Scope& inherited_scope,
     const std::optional<std::string>& return_class,
     const SystemVerilogScalarKind return_scalar) {
-  auto scope = inherited_scope;
-  for (auto& declaration : statement.declarations) {
-    if (declaration.initializer) {
-      resolve_typed_expression(
-          *declaration.initializer, scope, declaration.type);
+  // Only a statement that declares objects needs its own scope copy.
+  std::optional<Scope> declared_scope;
+  if (!statement.declarations.empty()) {
+    declared_scope = inherited_scope;
+    for (auto& declaration : statement.declarations) {
+      if (declaration.initializer) {
+        resolve_typed_expression(
+            *declaration.initializer, *declared_scope, declaration.type);
+      }
+      declared_scope->objects[declaration.name] = declaration.type;
     }
-    scope.objects[declaration.name] = declaration.type;
+  }
+  const Scope& scope = declared_scope ? *declared_scope : inherited_scope;
+  // `$cast(dest, value);` to an integral destination discards the call's
+  // result (IEEE 1800-2017 6.24.2).
+  if (statement.kind == StatementKind::TaskCall
+      && statement.task_name == "$cast"
+      && statement.task_arguments.size() == 2U) {
+    auto destination = statement.task_arguments.front();
+    const auto destination_type = resolve_expression(destination, scope);
+    if (!destination_type || !class_identity(*destination_type)) {
+      Expression call{ExpressionKind::Call, "@sv-dollar-cast",
+          {std::move(statement.task_arguments[0]),
+           std::move(statement.task_arguments[1])},
+          statement.span};
+      statement.kind = StatementKind::ContainerMethod;
+      statement.value = std::move(call);
+      statement.task_name.clear();
+      statement.task_arguments.clear();
+      statement.task_argument_names.clear();
+    }
+  }
+  // A task called through a selected receiver, `items[i].run(x)`, parses as
+  // a method call statement (IEEE 1800-2017 8.4, 13.3).
+  if (statement.kind == StatementKind::ContainerMethod
+      && statement.value.kind == ExpressionKind::Call
+      && statement.value.text.starts_with('.')
+      && !statement.value.operands.empty()
+      && statement.value.operands.front().kind
+          != ExpressionKind::Identifier) {
+    auto receiver = statement.value.operands.front();
+    const auto receiver_type = resolve_expression(receiver, scope);
+    const auto identity = receiver_type
+        ? class_identity(*receiver_type) : std::nullopt;
+    const auto name = statement.value.text.substr(1U);
+    if (identity
+        && !find_methods(*identity, name, SystemVerilogClassMethodKind::Task)
+                .empty()) {
+      const auto match = select_method(
+          *identity, name, SystemVerilogClassMethodKind::Task,
+          statement.value.operands.size() - 1U, statement.span);
+      if (!match || !match->method) {
+        return;
+      }
+      statement.kind = StatementKind::TaskCall;
+      statement.task_name = "@sv-task:" + match->method->canonical_identity;
+      statement.task_arguments.clear();
+      statement.task_argument_names.clear();
+      statement.task_arguments.push_back(std::move(receiver));
+      statement.task_argument_names.emplace_back();
+      for (std::size_t index = 1U; index < statement.value.operands.size();
+           ++index) {
+        statement.task_arguments.push_back(
+            std::move(statement.value.operands[index]));
+        statement.task_argument_names.push_back(
+            index < statement.value.call_argument_names.size()
+                ? statement.value.call_argument_names[index]
+                : std::string{});
+      }
+      statement.value = Expression{};
+      retain_task_profile(
+          statement, *match->method, match->owner, &*receiver_type);
+      for (std::size_t index = 1U; index < statement.task_arguments.size();
+           ++index) {
+        const auto& actual_name = statement.task_argument_names[index];
+        auto formal = match->method->arguments.begin()
+            + static_cast<std::ptrdiff_t>(std::min(
+                index - 1U, match->method->arguments.size()));
+        if (!actual_name.empty()) {
+          formal = std::ranges::find(
+              match->method->arguments, actual_name,
+              &FunctionArgument::name);
+        }
+        if (formal != match->method->arguments.end()) {
+          resolve_typed_expression(
+              statement.task_arguments[index], scope, formal->type);
+        } else {
+          resolve_expression(statement.task_arguments[index], scope);
+        }
+      }
+      return;
+    }
   }
   auto target_type = resolve_expression(statement.target, scope);
   const auto expected_class = statement.kind == StatementKind::Return
@@ -1116,6 +1272,26 @@ void Resolver::resolve_statement(
       ? resolve_typed_expression(statement.value, scope, *target_type)
       : resolve_expression(
             statement.value, scope, expected_class, expected_scalar);
+  // A class handle receives only a handle of its own class or of a class
+  // derived from it, or one implementing it (IEEE 1800-2017 8.15). Only a
+  // plain variable value has a class known independently of specialization.
+  if (statement.kind == StatementKind::Assignment && target_type && value_type
+      && statement.value.kind == ExpressionKind::Identifier
+      && !target_type->systemverilog_container
+      && !value_type->systemverilog_container) {
+    const auto target_class = class_identity(*target_type);
+    const auto value_class = class_identity(*value_type);
+    if (target_class && value_class && *target_class != *value_class
+        && !class_assignable(*value_class, *target_class)) {
+      diagnose(
+          diagnostics_,
+          "FSIM-SV-CLASS-025",
+          "a handle of class '" + *value_class
+              + "' cannot be assigned to a variable of class '"
+              + *target_class + "'",
+          statement.span);
+    }
+  }
   const bool expected_chandle =
       expected_scalar == SystemVerilogScalarKind::Chandle;
   const bool destination_type_known =
@@ -1131,10 +1307,15 @@ void Resolver::resolve_statement(
   }
   const auto condition_type = resolve_expression(statement.condition, scope);
   if (chandle(condition_type)) {
-    diagnose(
-        diagnostics_, "FSIM-SV-SEM-175",
-        "chandle does not provide logical truth; compare it with null",
-        statement.condition.span);
+    // A chandle is true when it is not null (IEEE 1800-2017 6.14).
+    const auto span = statement.condition.span;
+    Expression handle = std::move(statement.condition);
+    statement.condition = Expression{
+        ExpressionKind::Binary, "!=",
+        {std::move(handle),
+         Expression{ExpressionKind::Call, "@sv-null", {}, span}},
+        span};
+    resolve_expression(statement.condition, scope);
   }
   resolve_expression(statement.loop_initial, scope);
   resolve_expression(statement.loop_limit, scope);
@@ -1212,6 +1393,19 @@ void Resolver::resolve_class(SystemVerilogClassDeclaration& declaration, Scope s
   for (auto& method : declaration.methods) {
     auto method_scope = scope;
     add_objects(method_scope, method.arguments);
+    // A formal typed by an array typedef of class handles keeps the array
+    // (`typedef C list_t[string]; function f(ref list_t l)`).
+    for (const auto& argument : method.arguments) {
+      if (!argument.type.named_type.empty()
+          && argument.type.named_type
+              != argument.type.systemverilog_class_name) {
+        auto resolved = resolve_alias_type(
+            argument.type, declaration.canonical_identity);
+        if (resolved.systemverilog_container) {
+          method_scope.objects[argument.name] = std::move(resolved);
+        }
+      }
+    }
     add_objects(method_scope, method.variables);
     if (method.kind == SystemVerilogClassMethodKind::Function) {
       method_scope.objects[method.name] = method.return_type;

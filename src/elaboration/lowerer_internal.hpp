@@ -1696,6 +1696,9 @@ private:
     const semantic::SpecializedHirUnit* specialized_hir_unit_ { };
     const CoverageHirContext* coverage_hir_context_ { };
     bool coverage_hir_process_active_ { };
+    // Set for one function call lowered as a call statement, whose result is
+    // discarded and which may name a void function.
+    bool discarding_call_result_ { };
     const std::unordered_map<std::string, std::uint64_t>*
         systemverilog_interface_handles_ { };
     const std::unordered_map<std::string, std::string>*

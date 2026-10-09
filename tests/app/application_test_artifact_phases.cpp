@@ -161,7 +161,8 @@ module scalar_artifact;
     WIDE_ZERO = 137'b0,
     WIDE_ENUM = {1'b1, 62'b0, 1'b1, 69'b0, 4'b1000}
   } wide_enum_t;
-  typedef struct packed {
+  // Only unpacked structure members take defaults (IEEE 1800-2017 7.2.2).
+  typedef struct {
     logic [72:0] high = {1'b1, 71'b0, 1'b1};
     logic [63:0] low = 64'h8;
   } initialized_wide_t;
@@ -248,11 +249,12 @@ module artifact_virtual_leaf(artifact_if.view bus);
   virtual artifact_if #(.WIDTH(4)).view selected = bus;
 endmodule
 
-program interface_artifact;
+// A program cannot instantiate interfaces or modules (IEEE 1800-2017 24.3).
+module interface_artifact;
   artifact_if #(.WIDTH(4)) link();
   artifact_virtual_leaf leaf(link);
   virtual artifact_if #(.WIDTH(4)).view selected = link;
-endprogram
+endmodule
 )";
     }
     {

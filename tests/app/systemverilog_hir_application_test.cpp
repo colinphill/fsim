@@ -752,7 +752,7 @@ package values;
   typedef logic signed [3:0] key_t;
   typedef enum logic [1:0] {idle = 0, busy = 1} state_t;
   typedef struct packed { logic valid; logic [2:0] data; } packet_t;
-  typedef struct packed {
+  typedef struct {
     logic [3:0] prefix = 4'ha;
     packet_t packet = '{valid: 1'b1, data: 3'h5};
   } initialized_t;

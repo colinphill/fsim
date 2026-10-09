@@ -26,6 +26,9 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             directive.property_tokens
         };
         const SystemVerilogAssertionDeclaration* property { };
+        // A property instance with actuals is restructured from its
+        // substituted tokens so the specialized slices see the actuals.
+        std::optional<SystemVerilogAssertionDeclaration> substituted_property;
         std::vector<Token> substituted_predicate_tokens;
         std::vector<Token> substituted_clock_tokens;
         std::vector<Token> substituted_disable_tokens;
@@ -158,6 +161,15 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 };
                 substituted_predicate_tokens = substitute(property->expression_tokens);
                 predicate_tokens = substituted_predicate_tokens;
+                if (!bindings.empty() && property->property_expression) {
+                    substituted_property = *property;
+                    substituted_property->expression_tokens
+                        = substituted_predicate_tokens;
+                    substituted_property->property_expression.reset();
+                    const auto saved_diagnostics = diagnostics_.size();
+                    structure_property_expression(*substituted_property);
+                    diagnostics_.resize(saved_diagnostics);
+                }
                 if (property->clock)
                     substituted_clock_tokens = substitute(property->clock->event_tokens);
                 if (property->disable)
@@ -175,6 +187,9 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 for (const auto& local : property->local_variables) {
                     executable_locals.push_back(
                         { &local, substitute(local.initializer_tokens) });
+                }
+                if (substituted_property) {
+                    property = &*substituted_property;
                 }
             }
         }
@@ -453,13 +468,13 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             ? std::span<const Token> { property_abort->condition_tokens }
             : std::span<const Token> { };
         auto abort_condition = property_abort
-            ? scalar_expression(abort_condition_tokens)
+            ? assertion_expression(abort_condition_tokens)
             : std::optional<Expression> { };
         auto condition = sequence
             ? std::optional<Expression> { }
             : property_abort
-            ? scalar_expression(abort_property_tokens)
-            : scalar_expression(predicate_tokens);
+            ? assertion_expression(abort_property_tokens)
+            : assertion_expression(predicate_tokens);
         if (property_abort && (!abort_condition || !condition)) {
             error(
                 property_abort->span.empty()
@@ -475,7 +490,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             if (expression && !expression->intersection_operands.empty()) {
                 std::optional<Expression> intersection;
                 for (const auto& operand : expression->intersection_operands) {
-                    auto value = scalar_expression(operand.tokens);
+                    auto value = assertion_expression(operand.tokens);
                     if (!value) {
                         intersection.reset();
                         break;
@@ -498,8 +513,8 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             if (expression && !condition
                 && expression->binary_operations.size() == 1U) {
                 const auto& operation = expression->binary_operations.front();
-                auto left = scalar_expression(operation.left_tokens);
-                auto right = scalar_expression(operation.right_tokens);
+                auto left = assertion_expression(operation.left_tokens);
+                auto right = assertion_expression(operation.right_tokens);
                 if (left && right) {
                     condition = Expression {
                         ExpressionKind::Binary,
@@ -512,7 +527,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             if (expression && !condition
                 && expression->first_matches.size() == 1U) {
                 const auto& first_match = expression->first_matches.front();
-                condition = scalar_expression(first_match.sequence_tokens);
+                condition = assertion_expression(first_match.sequence_tokens);
                 if (!condition) {
                     const std::span<const Token> match_sequence {
                         first_match.sequence_tokens
@@ -553,10 +568,10 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                         }
                         auto first = position == 0U
                             ? std::optional<Expression> { }
-                            : scalar_expression(match_sequence.first(position));
+                            : assertion_expression(match_sequence.first(position));
                         auto second = right >= match_sequence.size()
                             ? std::optional<Expression> { }
-                            : scalar_expression(match_sequence.subspan(right));
+                            : assertion_expression(match_sequence.subspan(right));
                         if (first && second && minimum) {
                             sequence_antecedent = std::move(*first);
                             condition = std::move(*second);
@@ -662,7 +677,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                             const auto assignment_index
                                 = static_cast<std::size_t>(
                                     assignment - item.begin());
-                            auto value = scalar_expression(
+                            auto value = assertion_expression(
                                 item.subspan(assignment_index + 1U));
                             if (!value) {
                                 condition.reset();
@@ -744,7 +759,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                                 const auto value_tokens = arguments.subspan(
                                     argument_begin, argument - argument_begin);
                                 if (!value_tokens.empty()) {
-                                    auto value = scalar_expression(value_tokens);
+                                    auto value = assertion_expression(value_tokens);
                                     if (!value) {
                                         valid_call = false;
                                         break;
@@ -781,7 +796,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 const auto& element_tokens = substituted_sequence_tokens.empty()
                     ? expression->elements.front().expression_tokens
                     : substituted_sequence_tokens;
-                condition = scalar_expression(element_tokens);
+                condition = assertion_expression(element_tokens);
             }
             const bool two_element_sequence = expression
                 && expression->elements.size() == 2U
@@ -832,9 +847,9 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                         }
                     }
                 }
-                auto first = scalar_expression(
+                auto first = assertion_expression(
                     first_span);
-                auto second = scalar_expression(second_span);
+                auto second = assertion_expression(second_span);
                 if (first && second && count) {
                     sequence_antecedent = std::move(*first);
                     condition = std::move(*second);
@@ -889,8 +904,8 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                     && predicate_tokens[position + 2U].kind == TokenKind::Number
                     && predicate_tokens[position + 2U].text
                         == delay.range.minimum_tokens.front().text) {
-                    auto first = scalar_expression(predicate_tokens.first(position));
-                    auto second = scalar_expression(predicate_tokens.subspan(right));
+                    auto first = assertion_expression(predicate_tokens.first(position));
+                    auto second = assertion_expression(predicate_tokens.subspan(right));
                     if (first && second) {
                         sequence_antecedent = std::move(*first);
                         condition = std::move(*second);
@@ -924,8 +939,8 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                     separator - tokens.begin());
                 const auto right = position + 3U;
                 if (position != 0U && right < tokens.size()) {
-                    auto first = scalar_expression(tokens.first(position));
-                    auto second = scalar_expression(tokens.subspan(right));
+                    auto first = assertion_expression(tokens.first(position));
+                    auto second = assertion_expression(tokens.subspan(right));
                     if (first && second) {
                         sequence_antecedent = std::move(*first);
                         condition = std::move(*second);
@@ -950,18 +965,18 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                     || recurrence.kind
                         == SystemVerilogPropertyRecurrenceKind::StrongAlways)
                 && !recurrence.range) {
-                condition = scalar_expression(recurrence.operand_tokens);
+                condition = assertion_expression(recurrence.operand_tokens);
             } else if ((recurrence.kind
                                == SystemVerilogPropertyRecurrenceKind::Always
                            || recurrence.kind
                                == SystemVerilogPropertyRecurrenceKind::StrongAlways)
                 && recurrence.range) {
-                auto minimum = scalar_expression(
+                auto minimum = assertion_expression(
                     recurrence.range->minimum_tokens);
                 auto maximum = recurrence.range->maximum_tokens.empty()
                     ? minimum
-                    : scalar_expression(recurrence.range->maximum_tokens);
-                auto operand = scalar_expression(recurrence.operand_tokens);
+                    : assertion_expression(recurrence.range->maximum_tokens);
+                auto operand = assertion_expression(recurrence.operand_tokens);
                 if (minimum && maximum && operand) {
                     always_minimum = std::move(*minimum);
                     always_maximum = std::move(*maximum);
@@ -975,7 +990,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                            || recurrence.kind
                                == SystemVerilogPropertyRecurrenceKind::StrongEventually)
                 && !recurrence.range) {
-                condition = scalar_expression(recurrence.operand_tokens);
+                condition = assertion_expression(recurrence.operand_tokens);
                 eventually = condition.has_value();
                 strong_eventually = recurrence.kind
                     == SystemVerilogPropertyRecurrenceKind::StrongEventually;
@@ -984,12 +999,12 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                            || recurrence.kind
                                == SystemVerilogPropertyRecurrenceKind::StrongEventually)
                 && recurrence.range) {
-                auto minimum = scalar_expression(
+                auto minimum = assertion_expression(
                     recurrence.range->minimum_tokens);
                 auto maximum = recurrence.range->maximum_tokens.empty()
                     ? minimum
-                    : scalar_expression(recurrence.range->maximum_tokens);
-                auto operand = scalar_expression(recurrence.operand_tokens);
+                    : assertion_expression(recurrence.range->maximum_tokens);
+                auto operand = assertion_expression(recurrence.operand_tokens);
                 if (minimum && maximum && operand) {
                     eventually_minimum = std::move(*minimum);
                     eventually_maximum = std::move(*maximum);
@@ -1004,8 +1019,8 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             && property->property_expression->until_operations.size() == 1U) {
             const auto& until
                 = property->property_expression->until_operations.front();
-            auto left = scalar_expression(until.left_tokens);
-            auto right = scalar_expression(until.right_tokens);
+            auto left = assertion_expression(until.left_tokens);
+            auto right = assertion_expression(until.right_tokens);
             if (left && right) {
                 until_left = std::move(*left);
                 until_right = std::move(*right);
@@ -1016,8 +1031,8 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
         if (!condition && property && property->property_expression
             && property->property_expression->implications.size() == 1U) {
             const auto& implication = property->property_expression->implications.front();
-            auto antecedent = scalar_expression(implication.antecedent_tokens);
-            auto consequent = scalar_expression(implication.consequent_tokens);
+            auto antecedent = assertion_expression(implication.antecedent_tokens);
+            auto consequent = assertion_expression(implication.consequent_tokens);
             if (!consequent
                 && implication.kind
                     == SystemVerilogPropertyImplicationKind::Overlapped
@@ -1036,7 +1051,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                             && nexttime.count_tokens.front().kind
                                 == TokenKind::Number));
                 if (exact_nexttime) {
-                    consequent = scalar_expression(nexttime.operand_tokens);
+                    consequent = assertion_expression(nexttime.operand_tokens);
                     const auto& count = nexttime.count_tokens.empty()
                         ? implication.consequent_tokens.front()
                         : nexttime.count_tokens.front();
@@ -1091,6 +1106,60 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 "clock");
             continue;
         }
+        // Forms outside the specialized slices run on the general sequence
+        // automaton.
+        bool general_property { };
+        // A named sequence or property used as an operand is not the
+        // boolean or call a specialized slice may have taken it for.
+        // A predicate that is one whole instance stays with the slices.
+        const bool whole_instance = !predicate_tokens.empty()
+            && predicate_tokens.front().kind == TokenKind::Identifier
+            && (predicate_tokens.size() == 1U
+                || (predicate_tokens[1].kind == TokenKind::LeftParen
+                    && predicate_tokens.back().kind == TokenKind::RightParen
+                    && [&] {
+                           std::size_t depth { };
+                           for (std::size_t at = 1U;
+                                at < predicate_tokens.size(); ++at) {
+                               if (predicate_tokens[at].kind
+                                   == TokenKind::LeftParen) {
+                                   ++depth;
+                               } else if (predicate_tokens[at].kind
+                                       == TokenKind::RightParen
+                                   && --depth == 0U) {
+                                   return at + 1U == predicate_tokens.size();
+                               }
+                           }
+                           return false;
+                       }()));
+        const auto names_declaration = [&](
+                                           const SystemVerilogAssertionDeclarationKind
+                                               kind) {
+            return std::ranges::any_of(
+                predicate_tokens, [&](const Token& token) {
+                    return token.kind == TokenKind::Identifier
+                        && std::ranges::any_of(
+                            unit.systemverilog_assertion_declarations,
+                            [&](const SystemVerilogAssertionDeclaration&
+                                    entry) {
+                                return entry.kind == kind
+                                    && entry.name == token.text;
+                            });
+                });
+        };
+        const bool names_sequence
+            = names_declaration(SystemVerilogAssertionDeclarationKind::Property)
+            || (!whole_instance
+                && names_declaration(
+                    SystemVerilogAssertionDeclarationKind::Sequence));
+        if ((!condition || names_sequence) && assertion_clock
+            && !property_abort
+            && general_property_evaluation(predicate_tokens, unit,
+                GeneralPropertyActions { })) {
+            general_property = true;
+            condition = Expression {
+                ExpressionKind::IntegerLiteral, "1", { }, directive.span };
+        }
         const auto* assertion_disable = property && property->disable
             ? &*property->disable
             : directive_sequence && directive_sequence->disable
@@ -1113,7 +1182,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                       sequence->disable->condition_tokens }
                 : std::span<const Token> {
                       substituted_sequence_disable_tokens };
-            disable_condition = scalar_expression(disable_tokens);
+            disable_condition = assertion_expression(disable_tokens);
             if (!disable_condition) {
                 error(
                     disable_tokens.empty()
@@ -1172,7 +1241,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 local.declaration->span);
             if (local.initializer_tokens.empty())
                 continue;
-            const auto initializer = scalar_expression(local.initializer_tokens);
+            const auto initializer = assertion_expression(local.initializer_tokens);
             if (!initializer) {
                 error(
                     local.initializer_tokens.front(),
@@ -1326,7 +1395,28 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                                 "fsim.concurrent-assertion-pending|" }
                 + std::to_string(index) + "|" + kind_name + "|"
                 + std::string { outcome } + "|" + process.name;
-            for (const auto& action : actions) {
+            // Only display and report actions can be replayed when a
+            // pending attempt resolves at the end of simulation; those in
+            // unnamed blocks are replayed in order.
+            std::vector<const Statement*> replayed;
+            const auto collect = [&](const auto& self,
+                                     const std::span<const Statement> items)
+                -> void {
+                for (const auto& item : items) {
+                    if (item.kind == StatementKind::Block
+                        && item.label.empty()) {
+                        self(self, std::span<const Statement> {
+                                       item.statements.begin(),
+                                       item.statements.end() });
+                    } else if (item.kind == StatementKind::Display
+                        || item.kind == StatementKind::Report) {
+                        replayed.push_back(&item);
+                    }
+                }
+            };
+            collect(collect, actions);
+            for (const auto* replayed_action : replayed) {
+                const auto& action = *replayed_action;
                 marker.output_text += "|";
                 marker.output_text += action.kind == StatementKind::Report ? "R" : "D";
                 marker.output_text += "," + std::to_string(static_cast<std::underlying_type_t<AssertionSeverity>>(action.assertion_severity));
@@ -1344,7 +1434,9 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
         };
         assertion.assertion_has_pass_action = true;
         assertion.statements.push_back(coverage_marker("pass"));
-        const auto pass_actions = action_statements(directive.pass_action_tokens);
+        const auto pass_actions = directive.pass_action_statements.empty()
+            ? action_statements(directive.pass_action_tokens)
+            : directive.pass_action_statements;
         if (!sequence_match_actions.empty() || !pass_actions.empty()) {
             assertion.statements.push_back(action_region_marker());
             assertion.statements.insert(
@@ -1355,7 +1447,9 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
         }
         assertion.assertion_has_failure_action = true;
         assertion.else_statements.push_back(coverage_marker("failure"));
-        const auto failure_actions = action_statements(directive.failure_action_tokens);
+        const auto failure_actions = directive.failure_action_statements.empty()
+            ? action_statements(directive.failure_action_tokens)
+            : directive.failure_action_statements;
         append_actions(assertion.else_statements, failure_actions);
         if (failure_actions.empty() && !directive.has_failure_action && (directive.kind == SystemVerilogConcurrentAssertionKind::Assert || directive.kind == SystemVerilogConcurrentAssertionKind::Assume)) {
             Statement report;
@@ -1389,7 +1483,45 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 disable.else_statements.push_back(std::move(attempt));
                 process.statements.push_back(std::move(disable));
             };
-        if (property_abort) {
+        if (general_property) {
+            GeneralPropertyActions actions;
+            auto success = assertion;
+            success.condition = Expression {
+                ExpressionKind::IntegerLiteral, "1", { }, directive.span };
+            auto failure = assertion;
+            failure.condition = Expression {
+                ExpressionKind::IntegerLiteral, "0", { }, directive.span };
+            actions.success.push_back(std::move(success));
+            actions.failure.push_back(std::move(failure));
+            actions.vacuous.push_back(coverage_marker("vacuous"));
+            append_actions(actions.vacuous, pass_actions);
+            actions.clock = process.sensitivities;
+            actions.span = directive.span;
+            actions.name_prefix = "__fsim_a" + std::to_string(index);
+            if (disable_condition) {
+                actions.disable = std::move(*disable_condition);
+                actions.abort.push_back(coverage_marker("abort"));
+            }
+            auto evaluation = general_property_evaluation(
+                predicate_tokens, unit, actions);
+            if (!evaluation) {
+                error(
+                    directive.property_tokens.front(),
+                    "FSIM-SV-SEM-200",
+                    "the concurrent property cannot be evaluated");
+                continue;
+            }
+            // The evaluation advances every attempt in this process; its
+            // state persists in process variables between clock ticks.
+            process.variables.insert(process.variables.end(),
+                evaluation->declarations.begin(),
+                evaluation->declarations.end());
+            evaluation->declarations.clear();
+            process.statements.insert(process.statements.end(),
+                assertion_local_initializers.begin(),
+                assertion_local_initializers.end());
+            process.statements.push_back(std::move(*evaluation));
+        } else if (property_abort) {
             Statement aborted;
             aborted.kind = StatementKind::If;
             aborted.condition = std::move(*abort_condition);

@@ -188,3 +188,59 @@ gives fsim's result in each case checked.
 - Packed structures of different types are assignment compatible as
   integral values (6.22.3), so fsim no longer rejects passing one where
   another is expected.
+
+## Sequences, rewrites and corpus disagreements (batch 21)
+
+- Concurrent properties outside the specialized slices compile to sequence
+  automata advanced by the directive's own process once per clock tick.
+  Attempts occupy 64 slots (start tick modulo 64), and every automaton state
+  is a 64-bit vector of the slots positioned there, with a count per slot
+  for attempts that started together. An antecedent match starts consequent
+  attempts in the same tick; `|=>` with a sequence consequent is the same
+  automaton with a leading `##1`. Outcomes are counted during the step and
+  the action blocks run after it, because reads after the first action are
+  no longer sampled. An attempt still running 64 ticks after it started is
+  abandoned when its slot is reused. Automata are limited to 192 states.
+- The first design gave every attempt a forked thread with block-local
+  state. Fork children share their process's frame, so overlapping
+  attempts overwrote each other's state: `a ##1 b[*2]` never matched when
+  attempts overlapped, and a `b[->1]` consequent failed spuriously. Static
+  block variables in an `always` process persist between activations, but
+  in a concurrent-assertion process only process variables do, so the
+  automaton state is declared there under a per-directive name prefix.
+- New attempts start through a one-branch `fork ... join`, so `$assertoff`
+  (which filters assertion forks) stops new attempts while running ones
+  continue (20.12). `$assertkill` does not yet end running attempts of this
+  evaluation.
+- A predicate that is one named sequence instance stays with the
+  specialized slices, which report attempts still running at the end of
+  simulation; the general evaluation does not.
+- A second `WaitRegion` to the region a process is already in now continues
+  in place; it used to fail the process silently, which dropped any later
+  action of the same tick.
+- The specialized `cover property` slice reported one match per tick when
+  several attempts matched then (`b[*1:3] ##1 c`): its actions in that tick
+  ran into the `WaitRegion` failure above. 16.14.3 counts each attempt, as
+  it now does.
+- A vacuous success runs the pass action, as 16.14.1's default and
+  Verilator do; xsim does not run it. `disable iff` reads the sampled
+  value of its condition, while 16.12 and xsim use its current value.
+- `randcase` and `randsequence` are rewritten into ordinary statements
+  before elaboration: weights are summed and compared with `$urandom`,
+  productions expand inline in named blocks, production arguments become
+  block variables, and `break`/`return` in a code block disable the
+  randsequence or production block. `rand join` runs its productions in
+  order, which is one interleaving 18.17.5 allows. Recursive productions
+  and productions with return values are rejected (`SV-UNSUPPORTED-046`).
+- An assignment within an expression (11.3.6) runs as a statement just
+  before the statement containing it; its value is the target's new value.
+  Inside a loop condition it would run only once, so it is rejected there
+  (`SV-UNSUPPORTED-047`).
+- sv-tests `18.17.2--if-else-production-statements_{0,2}_fail` declare an
+  undeclared `switch` inside a compilation-unit function that nothing
+  calls. fsim checks a callable body only when it is elaborated, so these
+  now compile; they used to fail only because `randsequence` did not parse.
+- ivtest `sv_wildcard_import4` declares a module `event e` after using
+  the wildcard-imported package event `e`; 26.3 makes that illegal, but fsim
+  does not yet track earlier wildcard references. It used to fail only
+  because package events did not parse.

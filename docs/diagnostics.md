@@ -1336,6 +1336,9 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-PARSE-385` | error | A package import in a module, interface, or program header is not followed by a parameter-port list or port list. |
 | `FSIM-SV-PARSE-387` | error | A generated class declaration has an invalid qualifier/shape, or a generated interface class is used before SystemVerilog-2023. |
 | `FSIM-SV-PARSE-388` | error | An enum literal range (`name[N]`, `name[N:M]`) bound is not an unsized decimal literal, or the range exceeds 65536 literals. |
+| `FSIM-SV-PARSE-389` | error | A `randsequence` production, rule, `case` item, or parenthesized/braced operand is malformed (IEEE 1800-2017 18.17). |
+| `FSIM-SV-PARSE-390` | error | A `randcase` item lacks its `:` or the statement has no `endcase` (IEEE 1800-2017 18.16). |
+| `FSIM-SV-PARSE-391` | error | A typed constructor call `C::new(...)` has no closing `)` (IEEE 1800-2017 8.8). |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -1655,6 +1658,10 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-CLASS-021` | error | A randomization mode call violates local or protected class-member access. |
 | `FSIM-SV-CLASS-022` | error | The special `null` object-randomize checker selection is mixed with another variable-list item. |
 | `FSIM-SV-CLASS-023` | error | Outside a class, the class scope operator names a parameterized class without a parameter value assignment (`C::name` instead of `C#()::name`, IEEE 1800-2017 8.25.1). |
+| `FSIM-SV-CLASS-024` | error | `new` constructs a virtual (abstract) class or an interface class (IEEE 1800-2017 8.21, 8.26). |
+| `FSIM-SV-CLASS-025` | error | A class handle is assigned a handle of a class that is neither the same class nor derived from it (IEEE 1800-2017 8.15). |
+| `FSIM-SV-CLASS-026` | error | The class scope of a typed constructor `C::new` does not name exactly one class (IEEE 1800-2017 8.8). |
+| `FSIM-SV-CLASS-027` | error | The operand of a shallow copy `new h` is not a class handle (IEEE 1800-2017 8.12). |
 
 The standardized `$dist_*` callables use source-located simulation warnings
 rather than compile diagnostics for runtime-domain failures. Nonpositive
@@ -1776,6 +1783,12 @@ scheduler.
 | `FSIM-SV-SEM-396` | error | A non-ANSI port or classic task argument declared with a net or data type is declared again, or its direction and data declarations have different packed ranges or an atom/real/aggregate data type over a ranged direction declaration (IEEE 1800-2017 23.2.2.1, 13.3). |
 | `FSIM-SV-SEM-397` | error | An automatic variable is written by a nonblocking assignment, named in its intra-assignment event, or used by a procedural continuous assignment, `force`, `deassign` or `release` (IEEE 1800-2017 6.21). |
 | `FSIM-SV-SEM-398` | error | A net is declared as a dynamic array, queue, or associative array (IEEE 1800-2017 6.7.1). |
+| `FSIM-SV-SEM-399` | error | A package `export P::name` or `export P::*` names a package from which the exporting package imports nothing of that name (IEEE 1800-2017 26.6). |
+| `FSIM-SV-SEM-400` | error | A program block contains an `always` procedure or a module, interface, or program instance (IEEE 1800-2017 24.3). |
+| `FSIM-SV-SEM-401` | error | A packed structure or union member declares a default value (IEEE 1800-2017 7.2.2). |
+| `FSIM-SV-SEM-402` | error | In Verilog, a declaration appears in an unnamed `begin` or `fork` block (IEEE 1364-2005 9.8.3); SystemVerilog allows it. |
+| `FSIM-SV-SEM-403` | error | A `randsequence` names a production that it does not declare (IEEE 1800-2017 18.17). |
+| `FSIM-SV-SEM-404` | error | A `for` loop variable declared with `var` has no data type, as in `for (var [7:0] i = 0; ...)` (IEEE 1800-2017 12.7.1). |
 | `FSIM-SV-SEM-073` | error | A module or package declares the same bounded task name more than once. |
 | `FSIM-SV-SEM-075` | error | A bounded text-file system function has the wrong argument count. |
 | `FSIM-SV-SEM-076` | error | `$fdisplay` or `$fwrite` has a nonliteral, malformed, unsupported, or multi-value format. |
@@ -1831,6 +1844,8 @@ scheduler.
 | `FSIM-SV-UNSUPPORTED-042` | error | Reserved non-emitting identity formerly used for deferred `case matches` binding, tagged, and structured patterns. |
 | `FSIM-SV-UNSUPPORTED-043` | error | Reserved non-emitting identity formerly used for deferred `case matches` guards. |
 | `FSIM-SV-UNSUPPORTED-045` | error | A class member is outside the current property, method, constraint, typedef, or nested-class foundation. |
+| `FSIM-SV-UNSUPPORTED-046` | error | A `randsequence` production is recursive or returns a value; productions expand inline and only `void` productions are supported. |
+| `FSIM-SV-UNSUPPORTED-047` | error | An assignment within an expression (IEEE 1800-2017 11.3.6) appears in a loop control expression; such assignments run once before their statement. |
 
 ## Elaboration and SimIR lowering
 
@@ -2063,6 +2078,7 @@ scheduler.
 | `FSIM-ELAB-SVFUNC-011` | error | Malformed HIR presents a nonintegral writable function formal to the bounded execution path. |
 | `FSIM-ELAB-SVFUNC-012` | error | A bounded `ref` function actual is not a writable variable target or the function is not automatic. |
 | `FSIM-ELAB-SVFUNC-013` | error | A `ref static` function actual lacks static storage lifetime. |
+| `FSIM-ELAB-SVFUNC-014` | error | A void function is called where a value is required, including inside `void'(...)` (IEEE 1800-2017 13.4.1). |
 | `FSIM-ELAB-VHFUNC-001` | error | An interface-function generic has no retained profile in HIR. |
 | `FSIM-ELAB-VHFUNC-002` | error | An interface-function association or selected actual is not same-language VHDL. |
 | `FSIM-ELAB-VHFUNC-003` | error | An interface-function actual is not a simple visible function name. |
@@ -2615,6 +2631,7 @@ scheduler.
 | `FSIM-ELAB-SVASSIGN-001` | error | A SystemVerilog-2023 nonblocking assignment targets an element of a dynamically sized array variable. |
 | `FSIM-ELAB-SVASSIGN-002` | error | An assignment-pattern target is empty, malformed, or contains a keyed association instead of positional lvalues. |
 | `FSIM-ELAB-SVASSIGN-003` | error | A blocking or nonblocking procedural assignment targets a net; its target must be a variable (IEEE 1800-2017 10.4). |
+| `FSIM-ELAB-SVASSIGN-004` | error | A whole unpacked array is assigned a scalar or packed value instead of an unpacked array value (IEEE 1800-2017 7.6). |
 | `FSIM-ELAB-SVSELECT-001` | error | A bit-select or part-select is applied to a scalar (1-bit, rangeless) unpacked array element (IEEE 1800-2017 11.5.1). |
 | `FSIM-ELAB-SVASSERT-001` | error | A concurrent assertion incorrectly carries an immediate-assertion deferred qualifier. |
 | `FSIM-ELAB-SVASSERT-002` | error | A deferred immediate assertion action cannot be lowered to its scheduler-region handoff. |

@@ -274,7 +274,8 @@ module invalid_member_initializer;
     logic [3:0] payload;
     logic valid;
   } inner_t;
-  typedef struct packed {
+  // Only unpacked structure members take defaults (IEEE 1800-2017 7.2.2).
+  typedef struct {
     inner_t nested = '{payload: 4'h1};
   } outer_t;
   outer_t value;

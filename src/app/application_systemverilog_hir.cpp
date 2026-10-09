@@ -811,6 +811,12 @@ namespace systemverilog_hir_detail {
         output.anonymous = input.anonymous;
         output.udp = input.udp_instance;
         output.array_indices = input.array_indices;
+        if (input.array_left && input.array_right) {
+            output.array_left = expression(
+                *input.array_left, scope, instance_origin);
+            output.array_right = expression(
+                *input.array_right, scope, instance_origin);
+        }
         for (const auto& input_parameter : input.parameter_overrides) {
             sv::ActualAssociation parameter;
             parameter.formal = input_parameter.name;

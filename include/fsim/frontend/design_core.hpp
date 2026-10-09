@@ -1278,6 +1278,10 @@ struct Instance {
     // Empty for a scalar instance. A bounded SystemVerilog instance array is
     // expanded in this exact declared order after specialization.
     std::vector<std::int64_t> array_indices;
+    // Instance-array bounds that are not literals; the array expands during
+    // elaboration once parameters are known.
+    std::optional<Expression> array_left;
+    std::optional<Expression> array_right;
     std::vector<ParameterOverride> parameter_overrides;
     // Populated for UDP propagation-delay syntax after declaration-aware
     // frontend normalization. Module parameter overrides remain separate.

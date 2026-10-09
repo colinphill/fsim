@@ -208,6 +208,14 @@ FunctionDeclaration VerilogParser::parse_function(
         static_reference = false;
       }
 
+      // `var` marks a variable formal; without a data type it is logic
+      // (IEEE 1800-2017 13.3, 23.2.2.3).
+      const bool var_formal = language_ == Language::SystemVerilog2017
+          && match_keyword("var");
+      const bool implicit_var_formal = var_formal
+          && at(TokenKind::Identifier)
+          && !keyword_reserved(keyword_set_, current().text)
+          && !is_named_type_reference_start();
       const bool explicit_type =
           keyword("string") || keyword("byte")
           || keyword("shortint") || keyword("longint")
@@ -229,7 +237,11 @@ FunctionDeclaration VerilogParser::parse_function(
             "direction");
       }
       Type type;
-      if (explicit_direction || explicit_type
+      if (implicit_var_formal) {
+        type = default_verilog_type();
+        type.spelling = "logic";
+        inherited_type = type;
+      } else if (var_formal || explicit_direction || explicit_type
           || !have_inherited_formal) {
         type = parse_parameter_type();
         inherited_type = type;
@@ -402,6 +414,20 @@ FunctionDeclaration VerilogParser::parse_function(
   function.type_aliases = std::move(local_declarations.type_aliases);
   function.variables = std::move(body.declarations);
   function.statements = std::move(body.statements);
+  // A classic formal declared without a type takes the type of a later
+  // variable declaration of the same name, as `input x; real x;`
+  // (IEEE 1364-2005 10.3.1 port declarations with a data type).
+  std::erase_if(function.variables, [&](const VariableDeclaration& variable) {
+    const auto argument = std::ranges::find(
+        function.arguments, variable.name, &FunctionArgument::name);
+    if (argument == function.arguments.end()
+        || argument->type.spelling != "implicit"
+        || variable.initializer) {
+      return false;
+    }
+    argument->type = variable.type;
+    return true;
+  });
   if (!classic_header_arguments.empty()) {
     std::vector<FunctionArgument> ordered;
     ordered.reserve(classic_header_arguments.size());
@@ -712,6 +738,14 @@ TaskDeclaration VerilogParser::parse_task(
         inherited_static_reference = static_reference;
       }
 
+      // `var` marks a variable formal; without a data type it is logic
+      // (IEEE 1800-2017 13.3, 23.2.2.3).
+      const bool var_formal = language_ == Language::SystemVerilog2017
+          && match_keyword("var");
+      const bool implicit_var_formal = var_formal
+          && at(TokenKind::Identifier)
+          && !keyword_reserved(keyword_set_, current().text)
+          && !is_named_type_reference_start();
       const bool explicit_type =
           keyword("string") || keyword("byte") || keyword("shortint") ||
           keyword("longint") || keyword("time") || keyword("shortreal") ||
@@ -728,7 +762,12 @@ TaskDeclaration VerilogParser::parse_task(
             "direction");
       }
       Type type;
-      if (explicit_direction || explicit_type || !have_inherited_formal) {
+      if (implicit_var_formal) {
+        type = default_verilog_type();
+        type.spelling = "logic";
+        inherited_type = type;
+      } else if (var_formal || explicit_direction || explicit_type
+          || !have_inherited_formal) {
         type = parse_parameter_type();
         inherited_type = type;
       } else {

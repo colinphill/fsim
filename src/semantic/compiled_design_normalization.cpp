@@ -10,6 +10,7 @@
 #include <set>
 #include <span>
 #include <string>
+#include <unordered_map>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -1624,25 +1625,43 @@ bool add_type_dependencies(
         });
 }
 
-bool scope_within(
-    const Model& model, ScopeId scope, const ScopeId owner)
-{
-    while (scope.valid() && scope.value() < model.scopes().size()) {
-        if (scope == owner) {
-            return true;
-        }
-        const auto parent = model.scopes()[scope.value()].parent;
-        if (!parent) {
-            return false;
-        }
-        scope = *parent;
-    }
-    return false;
-}
-
 bool annotate_classes(CompiledDesign& design)
 {
     const auto& expressions = design.systemverilog_hir.expressions();
+    // The dependencies of the expressions inside each method body, gathered
+    // in one pass: an expression contributes to every enclosing method
+    // scope, in expression order.
+    std::unordered_map<std::uint32_t, ResidualDependencies>
+        method_scope_dependencies;
+    for (const auto& declaration : design.systemverilog_hir.classes()) {
+        for (const auto& method : declaration.methods) {
+            const auto* member = find_declaration(
+                design.systemverilog_hir, method.declaration);
+            if (member != nullptr && member->nested_scope) {
+                method_scope_dependencies.try_emplace(
+                    member->nested_scope->value());
+            }
+        }
+    }
+    if (!method_scope_dependencies.empty()) {
+        const auto& scopes = design.semantics.scopes();
+        for (const auto& expression : expressions) {
+            auto scope = expression.scope;
+            while (scope.valid() && scope.value() < scopes.size()) {
+                const auto found
+                    = method_scope_dependencies.find(scope.value());
+                if (found != method_scope_dependencies.end()) {
+                    merge_dependencies(
+                        found->second, expression.dependencies);
+                }
+                const auto parent = scopes[scope.value()].parent;
+                if (!parent) {
+                    break;
+                }
+                scope = *parent;
+            }
+        }
+    }
     for (auto& declaration : design.systemverilog_hir.mutable_classes()) {
         declaration.dependencies = { };
         for (auto& parameter : declaration.parameters) {
@@ -1742,12 +1761,10 @@ bool annotate_classes(CompiledDesign& design)
                 }
             }
             if (member->nested_scope) {
-                for (const auto& expression : expressions) {
-                    if (scope_within(design.semantics,
-                            expression.scope, *member->nested_scope)) {
-                        merge_dependencies(
-                            method.dependencies, expression.dependencies);
-                    }
+                const auto found = method_scope_dependencies.find(
+                    member->nested_scope->value());
+                if (found != method_scope_dependencies.end()) {
+                    merge_dependencies(method.dependencies, found->second);
                 }
             }
             canonicalize(method.dependencies);

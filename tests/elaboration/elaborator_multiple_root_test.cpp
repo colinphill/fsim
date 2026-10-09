@@ -97,10 +97,11 @@ module interface_root;
   recursive_mid mid(link);
   virtual recursive_if #(.WIDTH(4)).view selected = link;
 endmodule
-program program_interface_root;
+// A program cannot instantiate an interface (IEEE 1800-2017 24.3).
+module program_interface_root;
   recursive_if #(.WIDTH(8)) link();
   virtual recursive_if #(.WIDTH(8)).view selected = link;
-endprogram
+endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     if (!interface_roots.ok()) {
