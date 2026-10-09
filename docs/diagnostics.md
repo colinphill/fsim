@@ -1770,6 +1770,7 @@ scheduler.
 | `FSIM-SV-SEM-069` | error | A bounded task local conflicts with an argument or earlier local. |
 | `FSIM-SV-SEM-071` | error | A bounded task return statement incorrectly supplies a value. |
 | `FSIM-SV-SEM-394` | error | A void function return statement incorrectly supplies a value (IEEE 1800-2017 13.4.1). |
+| `FSIM-SV-SEM-395` | error | A Verilog (not SystemVerilog) ANSI task or function port declaration omits its direction (IEEE 1364-2005 10.2.1, 10.3.1). |
 | `FSIM-SV-SEM-073` | error | A module or package declares the same bounded task name more than once. |
 | `FSIM-SV-SEM-075` | error | A bounded text-file system function has the wrong argument count. |
 | `FSIM-SV-SEM-076` | error | `$fdisplay` or `$fwrite` has a nonliteral, malformed, unsupported, or multi-value format. |

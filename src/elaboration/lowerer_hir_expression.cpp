@@ -2962,6 +2962,64 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                     || (!descending && *left > *right)) {
                     return;
                 }
+                // A range choice whose value is an array of the aggregate's
+                // element type supplies a slice: its elements, left to
+                // right, go to the range's indices (IEEE 1076-2008 9.3.3.3).
+                const auto count = index_distance(*left, *right) + 1U;
+                const auto value_width = hir_expression_width(
+                    association.value, hir_process_scope_);
+                if (count > 1U && value_width
+                    && count <= std::numeric_limits<std::size_t>::max()
+                        / *element_width
+                    && *value_width == count * *element_width
+                    && *value_width
+                        <= std::numeric_limits<std::uint32_t>::max()) {
+                    const auto slice = lower_hir_expression(
+                        association.value, *value_width);
+                    if (!slice) {
+                        valid = false;
+                        return;
+                    }
+                    const auto low = std::min(*range->left, *range->right);
+                    const auto high = std::max(*range->left, *range->right);
+                    auto index = *left;
+                    for (std::uint64_t element { }; element < count;
+                        ++element) {
+                        if (index < low || index > high) {
+                            report(
+                                "FSIM-ELAB-VHARRAYAGG-003",
+                                "VHDL array aggregate index "
+                                    + std::to_string(index)
+                                    + " is outside the contextual range",
+                                span);
+                            valid = false;
+                            return;
+                        }
+                        const auto slot = static_cast<std::size_t>(
+                            index_distance(index, *range->right));
+                        if (values[slot]) {
+                            report(
+                                "FSIM-ELAB-VHARRAYAGG-004",
+                                "VHDL array aggregate index is assigned "
+                                "more than once",
+                                span);
+                            valid = false;
+                            return;
+                        }
+                        const auto selected = allocate_register(
+                            *element_width, register_domain(*slice));
+                        process_.operations.emplace_back(Extract {
+                            selected,
+                            *slice,
+                            static_cast<std::uint32_t>(
+                                (count - 1U - element) * *element_width),
+                            static_cast<std::uint32_t>(*element_width),
+                        });
+                        values[slot] = selected;
+                        index += descending ? -1 : 1;
+                    }
+                    return;
+                }
                 auto index = *left;
                 while (true) {
                     assign_index(index, association.value, span);

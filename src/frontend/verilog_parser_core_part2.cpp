@@ -1166,6 +1166,9 @@ DesignUnit VerilogParser::parse_module(
                 std::make_move_iterator(instances.end()));
         } else if (at(TokenKind::Backtick)) {
             parse_directive();
+        } else if (language_ == Language::SystemVerilog2017
+            && match(TokenKind::Semicolon)) {
+            // An empty module item (IEEE 1800-2017 A.1.10).
         } else {
             module_has_non_time_item_ = true;
             const auto unexpected = advance();

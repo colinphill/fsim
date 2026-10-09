@@ -1974,6 +1974,7 @@ tests/fixtures/compliance/sv_compilation_unit_declarations.sv
 tests/fixtures/compliance/sv_display_arguments.sv
 tests/fixtures/compliance/sv_function_statements.sv
 tests/fixtures/compliance/sv_hierarchical_references.sv
+tests/fixtures/compliance/sv_module_items.sv
 tests/fixtures/compliance/sv_net_data_types.sv
 tests/fixtures/compliance/sv_port_width_mismatch.sv
 tests/fixtures/compliance/sv_streaming_unpack.sv
@@ -1983,6 +1984,7 @@ tests/fixtures/compliance/verilog_2005_begin_keywords.v
 tests/fixtures/compliance/vhdl_character_type.vhd
 tests/fixtures/compliance/vhdl_composite_constants.vhd
 tests/fixtures/compliance/vhdl_enum_index_arrays.vhd
+tests/fixtures/compliance/vhdl_formal_subelements.vhd
 tests/fixtures/compliance/vhdl_generate_configuration.vhd
 tests/fixtures/compliance/vhdl_now_and_string_formals.vhd
 tests/fixtures/compliance/vhdl_package_shared_variables.vhd

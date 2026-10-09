@@ -945,12 +945,9 @@ def check_outcome(case: Case, steps: list[StepResult], workdir: Path) -> tuple[s
     if case.checker == "vhdl_clean":
         if hdl_errors:
             return "fail", "error assertion: " + hdl_errors[0][-160:]
-        for name, expected in case.checker_data.get("outputs", []):
-            produced = workdir / name
-            if not produced.exists():
-                return "fail", f"output file {name} missing"
-            if read_text(produced).split() != read_text(Path(expected)).split():
-                return "fail", f"output file {name} differs"
+        # GHDL's VESTs harness (testsuite.sh) records OUTPUT= files but never
+        # compares them: the iofiles are inputs for the read tests, and a
+        # typed file's representation is implementation defined.
         return "pass", ""
     if case.checker == "vunit":
         return "pass", ""

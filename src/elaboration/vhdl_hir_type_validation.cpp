@@ -1575,6 +1575,32 @@ private:
             validate_value(value, source);
         };
 
+        // Whether a range choice's value is an array of the element type,
+        // as long as the range: a subtype of array profile, or a string
+        // literal with one element per index.
+        const auto slice_value = [&](const semantic::ExpressionId value,
+                                     const std::int64_t left,
+                                     const std::int64_t right) {
+            const auto count = left > right
+                ? static_cast<std::uint64_t>(left - right) + 1U
+                : static_cast<std::uint64_t>(right - left) + 1U;
+            if (count < 2U) {
+                return false;
+            }
+            const auto expression = specialization_.find_expression(value);
+            if (expression && expression->vhdl != nullptr
+                && expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::string_literal) {
+                const auto width = literal_width(value);
+                return width && *width == count;
+            }
+            const auto subtype = expression_subtype(value);
+            if (!subtype) {
+                return false;
+            }
+            std::unordered_set<std::uint32_t> visiting;
+            return profile(*subtype, visiting).kind == ProfileKind::array;
+        };
         struct AggregateChoiceRange {
             std::int64_t left { };
             std::int64_t right { };
@@ -1736,10 +1762,28 @@ private:
                         return;
                     }
                     const auto step = value.text == "downto" ? -1 : 1;
+                    // An array-valued range choice supplies a slice (IEEE
+                    // 1076-2008 9.3.3.3); its indices are assigned without
+                    // the element check.
+                    const bool slice = slice_value(
+                        association.value, *left, *right);
                     for (auto index = *left;; index += step) {
-                        assign(
-                            index, association.value,
-                            association.source);
+                        if (slice) {
+                            if (index < minimum || index > maximum
+                                || !assigned.insert(index).second) {
+                                report(
+                                    "FSIM-ELAB-VHARRAYAGG-003",
+                                    "VHDL array aggregate slice is outside "
+                                        "the contextual range or overlaps "
+                                        "another choice",
+                                    association.source);
+                                break;
+                            }
+                        } else {
+                            assign(
+                                index, association.value,
+                                association.source);
+                        }
                         if (index == *right) {
                             break;
                         }

@@ -871,8 +871,102 @@ void VhdlParser::parse_vhdl_port_map(
       "'(' after port map",
       "FSIM-VHDL-PARSE-041");
   bool saw_named_port = false;
+  // Individual association of formal subelements (IEEE 1076-2008 6.5.7.1):
+  // `d(7) => x, d(6 downto 0) => y` or `p.field => z`. The parts of one
+  // formal are combined into a single association whose actual is an
+  // aggregate with the subelements as choices.
+  struct SubelementGroup {
+    std::size_t connection { };
+    std::string port;
+  };
+  std::vector<SubelementGroup> subelement_groups;
+  const auto subelement_formal = [&]() -> std::optional<std::size_t> {
+    if (!at(TokenKind::Identifier)) {
+      return std::nullopt;
+    }
+    if (at(TokenKind::Dot, 1) && at(TokenKind::Identifier, 2)
+        && at(TokenKind::Arrow, 3)) {
+      return 3U;
+    }
+    if (!at(TokenKind::LeftParen, 1)) {
+      return std::nullopt;
+    }
+    std::size_t depth { };
+    for (std::size_t offset = 1U; !at(TokenKind::EndOfFile, offset);
+         ++offset) {
+      if (at(TokenKind::LeftParen, offset)) {
+        ++depth;
+      } else if (at(TokenKind::RightParen, offset) && --depth == 0U) {
+        return at(TokenKind::Arrow, offset + 1U)
+            ? std::optional { offset + 1U }
+            : std::nullopt;
+      } else if (depth == 1U && at(TokenKind::Comma, offset)) {
+        return std::nullopt;
+      }
+    }
+    return std::nullopt;
+  };
   while (!at_end() && !at(TokenKind::RightParen)) {
     const auto actual_start = current();
+    if (subelement_formal()) {
+      saw_named_port = true;
+      const auto port = vhdl_name(advance().text);
+      Expression choice;
+      if (match(TokenKind::Dot)) {
+        const auto element = advance();
+        choice = Expression { ExpressionKind::Identifier,
+            vhdl_name(element.text), { }, element.span };
+      } else {
+        advance();
+        auto left = parse_expression();
+        if (match_keyword("to", true) || match_keyword("downto", true)) {
+          const auto direction = detail::ascii_lower(previous().text);
+          auto right = parse_expression();
+          const auto span = cover(left.span, right.span);
+          choice = Expression { ExpressionKind::Binary, direction,
+              { std::move(left), std::move(right) }, span };
+        } else {
+          choice = std::move(left);
+        }
+        expect(TokenKind::RightParen, "')' after formal subelement",
+            "FSIM-VHDL-PARSE-042");
+      }
+      expect(TokenKind::Arrow, "'=>' after formal subelement",
+          "FSIM-VHDL-PARSE-042");
+      auto actual = parse_expression();
+      auto group = std::ranges::find(
+          subelement_groups, port, &SubelementGroup::port);
+      if (group == subelement_groups.end()) {
+        if (std::ranges::any_of(connections,
+                [&](const PortConnection& existing) {
+                  return existing.port == port;
+                })) {
+          error(actual_start, "FSIM-VHDL-SEM-078",
+              "duplicate named port actual '" + port + "'");
+        }
+        PortConnection connection;
+        connection.port = port;
+        connection.value.kind = ExpressionKind::Aggregate;
+        connection.value.text = "@vhdl-formal-subelements";
+        connection.value.span = cover(actual_start.span, previous().span);
+        connection.span = connection.value.span;
+        subelement_groups.push_back({ connections.size(), port });
+        connections.push_back(std::move(connection));
+        group = std::prev(subelement_groups.end());
+      }
+      auto& aggregate = connections[group->connection].value;
+      const bool element_choice = choice.kind == ExpressionKind::Identifier;
+      aggregate.aggregate_choices.push_back(
+          element_choice ? choice.text : std::string { "@array" });
+      aggregate.aggregate_choice_expressions.push_back({ std::move(choice) });
+      aggregate.operands.push_back(std::move(actual));
+      aggregate.span = cover(aggregate.span, previous().span);
+      connections[group->connection].span = aggregate.span;
+      if (!match(TokenKind::Comma)) {
+        break;
+      }
+      continue;
+    }
     auto connection = parse_vhdl_port_connection();
     if (connection.port) {
       saw_named_port = true;

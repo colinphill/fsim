@@ -726,6 +726,10 @@ void VerilogParser::parse_virtual_interface_declaration(
 }
 
 [[nodiscard]] bool VerilogParser::is_declaration_start() const  {
+  if (language_ == Language::SystemVerilog2017
+      && (keyword("var") || keyword("const"))) {
+    return true;
+  }
   return is_direction_keyword() || is_net_type_keyword()
       || keyword("static") || keyword("automatic")
       || keyword("string") || keyword("chandle") || keyword("event")
@@ -820,8 +824,25 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
       unit.kind == UnitKind::SystemVerilogPackage;
   const bool systemverilog_const =
       package_variable && match_keyword("const");
+  if (!package_variable && language_ == Language::SystemVerilog2017
+      && keyword("const")) {
+    // A module-level constant variable (IEEE 1800-2017 6.20.6): legal code
+    // never writes it, so it is an ordinary initialized variable here.
+    (void)advance();
+  }
   VerilogTypeSpec spec;
   spec.type = default_verilog_type();
+  if (language_ == Language::SystemVerilog2017 && !is_direction_keyword()
+      && match_keyword("var")) {
+    // `var` declares a variable; with an implicit data type it is logic
+    // (IEEE 1800-2017 6.8).
+    if (!is_net_type_keyword() && !keyword("string")
+        && !keyword("chandle") && !keyword("event")
+        && !keyword("struct") && !keyword("union") && !keyword("enum")
+        && !is_named_type_reference_start()) {
+      spec.type.spelling = "logic";
+    }
+  }
   if (is_direction_keyword()) {
     spec.direction = parse_direction();
     spec.type = default_port_net_type();

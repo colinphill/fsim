@@ -211,6 +211,14 @@ FunctionDeclaration VerilogParser::parse_function(
           || keyword("signed") || keyword("unsigned")
           || at(TokenKind::LeftBracket)
           || is_named_type_reference_start();
+      if (language_ != Language::SystemVerilog2017 && !explicit_direction
+          && (explicit_type || !have_inherited_formal)) {
+        // IEEE 1364-2005 10.3.1: each Verilog function port declaration
+        // names its direction; only SystemVerilog defaults it.
+        error(current(), "FSIM-SV-SEM-395",
+            "a Verilog function or task port declaration requires a "
+            "direction");
+      }
       Type type;
       if (explicit_direction || explicit_type
           || !have_inherited_formal) {
@@ -701,6 +709,14 @@ TaskDeclaration VerilogParser::parse_task(
           keyword("int") || keyword("logic") || keyword("reg") ||
           keyword("bit") || keyword("signed") || keyword("unsigned") ||
           at(TokenKind::LeftBracket) || is_named_type_reference_start();
+      if (language_ != Language::SystemVerilog2017 && !explicit_direction
+          && (explicit_type || !have_inherited_formal)) {
+        // IEEE 1364-2005 10.2.1: each Verilog task port declaration names
+        // its direction; only SystemVerilog defaults it.
+        error(current(), "FSIM-SV-SEM-395",
+            "a Verilog function or task port declaration requires a "
+            "direction");
+      }
       Type type;
       if (explicit_direction || explicit_type || !have_inherited_formal) {
         type = parse_parameter_type();

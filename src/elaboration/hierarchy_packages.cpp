@@ -13357,6 +13357,17 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                 == semantic::vhdl::ExpressionKind::name) {
                 return true;
             }
+            // Individually associated formal subelements, each actual a
+            // name (IEEE 1076-1993 4.3.2.2), combined by the parser.
+            if (source.kind == semantic::vhdl::ExpressionKind::aggregate
+                && source.text == "@vhdl-formal-subelements") {
+                return !source.associations.empty()
+                    && std::ranges::all_of(source.associations,
+                        [&](const semantic::vhdl::AggregateAssociation&
+                                association) {
+                            return self(self, association.value);
+                        });
+            }
             if ((source.kind
                         == semantic::vhdl::ExpressionKind::index
                     || source.kind

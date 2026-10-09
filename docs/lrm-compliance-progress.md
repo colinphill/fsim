@@ -249,6 +249,58 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 13: formal subelements, aggregate slices, module items
+
+- Individual association of formal subelements in port maps (IEEE 1076-1993
+  4.3.2.2, 1076-2008 6.5.7.1): `d(7) => x, d(6 downto 0) => y` and
+  `p.field => z`. The parser combines the parts of one formal into a single
+  association. Its actual is an aggregate with the subelements as choices,
+  which is accepted before VHDL-2008 when every part is a name. Input ports
+  only so far.
+- An aggregate range choice whose value is an array supplies a slice
+  (`(7 => x, 6 downto 0 => y)`, IEEE 1076-2008 9.3.3.3).
+- SystemVerilog modules accept `const` variables (6.20.6), `var`
+  declarations with an implicit logic type (6.8), and empty `;` items
+  (A.1.10).
+- New check `FSIM-SV-SEM-395`: a Verilog (not SystemVerilog) ANSI task or
+  function port declaration must name its direction. ivtest br1027c and
+  br1027e expect this rejection in Verilog mode. Batch 12 had made them
+  pass by accident.
+
+Corpus effect against run 6: VESTs, nvc and VHDL-Compliance gain 8 cases;
+ivtest gains 2. Of the 120 `FSIM-VHDL-PARSE-042` cases, most now stop at
+other gaps. The largest is a conversion function on the formal side
+(`to_x(formal) => actual`, 36 VESTs cases), which the parser cannot yet
+tell apart from an indexed formal.
+
+- Runner: VESTs `OUTPUT=` files are no longer compared with the provided
+  iofiles. GHDL's own harness (`testsuite.sh`) records them but never
+  compares them. The iofiles are inputs for the read tests, and a typed
+  file's representation is implementation defined. 53 run-6 "output file
+  differs" failures were artifacts of this stricter check.
+
+Fixtures: `vhdl_formal_subelements.vhd` and `sv_module_items.sv`, both
+checked against xsim.
+
+### Corpus run 6 (after batches 10 to 12, interpreter)
+
+| Suite | Cases | Pass | Fail | Timeout | Skip | Pass rate |
+|---|---:|---:|---:|---:|---:|---:|
+| sv-tests | 1497 | 1087 | 409 | 1 | 0 | 72.6% |
+| verilator | 2415 | 562 | 1554 | 3 | 296 | 26.5% |
+| ivtest | 2826 | 1268 | 1529 | 4 | 25 | 45.3% |
+| vests | 3665 | 1974 | 1689 | 2 | 0 | 53.9% |
+| nvc | 1482 | 451 | 813 | 3 | 215 | 35.6% |
+| vhdl-compliance | 72 | 16 | 56 | 0 | 0 | 22.2% |
+
+Compared with run 5, 177 cases newly pass and 4 newly fail. All 4 are
+negative ivtest cases that newly supported syntax now reaches:
+- br1027c and br1027e: fixed in batch 13.
+- enum_base_fail_string2: an enum base that names a string typedef.
+- sv_array_cassign_fail10: an enum array assigned to an integer array.
+
+The last two need elaboration-time type checks (queued).
+
 ### Batch 12: display arguments, decimal field widths, shared file handles
 
 - Display and write tasks accept empty arguments, which print a space
@@ -488,6 +540,9 @@ error, and each exposes an existing gap:
 | SV: `void'($fgets(...))` and other discarded system-function calls | sv-tests chapter 21 |
 | SV: packed arrays of a named type (`T [3:0] v;`, `typedef T1 [7:0] T2;`) | ~80 ivtest/Verilator cases (`FSIM-SV-UNSUPPORTED-004`/`-024`) |
 | SV: typedefs of interface-port member types (`typedef ifc.t t;`) | ~20 Verilator cases |
+| VHDL: conversion functions on port association formals (`to_x(formal) => actual`) and on actuals | 36+ VESTs cases (`FSIM-ELAB-VHCOMP-009`) |
+| VHDL: individual association of output-port subelements | VESTs, nvc |
+| SV legality: an enum base that names a non-integral typedef; unpacked array assignment between enum and integer element types | ivtest negative cases |
 | VHDL: an array element such as `bit_vector(0 to N-1)`, constrained with non-literal bounds, was treated as unconstrained and gated to VHDL-2008 (fixed in batch 4) | 126 nvc/VESTs cases (`FSIM-FE-VHSTD-003`) |
 | VHDL: unconstrained array ports (`port (d : in bit_vector)`) bind with width 1 (`FSIM-ELAB-BIND-020`) | VESTs, generic-width library cells |
 | VHDL: analysis-time legality (index-constraint bounds and types, slices of multidimensional arrays, labels as primaries) | about 33 VESTs negative tests exposed by batch 4, part of the 724 accepted-invalid cases |
