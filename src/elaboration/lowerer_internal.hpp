@@ -441,6 +441,11 @@ private:
     // left after an element select. Empty for an ordinary vector.
     [[nodiscard]] std::vector<HirPackedRange>
     hir_systemverilog_packed_shape(semantic::ExpressionId expression) const;
+    // Whether a call actual sign-extends to its formal's width: a
+    // SystemVerilog value extends by its own signedness (IEEE 1800-2017
+    // 11.8.2, 13.5), other languages by the formal's.
+    [[nodiscard]] bool hir_actual_extension_signed(
+        semantic::ExpressionId actual, bool formal_signed) const;
     // The width an index target writes: an element of a multidimensional
     // packed array, otherwise one bit.
     [[nodiscard]] std::optional<std::size_t> hir_index_target_width(

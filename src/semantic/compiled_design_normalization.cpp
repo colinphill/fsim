@@ -784,10 +784,12 @@ std::optional<ConstantValue> constant_name_value(
     const auto* declaration = find_declaration(
         design.systemverilog_hir,
         *expression.referenced_name->selected);
+    // An enumeration literal has its enumeration's type, not that of its
+    // value expression (`P = 0` in an enum logic [2:0] is three bits), so
+    // its references are not folded into untyped literals (IEEE 1800-2017
+    // 6.19).
     if (declaration == nullptr
-        || (declaration->form != sv::DeclarationForm::local_parameter
-            && declaration->form
-                != sv::DeclarationForm::enumeration_literal)
+        || declaration->form != sv::DeclarationForm::local_parameter
         || !declaration->initializer) {
         return std::nullopt;
     }

@@ -8782,9 +8782,20 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     } else if (const auto cast = hir_systemverilog_cast_profile(
                    expression_id)) {
         const auto& operand = expression->systemverilog->operands.front();
-        const auto source_width = hir_expression_width(
+        auto source_width = hir_expression_width(
             operand, hir_process_scope_)
-                                      .value_or(cast->width);
+                                .value_or(cast->width);
+        // An integral size or type cast assigns its operand to a value of
+        // the cast's type, so the operand is evaluated in that context
+        // width (IEEE 1800-2017 6.24.1).
+        if ((cast->domain == frontend::ValueDomain::Bit2
+                || cast->domain == frontend::ValueDomain::Logic4)
+            && hir_systemverilog_scalar_kind(expression_id)
+                == frontend::SystemVerilogScalarKind::None
+            && hir_systemverilog_scalar_kind(operand)
+                == frontend::SystemVerilogScalarKind::None) {
+            source_width = std::max(source_width, cast->width);
+        }
         auto lowered = lower_hir_expression(operand, source_width);
         if (!lowered) {
             return std::nullopt;
@@ -11389,8 +11400,21 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 return destination;
             }
         }
+        // SystemVerilog unary -, ~ and + are context-determined: the
+        // operand widens, by its own signedness, to the context width
+        // before the operator applies (IEEE 1800-2017 11.6.1).
+        const bool context_unary = expression->systemverilog != nullptr
+            && scalar_width == 0U && expected_width > operand_width
+            && (source.text == "-" || source.text == "~"
+                || source.text == "+");
         auto operand = lower_hir_expression(
-            source.operands[0], operand_width, scalar_kind);
+            source.operands[0],
+            context_unary ? expected_width : operand_width, scalar_kind);
+        if (operand && context_unary
+            && register_width(*operand) < expected_width) {
+            operand = resize_register(*operand, expected_width,
+                hir_expression_signed(source.operands[0]));
+        }
         if (operand) {
             if (expression->vhdl != nullptr && source.text == "??") {
                 if (register_width(*operand) != 1U) {

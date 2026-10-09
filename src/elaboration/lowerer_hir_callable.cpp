@@ -2454,7 +2454,9 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
             }
             if (register_width(*lowered) != actual.width) {
                 lowered = resize_register(
-                    *lowered, actual.width, actual.signed_value);
+                    *lowered, actual.width,
+                    hir_actual_extension_signed(
+                        actual.expression, actual.signed_value));
             }
             actuals.push_back(*lowered);
             actual_kinds.push_back(0U);
@@ -2751,7 +2753,9 @@ bool Lowerer::lower_hir_class_task_call(
                 }
                 if (register_width(*lowered) != actual.width) {
                     lowered = resize_register(
-                        *lowered, actual.width, actual.signed_value);
+                        *lowered, actual.width,
+                        hir_actual_extension_signed(
+                            actual.expression, actual.signed_value));
                 }
                 actuals.push_back(*lowered);
                 actual_kinds.push_back(0U);
@@ -3011,7 +3015,8 @@ bool Lowerer::lower_hir_class_task_call(
             lowered_actuals[index] = resize_register(
                 *lowered_actuals[index],
                 actual.width,
-                actual.signed_value);
+                hir_actual_extension_signed(
+                    actual.expression, actual.signed_value));
         }
     }
 
@@ -5785,7 +5790,8 @@ Lowerer::lower_hir_function_call_value(
         if (register_width(*lowered_actuals[index]) != formal->width) {
             lowered_actuals[index] = resize_register(
                 *lowered_actuals[index], formal->width,
-                formal->signed_value);
+                hir_actual_extension_signed(
+                (*actuals)[index], formal->signed_value));
         }
     }
 
@@ -6335,7 +6341,8 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
         if (register_width(*lowered_actuals[index]) != formal->width) {
             lowered_actuals[index] = resize_register(
                 *lowered_actuals[index], formal->width,
-                formal->signed_value);
+                hir_actual_extension_signed(
+                (*actuals)[index], formal->signed_value));
         }
     }
 
@@ -6974,7 +6981,8 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
                 != formal->width) {
                 lowered_actuals[index] = resize_register(
                     *lowered_actuals[index], formal->width,
-                    formal->signed_value);
+                    hir_actual_extension_signed(
+                (*actuals)[index], formal->signed_value));
             }
         }
     }

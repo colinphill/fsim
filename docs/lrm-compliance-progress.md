@@ -249,6 +249,38 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 15: extension by source signedness, cast widths, enum literals
+
+These were wrong values, not unsupported constructs; Verilator checksum tests
+stopped on them.
+
+- A value extends to its target's width by its own signedness, which its
+  operands determine (IEEE 1800-2017 11.8.2). Before, assignments and
+  task/function arguments sign-extended by the target's signedness:
+  `s = 3'b111` into a signed byte gave `8'hff` instead of `8'h07`, and
+  `u = 3'sb111` into an unsigned byte gave `8'h07` instead of `8'hff`.
+- Unary `-`, `~` and `+` widen their operand to the context width before
+  applying (11.6.1). `-8'sh80` into a 16-bit target is `16'h0080`. Before,
+  this was right only because extension had wrongly followed the unsigned
+  target.
+- A size or type cast evaluates its operand in the cast's width (6.24.1):
+  `byte_t'(one << 2)` is `8'b100`.
+- A constant `if` condition whose arithmetic uses sized literals is no
+  longer folded by the host-integer constant evaluator.
+  `(4'd15 + 4'd1) != 4'd0` is false. The runtime path applies Verilog
+  widths.
+- An enumeration literal has its enumeration's width even when its value is
+  an unsized integer (`P = 0` in `enum logic [2:0]` is 3 bits, 6.19). HIR
+  normalization no longer folds enumeration-literal references into untyped
+  literals.
+- `FSIM-ELAB-SVTYPE-004` now also rejects a compound assignment or
+  increment of an enumeration variable (6.19.4).
+
+Corpus effect (against batch 14): Verilator +5, ivtest +23, sv-tests +4,
+no regressions.
+
+Fixture: `sv_expression_widths.sv`, checked against xsim.
+
 ### Batch 14: multidimensional packed arrays, parameter typing, %-d
 
 - Selections of multidimensional packed arrays (`logic [3:0][7:0] w`) were

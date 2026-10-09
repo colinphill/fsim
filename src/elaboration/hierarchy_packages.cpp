@@ -8260,6 +8260,24 @@ namespace {
                 || !statement.target || !statement.value) {
                 continue;
             }
+            if (statement.update_kind != semantic::sv::UpdateKind::none) {
+                // Arithmetic on an enumeration yields an integer, which an
+                // enumeration variable accepts only through a cast (IEEE
+                // 1800-2017 6.19.4), so it cannot be updated in place.
+                const auto nominal = expression_nominal_type(*statement.target);
+                const auto definition = nominal
+                    ? compiled.find_type(*nominal)
+                    : std::nullopt;
+                if (definition && definition->systemverilog != nullptr
+                    && definition->systemverilog->form
+                        == TypeForm::enumeration) {
+                    append("FSIM-ELAB-SVTYPE-004",
+                        "an enumeration variable cannot be updated by a "
+                        "compound assignment or increment without a cast",
+                        statement.source);
+                    continue;
+                }
+            }
             const auto* target = expression_type(*statement.target);
             const auto value = compiled.find_expression(*statement.value);
             constexpr auto tagged_prefix = std::string_view { "@sv-tagged:" };

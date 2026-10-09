@@ -8129,6 +8129,18 @@ Lowerer::hir_systemverilog_packed_shape(
     return shape;
 }
 
+bool Lowerer::hir_actual_extension_signed(
+    const semantic::ExpressionId actual,
+    const bool formal_signed) const
+{
+    const auto expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(actual)
+        : std::nullopt;
+    return expression && expression->systemverilog != nullptr
+        ? hir_expression_signed(actual)
+        : formal_signed;
+}
+
 std::optional<std::size_t> Lowerer::hir_index_target_width(
     const semantic::ExpressionId target) const
 {

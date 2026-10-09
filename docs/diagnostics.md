@@ -2010,7 +2010,7 @@ scheduler.
 | `FSIM-ELAB-SVTYPE-001` | error | A SystemVerilog user-defined type is not visible in the unit where it is used. |
 | `FSIM-ELAB-SVTYPE-002` | error | The same direct type name is imported from multiple SystemVerilog packages. |
 | `FSIM-ELAB-SVTYPE-003` | error | Bounded SystemVerilog typedef aliases contain a cycle. |
-| `FSIM-ELAB-SVTYPE-004` | error | A SystemVerilog packed struct, union, or enum assignment-like context does not use the same nominal type, a matching explicit cast, or a legal contextual pattern. |
+| `FSIM-ELAB-SVTYPE-004` | error | A SystemVerilog packed struct, union, or enum assignment-like context does not use the same nominal type, a matching explicit cast, or a legal contextual pattern; or an enumeration variable is updated by a compound assignment or increment. |
 | `FSIM-ELAB-SVTYPE-005` | error | SystemVerilog equality compares packed struct, union, or enum values with different or missing nominal types. |
 | `FSIM-ELAB-SVTYPE-006` | error | The SystemVerilog `type` operator is used outside a supported type comparison. |
 | `FSIM-ELAB-SVTYPE-007` | error | An ordinary packed union resolves to members with different widths. |

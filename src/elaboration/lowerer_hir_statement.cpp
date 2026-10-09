@@ -5823,11 +5823,14 @@ bool Lowerer::lower_hir_statement(
             lowered = converted;
         }
         if (register_width(*lowered) != *assignment_width) {
+            // The value extends by its own signedness, determined by its
+            // operands, not by the target's (IEEE 1800-2017 11.8.2).
             lowered = resize_register(
                 *lowered, *assignment_width,
-                member_width
-                    ? member_signed
-                    : binding->signed_value);
+                statement->systemverilog != nullptr
+                    ? hir_expression_signed(*value)
+                    : member_width ? member_signed
+                                   : binding->signed_value);
         }
         const auto assignment_domain = member_domain
             ? *member_domain
@@ -6290,8 +6293,59 @@ bool Lowerer::lower_hir_statement(
             }
         }
         if (statement->systemverilog != nullptr) {
-            const auto constant = specialized_hir_unit_
-                                      ->evaluate_integral_expression(*condition);
+            // The constant evaluator uses host integers, so arithmetic on
+            // sized literals that overflows its self-determined width
+            // ((4'd15 + 4'd1) == 4'd0) is left to the runtime path, which
+            // applies Verilog widths.
+            const auto sized_arithmetic = [&](const auto& self,
+                                              const semantic::ExpressionId id)
+                -> bool {
+                const auto expression
+                    = specialized_hir_unit_->find_expression(id);
+                if (!expression || expression->systemverilog == nullptr) {
+                    return false;
+                }
+                const auto& source = *expression->systemverilog;
+                if ((source.kind == semantic::sv::ExpressionKind::integer_literal
+                        || source.kind
+                            == semantic::sv::ExpressionKind::logic_literal)
+                    && source.text.find('\'') != std::string::npos) {
+                    return true;
+                }
+                return std::ranges::any_of(source.operands,
+                    [&](const semantic::ExpressionId operand) {
+                        return self(self, operand);
+                    });
+            };
+            const auto arithmetic = [&](const auto& self,
+                                        const semantic::ExpressionId id)
+                -> bool {
+                const auto expression
+                    = specialized_hir_unit_->find_expression(id);
+                if (!expression || expression->systemverilog == nullptr) {
+                    return false;
+                }
+                const auto& source = *expression->systemverilog;
+                const auto& text = source.text;
+                if ((source.kind == semantic::sv::ExpressionKind::binary
+                        && (text == "+" || text == "-" || text == "*"
+                            || text == "**" || text == "<<"
+                            || text == "<<<"))
+                    || (source.kind == semantic::sv::ExpressionKind::unary
+                        && (text == "-" || text == "~"))) {
+                    if (sized_arithmetic(sized_arithmetic, id)) {
+                        return true;
+                    }
+                }
+                return std::ranges::any_of(source.operands,
+                    [&](const semantic::ExpressionId operand) {
+                        return self(self, operand);
+                    });
+            };
+            const auto constant = arithmetic(arithmetic, *condition)
+                ? std::optional<std::int64_t> { }
+                : specialized_hir_unit_->evaluate_integral_expression(
+                      *condition);
             if (constant) {
                 if (!emit_coverage_arm(
                         *constant != 0 ? std::span { statements }

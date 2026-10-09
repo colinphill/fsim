@@ -1972,6 +1972,7 @@ tests/fixtures/compliance/run_compliance.cmake
 tests/fixtures/compliance/sv_class_statements.sv
 tests/fixtures/compliance/sv_compilation_unit_declarations.sv
 tests/fixtures/compliance/sv_display_arguments.sv
+tests/fixtures/compliance/sv_expression_widths.sv
 tests/fixtures/compliance/sv_function_statements.sv
 tests/fixtures/compliance/sv_hierarchical_references.sv
 tests/fixtures/compliance/sv_module_items.sv
