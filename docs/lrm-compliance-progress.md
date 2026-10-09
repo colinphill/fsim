@@ -249,6 +249,20 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 16: $stop reporting and Verilator driver fidelity
+
+- `fsim simulate` prints `$stop paused the simulation` after the status line
+  when a run ends at `$stop` rather than `$finish`. `$stop` suspends a
+  simulation (IEEE 1800-2017 20.2), and before this the two endings were
+  indistinguishable in batch output.
+- Runner: a Verilator test passes when its run neither stops at `$stop` nor
+  reports `%Error`. `*-* All Finished *-*` is required only when the test
+  calls `test.execute(check_finished=True)`, as in `driver.py`. Before,
+  every executing test needed the marker. That failed tests that finish
+  without printing it, while a `$stop` after the marker went unnoticed.
+
+Corpus effect: Verilator 29.4% to 31.4% (43 newly pass, none newly fail).
+
 ### Batch 15: extension by source signedness, cast widths, enum literals
 
 These were wrong values, not unsupported constructs; Verilator checksum tests

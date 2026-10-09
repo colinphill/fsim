@@ -368,6 +368,12 @@ int run_built_project(
                           ? "reached time limit"
                           : "stopped")
                << " at tick " << result.time << ", delta " << result.delta << '\n';
+        if (result.status == runtime::RunStatus::stopped
+            && !simulation.finished()) {
+            // $stop suspends rather than ends the simulation (IEEE
+            // 1800-2017 20.2); in a batch run nothing resumes it.
+            output << "$stop paused the simulation\n";
+        }
 #if defined(FSIM_ENABLE_ALLOCATION_PROFILING)
         allocation_profile_session.finish(output);
 #endif

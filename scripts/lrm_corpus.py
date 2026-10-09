@@ -431,8 +431,14 @@ def verilator_cases(root: Path) -> list[Case]:
             expect="fail" if (compile_fails or execute_fails) else "pass",
             fail_by="compile" if compile_fails else "simulate" if executes else "elaborate",
             checker="verilator",
+            # driver.py's execute() checks for "*-* All Finished *-*" only
+            # with check_finished=True; otherwise a run passes unless it
+            # stops ($stop) or reports %Error.
             checker_data={"check_finished": executes
-                          and not (compile_fails or execute_fails)},
+                          and not (compile_fails or execute_fails)
+                          and bool(re.search(
+                              r"test\.execute\([^)]*check_finished\s*=\s*True",
+                              source, re.S))},
             writes=[("verilator_shell.sv", shell)] if shell else [],
             skip=skip,
         ))
@@ -931,6 +937,8 @@ def check_outcome(case: Case, steps: list[StepResult], workdir: Path) -> tuple[s
     if case.checker == "verilator":
         if "%Error" in sim_output:
             return "fail", "test reported %Error"
+        if re.search(r"^\$stop paused the simulation", sim_output, re.M):
+            return "fail", "test stopped ($stop)"
         if case.checker_data.get("check_finished") and "*-* All Finished *-*" not in sim_output:
             return "fail", "missing *-* All Finished *-*"
         return "pass", ""
