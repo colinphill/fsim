@@ -1095,7 +1095,7 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 actual_lowerer.set_specialized_hir_unit(
                     &working_specialization);
                 actual_lowerer.set_systemverilog_interface_handles(
-                    &systemverilog_interface_handles_);
+                    &systemverilog_interface_handles_, &systemverilog_interface_types_);
                 const auto append_adapter = [&](std::optional<Process> lowered) {
                     if (!lowered) {
                         return false;

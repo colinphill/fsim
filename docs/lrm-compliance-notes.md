@@ -158,3 +158,21 @@ gives fsim's result in each case checked.
   pr1704013 expect a compile error. fsim follows xsim.
 - A different-type enumeration or packed-structure equality is an integral
   comparison (xsim warns); ivtest enum_order relies on it.
+
+## Corpus disagreements resolved by the LRM and xsim (batch 19)
+
+- Verilator `t_clocked_release_combo` expects an `always_comb` variable to
+  return to its driven value at `release`. IEEE 1800-2017 10.6.2 keeps a
+  released variable's forced value until its next assignment, and the
+  `always_comb` block does not run again because its input does not change.
+  xsim keeps the forced value too, so the test now stops.
+- A variable driven by a continuous assignment re-evaluates at `release`,
+  as 10.6.2 requires; xsim keeps the forced value there as well.
+- ivtest `nb_ec_real` expects a `repeat(0)` nonblocking update to be
+  visible after `#0`. The update matures in the NBA region, after the
+  inactive region that `#0` resumes in; xsim agrees with fsim. The test
+  also uses the iverilog-only `$simtime`.
+- ivtest `real_wire_force_rel` checks a `wire real` immediately after a
+  blocking write to its driver, before the continuous assignment can
+  update it; xsim rejects `wire real` altogether.
+

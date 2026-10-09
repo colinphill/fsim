@@ -242,8 +242,24 @@ Type VerilogParser::parse_systemverilog_enum_type(
         (void)apply_systemverilog_integral_type(type, "int");
     } else if (at(TokenKind::Identifier)) {
         type = parse_named_type();
-        type.systemverilog_enum_base_type = std::move(type.named_type);
-        type.named_type.clear();
+        // A base typedef already known as an integral type supplies the
+        // enumeration's representation directly (6.19); otherwise the name
+        // is resolved, and its legality checked, during elaboration.
+        const auto known = packed_typedef_types_.find(type.named_type);
+        if (known != packed_typedef_types_.end()
+            && !at(TokenKind::LeftBracket)
+            && known->second.named_type.empty()
+            && known->second.enumeration_literals.empty()
+            && known->second.packed_members.empty()
+            && !known->second.systemverilog_container
+            && (known->second.domain == ValueDomain::Logic4
+                || known->second.domain == ValueDomain::Bit2
+                || known->second.domain == ValueDomain::Integer)) {
+            type = known->second;
+        } else {
+            type.systemverilog_enum_base_type = std::move(type.named_type);
+            type.named_type.clear();
+        }
         // enum_base_type ::= type_identifier [packed_dimension] (6.19).
         if (at(TokenKind::LeftBracket)) {
             parse_optional_range(type);
@@ -1198,9 +1214,24 @@ bool VerilogParser::parse_optional_container_dimension(Type& type)
             "dynamic arrays, queues, and associative arrays require "
             "SystemVerilog-2017");
     }
-    if ((language_ == Language::Verilog2005
-            && type.spelling == "wire")
-        || (type.domain == ValueDomain::Unknown
+    // IEEE 1800-2017 6.7.1: a net array has fixed unpacked dimensions; a
+    // dynamic array, queue, or associative array is a variable form.
+    const auto net_spelling = type.systemverilog_net_type.empty()
+        ? std::string_view { type.spelling }
+        : std::string_view { type.systemverilog_net_type };
+    if (container.kind != SystemVerilogContainerKind::StaticArray
+        && contains_word(
+            { "wire", "tri", "tri0", "tri1", "wand", "triand", "wor",
+                "trior", "trireg", "uwire", "supply0", "supply1" },
+            net_spelling)) {
+        error(
+            start,
+            "FSIM-SV-SEM-398",
+            "a net cannot be a dynamic array, queue, or associative array");
+        return true;
+    }
+    // IEEE 1364-2005 4.9: net arrays are legal Verilog-2005 declarations.
+    if ((type.domain == ValueDomain::Unknown
             && type.named_type.empty()
             && type.systemverilog_scalar
                 == SystemVerilogScalarKind::None)) {

@@ -1349,9 +1349,13 @@ private:
         SpecializationInfo& specialization,
         std::optional<std::uint32_t> program_owner,
         std::size_t& concurrent_order,
-        std::vector<semantic::ProcessId>* deferred_processes = nullptr);
-    // Lower processes whose hierarchical references named instances that
-    // did not exist yet; called once the unit's children are instantiated.
+        std::vector<semantic::ProcessId>* deferred_processes = nullptr,
+        std::vector<std::pair<semantic::StatementId, std::size_t>>*
+            deferred_statements = nullptr);
+    // Lower processes and concurrent statements whose hierarchical
+    // references named instances that did not exist yet (an interface
+    // instance's members); called once the unit's children are
+    // instantiated.
     bool lower_deferred_systemverilog_processes(
         const semantic::sv::Unit& unit,
         const semantic::SpecializedHirUnit& specialized,
@@ -1360,7 +1364,9 @@ private:
         const std::vector<semantic::ProcessId>& deferred_processes,
         Lowerer& lowerer,
         std::size_t specialization_index,
-        std::optional<std::uint32_t> program_owner);
+        std::optional<std::uint32_t> program_owner,
+        const std::vector<std::pair<semantic::StatementId, std::size_t>>&
+            deferred_statements = { });
 
     bool materialize_compiled_systemverilog_declaration(
         const semantic::sv::Unit& unit,

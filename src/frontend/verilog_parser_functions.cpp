@@ -975,6 +975,91 @@ void VerilogParser::validate_task_body(
             "duplicate or conflicting task local '" + variable.name + "'");
     }
   }
+  // An automatic variable cannot be written by a nonblocking assignment,
+  // named in its intra-assignment event, or used by a procedural
+  // continuous assignment or force (IEEE 1800-2017 6.21).
+  if (task.automatic) {
+    const auto root_name = [](const auto& self, const Expression& value)
+        -> std::string {
+      if (value.kind == ExpressionKind::Identifier) {
+        return value.text.substr(0U, value.text.find_first_of(".["));
+      }
+      if ((value.kind == ExpressionKind::Index
+              || value.kind == ExpressionKind::Slice)
+          && !value.operands.empty()) {
+        return self(self, value.operands.front());
+      }
+      return { };
+    };
+    const auto mentions = [&](const auto& self, const Expression& value,
+                              const std::unordered_set<std::string>& automatic)
+        -> std::optional<std::string> {
+      if (value.kind == ExpressionKind::Identifier) {
+        const auto name = value.text.substr(0U, value.text.find_first_of(".["));
+        if (automatic.contains(name)) {
+          return name;
+        }
+      }
+      for (const auto& operand : value.operands) {
+        if (const auto found = self(self, operand, automatic)) {
+          return found;
+        }
+      }
+      return std::nullopt;
+    };
+    const auto check = [&](const auto& self,
+                           const auto& statements,
+                           std::unordered_set<std::string> automatic) -> void {
+      for (const auto& statement : statements) {
+        auto scoped = automatic;
+        for (const auto& declaration : statement.declarations) {
+          scoped.insert(declaration.name);
+        }
+        const auto report = [&](const std::string& name,
+                                const std::string& use) {
+          error(start, "FSIM-SV-SEM-397",
+              "automatic variable '" + name + "' cannot be " + use);
+        };
+        const auto target = root_name(root_name, statement.target);
+        if (statement.kind == StatementKind::Assignment
+            && statement.assignment_kind == AssignmentKind::NonBlocking) {
+          if (scoped.contains(target)) {
+            report(target, "written by a nonblocking assignment");
+          }
+          for (const auto& sensitivity : statement.sensitivities) {
+            const auto name = sensitivity.signal.substr(
+                0U, sensitivity.signal.find_first_of(".["));
+            if (scoped.contains(name)) {
+              report(name, "named in a nonblocking assignment's event");
+            } else if (const auto found = mentions(
+                           mentions, sensitivity.expression, scoped)) {
+              report(*found, "named in a nonblocking assignment's event");
+            }
+          }
+        } else if (statement.kind == StatementKind::ProceduralAssign
+            || statement.kind == StatementKind::Force) {
+          if (scoped.contains(target)) {
+            report(target, "the target of a procedural continuous "
+                           "assignment or force");
+          } else if (const auto found = mentions(
+                         mentions, statement.value, scoped)) {
+            report(*found, "used by a procedural continuous assignment "
+                           "or force");
+          }
+        } else if ((statement.kind == StatementKind::Deassign
+                       || statement.kind == StatementKind::Release)
+            && scoped.contains(target)) {
+          report(target, "deassigned or released");
+        }
+        self(self, statement.statements, scoped);
+        self(self, statement.else_statements, scoped);
+        for (const auto& alternative : statement.case_alternatives) {
+          self(self, alternative.statements, scoped);
+        }
+      }
+    };
+    check(check, task.statements, names);
+  }
   const auto inspect =
       [&](const auto& self,
           const std::vector<Statement>& statements) -> void {

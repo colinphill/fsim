@@ -78,7 +78,8 @@ template <typename OperationType, typename ExactSignalWidth,
                 const auto width = formatted_value_width(value.format, value.scalar_kind);
                 if (!width || (*width != 0 && *width != signal_value_width))
                     reject(process, index, "MonitorInstall scalar metadata is inconsistent");
-            } else if (value.kind != MonitorValueKind::time)
+            } else if (value.kind != MonitorValueKind::time
+                && value.kind != MonitorValueKind::simulation_time)
                 reject(process, index, "MonitorInstall value kind is invalid");
         }
         result.uses_monitor_install = true;

@@ -1070,9 +1070,10 @@ endmodule
     const auto invalid_monitor_design = compile_and_elaborate(
         invalid_monitor_source.design,
         "sv:work.invalid_monitor");
-    assert(!invalid_monitor_design.ok());
+    // A $monitor expression argument is evaluated by a generated driver.
+    assert(invalid_monitor_design.ok());
     assert(
-        has_diagnostic(
+        !has_diagnostic(
             invalid_monitor_design, "FSIM-ELAB-103"));
 
     const auto array_source = fsim::frontend::parse_text(

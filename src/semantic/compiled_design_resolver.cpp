@@ -1615,19 +1615,22 @@ CompiledDeclarationResolution
 CompiledDesignResolver::resolve_systemverilog_interface_member(
     const std::string_view receiver, const std::string_view member,
     const ScopeId use_scope,
-    const CompiledDeclarationPredicate& predicate) const
+    const CompiledDeclarationPredicate& predicate,
+    const std::string_view generic_interface) const
 {
     if (design_ == nullptr || receiver.empty() || member.empty()) {
         return { CompiledResolutionStatus::invalid, { } };
     }
-    const auto interface_object = [](const CompiledDeclarationView& view) {
+    const auto interface_object = [&](const CompiledDeclarationView& view) {
         if (view.systemverilog == nullptr) {
             return false;
         }
         const auto& declaration = *view.systemverilog;
         return !declaration.interface_type.empty()
             || (declaration.type
-                && !declaration.type->interface_type.empty());
+                && !declaration.type->interface_type.empty())
+            || (!generic_interface.empty() && declaration.type
+                && declaration.type->target.spelling == "interface");
     };
     const auto receiver_id = resolve_systemverilog(
         receiver, use_scope, interface_object, false).unique();
@@ -1640,7 +1643,9 @@ CompiledDesignResolver::resolve_systemverilog_interface_member(
     const auto& declaration = *receiver_view->systemverilog;
     const auto interface_name = !declaration.interface_type.empty()
         ? std::string_view { declaration.interface_type }
-        : std::string_view { declaration.type->interface_type };
+        : declaration.type && !declaration.type->interface_type.empty()
+        ? std::string_view { declaration.type->interface_type }
+        : generic_interface;
     const auto modport = !declaration.modport.empty()
         ? std::string_view { declaration.modport }
         : declaration.type

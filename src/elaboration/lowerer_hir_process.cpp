@@ -470,10 +470,26 @@ std::vector<SignalId> Lowerer::hir_signal_dependencies(
         }
         if (const auto container = hir_container_object_binding(current);
             container && !container->local) {
+            bool element_alias = false;
             for (const auto& alias :
                 design_.container_element_signal_aliases_) {
                 if (alias.object == container->object && alias.readable) {
                     dependencies.push_back(alias.signal);
+                    element_alias = true;
+                }
+            }
+            // Without element nets, the container's bridge signal carries
+            // every element change.
+            if (!element_alias) {
+                const auto alias = std::ranges::find_if(
+                    design_.container_signal_aliases_.rbegin(),
+                    design_.container_signal_aliases_.rend(),
+                    [&](const runtime::simir::ContainerSignalAlias& candidate) {
+                        return candidate.object == container->object
+                            && candidate.readable;
+                    });
+                if (alias != design_.container_signal_aliases_.rend()) {
+                    dependencies.push_back(alias->signal);
                 }
             }
         }
@@ -2271,6 +2287,7 @@ std::optional<Process> Lowerer::lower_hir_process_body(
     named_block_controls_.clear();
     named_fork_controls_.clear();
     procedural_continuous_assignments_.clear();
+    pending_monitor_drivers_.clear();
     procedural_continuous_assignment_by_statement_.clear();
     procedural_continuous_assignments_by_target_.clear();
     readonly_signal_write_operations_.clear();
@@ -2982,6 +2999,7 @@ std::optional<Process> Lowerer::lower_hir_process_body(
     process_.driver_regions = collect_driver_regions(
         process_, register_widths_);
     materialize_hir_procedural_continuous_assignments();
+    materialize_hir_monitor_drivers();
 
     next_register_ = 0U;
     next_string_register_ = 0U;

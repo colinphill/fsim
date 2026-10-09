@@ -2550,6 +2550,24 @@ private:
             error_ = "constant function recursion exceeds the call-depth limit";
             return std::nullopt;
         }
+        // A real result or argument is outside integral evaluation.
+        const auto real_spelling = [](const std::string_view spelling) {
+            return spelling == "real" || spelling == "realtime"
+                || spelling == "shortreal";
+        };
+        if (real_spelling(callable.callable->return_type.target.spelling)
+            || std::ranges::any_of(callable.callable->formals,
+                [&](const semantic::DeclarationId formal) {
+                    const auto view = specialization_.find_declaration(formal);
+                    return view && view->systemverilog != nullptr
+                        && view->systemverilog->type
+                        && real_spelling(
+                            view->systemverilog->type->target.spelling);
+                })) {
+            error_ = "a real constant function is outside integral "
+                     "constant evaluation";
+            return std::nullopt;
+        }
         Frame frame;
         frame.callable = callable.id;
         const auto& formals = callable.callable->formals;

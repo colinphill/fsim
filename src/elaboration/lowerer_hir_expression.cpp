@@ -5286,6 +5286,87 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
     return result;
 }
 
+std::optional<Lowerer::HirHierarchicalParameter>
+Lowerer::hir_hierarchical_parameter(
+    const semantic::ExpressionId expression_id) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->systemverilog == nullptr
+        || expression->systemverilog->kind
+            != semantic::sv::ExpressionKind::name) {
+        return std::nullopt;
+    }
+    std::string_view name = expression->systemverilog->text;
+    const auto separator = name.find_last_of('.');
+    if (separator == std::string_view::npos || separator == 0U
+        || hir_referenced_declaration(expression_id)
+        || signals_.contains(std::string { name })
+        || hir_hierarchical_signal(name)) {
+        return std::nullopt;
+    }
+    if (name.starts_with("$root.")) {
+        name.remove_prefix(6U);
+    }
+    const auto instance = name.substr(0U, name.find_last_of('.'));
+    const auto parameter = name.substr(name.find_last_of('.') + 1U);
+    const auto lookup = [&](const std::string& path)
+        -> std::optional<HirHierarchicalParameter> {
+        for (const auto& specialization : design_.specializations_) {
+            if (specialization.instance != path) {
+                continue;
+            }
+            for (const auto& [formal, identity] :
+                specialization.parameter_identity_values) {
+                if (formal != parameter) {
+                    continue;
+                }
+                if (const auto constant
+                    = decode_hir_systemverilog_constant(identity)) {
+                    return HirHierarchicalParameter {
+                        constant->packed, constant->signed_value };
+                }
+                if (const auto scalar
+                    = decode_hir_systemverilog_scalar_constant(identity)) {
+                    const bool single = scalar->kind
+                        == frontend::SystemVerilogScalarKind::ShortReal;
+                    return HirHierarchicalParameter {
+                        PackedLogic4::from_aval_bval(
+                            single ? 32U : 64U, scalar->bits, 0U),
+                        scalar->kind
+                            == frontend::SystemVerilogScalarKind::None,
+                        scalar->kind,
+                    };
+                }
+                return std::nullopt;
+            }
+            return std::nullopt;
+        }
+        return std::nullopt;
+    };
+    // Resolve from the innermost enclosing scope outward (23.8).
+    std::string_view scope = hierarchy_;
+    while (!scope.empty()) {
+        if (const auto found = lookup(
+                std::string { scope } + "." + std::string { instance })) {
+            hierarchical_reference_used_ = true;
+            return found;
+        }
+        const auto dot = scope.find_last_of('.');
+        scope = dot == std::string_view::npos ? std::string_view { }
+                                              : scope.substr(0U, dot);
+    }
+    if (const auto found = lookup(std::string { instance })) {
+        hierarchical_reference_used_ = true;
+        return found;
+    }
+    hierarchical_reference_missed_ = true;
+    return std::nullopt;
+}
+
 std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     const semantic::ExpressionId expression_id,
     const std::size_t expected_width,
@@ -5295,6 +5376,16 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         = std::exchange(hir_unsigned_operation_, false);
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
+    }
+    if (const auto parameter = hir_hierarchical_parameter(expression_id)) {
+        const auto destination = allocate_register(
+            parameter->value.width(),
+            parameter->scalar_kind == frontend::SystemVerilogScalarKind::None
+                ? frontend::ValueDomain::Logic4
+                : frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(
+            LoadConstant { destination, parameter->value });
+        return destination;
     }
     if (const auto method = hir_systemverilog_enumeration_method(
             expression_id);
@@ -12231,6 +12322,66 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             && lhs_scalar != ScalarKind::None) {
             rhs_scalar = lhs_scalar;
         }
+        const auto real_scalar = [](const ScalarKind kind) {
+            return kind == ScalarKind::ShortReal || kind == ScalarKind::Real
+                || kind == ScalarKind::Realtime;
+        };
+        // IEEE 1800-2017 11.4.3: a power with a real operand is real.
+        if (source.text == "**" && expression->systemverilog != nullptr
+            && (real_scalar(lhs_scalar) || real_scalar(rhs_scalar))) {
+            const auto lower_power_operand
+                = [&](const semantic::ExpressionId operand)
+                -> std::optional<std::pair<RegisterId, ScalarKind>> {
+                const auto kind = hir_systemverilog_scalar_kind(operand);
+                const auto width = real_scalar(kind)
+                    ? std::optional<std::size_t> {
+                          kind == ScalarKind::ShortReal ? 32U : 64U }
+                    : hir_expression_width(operand, hir_process_scope_);
+                if (!width || *width == 0U || *width > 64U) {
+                    return std::nullopt;
+                }
+                const auto lowered = lower_hir_expression(operand, *width,
+                    real_scalar(kind) ? kind : ScalarKind::None);
+                if (!lowered) {
+                    return std::nullopt;
+                }
+                return std::pair { *lowered,
+                    real_scalar(kind) ? kind : ScalarKind::None };
+            };
+            const auto base = lower_power_operand(source.operands[0]);
+            const auto exponent = lower_power_operand(source.operands[1]);
+            if (!base || !exponent) {
+                return std::nullopt;
+            }
+            auto power = allocate_register(64U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(SystemVerilogMath {
+                runtime::SystemVerilogMathFunction::Pow,
+                power,
+                base->first,
+                exponent->first,
+                static_cast<std::uint32_t>(register_width(base->first)),
+                static_cast<std::uint32_t>(register_width(exponent->first)),
+                base->second,
+                exponent->second,
+                hir_expression_signed(source.operands[0]),
+                hir_expression_signed(source.operands[1]),
+            });
+            if (scalar_context == ScalarKind::ShortReal) {
+                const auto narrowed = allocate_register(
+                    32U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(SystemVerilogScalarBinary {
+                    ScalarOperator::Convert,
+                    narrowed,
+                    power,
+                    power,
+                    ScalarKind::Real,
+                    ScalarKind::Real,
+                    ScalarKind::ShortReal,
+                });
+                power = narrowed;
+            }
+            return power;
+        }
         if (!scalar_operation
             && (lhs_scalar != ScalarKind::None
                 || rhs_scalar != ScalarKind::None
@@ -12279,11 +12430,23 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             }
             const auto comparison
                 = *scalar_operation >= ScalarOperator::Equal;
+            // A real operand makes the operation real (IEEE 1800-2017
+            // 11.3.1), whichever side it is on.
+            const auto combined_kind = lhs_scalar == ScalarKind::Real
+                    || rhs_scalar == ScalarKind::Real
+                ? ScalarKind::Real
+                : lhs_scalar == ScalarKind::Realtime
+                    || rhs_scalar == ScalarKind::Realtime
+                ? ScalarKind::Realtime
+                : lhs_scalar == ScalarKind::ShortReal
+                    || rhs_scalar == ScalarKind::ShortReal
+                ? ScalarKind::ShortReal
+                : lhs_scalar;
             const auto result_kind = comparison
                 ? ScalarKind::None
                 : scalar_context != ScalarKind::None
                 ? scalar_context
-                : lhs_scalar;
+                : combined_kind;
             const auto destination = allocate_register(
                 comparison ? 1U : scalar_width(result_kind),
                 frontend::ValueDomain::Bit2);

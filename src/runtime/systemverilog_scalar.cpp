@@ -599,7 +599,28 @@ SystemVerilogPackedScalarResult systemverilog_scalar_binary_payload(
     const SystemVerilogScalarKind right_kind,
     const SystemVerilogScalarKind result_kind) noexcept
 {
-    const auto lhs = decode_systemverilog_scalar_payload(left, left_kind);
+    const auto real_kind = [](const SystemVerilogScalarKind kind) {
+        return kind == SystemVerilogScalarKind::Real
+            || kind == SystemVerilogScalarKind::Realtime
+            || kind == SystemVerilogScalarKind::ShortReal;
+    };
+    // IEEE 1800-2017 6.12.2: x and z bits of a time value convert to zero
+    // when the value takes part in a real operation.
+    const auto decode = [&](const PackedLogic4& payload,
+                            const SystemVerilogScalarKind kind,
+                            const SystemVerilogScalarKind partner) {
+        auto decoded = decode_systemverilog_scalar_payload(payload, kind);
+        if (decoded.error == SystemVerilogScalarError::UnknownValue
+            && kind == SystemVerilogScalarKind::Time
+            && (real_kind(partner) || real_kind(result_kind))) {
+            decoded = { { kind, 0U }, { } };
+        }
+        return decoded;
+    };
+    const auto lhs = decode(left, left_kind,
+        operation == SystemVerilogScalarBinaryOperator::Convert
+            ? result_kind
+            : right_kind);
     if (!lhs)
         return { PackedLogic4 { }, lhs.error };
     if (operation == SystemVerilogScalarBinaryOperator::Convert) {
@@ -623,7 +644,7 @@ SystemVerilogPackedScalarResult systemverilog_scalar_binary_payload(
                   PackedLogic4 { }, converted.error
               };
     }
-    const auto rhs = decode_systemverilog_scalar_payload(right, right_kind);
+    const auto rhs = decode(right, right_kind, left_kind);
     if (!rhs)
         return { PackedLogic4 { }, rhs.error };
     if (operation >= SystemVerilogScalarBinaryOperator::Equal) {

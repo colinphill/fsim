@@ -1025,9 +1025,10 @@ endmodule
       !invalid_verilog_memories.ok()
           && has_diagnostic(
               invalid_verilog_memories, "FSIM-VERILOG-SEM-012")
-          && has_diagnostic(
+          && !has_diagnostic(
               invalid_verilog_memories, "FSIM-SV-SEM-079"),
-      "multidimensional and net Verilog memories diagnose precisely");
+      "multidimensional Verilog memories diagnose precisely and net "
+      "memories are accepted (IEEE 1364-2005 4.9)");
 
   const auto systemverilog_net_array = parse_text(
       "systemverilog-net-array.sv",

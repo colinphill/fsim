@@ -2094,6 +2094,12 @@ ResolutionKind HierarchyBuilder::native_resolution(
         || signal.type_name == "std_logic_vector") {
         return ResolutionKind::std_logic;
     }
+    // IEEE 1800-2017 6.7.2: a real net is unresolved; only a user nettype
+    // can resolve several drivers of a real value.
+    if (signal.systemverilog_scalar
+        != frontend::SystemVerilogScalarKind::None) {
+        return ResolutionKind::none;
+    }
     if (net_type == "wire"
         || net_type == "tri"
         || net_type == "tri0"

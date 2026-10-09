@@ -466,10 +466,11 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_strobe.ok());
-    const auto rejected_strobe = compile_and_elaborate(
+    // A $strobe expression argument is evaluated by a generated driver.
+    const auto accepted_strobe = compile_and_elaborate(
         invalid_strobe.design, "invalid_strobe");
-    assert(!rejected_strobe.ok());
-    assert(has_diagnostic(rejected_strobe, "FSIM-ELAB-108"));
+    assert(accepted_strobe.ok());
+    assert(!has_diagnostic(accepted_strobe, "FSIM-ELAB-108"));
 }
 
 } // namespace fsim::tests::elaboration

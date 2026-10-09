@@ -112,6 +112,11 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
         std::string modport;
         if (explicit_generic_interface) {
           advance();
+          // `interface.mp a`: a generic interface port restricted to a
+          // modport of whatever interface is connected (25.4).
+          if (match(TokenKind::Dot)) {
+            modport = expect_identifier("interface modport name").text;
+          }
         } else {
           interface_type = advance().text;
           if (match(TokenKind::Dot)) {
@@ -983,6 +988,9 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     const auto name = expect_identifier("declared name");
     auto declaration_type = spec.type;
     (void)parse_optional_container_dimension(declaration_type);
+    if (declaration_type.systemverilog_container) {
+      unit_container_names_.insert(name.text);
+    }
     std::optional<Expression> initializer;
     if (match(TokenKind::Assign)) {
       const auto assignment = previous();

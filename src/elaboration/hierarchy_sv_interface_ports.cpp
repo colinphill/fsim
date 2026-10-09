@@ -235,9 +235,15 @@ bool HierarchyBuilder::forward_compiled_systemverilog_interface_port(
     const auto library = child_unit.library.empty()
         ? std::string_view { "work" }
         : std::string_view { child_unit.library };
+    // A generic interface port (`interface.mp a`) has the connected
+    // actual's interface type (25.4).
+    const auto& interface_type = formal.interface_type.empty()
+            && actual_type != systemverilog_interface_types_.end()
+        ? actual_type->second
+        : formal.interface_type;
     const auto interface_unit = compiled_->find_unit(
         semantic::UnitKind::systemverilog_interface,
-        library, formal.interface_type);
+        library, interface_type);
     const auto* interface = interface_unit
             && interface_unit->systemverilog != nullptr
         ? interface_unit->systemverilog
@@ -245,7 +251,7 @@ bool HierarchyBuilder::forward_compiled_systemverilog_interface_port(
     if (interface == nullptr) {
         diagnose(
             "FSIM-ELAB-SVIFACE-003",
-            "unknown interface type '" + formal.interface_type
+            "unknown interface type '" + interface_type
                 + "' for port '" + formal.name + "'",
             formal.source);
         return false;

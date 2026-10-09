@@ -733,6 +733,9 @@ class VerilogParser final : private detail::ParserBase {
       const Type& data_type, const Token& name, std::string_view what);
   std::unordered_set<std::string> current_procedural_names_;
   std::unordered_map<std::string, Type> current_procedural_types_;
+  // Design-unit-level dynamic arrays, queues and associative arrays, whose
+  // built-in methods may omit empty parentheses (IEEE 1800-2017 13.4.5).
+  std::unordered_set<std::string> unit_container_names_;
   std::unordered_set<std::string> current_function_arguments_;
   std::string current_function_name_;
   bool in_function_{};

@@ -571,6 +571,7 @@ DesignUnit VerilogParser::parse_module(
     non_ansi_ports_.clear();
     explicit_port_types_.clear();
     body_port_declarations_.clear();
+    unit_container_names_.clear();
     port_type_refinements_.clear();
     implicit_net_references_.clear();
     container_iterator_names_.clear();

@@ -55,7 +55,11 @@ namespace {
     return type.element_width == 0
         ? std::nullopt
         : std::optional<std::size_t>{type.element_width};
+  // A real or shortreal element bridges as its IEEE-754 payload bits.
   case ContainerElementKind::Scalar:
+    return type.element_width == 0
+        ? std::nullopt
+        : std::optional<std::size_t>{type.element_width};
   case ContainerElementKind::String:
     return std::nullopt;
   case ContainerElementKind::Container:

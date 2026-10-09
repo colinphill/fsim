@@ -187,7 +187,10 @@ public:
     [[nodiscard]] CompiledDeclarationResolution
     resolve_systemverilog_interface_member(std::string_view receiver,
         std::string_view member, ScopeId use_scope,
-        const CompiledDeclarationPredicate& predicate = { }) const;
+        const CompiledDeclarationPredicate& predicate = { },
+        // The interface type bound to a generic `interface` port, which
+        // the port declaration itself does not name (IEEE 1800-2017 25.4).
+        std::string_view generic_interface = { }) const;
 
     /// Resolve the constant-expression declaration classes with their shared
     /// semantic rank: enumeration literals hide parameters/localparams;

@@ -2177,7 +2177,8 @@ Lowerer::hir_class_task_profile(
             selected_declaration
                 = resolver.resolve_systemverilog_interface_member(
                       receiver, identity.substr(separator + 1U),
-                      call.scope, task)
+                      call.scope, task,
+                      hir_generic_interface_type(receiver))
                       .unique();
             if (selected_declaration) {
                 interface_receiver = std::string { receiver };
@@ -3006,8 +3007,8 @@ bool Lowerer::lower_hir_class_task_call(
         lowered_actuals[index] = packed_copy_out_targets[index]
             ? std::optional<RegisterId> {
                   packed_copy_out_targets[index]->captured }
-            : lower_hir_expression(
-                  actual.expression, actual.width);
+            : lower_hir_callable_actual(
+                  actual.expression, formals[index], actual.width);
         if (!lowered_actuals[index]) {
             return false;
         }
@@ -4159,7 +4160,8 @@ Lowerer::hir_interface_function_profile(
         = resolver.resolve_systemverilog_interface_member(
               receiver->systemverilog->text,
               std::string_view { call.text }.substr(1U),
-              process_scope, function)
+              process_scope, function,
+              hir_generic_interface_type(receiver->systemverilog->text))
               .unique();
     return declaration
         ? std::optional<HirInterfaceFunctionProfile> {
@@ -5153,6 +5155,81 @@ std::optional<RegisterId> Lowerer::lower_hir_callable_actual(
     const auto expression = specialized_hir_unit_
         ? specialized_hir_unit_->find_expression(actual)
         : std::nullopt;
+    if (expression && expression->systemverilog != nullptr) {
+        // IEEE 1800-2017 13.3: an argument is assigned to its formal, which
+        // converts between integral and real values (6.12.2).
+        using Kind = frontend::SystemVerilogScalarKind;
+        const auto real_kind = [](const Kind kind) {
+            return kind == Kind::Real || kind == Kind::Realtime
+                || kind == Kind::ShortReal;
+        };
+        const auto declaration = specialized_hir_unit_->find_declaration(
+            formal);
+        const auto& spelling = declaration
+                && declaration->systemverilog != nullptr
+                && declaration->systemverilog->type
+                && !declaration->systemverilog->type->container_form
+            ? declaration->systemverilog->type->target.spelling
+            : std::string { };
+        const auto formal_kind = spelling == "real" ? Kind::Real
+            : spelling == "realtime"                ? Kind::Realtime
+            : spelling == "shortreal"               ? Kind::ShortReal
+                                                    : Kind::None;
+        const auto actual_kind = hir_systemverilog_scalar_kind(actual);
+        const bool integral_formal = declaration
+            && declaration->systemverilog != nullptr
+            && declaration->systemverilog->type
+            && !declaration->systemverilog->type->container_form
+            && formal_kind == Kind::None && spelling != "time"
+            && spelling != "chandle" && spelling != "string"
+            && spelling != "event";
+        if (real_kind(formal_kind) && actual_kind == Kind::None) {
+            const auto lowered = lower_hir_expression(actual,
+                hir_expression_width(actual, hir_process_scope_)
+                    .value_or(32U));
+            if (!lowered) {
+                return std::nullopt;
+            }
+            return convert_hir_integral_to_real(
+                *lowered, hir_expression_signed(actual), formal_kind);
+        }
+        if (real_kind(formal_kind) && real_kind(actual_kind)
+            && (formal_kind == Kind::ShortReal)
+                != (actual_kind == Kind::ShortReal)) {
+            const auto lowered = lower_hir_expression(actual,
+                actual_kind == Kind::ShortReal ? 32U : 64U, actual_kind);
+            if (!lowered) {
+                return std::nullopt;
+            }
+            const auto converted = allocate_register(
+                formal_kind == Kind::ShortReal ? 32U : 64U,
+                frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(SystemVerilogScalarBinary {
+                runtime::SystemVerilogScalarBinaryOperator::Convert,
+                converted,
+                *lowered,
+                *lowered,
+                actual_kind,
+                actual_kind,
+                formal_kind,
+            });
+            return converted;
+        }
+        if (integral_formal && real_kind(actual_kind)) {
+            const auto lowered = lower_hir_expression(actual,
+                actual_kind == Kind::ShortReal ? 32U : 64U, actual_kind);
+            if (!lowered) {
+                return std::nullopt;
+            }
+            auto converted = convert_hir_real_to_integral(
+                *lowered, actual_kind);
+            if (register_width(converted) != expected_width) {
+                converted = resize_register(
+                    converted, expected_width, true);
+            }
+            return converted;
+        }
+    }
     if (!expression || expression->vhdl == nullptr
         || expression->vhdl->kind
             != semantic::vhdl::ExpressionKind::aggregate) {

@@ -223,7 +223,9 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
     SpecializationInfo& specialization,
     const std::optional<std::uint32_t> program_owner,
     std::size_t& concurrent_order,
-    std::vector<semantic::ProcessId>* const deferred_processes)
+    std::vector<semantic::ProcessId>* const deferred_processes,
+    std::vector<std::pair<semantic::StatementId, std::size_t>>* const
+        deferred_statements)
 {
     std::unordered_map<const semantic::sv::GenerateRegion*,
         std::vector<semantic::DeclarationId>> generated_signal_declarations;
@@ -289,9 +291,19 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
                 ? statement->systemverilog->source
             : unit.source;
         const auto order = concurrent_order++;
+        const auto diagnostics_before = diagnostics_.size();
+        lowerer.reset_hierarchical_reference_state();
         auto lowered = lower_cached_systemverilog_concurrent_statement(
             unit, specialized, lowerer, statement_id, source_language,
             unit.declarations, path, order, program_owner);
+        if (!lowered && deferred_statements != nullptr
+            && lowerer.hierarchical_reference_missed()) {
+            // `assign intf.member = ...` names a member of an instance
+            // created after this unit's statements; retry then.
+            diagnostics_.resize(diagnostics_before);
+            deferred_statements->emplace_back(statement_id, order);
+            continue;
+        }
         if (!lowered) {
             report(
                 "FSIM-ELAB-HIR-001",
@@ -492,7 +504,7 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             coverage_, unit.kind == semantic::sv::UnitKind::module
                 && source_language == frontend::Language::SystemVerilog2017);
         generated_lowerer.set_systemverilog_interface_handles(
-            &systemverilog_interface_handles_);
+            &systemverilog_interface_handles_, &systemverilog_interface_types_);
         generated_lowerer.set_systemverilog_program_owner(
             program_owner);
         auto generated_concurrent_statements
@@ -716,8 +728,57 @@ bool HierarchyBuilder::lower_deferred_systemverilog_processes(
     const std::vector<semantic::ProcessId>& deferred_processes,
     Lowerer& lowerer,
     const std::size_t specialization_index,
-    const std::optional<std::uint32_t> program_owner)
+    const std::optional<std::uint32_t> program_owner,
+    const std::vector<std::pair<semantic::StatementId, std::size_t>>&
+        deferred_statements)
 {
+    for (const auto& [statement_id, order] : deferred_statements) {
+        const auto statement = specialized.find_statement(statement_id);
+        const auto statement_source = statement
+                && statement->systemverilog != nullptr
+            ? statement->systemverilog->source
+            : unit.source;
+        lowerer.reset_hierarchical_reference_state();
+        auto lowered = lower_cached_systemverilog_concurrent_statement(
+            unit, specialized, lowerer, statement_id, source_language,
+            unit.declarations, path, order, program_owner);
+        if (!lowered) {
+            report(
+                "FSIM-ELAB-HIR-001",
+                "compiled concurrent statement could not be lowered "
+                "from HIR",
+                compiled_source_span(*compiled_, statement_source));
+            return false;
+        }
+        auto& specialization
+            = design_.specializations_[specialization_index];
+        if (lowered->instance) {
+            auto& instance = *lowered->instance;
+            instance.reactive = program_owner.has_value();
+            instance.program_owner = program_owner;
+            canonicalize_process_operations(lowered->common, instance);
+            specialization.processes.push_back(instance.id);
+            design_.append_process_instance_record(
+                std::move(lowered->common), std::move(instance));
+        } else {
+            auto& process = *lowered->process;
+            process.language_standard = unit.standard;
+            process.compatibility_profile = unit.compatibility_profile;
+            process.reactive = program_owner.has_value();
+            process.program_owner = program_owner;
+            canonicalize_process_operations(process);
+            specialization.processes.push_back(process.id);
+            design_.append_process_record(std::move(process));
+        }
+        for (auto& generated : lowerer.take_generated_processes()) {
+            generated.language_standard = unit.standard;
+            generated.compatibility_profile = unit.compatibility_profile;
+            canonicalize_process_operations(generated);
+            design_.specializations_[specialization_index]
+                .processes.push_back(generated.id);
+            design_.append_process_record(std::move(generated));
+        }
+    }
     for (const auto process_id : deferred_processes) {
         const auto process = specialized.find_process(process_id);
         const auto process_source = process

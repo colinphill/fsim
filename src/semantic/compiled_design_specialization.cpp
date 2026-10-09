@@ -6464,6 +6464,21 @@ private:
                 && expression.operands.size() > formals.size())) {
             return std::nullopt;
         }
+        // A real result or argument is outside integral evaluation.
+        const auto real_spelling = [](const std::string_view spelling) {
+            return spelling == "real" || spelling == "realtime"
+                || spelling == "shortreal";
+        };
+        if (real_spelling(declaration.callable->return_type.target.spelling)
+            || std::ranges::any_of(formals, [&](const DeclarationId formal) {
+                   const auto view = unit_.find_declaration(formal);
+                   return view && view->systemverilog != nullptr
+                       && view->systemverilog->type
+                       && real_spelling(
+                           view->systemverilog->type->target.spelling);
+               })) {
+            return std::nullopt;
+        }
         CallFrame frame;
         frame.callable = *callable_id;
         const auto actual_count = expression.call_arguments.empty()

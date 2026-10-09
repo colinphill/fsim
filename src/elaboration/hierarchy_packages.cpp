@@ -8494,6 +8494,64 @@ namespace {
                 || !parameter.type || !parameter.initializer) {
                 continue;
             }
+            // A parameter value is a constant expression: it cannot read a
+            // variable, net or port, except through a type query such as
+            // $bits (IEEE 1800-2017 6.20.2, 11.2.1).
+            const auto nonconstant = [&](const auto& self,
+                                         const semantic::ExpressionId id)
+                -> const semantic::sv::Declaration* {
+                const auto view = compiled.find_expression(id);
+                if (!view || view->systemverilog == nullptr) {
+                    return nullptr;
+                }
+                const auto& value = *view->systemverilog;
+                if (value.kind == ExpressionKind::call
+                    && (value.text == "$bits" || value.text == "$size"
+                        || value.text == "$left" || value.text == "$right"
+                        || value.text == "$low" || value.text == "$high"
+                        || value.text == "$increment"
+                        || value.text == "$dimensions"
+                        || value.text == "$unpacked_dimensions"
+                        || value.text == "$typename"
+                        || value.text == "$isunbounded")) {
+                    return nullptr;
+                }
+                // `$` is the unbounded constant (IEEE 1800-2017 6.20.2).
+                if (value.kind == ExpressionKind::name
+                    && value.text != "$"
+                    && value.referenced_name
+                    && value.referenced_name->selected) {
+                    const auto referenced = compiled.find_declaration(
+                        *value.referenced_name->selected);
+                    if (referenced && referenced->systemverilog != nullptr
+                        && !referenced->systemverilog->name.starts_with("$")
+                        && (referenced->systemverilog->form
+                                == DeclarationForm::variable
+                            || referenced->systemverilog->form
+                                == DeclarationForm::net
+                            || referenced->systemverilog->form
+                                == DeclarationForm::port)
+                        && compiled_scope_belongs_to_unit(compiled,
+                            referenced->systemverilog->scope, unit.id)) {
+                        return &*referenced->systemverilog;
+                    }
+                }
+                for (const auto operand : value.operands) {
+                    if (const auto* found = self(self, operand)) {
+                        return found;
+                    }
+                }
+                return nullptr;
+            };
+            if (const auto* object = nonconstant(
+                    nonconstant, *parameter.initializer)) {
+                append("FSIM-ELAB-SVCONST-003",
+                    "the value of parameter '" + parameter.name
+                        + "' reads '" + object->name
+                        + "', which is not a constant",
+                    parameter.source);
+                continue;
+            }
             if (unit_specialized != nullptr
                 && hir_systemverilog_explicit_integral_type(
                     *parameter.type)) {
@@ -12321,7 +12379,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
     };
     lowerer.set_specialized_hir_unit(&*specialized);
     lowerer.set_systemverilog_interface_handles(
-        &systemverilog_interface_handles_);
+        &systemverilog_interface_handles_, &systemverilog_interface_types_);
     lowerer.set_hir_container_declaration_bindings(
         &root_materialization.container_declaration_bindings);
 
@@ -12441,12 +12499,14 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
 
     std::size_t concurrent_order { };
     std::vector<semantic::ProcessId> deferred_processes;
+    std::vector<std::pair<semantic::StatementId, std::size_t>>
+        deferred_statements;
     if (!lower_compiled_systemverilog_processes(
             unit, *specialized, path, source_language,
             active_concurrent_statements, active_processes,
             generate_occurrences, generated_materializations, lowerer,
             clocking_processes, specialization, program_owner,
-            concurrent_order, &deferred_processes)) {
+            concurrent_order, &deferred_processes, &deferred_statements)) {
         return false;
     }
     append_selected_systemverilog_classes(
@@ -12485,10 +12545,11 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
             concurrent_order, generated_path)) {
         return false;
     }
-    if (!deferred_processes.empty()
+    if ((!deferred_processes.empty() || !deferred_statements.empty())
         && !lower_deferred_systemverilog_processes(
             unit, *specialized, path, source_language, deferred_processes,
-            lowerer, specialization_index, program_owner)) {
+            lowerer, specialization_index, program_owner,
+            deferred_statements)) {
         return false;
     }
     resolve_compiled_systemverilog_virtual_interface_initializers(

@@ -197,7 +197,32 @@ Expression VerilogParser::parse_postfix(Expression expression)
                     || member.text == "find_first_index"
                     || member.text == "find_last"
                     || member.text == "find_last_index");
-            if (parenthesized_call || implicit_container_with) {
+            // IEEE 1800-2017 13.4.5: a method with no arguments may omit its
+            // empty parentheses, as in `q.size` or `q.pop_back`.
+            const bool implicit_container_call = !parenthesized_call
+                && !implicit_container_with
+                && expression.kind == ExpressionKind::Identifier
+                && [&] {
+                       const auto found
+                           = current_procedural_types_.find(expression.text);
+                       return found != current_procedural_types_.end()
+                           ? found->second.systemverilog_container
+                                 .has_value()
+                           : unit_container_names_.contains(expression.text);
+                   }()
+                && (member.text == "size" || member.text == "num"
+                    || member.text == "pop_front"
+                    || member.text == "pop_back"
+                    || member.text == "sum" || member.text == "product"
+                    || member.text == "and" || member.text == "or"
+                    || member.text == "xor" || member.text == "min"
+                    || member.text == "max" || member.text == "unique"
+                    || member.text == "unique_index"
+                    || member.text == "reverse" || member.text == "sort"
+                    || member.text == "rsort" || member.text == "shuffle"
+                    || member.text == "delete");
+            if (parenthesized_call || implicit_container_with
+                || implicit_container_call) {
                 const auto receiver_span = expression.span;
                 const auto receiver_type = [&]() -> const Type* {
                     if (expression.kind != ExpressionKind::Identifier)

@@ -14,6 +14,10 @@
 
 namespace fsim::elaboration {
 
+// A `timescale or timeunit spelling such as "10ns" in femtoseconds.
+[[nodiscard]] std::optional<std::uint64_t>
+systemverilog_unit_time_scale_femtoseconds(std::string_view spelling) noexcept;
+
 using frontend::ProcessKind;
 using runtime::Logic4;
 using runtime::PackedLogic4;
@@ -83,8 +87,13 @@ public:
         const CoverageHirContext* coverage, bool module) noexcept;
     void set_hir_code_coverage_active(bool active) noexcept;
     void set_systemverilog_interface_handles(
-        const std::unordered_map<std::string, std::uint64_t>* handles)
+        const std::unordered_map<std::string, std::uint64_t>* handles,
+        const std::unordered_map<std::string, std::string>* types = nullptr)
         noexcept;
+    // The interface type bound to a generic `interface` port of this
+    // instance, or empty.
+    [[nodiscard]] std::string hir_generic_interface_type(
+        std::string_view receiver) const;
     void diagnose_hir_systemverilog_file_process(
         semantic::ProcessId process);
     [[nodiscard]] std::optional<semantic::SourceSpanId>
@@ -1606,6 +1615,22 @@ private:
         semantic::SourceSpanId source,
         bool vhdl_driving_value = false);
     void materialize_hir_procedural_continuous_assignments();
+    // $monitor and $strobe arguments other than plain signals are evaluated
+    // into hidden signals by generated always_comb drivers.
+    void materialize_hir_monitor_drivers();
+    // A hierarchical reference to an instance parameter, such as `u1.WIDTH`
+    // (IEEE 1800-2017 23.6), as its elaborated value.
+    struct HirHierarchicalParameter {
+        runtime::PackedLogic4 value;
+        bool signed_value { };
+        frontend::SystemVerilogScalarKind scalar_kind {
+            frontend::SystemVerilogScalarKind::None
+        };
+    };
+    [[nodiscard]] std::optional<HirHierarchicalParameter>
+    hir_hierarchical_parameter(semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<SignalId> hir_monitor_expression_signal(
+        semantic::ExpressionId expression);
 
     void validate_read_only_signal_writes(
         const frontend::SourceSpan& source);
@@ -1647,6 +1672,8 @@ private:
     bool coverage_hir_process_active_ { };
     const std::unordered_map<std::string, std::uint64_t>*
         systemverilog_interface_handles_ { };
+    const std::unordered_map<std::string, std::string>*
+        systemverilog_interface_types_ { };
     const ContainerDeclarationBindings*
         container_declaration_bindings_ { };
     semantic::ScopeId hir_process_scope_;
@@ -1782,6 +1809,12 @@ private:
     };
     std::vector<ProceduralContinuousAssignment>
         procedural_continuous_assignments_;
+    struct PendingMonitorDriver {
+        semantic::ExpressionId expression;
+        SignalId signal { };
+        semantic::ScopeId scope;
+    };
+    std::vector<PendingMonitorDriver> pending_monitor_drivers_;
     std::unordered_map<std::string, std::size_t>
         procedural_continuous_assignment_by_statement_;
     std::unordered_map<std::string, std::vector<std::size_t>>

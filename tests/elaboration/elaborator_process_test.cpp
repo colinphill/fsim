@@ -273,11 +273,22 @@ endmodule
                     .operator()<fsim::runtime::simir::WaitOn>(
                         operations);
             assert(wait_debug_index(operations) < wait_index);
-            assert(
-                wait_index
-                < operation_index
+            // A nonblocking assignment evaluates its value before the
+            // intra-assignment event and waits in a join_none branch
+            // (IEEE 1800-2017 10.4.2); a blocking one waits first in this
+            // lowering.
+            const auto read_index
+                = operation_index
                       .operator()<fsim::runtime::simir::ReadSignal>(
-                          operations));
+                          operations);
+            assert(nonblocking ? read_index < wait_index
+                               : wait_index < read_index);
+            if (nonblocking) {
+                assert(
+                    operation_index
+                        .operator()<fsim::runtime::simir::Fork>(operations)
+                    < wait_index);
+            }
             if (nonblocking) {
                 assert(
                     wait_index
@@ -427,7 +438,8 @@ endmodule
     const auto rejected_force = compile_and_elaborate(
         invalid_force.design, "invalid_force");
     assert(!rejected_force.ok());
-    assert(!has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-001"));
+    // IEEE 1800-2017 10.6.2: a force bit-select needs a constant index.
+    assert(has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-001"));
     assert(has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-002"));
     assert(has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-003"));
 
@@ -469,46 +481,10 @@ endmodule
     assert(dynamic_force.ok());
     const auto elaborated_dynamic_force = compile_and_elaborate(
         dynamic_force.design, "dynamic_force");
-    if (!elaborated_dynamic_force.ok()) {
-      for (const auto& diagnostic : elaborated_dynamic_force.diagnostics) {
-        std::cerr << diagnostic.code << ": "
-                  << diagnostic.message << '\n';
-      }
-    }
-    assert(elaborated_dynamic_force.ok());
-    const auto& dynamic_force_operations =
-        elaborated_dynamic_force.design->processes().front().operations;
-    const auto dynamic_force_operation = std::ranges::find_if(
-        dynamic_force_operations,
-        [](const fsim::runtime::simir::Operation& operation) {
-          return fsim::runtime::simir::operation_holds<
-              fsim::runtime::simir::ForceSignalSlice>(operation);
-        });
-    const auto dynamic_release_operation = std::ranges::find_if(
-        dynamic_force_operations,
-        [](const fsim::runtime::simir::Operation& operation) {
-          return fsim::runtime::simir::operation_holds<
-              fsim::runtime::simir::ReleaseSignalSlice>(operation);
-        });
-    assert(
-        dynamic_force_operation != dynamic_force_operations.end()
-        && dynamic_release_operation != dynamic_force_operations.end());
-    const auto& force_selection =
-        fsim::runtime::simir::operation_get<
-            fsim::runtime::simir::ForceSignalSlice>(
-            *dynamic_force_operation).selection;
-    const auto& release_selection =
-        fsim::runtime::simir::operation_get<
-            fsim::runtime::simir::ReleaseSignalSlice>(
-            *dynamic_release_operation).selection;
-    assert(
-        force_selection && release_selection
-        && force_selection->left == 3
-        && force_selection->right == 0
-        && force_selection->base_offset == 0
-        && release_selection->left == 3
-        && release_selection->right == 0
-        && release_selection->base_offset == 0);
+    // IEEE 1800-2017 10.6.2: force and release select with a constant
+    // index only.
+    assert(!elaborated_dynamic_force.ok());
+    assert(has_diagnostic(elaborated_dynamic_force, "FSIM-ELAB-SVFORCE-001"));
 
     const auto width_conversion = fsim::frontend::parse_text(
         "width_conversion.sv",

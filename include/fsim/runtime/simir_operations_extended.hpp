@@ -515,6 +515,9 @@ struct TimeDisplay {
 enum class MonitorValueKind : std::uint8_t {
     signal,
     time,
+    // $time, $stime, or $realtime evaluated when the monitor prints; a time
+    // change alone does not trigger it (IEEE 1800-2017 21.2.3).
+    simulation_time,
 };
 
 struct MonitorValue {
@@ -529,6 +532,11 @@ struct MonitorValue {
     bool zero_pad { };
     SystemVerilogScalarKind scalar_kind { SystemVerilogScalarKind::None };
     bool use_timeformat_width { };
+    ::fsim::runtime::SystemVerilogTimeFunction time_function {
+        ::fsim::runtime::SystemVerilogTimeFunction::Time
+    };
+    std::uint64_t time_unit_femtoseconds { };
+    std::uint64_t time_precision_femtoseconds { };
 };
 
 /// Replace the global Verilog/SystemVerilog monitor registration and publish

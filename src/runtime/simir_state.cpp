@@ -2941,6 +2941,35 @@ void Interpreter::Impl::notify_execution_point(
                 value.minimum_width,
                 value.left_justify,
                 value.zero_pad);
+        } else if (value.kind == MonitorValueKind::simulation_time) {
+            const auto now = systemverilog_time_function(
+                value.time_function,
+                scheduler.now(),
+                { value.time_unit_femtoseconds,
+                    value.time_precision_femtoseconds,
+                    time_format.resolution_femtoseconds });
+            const auto encoded = !now
+                ? SystemVerilogPackedScalarResult {
+                      PackedLogic4 { }, now.error }
+                : value.time_function == SystemVerilogTimeFunction::Realtime
+                ? encode_systemverilog_scalar_payload(now.value)
+                : systemverilog_scalar_to_packed(now.value,
+                      value.time_function == SystemVerilogTimeFunction::Stime
+                          ? 32U
+                          : 64U,
+                      false);
+            text += make_formatted_output(
+                value.prefix,
+                { },
+                value.format,
+                encoded ? encoded.value
+                        : PackedLogic4 { 64U, Logic4::x },
+                value.signed_decimal,
+                value.suppress_leading_zero,
+                value.minimum_width,
+                value.left_justify,
+                value.zero_pad,
+                value.scalar_kind);
         } else {
             text += make_formatted_output(
                 value.prefix,

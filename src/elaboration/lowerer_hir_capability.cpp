@@ -1099,10 +1099,29 @@ void Lowerer::set_hir_container_declaration_bindings(
 }
 
 void Lowerer::set_systemverilog_interface_handles(
-    const std::unordered_map<std::string, std::uint64_t>* const handles)
+    const std::unordered_map<std::string, std::uint64_t>* const handles,
+    const std::unordered_map<std::string, std::string>* const types)
     noexcept
 {
     systemverilog_interface_handles_ = handles;
+    if (types != nullptr) {
+        systemverilog_interface_types_ = types;
+    }
+}
+
+std::string Lowerer::hir_generic_interface_type(
+    const std::string_view receiver) const
+{
+    if (systemverilog_interface_types_ == nullptr || receiver.empty()) {
+        return { };
+    }
+    const auto path = hierarchy_.empty()
+        ? std::string { receiver }
+        : hierarchy_ + "." + std::string { receiver };
+    const auto found = systemverilog_interface_types_->find(path);
+    return found == systemverilog_interface_types_->end()
+        ? std::string { }
+        : found->second;
 }
 
 frontend::SourceSpan Lowerer::hir_source_span(
@@ -2290,6 +2309,9 @@ bool Lowerer::hir_expression_signed(
     }
     if (const auto binding = hir_case_pattern_binding(expression_id)) {
         return binding->signed_value;
+    }
+    if (const auto parameter = hir_hierarchical_parameter(expression_id)) {
+        return parameter->signed_value;
     }
     if (const auto signal = hir_direct_signal_binding(expression_id);
         signal && signal->signed_value) {
@@ -8107,6 +8129,13 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
     if (retained_kind != Kind::None) {
         return retained_kind;
     }
+    if (source.kind == semantic::sv::ExpressionKind::name
+        && source.text.find('.') != std::string::npos) {
+        if (const auto parameter = hir_hierarchical_parameter(expression_id);
+            parameter && parameter->scalar_kind != Kind::None) {
+            return parameter->scalar_kind;
+        }
+    }
 
     if (source.kind == semantic::sv::ExpressionKind::integer_literal
         && (source.decimal_literal
@@ -8581,6 +8610,9 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
     }
     if (hir_vhdl_now_expression(expression_id)) {
         return 64U;
+    }
+    if (const auto parameter = hir_hierarchical_parameter(expression_id)) {
+        return parameter->value.width();
     }
     if (const auto method = hir_systemverilog_enumeration_method(
             expression_id)) {

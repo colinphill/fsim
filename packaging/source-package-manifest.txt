@@ -1982,6 +1982,7 @@ tests/fixtures/compliance/sv_operand_signedness.sv
 tests/fixtures/compliance/sv_packed_multidim.sv
 tests/fixtures/compliance/sv_parameter_types.sv
 tests/fixtures/compliance/sv_port_width_mismatch.sv
+tests/fixtures/compliance/sv_real_values_and_events.sv
 tests/fixtures/compliance/sv_streaming_unpack.sv
 tests/fixtures/compliance/sv_string_containers.sv
 tests/fixtures/compliance/sv_time_without_timescale.sv

@@ -249,6 +249,62 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 19: real values, monitors, hierarchical parameters, events
+
+Fixture: `sv_real_values_and_events.sv` (passes on xsim).
+
+Real values (6.12.2, 11.3.1, 11.4.3, 11.4.13):
+- Integral and real values convert when written to container elements
+  (`foo[1] = i` stored the bit pattern) and when passed to function or task
+  arguments, including shortreal to real formals.
+- `+=`, `++` and the other compound updates of real variables and real
+  array elements use real arithmetic (they used packed integer arithmetic).
+- A binary operation with a real operand on either side is real (`$time /
+  1000.0` displayed 0), and a real `**` is evaluated with `$pow`.
+- An x/z `time` value converts to zero in a real operation instead of
+  stopping the run.
+- A real net (`wire real`) is unresolved; it was given 4-state wire
+  resolution and rejected at load.
+- Integral constant evaluation no longer runs a function with a real
+  result or argument; such calls evaluate at run time.
+
+Events, force and release (9.4.2, 10.4.2, 10.6.2):
+- An event control on an element of a real array or a dynamic array
+  (`@(rarr[0])`). Arrays of real elements now have a bridge signal.
+- `a <= @(e) b` evaluates `b` at once and schedules the update in a
+  `join_none` branch; the process no longer blocks.
+  - The branch starts waiting only when the process next blocks
+    (9.3.2), so an edge in between is missed.
+- `release` of a variable keeps its forced value until the next assignment,
+  unless a continuous assignment in the unit drives the variable.
+- A force or release bit-select needs a constant index
+  (`SVFORCE-001`), as xsim requires.
+
+Display and hierarchy (21.2.3, 23.6, 13.4.5):
+- `$monitor` and `$strobe` accept expressions and selects (`a + b`,
+  `a[1]`, `arr[i]`): each is evaluated into a hidden signal by a generated
+  `always_comb` driver. `$time`, `$stime` and `$realtime` arguments are read
+  when the monitor prints.
+- A hierarchical reference to an instance parameter (`u1.WIDTH`) reads the
+  instance's elaborated value.
+- Built-in array methods without parentheses (`q.size`, `q.pop_back`).
+
+Declarations and legality:
+- Verilog-2005 net arrays (`wire [7:0] m [0:3]`, IEEE 1364-2005 4.9).
+- A net cannot be a dynamic array, queue or associative array
+  (`SV-SEM-398`).
+- An automatic variable cannot be a nonblocking or procedural continuous
+  assignment target, or be forced (`SV-SEM-397`).
+- A parameter value cannot read a variable, net or port (`SVCONST-003`).
+- Continuous assignments to interface members wait for the instance
+  hierarchy; generic interface ports take a modport and call methods.
+- A typedef name used as an enumeration base resolves to its type.
+
+Corpus effect (interpreter): ivtest +78 (1704/2826), Verilator +25
+(727/2415), nvc +6 (471/1482), VESTs +5 (2035/3665); sv-tests and
+VHDL Compliance-Tests unchanged. One Verilator case now stops as xsim
+does (see `lrm-compliance-notes.md`).
+
 ### Batch 18: enumerations, real values, classes in modules, formats
 
 Fixtures: `sv_enum_methods.sv`, `sv_type_and_class_forms.sv` (both pass on

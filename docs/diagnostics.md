@@ -1773,6 +1773,8 @@ scheduler.
 | `FSIM-SV-SEM-394` | error | A void function return statement incorrectly supplies a value (IEEE 1800-2017 13.4.1). |
 | `FSIM-SV-SEM-395` | error | A Verilog (not SystemVerilog) ANSI task or function port declaration omits its direction (IEEE 1364-2005 10.2.1, 10.3.1). |
 | `FSIM-SV-SEM-396` | error | A non-ANSI port or classic task argument declared with a net or data type is declared again, or its direction and data declarations have different packed ranges or an atom/real/aggregate data type over a ranged direction declaration (IEEE 1800-2017 23.2.2.1, 13.3). |
+| `FSIM-SV-SEM-397` | error | An automatic variable is written by a nonblocking assignment, named in its intra-assignment event, or used by a procedural continuous assignment, `force`, `deassign` or `release` (IEEE 1800-2017 6.21). |
+| `FSIM-SV-SEM-398` | error | A net is declared as a dynamic array, queue, or associative array (IEEE 1800-2017 6.7.1). |
 | `FSIM-SV-SEM-073` | error | A module or package declares the same bounded task name more than once. |
 | `FSIM-SV-SEM-075` | error | A bounded text-file system function has the wrong argument count. |
 | `FSIM-SV-SEM-076` | error | `$fdisplay` or `$fwrite` has a nonliteral, malformed, unsupported, or multi-value format. |
@@ -1931,12 +1933,12 @@ scheduler.
 | `FSIM-ELAB-100` | error | A named-event trigger references an unknown event. |
 | `FSIM-ELAB-101` | error | A named-event trigger targets an object not declared as an event. |
 | `FSIM-ELAB-102` | error | A formatted-output value expression could not be lowered into SimIR. |
-| `FSIM-ELAB-103` | error | A value-sensitive `$monitor` operand is not yet a direct packed-signal reference. |
+| `FSIM-ELAB-103` | error | A `$monitor` operand is neither a signal, a time query, nor an expression with a static width that a generated driver can evaluate. |
 | `FSIM-ELAB-104` | error | A random system function is used in an unsupported language or with an invalid argument count. |
 | `FSIM-ELAB-105` | error | Procedural assignment timing-control HIR has an inconsistent control kind, delay, or event payload. |
 | `FSIM-ELAB-106` | error | Procedural update metadata is inconsistent with its normalized expression or captured lvalue. |
 | `FSIM-ELAB-107` | error | A callable fork would escape its frame, or a function background process (SystemVerilog-2009 or later) originates outside procedural code rooted in an `initial` block. |
-| `FSIM-ELAB-108` | error | A postponed `$strobe` operand is not yet a direct packed-signal reference. |
+| `FSIM-ELAB-108` | error | A postponed `$strobe` operand is neither a signal, a time query, nor an expression with a static width that a generated driver can evaluate. |
 | `FSIM-ELAB-DRV-001` | error | An unresolved variable has multiple process drivers that conflict: a continuous assignment with another driver, or several VHDL processes. Procedural writes from several SystemVerilog processes are legal (IEEE 1800-2017 6.5). |
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |
@@ -2402,6 +2404,7 @@ scheduler.
 | `FSIM-ELAB-SVENUM-006` | error | An enum literal value is not a constant expression (for example `$time`). |
 | `FSIM-ELAB-SVCONST-001` | error | A SystemVerilog parameter value cannot be converted to its declared bounded integral type without losing X/Z state or valid width metadata. |
 | `FSIM-ELAB-SVCONST-002` | note, warning, or error | A SystemVerilog severity system task executed during constant evaluation. Notes and warnings preserve successful elaboration; errors and fatal reports reject the design. |
+| `FSIM-ELAB-SVCONST-003` | error | A parameter value reads a variable, net or port of its own unit outside a type query such as `$bits`, so it is not a constant expression (IEEE 1800-2017 6.20.2). |
 | `FSIM-ELAB-SVEXIT-001` | error | `$exit` is used outside a SystemVerilog program block. |
 | `FSIM-ELAB-SVPROGRAM-001` | error | A SystemVerilog-2023 program elaboration-severity task has a nonconstant or invalid format/value argument. |
 | `FSIM-ELAB-SVPROGRAM-002` | note, warning, error, or fatal | A SystemVerilog-2023 program severity system task executed during elaboration; notes and warnings preserve the design while errors and fatal reports reject it. |

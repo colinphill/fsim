@@ -131,6 +131,12 @@ namespace {
 
 } // namespace
 
+std::optional<std::uint64_t> systemverilog_unit_time_scale_femtoseconds(
+    const std::string_view spelling) noexcept
+{
+    return systemverilog_time_scale_femtoseconds(spelling);
+}
+
 std::optional<runtime::SystemVerilogMathFunction>
 Lowerer::hir_systemverilog_math_function(
     const semantic::ExpressionId expression_id) const

@@ -1197,6 +1197,16 @@ bool Lowerer::lower_hir_force_release(
             span);
         return true;
     }
+    // IEEE 1800-2017 10.6.2: a force or release selects a net with a
+    // constant bit-select.
+    if (index && !constant_selection
+        && !hir_constant_integer(target_expression.operands[1])) {
+        report(
+            "FSIM-ELAB-SVFORCE-001",
+            "procedural force/release bit-select requires a constant index",
+            span);
+        return true;
+    }
     const auto width = constant_selection
         ? std::optional { constant_selection->width }
         : index  ? hir_index_target_width(target)
@@ -1225,6 +1235,53 @@ bool Lowerer::lower_hir_force_release(
         : member ? static_cast<std::uint32_t>(member->offset)
                  : 0U;
     if (!force) {
+        // IEEE 1800-2017 10.6.2: a released variable keeps its forced value
+        // until its next assignment; a released net takes its drivers' value.
+        const auto& released = design_.signal_info_.at(*binding->signal);
+        // A variable driven by a continuous assignment re-evaluates instead.
+        const auto continuously_assigned = [&] {
+            const auto unit = specialized_hir_unit_->design().find_unit(
+                specialized_hir_unit_->unit());
+            if (!unit || unit->systemverilog == nullptr || !declaration) {
+                return true;
+            }
+            const auto assigns = [&](const auto& statements) {
+                return std::ranges::any_of(statements,
+                    [&](const semantic::StatementId statement_id) {
+                        const auto statement
+                            = specialized_hir_unit_->find_statement(
+                                statement_id);
+                        return statement
+                            && statement->systemverilog != nullptr
+                            && statement->systemverilog->target
+                            && hir_target_declaration(
+                                   *statement->systemverilog->target)
+                            == declaration;
+                    });
+            };
+            const auto in_region = [&](const auto& self,
+                                       const semantic::sv::GenerateRegion&
+                                           region) -> bool {
+                return assigns(region.concurrent_statements)
+                    || std::ranges::any_of(region.nested,
+                        [&](const auto& nested) {
+                            return self(self, nested);
+                        });
+            };
+            return assigns(unit->systemverilog->concurrent_statements)
+                || std::ranges::any_of(unit->systemverilog->generates,
+                    [&](const auto& region) {
+                        return in_region(in_region, region);
+                    });
+        };
+        const bool variable_target = released.systemverilog_net_type.empty()
+            && !released.is_port && !continuously_assigned();
+        std::optional<RegisterId> held;
+        if (variable_target) {
+            held = allocate_register(binding->width, binding->domain);
+            process_.operations.emplace_back(ReadSignal {
+                *held, *binding->signal, SignalReadKind::current });
+        }
         process_.operations.emplace_back(ReleaseSignalSlice {
             *binding->signal,
             dynamic_selection ? 0U : offset,
@@ -1232,6 +1289,10 @@ bool Lowerer::lower_hir_force_release(
             dynamic_selection,
             false,
         });
+        if (held) {
+            process_.operations.emplace_back(
+                WriteBlocking { *binding->signal, *held });
+        }
         record_readonly_vhdl_output_write(*binding);
         return true;
     }
@@ -2387,8 +2448,10 @@ bool Lowerer::lower_hir_statement(
             = statement->systemverilog != nullptr
             && statement->systemverilog->assignment_control
                 == semantic::sv::AssignmentControl::event;
+        // A nonblocking assignment evaluates its value before waiting
+        // (IEEE 1800-2017 10.4.2).
         const bool event_control_lowered_early
-            = event_controlled
+            = event_controlled && !nonblocking
             && statement->systemverilog->update_kind
                 == semantic::sv::UpdateKind::none;
         if (event_control_lowered_early
@@ -2404,9 +2467,20 @@ bool Lowerer::lower_hir_statement(
         };
         // A class property update writes its normalized value (`a + val`)
         // through the property path below.
+        // A real target updates through its normalized real operation.
+        const auto update_target_kind = statement->systemverilog != nullptr
+                && statement->systemverilog->update_kind
+                    != semantic::sv::UpdateKind::none
+            ? hir_systemverilog_scalar_kind(*target)
+            : frontend::SystemVerilogScalarKind::None;
         if (statement->systemverilog != nullptr
             && statement->systemverilog->update_kind
                 != semantic::sv::UpdateKind::none
+            && update_target_kind != frontend::SystemVerilogScalarKind::Real
+            && update_target_kind
+                != frontend::SystemVerilogScalarKind::Realtime
+            && update_target_kind
+                != frontend::SystemVerilogScalarKind::ShortReal
             && !hir_class_property_profile(*target)) {
             const auto& input = *statement->systemverilog;
             const auto normalized
@@ -3347,10 +3421,18 @@ bool Lowerer::lower_hir_statement(
         if (const auto element = hir_container_element_binding(*target)) {
             const auto& input = *statement->systemverilog;
             trace_generated("fixed-net-entry");
+            // A real element update writes its normalized real operation.
+            const bool real_element_update
+                = update_target_kind == frontend::SystemVerilogScalarKind::Real
+                || update_target_kind
+                    == frontend::SystemVerilogScalarKind::Realtime
+                || update_target_kind
+                    == frontend::SystemVerilogScalarKind::ShortReal;
             if (input.assignment_control
                     != semantic::sv::AssignmentControl::none
                 || input.delay
-                || input.update_kind != semantic::sv::UpdateKind::none) {
+                || (input.update_kind != semantic::sv::UpdateKind::none
+                    && !real_element_update)) {
                 trace_generated("fixed-net-control");
                 return false;
             }
@@ -3792,10 +3874,48 @@ bool Lowerer::lower_hir_statement(
                         && value_expression->systemverilog->text.starts_with(
                             "@sv-tagged:")));
             const auto diagnostics_before = diagnostics_.size();
+            // IEEE 1800-2017 6.12.2: an assignment converts between an
+            // integral value and a real or shortreal element.
+            const auto element_scalar_kind = !packed_pattern
+                    && value_expression
+                    && value_expression->systemverilog != nullptr
+                ? hir_systemverilog_scalar_kind(*target)
+                : frontend::SystemVerilogScalarKind::None;
+            const auto value_scalar_kind
+                = element_scalar_kind == frontend::SystemVerilogScalarKind::None
+                ? frontend::SystemVerilogScalarKind::None
+                : hir_systemverilog_scalar_kind(*value);
+            const auto real_kind
+                = [](const frontend::SystemVerilogScalarKind kind) {
+                      return kind == frontend::SystemVerilogScalarKind::Real
+                          || kind == frontend::SystemVerilogScalarKind::Realtime
+                          || kind
+                          == frontend::SystemVerilogScalarKind::ShortReal;
+                  };
+            const auto element_real = real_kind(element_scalar_kind);
+            const auto value_real = real_kind(value_scalar_kind);
             auto lowered = packed_pattern
                 ? lower_hir_systemverilog_packed_pattern(
                       *value, *element_type, element->width)
-                : lower_hir_expression(*value, element->width);
+                : element_real && value_scalar_kind
+                        == frontend::SystemVerilogScalarKind::None
+                ? lower_hir_expression(*value,
+                      hir_expression_width(*value, hir_process_scope_)
+                          .value_or(element->width))
+                : lower_hir_expression(*value, element->width,
+                      element_real ? element_scalar_kind
+                                   : frontend::SystemVerilogScalarKind::None);
+            if (lowered && element_real
+                && value_scalar_kind
+                    == frontend::SystemVerilogScalarKind::None) {
+                lowered = convert_hir_integral_to_real(*lowered,
+                    hir_expression_signed(*value), element_scalar_kind);
+            } else if (lowered && value_real && !element_real
+                && element_scalar_kind
+                    == frontend::SystemVerilogScalarKind::None) {
+                lowered = convert_hir_real_to_integral(
+                    *lowered, value_scalar_kind);
+            }
             if (!element_index || !lowered) {
                 if (!lowered && diagnostics_.size() == diagnostics_before
                     && value_expression
@@ -5950,7 +6070,48 @@ bool Lowerer::lower_hir_statement(
                     binding->integer_range->right),
             });
         }
-        if (!lower_intra_assignment_control()) {
+        // IEEE 1800-2017 10.4.2: a nonblocking assignment with an
+        // intra-assignment event control schedules its update when the event
+        // occurs; the process continues at once. A join_none branch waits and
+        // writes the value captured here.
+        struct NonblockingEventHandoff {
+            Lowerer& lowerer;
+            std::optional<InstructionIndex> fork, jump, branch;
+            ~NonblockingEventHandoff()
+            {
+                if (!fork) {
+                    return;
+                }
+                auto& operations = lowerer.process_.operations;
+                operations.emplace_back(ForkEnd { });
+                const auto continuation = static_cast<InstructionIndex>(
+                    operations.size());
+                operations[*fork] = Fork {
+                    { *branch }, runtime::simir::ForkJoinKind::none
+                };
+                operations[*jump] = Jump { continuation };
+            }
+        } nonblocking_event_handoff { *this, { }, { }, { } };
+        if (nonblocking && event_controlled
+            && !event_control_lowered_early) {
+            const auto captured = allocate_register(
+                register_width(*lowered), register_domain(*lowered));
+            process_.operations.emplace_back(
+                CopyRegister { captured, *lowered });
+            lowered = captured;
+            nonblocking_event_handoff.fork = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Fork { });
+            nonblocking_event_handoff.jump = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Jump { });
+            nonblocking_event_handoff.branch = static_cast<InstructionIndex>(
+                process_.operations.size());
+            if (!lower_assignment_event_control(*statement->systemverilog)) {
+                nonblocking_event_handoff.fork.reset();
+                return false;
+            }
+        } else if (!lower_intra_assignment_control()) {
             return false;
         }
         if (procedural_delay && !delayed_nonblocking_assignment) {
@@ -11109,7 +11270,70 @@ bool Lowerer::lower_hir_statement(
                         ? hir_runtime_binding(
                               *declaration, hir_process_scope_, false)
                         : std::nullopt;
-                    if (!expression || !binding || !binding->signal) {
+                    const auto monitored_expression = expression
+                        ? specialized_hir_unit_->find_expression(*expression)
+                        : std::nullopt;
+                    const bool plain_name = monitored_expression
+                        && monitored_expression->systemverilog != nullptr
+                        && monitored_expression->systemverilog->kind
+                            == semantic::sv::ExpressionKind::name;
+                    // $time, $stime, and $realtime are read when the
+                    // monitor prints.
+                    const auto time_call = monitored_expression
+                            && monitored_expression->systemverilog != nullptr
+                            && monitored_expression->systemverilog->kind
+                                == semantic::sv::ExpressionKind::call
+                            && monitored_expression->systemverilog->operands
+                                   .empty()
+                        ? std::string_view {
+                              monitored_expression->systemverilog->text }
+                        : std::string_view { };
+                    if (time_call == "$time" || time_call == "$stime"
+                        || time_call == "$realtime") {
+                        const auto unit
+                            = specialized_hir_unit_->design().find_unit(
+                                specialized_hir_unit_->unit());
+                        const auto* const context = unit
+                                && unit->systemverilog != nullptr
+                            ? &unit->systemverilog->compilation
+                            : nullptr;
+                        monitor_value.kind
+                            = MonitorValueKind::simulation_time;
+                        monitor_value.time_function = time_call == "$time"
+                            ? runtime::SystemVerilogTimeFunction::Time
+                            : time_call == "$stime"
+                            ? runtime::SystemVerilogTimeFunction::Stime
+                            : runtime::SystemVerilogTimeFunction::Realtime;
+                        monitor_value.time_unit_femtoseconds = context
+                            ? systemverilog_unit_time_scale_femtoseconds(
+                                  context->time_unit)
+                                  .value_or(0U)
+                            : 0U;
+                        monitor_value.time_precision_femtoseconds = context
+                            ? systemverilog_unit_time_scale_femtoseconds(
+                                  context->time_precision)
+                                  .value_or(0U)
+                            : 0U;
+                        monitor_value.format = output_format(format);
+                        monitor_value.scalar_kind = time_call == "$realtime"
+                            ? frontend::SystemVerilogScalarKind::Realtime
+                            : frontend::SystemVerilogScalarKind::None;
+                        monitor_value.minimum_width
+                            = hir_systemverilog_decimal_width(*expression,
+                                monitor_value.format,
+                                suppress_leading_zero || left_justify,
+                                minimum_width);
+                        monitor.values.push_back(std::move(monitor_value));
+                        return;
+                    }
+                    auto monitored = plain_name && binding && binding->signal
+                        ? binding->signal
+                        : std::optional<SignalId> { };
+                    if (expression && !monitored) {
+                        monitored = hir_monitor_expression_signal(
+                            *expression);
+                    }
+                    if (!expression || !monitored) {
                         report(
                             monitor.one_shot
                                 ? "FSIM-ELAB-108"
@@ -11124,7 +11348,7 @@ bool Lowerer::lower_hir_statement(
                         return;
                     }
                     monitor_value.kind = MonitorValueKind::signal;
-                    monitor_value.signal = *binding->signal;
+                    monitor_value.signal = *monitored;
                     monitor_value.format = output_format(format);
                     monitor_value.minimum_width
                         = hir_systemverilog_decimal_width(*expression,
@@ -13424,7 +13648,7 @@ void Lowerer::materialize_hir_procedural_continuous_assignments()
             diagnostics_);
         driver_lowerer.set_specialized_hir_unit(specialized_hir_unit_);
         driver_lowerer.set_systemverilog_interface_handles(
-            systemverilog_interface_handles_);
+            systemverilog_interface_handles_, systemverilog_interface_types_);
         driver_lowerer.set_systemverilog_program_owner(
             systemverilog_program_owner_);
         driver_lowerer.vhdl_standard_ = vhdl_standard_;
@@ -13469,5 +13693,109 @@ void Lowerer::materialize_hir_procedural_continuous_assignments()
         driver->id = static_cast<ProcessId>(process_index);
         generated_processes_.push_back(std::move(*driver));
     }
+}
+std::optional<SignalId> Lowerer::hir_monitor_expression_signal(
+    const semantic::ExpressionId expression)
+{
+    const auto scalar_kind = hir_systemverilog_scalar_kind(expression);
+    const bool real_value
+        = scalar_kind == frontend::SystemVerilogScalarKind::Real
+        || scalar_kind == frontend::SystemVerilogScalarKind::Realtime
+        || scalar_kind == frontend::SystemVerilogScalarKind::ShortReal;
+    const auto width = real_value
+        ? std::optional<std::size_t> {
+              scalar_kind == frontend::SystemVerilogScalarKind::ShortReal
+                  ? 32U
+                  : 64U }
+        : hir_expression_width(expression, hir_process_scope_);
+    if (!width || *width == 0U
+        || *width > std::numeric_limits<std::uint32_t>::max()
+        || design_.signals_.size() >= std::numeric_limits<SignalId>::max()) {
+        return std::nullopt;
+    }
+    const auto id = static_cast<SignalId>(design_.signals_.size());
+    const auto name = (process_.name.empty() ? hierarchy_ : process_.name)
+        + ".$monitor_" + std::to_string(id);
+    const auto domain = real_value ? frontend::ValueDomain::Bit2
+                                   : frontend::ValueDomain::Logic4;
+    SignalInfo info;
+    info.id = id;
+    info.name = name;
+    info.width = *width;
+    info.type_name = real_value ? "real" : "logic";
+    info.source_domain = domain;
+    info.is_signed = hir_expression_signed(expression);
+    info.systemverilog_scalar = real_value
+        ? scalar_kind
+        : frontend::SystemVerilogScalarKind::None;
+    const auto initial = real_value
+        ? runtime::encode_systemverilog_scalar_payload(
+              runtime::SystemVerilogScalarValue { scalar_kind, 0U })
+              .value
+        : PackedLogic4 { *width, Logic4::x };
+    Signal signal {
+        name,
+        initial,
+        ResolutionKind::none,
+        value_kind(domain),
+    };
+    signal.systemverilog_scalar = info.systemverilog_scalar;
+    design_.signal_info_.push_back(std::move(info));
+    design_.signals_.push_back(std::move(signal));
+    design_.signal_by_name_.emplace(name, id);
+    pending_monitor_drivers_.push_back(
+        { expression, id, hir_process_scope_ });
+    return id;
+}
+
+void Lowerer::materialize_hir_monitor_drivers()
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return;
+    }
+    for (const auto& pending : pending_monitor_drivers_) {
+        Lowerer driver_lowerer(
+            design_, signals_, read_only_signals_, string_objects_,
+            read_only_string_objects_, container_objects_,
+            read_only_container_objects_,
+            diagnostics_);
+        driver_lowerer.set_specialized_hir_unit(specialized_hir_unit_);
+        driver_lowerer.set_systemverilog_interface_handles(
+            systemverilog_interface_handles_, systemverilog_interface_types_);
+        driver_lowerer.set_systemverilog_program_owner(
+            systemverilog_program_owner_);
+        driver_lowerer.vhdl_standard_ = vhdl_standard_;
+        const auto source = specialized_hir_unit_->find_expression(
+            pending.expression);
+        HirProcessDescription description;
+        if (source && source->systemverilog != nullptr) {
+            description.source = source->systemverilog->source;
+        }
+        description.scope = pending.scope;
+        description.name = "$monitor_driver_"
+            + std::to_string(pending.signal);
+        description.input_actual = pending.expression;
+        description.input_actual_destination = pending.signal;
+        description.kind = frontend::ProcessKind::SystemVerilogAlwaysComb;
+        description.wildcard_sensitivity = true;
+        description.require_wildcard_dependency = false;
+        description.always_comb_or_latch = true;
+        auto driver = driver_lowerer.lower_hir_process_body(
+            description, language_, hierarchy_);
+        const auto process_index = design_.process_count()
+            + 1U + generated_processes_.size();
+        if (!driver
+            || process_index > std::numeric_limits<ProcessId>::max()) {
+            report(
+                "FSIM-ELAB-103",
+                "a $monitor or $strobe argument cannot be evaluated by a "
+                "generated driver",
+                hir_source_span(description.source));
+            continue;
+        }
+        driver->id = static_cast<ProcessId>(process_index);
+        generated_processes_.push_back(std::move(*driver));
+    }
+    pending_monitor_drivers_.clear();
 }
 } // namespace fsim::elaboration
