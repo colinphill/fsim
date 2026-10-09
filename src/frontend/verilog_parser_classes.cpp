@@ -76,6 +76,27 @@ VerilogParser::parse_class_forward_declaration(
   return declaration;
 }
 
+namespace {
+
+// Class enum constants are static properties whose initializers are
+// evaluated without other class names in scope, so an implicit value
+// (`previous + 1`) is rewritten over the previous literal's value.
+void inline_implicit_enum_values(std::vector<Expression>& values,
+    const std::vector<std::string>& names)
+{
+  for (std::size_t index = 1; index < values.size(); ++index) {
+    auto& value = values[index];
+    if (value.kind == ExpressionKind::Binary && value.text == "+"
+        && value.operands.size() == 2U
+        && value.operands.front().kind == ExpressionKind::Identifier
+        && value.operands.front().text == names[index - 1U]) {
+      value.operands.front() = values[index - 1U];
+    }
+  }
+}
+
+}  // namespace
+
 bool VerilogParser::parse_class_property(
     SystemVerilogClassDeclaration& declaration,
     const Token& start) {
@@ -147,6 +168,27 @@ bool VerilogParser::parse_class_property(
       : built_in
           ? parse_parameter_type()
           : parse_named_type();
+  // An anonymous enumeration's literals are class constants (8.23).
+  if (common_type.named_type.empty()
+      && common_type.enumeration_literals.size()
+          == common_type.systemverilog_enumeration_values.size()) {
+    auto values = common_type.systemverilog_enumeration_values;
+    inline_implicit_enum_values(values, common_type.enumeration_literals);
+    for (std::size_t index = 0;
+         index < common_type.enumeration_literals.size(); ++index) {
+      SystemVerilogClassProperty literal;
+      literal.declaration = VariableDeclaration{
+          common_type.enumeration_literals[index],
+          common_type,
+          std::optional<Expression>{values[index]},
+          common_type.systemverilog_enumeration_values[index].span};
+      literal.is_static = true;
+      literal.is_const = true;
+      literal.is_parameter = true;
+      literal.span = literal.declaration.span;
+      declaration.properties.push_back(std::move(literal));
+    }
+  }
   for (;;) {
     const auto name = expect_identifier("class property name");
     auto type = common_type;
@@ -611,6 +653,14 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
     const bool virtual_class,
     const bool interface_class) {
   SystemVerilogClassDeclaration declaration;
+  // Names in a class body resolve to class members, never to implicit nets
+  // of the enclosing module (IEEE 1800-2017 6.10).
+  struct ImplicitNetScope {
+    std::vector<ImplicitNetReference>& references;
+    std::size_t count;
+    ~ImplicitNetScope() { references.resize(count); }
+  } implicit_net_scope { implicit_net_references_,
+      implicit_net_references_.size() };
   declaration.standard_revision = standard_revision_;
   declaration.verilog_compatibility_profile = compatibility_profile_;
   declaration.enclosing_scope = std::move(enclosing_scope);
@@ -747,6 +797,31 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
             declaration.type_aliases.end(),
             std::make_move_iterator(type_owner.type_aliases.begin()),
             std::make_move_iterator(type_owner.type_aliases.end()));
+        // The literals of a class-scope enum are class constants, visible
+        // in methods and through `obj.A` or `C::A` (IEEE 1800-2017 8.23).
+        std::vector<Expression> literal_values;
+        std::vector<std::string> literal_names;
+        for (const auto& literal : type_owner.parameters) {
+          literal_values.push_back(literal.default_value);
+          literal_names.push_back(literal.name);
+        }
+        inline_implicit_enum_values(literal_values, literal_names);
+        for (std::size_t index = 0; index < type_owner.parameters.size();
+             ++index) {
+          auto& literal = type_owner.parameters[index];
+          literal.default_value = std::move(literal_values[index]);
+          SystemVerilogClassProperty property;
+          property.declaration = VariableDeclaration{
+              literal.name,
+              std::move(literal.type),
+              std::optional<Expression>{std::move(literal.default_value)},
+              literal.span};
+          property.is_static = true;
+          property.is_const = true;
+          property.is_parameter = true;
+          property.span = literal.span;
+          declaration.properties.push_back(std::move(property));
+        }
       }
       continue;
     }

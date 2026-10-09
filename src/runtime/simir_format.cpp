@@ -316,7 +316,8 @@ namespace fsim::runtime::simir {
     const std::uint32_t minimum_width,
     const bool left_justify,
     const bool zero_pad,
-    const SystemVerilogScalarKind scalar_kind)
+    const SystemVerilogScalarKind scalar_kind,
+    const std::uint32_t precision)
 {
     const bool scalar_text = scalar_kind != SystemVerilogScalarKind::None
         && scalar_kind != SystemVerilogScalarKind::Chandle
@@ -342,6 +343,14 @@ namespace fsim::runtime::simir {
         options.minimum_width = minimum_width;
         options.left_justify = left_justify;
         options.padding = zero_pad ? '0' : ' ';
+        // %e, %f and %g follow C's printf: six digits unless the format
+        // gives a precision; a plain real display is %g (21.2.1.3).
+        if (format != OutputFormat::time) {
+            options.precision
+                = precision == std::numeric_limits<std::uint32_t>::max()
+                ? 6U
+                : precision;
+        }
         const auto formatted = format_systemverilog_scalar(decoded.value, options);
         if (!formatted)
             throw std::runtime_error { "scalar formatting failed" };

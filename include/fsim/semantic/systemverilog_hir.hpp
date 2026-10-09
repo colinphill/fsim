@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <span>
 #include <string>
@@ -343,6 +344,7 @@ struct OutputValue {
     std::uint32_t minimum_width { };
     bool left_justify { };
     bool zero_pad { };
+    std::uint32_t precision { std::numeric_limits<std::uint32_t>::max() };
 };
 
 struct CaseAlternative {
@@ -408,6 +410,7 @@ struct Statement {
     std::string output_suffix;
     bool output_suppress_leading_zero { };
     std::uint32_t output_minimum_width { };
+    std::uint32_t output_precision { std::numeric_limits<std::uint32_t>::max() };
     bool output_left_justify { };
     bool output_zero_pad { };
     bool output_monitor { };

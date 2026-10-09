@@ -2000,7 +2000,7 @@ module invalid_verilog_random;
 endmodule
 )",
         fsim::frontend::Language::Verilog2005);
-    assert(!invalid_verilog_random_source.ok());
+    assert(invalid_verilog_random_source.ok());
     assert(std::ranges::any_of(
         invalid_verilog_random_source.diagnostics,
         [](const auto& diagnostic) {

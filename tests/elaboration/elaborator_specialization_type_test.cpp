@@ -180,7 +180,10 @@ endmodule
     rejects("invalid_function_return", "FSIM-ELAB-SVTYPE-004");
     rejects("invalid_task_copyout", "FSIM-ELAB-SVTYPE-004");
     rejects("invalid_nested_pattern", "FSIM-ELAB-SVTYPE-004");
-    rejects("invalid_enum_equality", "FSIM-ELAB-SVTYPE-005");
+    // Enumerations of different types compare as integral values
+    // (IEEE 1800-2017 6.19.3, 11.4.5).
+    assert(compile_and_elaborate(
+        nominal_legality.design, "sv:work.invalid_enum_equality").ok());
     rejects("invalid_explicit_cast", "FSIM-ELAB-SVTYPE-004");
     rejects("invalid_nominal_port", "FSIM-ELAB-BIND-057");
     rejects("invalid_enum_port", "FSIM-ELAB-BIND-053");
@@ -314,10 +317,10 @@ endmodule
         !invalid_cast.ok()
         && has_diagnostic(
             invalid_cast, "FSIM-ELAB-SVCAST-002"));
+    // Packed structures are integral, so equality of two packed types is
+    // an integral comparison (IEEE 1800-2017 7.2.1, 11.4.5).
     assert(
-        !invalid_comparison.ok()
-        && has_diagnostic(
-            invalid_comparison, "FSIM-ELAB-SVTYPE-005"));
+        !has_diagnostic(invalid_comparison, "FSIM-ELAB-SVTYPE-005"));
     assert(
         ignored_out_of_range_multidimensional_write.ok()
         && !has_diagnostic(

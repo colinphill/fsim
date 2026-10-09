@@ -104,6 +104,12 @@ void Resolver::run() {
       auto class_scope = scope;
       class_scope.lexical_identity = declaration.canonical_identity;
       class_scope.class_owner = &declaration;
+      // A class member hides an enclosing module object of the same name
+      // (IEEE 1800-2017 8.6, 23.9).
+      std::erase_if(class_scope.objects, [&](const auto& object) {
+        return find_property(declaration.canonical_identity, object.first)
+            .property != nullptr;
+      });
       resolve_class(declaration, class_scope);
     }
     for (auto& function : unit.functions) {

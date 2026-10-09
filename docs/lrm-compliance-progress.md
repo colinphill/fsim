@@ -249,6 +249,78 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 18: enumerations, real values, classes in modules, formats
+
+Fixtures: `sv_enum_methods.sv`, `sv_type_and_class_forms.sv` (both pass on
+xsim).
+
+Enumerations (6.19):
+- `first`, `last`, `next(N)`, `prev(N)`, `num` and `name`, with or without
+  parentheses. Anonymous enumerations get a hidden typedef (`$enum:<first
+  literal>`) so their methods and literal names resolve as for a typedef.
+- Literal ranges `name[N]` and `name[N:M]` (6.19.2), and a type-name base
+  with a packed dimension (`enum T [7:0]`).
+- Base types must be integer atoms or vectors with at most one packed
+  dimension (`SVENUM-004`). x/z values need a 4-state base, and the literal
+  after one needs its own initializer (`SVENUM-005`). Values must be
+  constant (`SVENUM-006`). A sized literal must have the base size.
+- An integral variable, array element or function result assigned to an
+  enumeration needs a cast, and so do enumeration array elements.
+  Equality of two different enumeration or packed types is an integral
+  comparison (11.4.5), as xsim accepts it.
+- Enumeration literals declared in a class are class constants (8.23).
+
+Real values (6.12.2, 6.24.1, 11.3.1):
+- An integral value assigned to a real converts its value (it was a bit
+  copy, so `r = i` gave 0), and a real assigned to an integral rounds half
+  away from zero.
+- `real'`, `shortreal'` and `realtime'` casts, and integral casts of real
+  operands.
+- An integral operand of a real operation converts. A binary operation or
+  conditional with a real operand is real, as is an element of a real
+  array or an untyped parameter with a real value.
+
+Formats (21.2.1.3):
+- `%e`/`%f`/`%g` take a precision (`%8.3f`) and default to six digits, as
+  in C and xsim. Before, the default was 17 significant digits, and a
+  precision was a parse error.
+- A real conversion of an integral value converts it, in `$display`,
+  `$fwrite` and `$sformatf`.
+
+Classes:
+- A class declared in a module: its properties shadow module names, so
+  property writes reach the object. Its method bodies no longer create
+  implicit nets in the module. A constructor no longer reports an unknown
+  `constructor` type. Compound updates of class properties (`a += v`) lower
+  in task bodies.
+- The class executor evaluates class constants and enumeration literals.
+
+Declarations and ports:
+- `$bits` of a built-in data type (`$bits(int)`, `$bits(logic [7:0])`)
+  folds to its width; a typedef name used as an operand is not an implicit
+  net.
+- Packed arrays of named vector types (`typedef T [3:0] U`, `T [2:0] v`).
+- Non-ANSI ports and classic task arguments: `int x; output x;` in either
+  order; the redeclaration checks of 23.2.2.1 and 13.3 (`SV-SEM-396`);
+  `input wire T x` with a typedef.
+- A SystemVerilog system service in a Verilog mode (`$bits` under
+  Verilog-2005) is a warning (`SV-PARSE-350`), since IEEE 1364 leaves
+  additional system services to the implementation, as iverilog does.
+
+Runtime and runner:
+- `$fopen` returns zero when it cannot open a file (21.3.1) instead of
+  stopping the run.
+- Runner: ivtest and Verilator expected compile failures may be rejected by
+  `elaborate` (both tools' compile steps elaborate). ivtest cases run with
+  `--file-root .`, a `work/` directory, and copies of the data files their
+  sources name.
+
+Corpus effect (interpreter): sv-tests +16 (1114/1497), ivtest +288
+(1626/2801), Verilator +18 (703/2119), nvc +13 (465/1267), VESTs +53
+(2030/3665). One ivtest port-range case, and two others that newly
+completed, now expect what xsim and Verilator accept (see
+`lrm-compliance-notes.md`).
+
 ### Batch 17: operand signedness, port data types, parameter values
 
 These were wrong values from Verilator `$stop` triage. Each was checked

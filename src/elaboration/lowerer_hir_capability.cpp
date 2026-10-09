@@ -2283,6 +2283,11 @@ bool Lowerer::hir_expression_signed(
     if (specialized_hir_unit_ == nullptr) {
         return false;
     }
+    if (const auto method = hir_systemverilog_enumeration_method(
+            expression_id)) {
+        return method->method == "num" || (method->method != "name"
+            && method->signed_value);
+    }
     if (const auto binding = hir_case_pattern_binding(expression_id)) {
         return binding->signed_value;
     }
@@ -5747,6 +5752,10 @@ bool Lowerer::hir_expression_is_string(
     if (specialized_hir_unit_ == nullptr) {
         return false;
     }
+    if (const auto method = hir_systemverilog_enumeration_method(
+            expression_id)) {
+        return method->method == "name";
+    }
     if (const auto actual = hir_let_actual(expression_id)) {
         return hir_expression_is_string(*actual, process_scope);
     }
@@ -7194,6 +7203,13 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
     if (hir_vhdl_now_expression(expression_id)) {
         return frontend::ValueDomain::Integer;
     }
+    if (const auto method = hir_systemverilog_enumeration_method(
+            expression_id)) {
+        return method->method == "name" ? frontend::ValueDomain::String
+            : method->method == "num" || !method->four_state
+            ? frontend::ValueDomain::Bit2
+            : frontend::ValueDomain::Logic4;
+    }
     if (hir_vhdl_function_name(expression_id)) {
         const auto resolution = resolve_hir_vhdl_function_call(
             expression_id, process_scope, 0U);
@@ -8038,13 +8054,53 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
         }
         return Kind::None;
     };
+    // A real cast has its target's scalar kind (6.24.1).
+    if (source.kind == semantic::sv::ExpressionKind::call
+        && source.text.starts_with("@sv-cast:")
+        && source.operands.size() == 1U) {
+        const auto cast_kind = spelling_kind(
+            std::string_view { source.text }.substr(9U));
+        if (cast_kind == Kind::ShortReal || cast_kind == Kind::Real
+            || cast_kind == Kind::Realtime) {
+            return cast_kind;
+        }
+    }
     const auto declaration_kind = [&](const semantic::DeclarationId id) {
         const auto declaration = specialized_hir_unit_->find_declaration(id);
-        return declaration && declaration->systemverilog != nullptr
-                && declaration->systemverilog->type
-            ? spelling_kind(
-                  declaration->systemverilog->type->target.spelling)
-            : Kind::None;
+        if (!declaration || declaration->systemverilog == nullptr) {
+            return Kind::None;
+        }
+        const auto& record = *declaration->systemverilog;
+        // An untyped parameter takes its value's type (6.20.2).
+        if ((record.form == semantic::sv::DeclarationForm::parameter
+                || record.form
+                    == semantic::sv::DeclarationForm::local_parameter)
+            && record.initializer && record.initializer != expression_id
+            && (!record.type
+                || (record.type->target.spelling == "implicit"
+                    && !record.type->packed_range))) {
+            // A user function call has its declared return type.
+            const auto initializer = specialized_hir_unit_->find_expression(
+                *record.initializer);
+            const auto callee_id = initializer
+                    && initializer->systemverilog != nullptr
+                    && initializer->systemverilog->kind
+                        == semantic::sv::ExpressionKind::call
+                ? hir_referenced_declaration(*record.initializer)
+                : std::nullopt;
+            if (callee_id) {
+                const auto callee = specialized_hir_unit_->find_declaration(
+                    *callee_id);
+                if (callee && callee->systemverilog != nullptr
+                    && callee->systemverilog->callable) {
+                    return spelling_kind(callee->systemverilog->callable
+                                             ->return_type.target.spelling);
+                }
+            }
+            return hir_systemverilog_scalar_kind(*record.initializer);
+        }
+        return record.type ? spelling_kind(record.type->target.spelling)
+                           : Kind::None;
     };
 
     const auto retained_kind = static_cast<Kind>(source.scalar_kind);
@@ -8069,12 +8125,81 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
     if ((source.kind == semantic::sv::ExpressionKind::unary
             || source.kind == semantic::sv::ExpressionKind::update)
         && source.operands.size() == 1U) {
+        // Reductions and logical negation are integral (11.4.7).
         if (source.kind == semantic::sv::ExpressionKind::unary
-            && systemverilog_reduction_operator(source.text)) {
+            && (systemverilog_reduction_operator(source.text)
+                || source.text == "!")) {
             return Kind::None;
         }
         return hir_systemverilog_scalar_kind(
             source.operands.front(), contextual_kind);
+    }
+    // A user function call has its declared return type, including one
+    // reached through a package import.
+    if (source.kind == semantic::sv::ExpressionKind::call
+        && !source.text.starts_with("$") && !source.text.starts_with("@")
+        && source.text != "?:") {
+        if (const auto callee_id = hir_referenced_declaration(expression_id)) {
+            const auto callee = specialized_hir_unit_->find_declaration(
+                *callee_id);
+            if (callee && callee->systemverilog != nullptr
+                && callee->systemverilog->callable
+                && callee->systemverilog->callable->function) {
+                if (const auto kind = spelling_kind(
+                        callee->systemverilog->callable->return_type.target
+                            .spelling);
+                    kind != Kind::None) {
+                    return kind;
+                }
+            }
+        }
+    }
+    // An element of a real array is real (7.4).
+    if (source.kind == semantic::sv::ExpressionKind::index
+        && !source.operands.empty()) {
+        if (const auto kind = hir_systemverilog_scalar_kind(
+                source.operands.front());
+            kind == Kind::Real || kind == Kind::ShortReal
+            || kind == Kind::Realtime) {
+            return kind;
+        }
+    }
+    // An arithmetic operation or conditional with a real operand is real
+    // (IEEE 1800-2017 11.3.1); a comparison is integral.
+    const auto combined = [&](const semantic::ExpressionId left,
+                              const semantic::ExpressionId right) {
+        const auto lhs = hir_systemverilog_scalar_kind(left);
+        const auto rhs = hir_systemverilog_scalar_kind(right);
+        const auto real = [](const Kind kind) {
+            return kind == Kind::Real || kind == Kind::Realtime;
+        };
+        return real(lhs) || real(rhs) ? Kind::Real
+            : lhs == Kind::ShortReal || rhs == Kind::ShortReal
+            ? Kind::ShortReal
+            : Kind::None;
+    };
+    if (source.kind == semantic::sv::ExpressionKind::binary
+        && source.operands.size() == 2U) {
+        if (source.text == "+" || source.text == "-" || source.text == "*"
+            || source.text == "/" || source.text == "**") {
+            if (const auto kind = combined(
+                    source.operands[0], source.operands[1]);
+                kind != Kind::None) {
+                return kind;
+            }
+        } else if (source.text == "==" || source.text == "!="
+            || source.text == "<" || source.text == "<="
+            || source.text == ">" || source.text == ">="
+            || source.text == "&&" || source.text == "||") {
+            return Kind::None;
+        }
+    }
+    if (source.kind == semantic::sv::ExpressionKind::call
+        && source.text == "?:" && source.operands.size() == 3U) {
+        if (const auto kind = combined(source.operands[1], source.operands[2]);
+            kind != Kind::None) {
+            return kind;
+        }
     }
     if (source.referenced_name && source.referenced_name->selected) {
         if (const auto kind = declaration_kind(
@@ -8148,8 +8273,19 @@ Lowerer::hir_systemverilog_packed_shape(
         || declaration->systemverilog->type->container_form) {
         return { };
     }
-    // Follow typedef aliases to the declared packed dimensions.
-    const auto* type = &*declaration->systemverilog->type;
+    // Follow typedef aliases to the declared packed dimensions. A typedef
+    // from another unit (`$unit` or a package) keeps only its spelling.
+    auto resolved = *declaration->systemverilog->type;
+    if (resolved.packed_dimensions.empty()
+        && !resolved.target.target.valid()
+        && !resolved.target.spelling.empty()) {
+        resolved = semantic::CompiledDesignResolver {
+            *specialized_hir_unit_, hir_generic_binding_frames_
+        }.effective_systemverilog_type(
+             resolved, declaration->systemverilog->scope)
+                       .value_or(resolved);
+    }
+    const auto* type = &resolved;
     for (std::size_t depth { };
         type->packed_dimensions.empty() && type->target.target.valid()
         && depth < 16U;
@@ -8157,8 +8293,10 @@ Lowerer::hir_systemverilog_packed_shape(
         const auto definition
             = specialized_hir_unit_->find_type(type->target.target);
         if (!definition || definition->systemverilog == nullptr
-            || definition->systemverilog->form
-                != semantic::sv::TypeForm::alias) {
+            || (definition->systemverilog->form
+                    != semantic::sv::TypeForm::alias
+                && definition->systemverilog->form
+                    != semantic::sv::TypeForm::packed_integral)) {
             break;
         }
         type = &definition->systemverilog->base;
@@ -8443,6 +8581,12 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
     }
     if (hir_vhdl_now_expression(expression_id)) {
         return 64U;
+    }
+    if (const auto method = hir_systemverilog_enumeration_method(
+            expression_id)) {
+        return method->method == "num" ? std::optional<std::size_t> { 32U }
+            : method->method == "name" ? std::nullopt
+                                       : std::optional { method->width };
     }
     if (hir_vhdl_function_name(expression_id)) {
         const auto resolution = resolve_hir_vhdl_function_call(

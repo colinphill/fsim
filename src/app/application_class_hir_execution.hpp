@@ -144,6 +144,7 @@ private:
     StaticPropertyWrite write_static_property_;
     SystemVerilogClassExecutionStatistics statistics_;
     std::size_t depth_ { };
+    std::size_t constant_depth_ { };
 };
 
 } // namespace fsim::app::application_detail

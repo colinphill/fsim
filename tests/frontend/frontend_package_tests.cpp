@@ -364,14 +364,16 @@ endmodule
       enum_unit.parameters.size() == 6,
       std::string{"anonymous and typedef enum literal count was "}
           + std::to_string(enum_unit.parameters.size()));
+  // The anonymous enum also has a hidden typedef for its methods.
   require(
-      enum_unit.type_aliases.size() == 4,
+      enum_unit.type_aliases.size() == 5,
       std::string{"enum and initialized typedef count was "}
           + std::to_string(enum_unit.type_aliases.size()));
   const auto& anonymous_enum =
       anonymous_object->type;
-  const auto& initialized =
-      enum_unit.type_aliases[3].type;
+  const auto& initialized = std::ranges::find(
+      enum_unit.type_aliases, std::string{"initialized_t"},
+      &TypeAliasDeclaration::name)->type;
   require(
       anonymous_enum.spelling == "int"
           && anonymous_enum.is_signed

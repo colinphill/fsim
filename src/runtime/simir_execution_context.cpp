@@ -492,7 +492,8 @@ void Interpreter::Impl::ExecutionContext::write_file_formatted(
     const std::uint32_t minimum_width,
     const bool left_justify,
     const bool zero_pad,
-    const SystemVerilogScalarKind scalar_kind){
+    const SystemVerilogScalarKind scalar_kind,
+    const std::uint32_t precision){
     if (format == OutputFormat::time) {
         const auto decoded = decode_systemverilog_scalar_payload(
             value, scalar_kind);
@@ -530,7 +531,8 @@ void Interpreter::Impl::ExecutionContext::write_file_formatted(
             minimum_width,
             left_justify,
             zero_pad,
-            scalar_kind),
+            scalar_kind,
+            precision),
         false);
 }
 
@@ -1399,7 +1401,8 @@ void Interpreter::Impl::ExecutionContext::display_formatted(
     const std::uint32_t minimum_width,
     const bool left_justify,
     const bool zero_pad,
-    const SystemVerilogScalarKind scalar_kind){
+    const SystemVerilogScalarKind scalar_kind,
+    const std::uint32_t precision){
     auto text = make_formatted_output(
         prefix,
         suffix,
@@ -1410,7 +1413,8 @@ void Interpreter::Impl::ExecutionContext::display_formatted(
         minimum_width,
         left_justify,
         zero_pad,
-        scalar_kind);
+        scalar_kind,
+        precision);
     if (postponed) {
         auto publish = [&owner = owner,
                 process = process,

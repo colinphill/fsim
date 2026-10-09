@@ -1972,6 +1972,7 @@ tests/fixtures/compliance/run_compliance.cmake
 tests/fixtures/compliance/sv_class_statements.sv
 tests/fixtures/compliance/sv_compilation_unit_declarations.sv
 tests/fixtures/compliance/sv_display_arguments.sv
+tests/fixtures/compliance/sv_enum_methods.sv
 tests/fixtures/compliance/sv_expression_widths.sv
 tests/fixtures/compliance/sv_function_statements.sv
 tests/fixtures/compliance/sv_hierarchical_references.sv
@@ -1984,6 +1985,7 @@ tests/fixtures/compliance/sv_port_width_mismatch.sv
 tests/fixtures/compliance/sv_streaming_unpack.sv
 tests/fixtures/compliance/sv_string_containers.sv
 tests/fixtures/compliance/sv_time_without_timescale.sv
+tests/fixtures/compliance/sv_type_and_class_forms.sv
 tests/fixtures/compliance/verilog_2005_begin_keywords.v
 tests/fixtures/compliance/vhdl_character_type.vhd
 tests/fixtures/compliance/vhdl_composite_constants.vhd

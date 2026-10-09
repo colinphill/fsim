@@ -340,9 +340,15 @@ Expression VerilogParser::parse_postfix(Expression expression)
                               ? std::optional<std::size_t> { argument_count }
                               : std::optional<std::size_t> { 1 })
                     : std::nullopt;
+                // Enumeration first(), last(), next() and prev() take no
+                // index argument (IEEE 1800-2017 6.19.5).
+                const bool enumeration_method_form = argument_count == 0
+                    && !known_container_receiver
+                    && (member.text == "first" || member.text == "last"
+                        || member.text == "next" || member.text == "prev");
                 if (expected_arguments
                     && argument_count != *expected_arguments
-                    && !known_class_receiver) {
+                    && !known_class_receiver && !enumeration_method_form) {
                     const bool string_method = member.text == "getc" || member.text == "compare"
                         || member.text == "icompare" || member.text == "len"
                         || member.text == "toupper" || member.text == "tolower"

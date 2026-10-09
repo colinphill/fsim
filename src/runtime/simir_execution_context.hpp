@@ -139,7 +139,9 @@ struct Interpreter::Impl::ExecutionContext final
         const std::uint32_t minimum_width,
         const bool left_justify,
         const bool zero_pad,
-        const SystemVerilogScalarKind scalar_kind) override;
+        const SystemVerilogScalarKind scalar_kind,
+        std::uint32_t precision
+        = std::numeric_limits<std::uint32_t>::max()) override;
     [[nodiscard]] std::string read_file_line(
         const FileHandle handle,
         std::uint32_t& count) override;
@@ -381,7 +383,9 @@ struct Interpreter::Impl::ExecutionContext final
         const std::uint32_t minimum_width,
         const bool left_justify,
         const bool zero_pad,
-        const SystemVerilogScalarKind scalar_kind) override;
+        const SystemVerilogScalarKind scalar_kind,
+        std::uint32_t precision
+        = std::numeric_limits<std::uint32_t>::max()) override;
 
     void display_time(
         const std::string_view prefix,

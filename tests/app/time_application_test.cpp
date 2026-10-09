@@ -728,10 +728,11 @@ void verify_time_format(
     assert(contains("monitor=    2.500 ns q=1"));
     assert(contains("top-time=3"));
     assert(contains("top-stime=3"));
-    assert(contains("top-realtime=2.50000000000000000"));
+    // %f has six digits after the point by default (21.2.1.3).
+    assert(contains("top-realtime=2.500000"));
     assert(contains("child-time=0"));
     assert(contains("child-stime=0"));
-    assert(contains("child-realtime=0.25000000000000000"));
+    assert(contains("child-realtime=0.250000"));
     const auto contains_at_zero = [&](const std::string_view expected) {
         return std::ranges::any_of(
             reference.output,

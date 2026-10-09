@@ -149,9 +149,7 @@ Process VerilogParser::parse_final()
 std::optional<Statement> VerilogParser::parse_statement()
 {
     if (const auto required = verilog_system_service_standard(current().text)) {
-        (void)require_standard(
-            "the system service '" + current().text + "'", *required,
-            current(), "FSIM-SV-PARSE-350");
+        note_system_service_standard(current().text, *required, current());
     }
     const auto require_sv2005 = [&](const std::string_view feature,
                                     const Token& token) {
@@ -827,6 +825,7 @@ std::optional<Statement> VerilogParser::parse_statement()
                 statement.output_suffix = std::move(parsed_format.trailing_text);
                 statement.output_suppress_leading_zero = conversion.suppress_leading_zero;
                 statement.output_minimum_width = conversion.minimum_width;
+                statement.output_precision = conversion.precision;
                 statement.output_left_justify = conversion.left_justify;
                 statement.output_zero_pad = conversion.zero_pad;
                 if (!values.empty()) {
@@ -850,7 +849,8 @@ std::optional<Statement> VerilogParser::parse_statement()
                             conversion.suppress_leading_zero,
                             conversion.minimum_width,
                             conversion.left_justify,
-                            conversion.zero_pad });
+                            conversion.zero_pad,
+                            conversion.precision });
                 }
                 for (std::size_t index = value_index;
                     index < values.size(); ++index) {
@@ -1035,7 +1035,8 @@ std::optional<Statement> VerilogParser::parse_statement()
                             conversion.suppress_leading_zero,
                             conversion.minimum_width,
                             conversion.left_justify,
-                            conversion.zero_pad });
+                            conversion.zero_pad,
+                            conversion.precision });
                         pending.clear();
                     }
                     pending += parsed_format.trailing_text;
@@ -1128,6 +1129,7 @@ std::optional<Statement> VerilogParser::parse_statement()
                         statement.output_suffix = std::move(parsed_format.trailing_text);
                         statement.output_suppress_leading_zero = conversion.suppress_leading_zero;
                         statement.output_minimum_width = conversion.minimum_width;
+                statement.output_precision = conversion.precision;
                         statement.output_left_justify = conversion.left_justify;
                         statement.output_zero_pad = conversion.zero_pad;
                         statement.value = std::move(values.front());
@@ -1156,7 +1158,8 @@ std::optional<Statement> VerilogParser::parse_statement()
                                     conversion.suppress_leading_zero,
                                     conversion.minimum_width,
                                     conversion.left_justify,
-                                    conversion.zero_pad });
+                                    conversion.zero_pad,
+                                    conversion.precision });
                         }
                         for (std::size_t index = value_index;
                             index < values.size(); ++index) {

@@ -316,4 +316,58 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_math_call(
     return destination;
 }
 
+RegisterId Lowerer::convert_hir_integral_to_real(const RegisterId value,
+    const bool signed_value, const frontend::SystemVerilogScalarKind target)
+{
+    auto source = value;
+    if (register_domain(value) != frontend::ValueDomain::Bit2) {
+        source = allocate_register(
+            register_width(value), frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(ConvertToTwoState { source, value });
+    }
+    const auto real = allocate_register(64U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(SystemVerilogMath {
+        runtime::SystemVerilogMathFunction::Itor,
+        real,
+        source,
+        0U,
+        static_cast<std::uint32_t>(register_width(source)),
+        0U,
+        frontend::SystemVerilogScalarKind::None,
+        frontend::SystemVerilogScalarKind::None,
+        signed_value,
+        false,
+    });
+    if (target != frontend::SystemVerilogScalarKind::ShortReal) {
+        return real;
+    }
+    const auto narrowed = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(SystemVerilogScalarBinary {
+        runtime::SystemVerilogScalarBinaryOperator::Convert,
+        narrowed,
+        real,
+        real,
+        frontend::SystemVerilogScalarKind::Real,
+        frontend::SystemVerilogScalarKind::Real,
+        frontend::SystemVerilogScalarKind::ShortReal,
+    });
+    return narrowed;
+}
+
+RegisterId Lowerer::convert_hir_real_to_integral(const RegisterId value,
+    const frontend::SystemVerilogScalarKind source)
+{
+    const auto integral = allocate_register(64U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(SystemVerilogScalarBinary {
+        runtime::SystemVerilogScalarBinaryOperator::Convert,
+        integral,
+        value,
+        value,
+        source,
+        source,
+        frontend::SystemVerilogScalarKind::None,
+    });
+    return integral;
+}
+
 } // namespace fsim::elaboration

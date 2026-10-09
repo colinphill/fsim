@@ -210,7 +210,7 @@ bool Interpreter::Impl::StaticKernel::behavioral_step(
             const auto text = make_formatted_output(op.prefix, op.suffix,
                 op.format, packed_register(op.source), op.signed_decimal,
                 op.suppress_leading_zero, op.minimum_width, op.left_justify,
-                op.zero_pad, op.scalar_kind);
+                op.zero_pad, op.scalar_kind, op.precision);
             behavioral_output(member_index, text, op.newline);
         } else if constexpr (std::is_same_v<T, StringDisplay>) {
             const auto text = op.prefix + string_register(op.source) + op.suffix;

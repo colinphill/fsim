@@ -420,11 +420,13 @@ def verilator_cases(root: Path) -> list[Case]:
         # driver.py simulates only when the test calls test.execute(); a
         # test that only compiles passes once the model builds.
         executes = "test.execute(" in source
+        # Verilator's compile also elaborates, so an expected compile
+        # failure may come from fsim's elaborate step.
+        elab = ["elaborate", "-q", "--no-aot"]
+        for top in tops:
+            elab += ["--top", top]
+        commands.append(Command("elaborate", elab))
         if not compile_fails:
-            elab = ["elaborate", "-q", "--no-aot"]
-            for top in tops:
-                elab += ["--top", top]
-            commands.append(Command("elaborate", elab))
             if executes:
                 commands.append(Command("simulate", ["simulate", "--engine", "{engine}"] + plusargs))
         cases.append(Case(
@@ -433,7 +435,7 @@ def verilator_cases(root: Path) -> list[Case]:
             group=verilator_group(name),
             commands=commands,
             expect="fail" if (compile_fails or execute_fails) else "pass",
-            fail_by="compile" if compile_fails else "simulate" if executes else "elaborate",
+            fail_by="elaborate" if compile_fails else "simulate" if executes else "elaborate",
             checker="verilator",
             # driver.py's execute() checks for "*-* All Finished *-*" only
             # with check_finished=True; otherwise a run passes unless it
@@ -519,21 +521,39 @@ def ivtest_cases(root: Path) -> list[Case]:
         compile_args += standard_args(language, standard)
         compile_args += ["-I", str(base / directory), str(source)]
         commands = [Command("compile", compile_args)]
-        if test_type not in ("CE", "CO"):
+        if test_type != "CO":
             tops = [module] if module else sv_root_modules([read_text(source)])
             elab = ["elaborate", "-q", "--no-aot"]
             for top in tops:
                 elab += ["--top", top]
+            # iverilog's compile step includes elaboration, so a CE test
+            # may be rejected by fsim's elaborate as well.
             commands.append(Command("elaborate", elab))
-            commands.append(Command("simulate", ["simulate", "--engine", "{engine}"] + plusargs))
+            if test_type != "CE":
+                # ivtest runs from its root: relative file names resolve
+                # against the work directory.
+                commands.append(Command("simulate", ["simulate", "--engine", "{engine}",
+                                                     "--file-root", "."] + plusargs))
         expect = "fail" if test_type in ("CE", "RE") else "pass"
+        # ivtest runs from its root, so data files named by a relative path
+        # ("ivltests/mem1.dat") are copied into the case's work directory.
+        copies: list[tuple[str, str]] = []
+        if source.exists():
+            for literal in set(re.findall(r'"([\w./-]+\.\w+)"', read_text(source))):
+                candidate = base / literal
+                if not literal.startswith(("/", "..")) and candidate.is_file() \
+                        and candidate != source:
+                    copies.append((str(candidate), literal))
         cases.append(Case(
             suite="ivtest",
             id=name,
+            copies=copies,
+            # iverilog's harness provides a work/ directory for outputs.
+            writes=[("work/.keep", "")],
             group=directory or "ivltests",
             commands=commands,
             expect=expect,
-            fail_by="compile" if test_type == "CE" else "simulate",
+            fail_by="elaborate" if test_type == "CE" else "simulate",
             checker="ivtest",
             checker_data={"gold": str(gold) if gold else None, "type": test_type},
             skip=skip,
@@ -1029,6 +1049,7 @@ def run_case(case: Case, fsim: Path, workdir: Path, engine: str, default_timeout
             record.update(status="harness", detail=f"copy failed: {error}")
             return record
     for destination, content in case.writes:
+        (workdir / destination).parent.mkdir(parents=True, exist_ok=True)
         (workdir / destination).write_text(content, encoding="utf-8")
     env = dict(os.environ)
     env.update(case.env)

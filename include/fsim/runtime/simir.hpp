@@ -195,6 +195,8 @@ struct StringMethod {
     bool signed_decimal { }, suppress_leading_zero { }, left_justify { }, zero_pad { };
     SystemVerilogScalarKind scalar_kind { SystemVerilogScalarKind::None };
     bool use_timeformat_width { };
+    // %e/%f/%g digits after the point; the maximum value is automatic.
+    std::uint32_t precision { std::numeric_limits<std::uint32_t>::max() };
 };
 struct ResizeContainer {
     ContainerRegisterId target { };

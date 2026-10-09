@@ -181,7 +181,8 @@ public:
         std::uint32_t,
         bool,
         bool,
-        SystemVerilogScalarKind = SystemVerilogScalarKind::None);
+        SystemVerilogScalarKind = SystemVerilogScalarKind::None,
+        std::uint32_t precision = std::numeric_limits<std::uint32_t>::max());
     [[nodiscard]] virtual std::string read_file_line(
         FileHandle, std::uint32_t&);
     [[nodiscard]] virtual std::int32_t read_file_character(FileHandle);
@@ -498,7 +499,8 @@ public:
         std::uint32_t,
         bool,
         bool,
-        SystemVerilogScalarKind = SystemVerilogScalarKind::None);
+        SystemVerilogScalarKind = SystemVerilogScalarKind::None,
+        std::uint32_t precision = std::numeric_limits<std::uint32_t>::max());
     virtual void display_time(
         std::string_view,
         std::string_view,

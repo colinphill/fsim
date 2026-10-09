@@ -53,6 +53,8 @@ struct FileWriteFormatted {
     std::uint32_t minimum_width { };
     bool left_justify { }, zero_pad { };
     SystemVerilogScalarKind scalar_kind { SystemVerilogScalarKind::None };
+    // %e/%f/%g digits after the point; the maximum value is automatic.
+    std::uint32_t precision { std::numeric_limits<std::uint32_t>::max() };
 };
 struct FileWriteString {
     std::uint32_t handle { }, source { };

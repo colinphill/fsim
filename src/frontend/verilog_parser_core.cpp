@@ -635,6 +635,23 @@ bool VerilogParser::require_standard(
   return false;
 }
 
+void VerilogParser::note_system_service_standard(
+    const std::string& name,
+    const StandardRevision required,
+    const Token& token) {
+  if (keyword_set_rank(keyword_set_for_standard_revision(standard_revision_))
+      >= keyword_set_rank(keyword_set_for_standard_revision(required))) {
+    return;
+  }
+  warning(
+      token,
+      "FSIM-SV-PARSE-350",
+      "the system service '" + name + "' is defined by "
+          + std::string(to_string(required)) + "; selected "
+          + std::string(to_string(standard_revision_))
+          + " accepts it as an extension");
+}
+
 Token VerilogParser::expect_keyword(
     const std::string_view word,
     const bool case_insensitive,

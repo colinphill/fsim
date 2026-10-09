@@ -5237,6 +5237,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
         && hir_expression_signed(expression_id)) {
         const auto& source = *unsigned_expression->systemverilog;
         if (source.kind == semantic::sv::ExpressionKind::binary
+            || (source.kind == semantic::sv::ExpressionKind::call
+                && source.text == "?:")
             || (source.kind == semantic::sv::ExpressionKind::unary
                 && (source.text == "+" || source.text == "-"
                     || source.text == "~"))) {
@@ -5293,6 +5295,12 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         = std::exchange(hir_unsigned_operation_, false);
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
+    }
+    if (const auto method = hir_systemverilog_enumeration_method(
+            expression_id);
+        method && method->method != "name") {
+        return lower_hir_systemverilog_enumeration_method(
+            expression_id, expected_width);
     }
     if (hir_vhdl_now_expression(expression_id)) {
         // TIME values are counts of the resolution limit; a time query with
@@ -8844,6 +8852,59 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             minimum,
         });
         result = destination;
+    } else if (expression->systemverilog != nullptr
+        && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::call
+        && (expression->systemverilog->text == "@sv-cast:real"
+            || expression->systemverilog->text == "@sv-cast:realtime"
+            || expression->systemverilog->text == "@sv-cast:shortreal")
+        && expression->systemverilog->operands.size() == 1U) {
+        // A real cast converts an integral operand's value and changes the
+        // precision of a real operand (IEEE 1800-2017 6.24.1).
+        using ScalarKind = frontend::SystemVerilogScalarKind;
+        const auto target = expression->systemverilog->text
+                == "@sv-cast:shortreal"
+            ? ScalarKind::ShortReal
+            : expression->systemverilog->text == "@sv-cast:realtime"
+            ? ScalarKind::Realtime
+            : ScalarKind::Real;
+        const auto operand = expression->systemverilog->operands.front();
+        const auto source_kind = hir_systemverilog_scalar_kind(operand);
+        if (source_kind == ScalarKind::None) {
+            const auto width = hir_expression_width(
+                operand, hir_process_scope_)
+                                   .value_or(32U);
+            const auto lowered = lower_hir_expression(operand, width);
+            if (!lowered) {
+                return std::nullopt;
+            }
+            result = convert_hir_integral_to_real(
+                *lowered, hir_expression_signed(operand), target);
+        } else {
+            auto lowered = lower_hir_expression(operand,
+                source_kind == ScalarKind::ShortReal ? 32U : 64U,
+                source_kind);
+            if (!lowered) {
+                return std::nullopt;
+            }
+            if ((source_kind == ScalarKind::ShortReal)
+                != (target == ScalarKind::ShortReal)) {
+                const auto converted = allocate_register(
+                    target == ScalarKind::ShortReal ? 32U : 64U,
+                    frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(SystemVerilogScalarBinary {
+                    runtime::SystemVerilogScalarBinaryOperator::Convert,
+                    converted,
+                    *lowered,
+                    *lowered,
+                    source_kind,
+                    source_kind,
+                    target,
+                });
+                lowered = converted;
+            }
+            result = *lowered;
+        }
     } else if (const auto cast = hir_systemverilog_cast_profile(
                    expression_id)) {
         const auto& operand = expression->systemverilog->operands.front();
@@ -8861,13 +8922,28 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 == frontend::SystemVerilogScalarKind::None) {
             source_width = std::max(source_width, cast->width);
         }
-        auto lowered = lower_hir_expression(operand, source_width);
+        // A real operand rounds to an integer first (6.12.2).
+        const auto operand_kind = hir_systemverilog_scalar_kind(operand);
+        const bool real_operand
+            = operand_kind == frontend::SystemVerilogScalarKind::ShortReal
+            || operand_kind == frontend::SystemVerilogScalarKind::Real
+            || operand_kind == frontend::SystemVerilogScalarKind::Realtime;
+        auto lowered = real_operand
+            ? lower_hir_expression(operand,
+                  operand_kind == frontend::SystemVerilogScalarKind::ShortReal
+                      ? 32U
+                      : 64U,
+                  operand_kind)
+            : lower_hir_expression(operand, source_width);
         if (!lowered) {
             return std::nullopt;
         }
+        if (real_operand) {
+            lowered = convert_hir_real_to_integral(*lowered, operand_kind);
+        }
         if (register_width(*lowered) != cast->width) {
-            lowered = resize_register(
-                *lowered, cast->width, hir_expression_signed(operand));
+            lowered = resize_register(*lowered, cast->width,
+                real_operand || hir_expression_signed(operand));
         }
         if (is_two_state_domain(cast->domain)
             && !is_two_state_domain(register_domain(*lowered))) {
@@ -11028,6 +11104,12 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         }
         result = *replicated;
     } else if (source.conditional && source.operands.size() == 3U) {
+        // A conditional is signed only when both alternatives are; its
+        // alternatives then extend unsigned (IEEE 1800-2017 11.4.11).
+        const bool unsigned_alternatives = expression->systemverilog != nullptr
+            && !(hir_expression_signed(source.operands[1])
+                && hir_expression_signed(source.operands[2])
+                && !unsigned_operation);
         const auto condition_domain = hir_expression_domain(
             source.operands[0], hir_process_scope_);
         const auto condition_width = hir_expression_width(
@@ -11130,6 +11212,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             const auto selected = *constant_condition != 0
                 ? source.operands[1]
                 : source.operands[2];
+            hir_unsigned_extension_ = unsigned_alternatives;
             auto lowered = lower_hir_expression(selected, *value_width);
             if (!lowered) {
                 trace_generated_conditional("sv-constant-value");
@@ -11138,7 +11221,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             if (register_width(*lowered) != *value_width) {
                 lowered = resize_register(
                     *lowered, *value_width,
-                    hir_expression_signed(selected));
+                    hir_expression_signed(selected)
+                        && !unsigned_alternatives);
             }
             if (!domain) {
                 domain = hir_expression_domain(selected, hir_process_scope_);
@@ -11324,13 +11408,14 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             const auto lower_alternative = [&](
                                                const semantic::ExpressionId id)
                 -> std::optional<RegisterId> {
+                hir_unsigned_extension_ = unsigned_alternatives;
                 auto value = lower_hir_expression(id, *value_width);
                 if (!value) {
                     return std::nullopt;
                 }
                 if (register_width(*value) != *value_width) {
-                    value = resize_register(
-                        *value, *value_width, hir_expression_signed(id));
+                    value = resize_register(*value, *value_width,
+                        hir_expression_signed(id) && !unsigned_alternatives);
                 }
                 if (register_domain(*value) != *domain) {
                     const auto converted = allocate_register(
@@ -12161,12 +12246,34 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         const auto scalar_width = [](const ScalarKind kind) {
             return kind == ScalarKind::ShortReal ? 32U : 64U;
         };
+        // An integral operand of a real operation converts its value to
+        // real (IEEE 1800-2017 11.3.1).
+        const auto lower_scalar_operand = [&](
+                                              const semantic::ExpressionId operand,
+                                              const ScalarKind kind)
+            -> std::optional<RegisterId> {
+            const bool real_kind = kind == ScalarKind::ShortReal
+                || kind == ScalarKind::Real || kind == ScalarKind::Realtime;
+            if (real_kind && expression->systemverilog != nullptr
+                && hir_systemverilog_scalar_kind(operand) == ScalarKind::None) {
+                const auto width = hir_expression_width(
+                    operand, hir_process_scope_)
+                                       .value_or(32U);
+                const auto lowered = lower_hir_expression(operand, width);
+                if (!lowered) {
+                    return std::nullopt;
+                }
+                return convert_hir_integral_to_real(
+                    *lowered, hir_expression_signed(operand), kind);
+            }
+            return lower_hir_expression(operand, scalar_width(kind), kind);
+        };
         if (scalar_operation && lhs_scalar != ScalarKind::None
             && rhs_scalar != ScalarKind::None) {
-            const auto lhs = lower_hir_expression(
-                source.operands[0], scalar_width(lhs_scalar), lhs_scalar);
-            const auto rhs = lower_hir_expression(
-                source.operands[1], scalar_width(rhs_scalar), rhs_scalar);
+            const auto lhs = lower_scalar_operand(
+                source.operands[0], lhs_scalar);
+            const auto rhs = lower_scalar_operand(
+                source.operands[1], rhs_scalar);
             if (!lhs || !rhs) {
                 return std::nullopt;
             }
@@ -12903,6 +13010,11 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
 {
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
+    }
+    if (const auto method = hir_systemverilog_enumeration_method(
+            expression_id);
+        method && method->method == "name") {
+        return lower_hir_systemverilog_enumeration_name(expression_id);
     }
     if (const auto actual = hir_generic_actual(expression_id)) {
         return lower_hir_string_expression(*actual);

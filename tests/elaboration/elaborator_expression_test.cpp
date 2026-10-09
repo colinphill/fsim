@@ -1033,7 +1033,7 @@ module verilog_isunknown;
 endmodule
 )",
         fsim::frontend::Language::Verilog2005);
-    assert(!verilog_isunknown.ok());
+    assert(verilog_isunknown.ok());
     assert(has_frontend_diagnostic(
         verilog_isunknown, "FSIM-SV-PARSE-350"));
 
@@ -1059,7 +1059,7 @@ module verilog_bits;
 endmodule
 )",
         fsim::frontend::Language::Verilog2005);
-    assert(!verilog_bits.ok());
+    assert(verilog_bits.ok());
     assert(has_frontend_diagnostic(
         verilog_bits, "FSIM-SV-PARSE-350"));
 

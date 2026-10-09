@@ -1897,7 +1897,8 @@ void Interpreter::Impl::execute(ProcessId id)
                         op.minimum_width,
                         op.left_justify,
                         op.zero_pad,
-                        op.scalar_kind);
+                        op.scalar_kind,
+                        op.precision);
                     if (op.postponed) {
                         auto publish = [this,
                                            process_id = process.id,

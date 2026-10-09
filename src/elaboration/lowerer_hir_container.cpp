@@ -924,4 +924,329 @@ bool Lowerer::lower_hir_container_locator_assignment(
     return true;
 }
 
+std::optional<Lowerer::HirEnumerationMethod>
+Lowerer::hir_systemverilog_enumeration_method(
+    const semantic::ExpressionId expression_id) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->systemverilog == nullptr) {
+        return std::nullopt;
+    }
+    const auto& source = *expression->systemverilog;
+    const auto method_name = [](const std::string_view text) {
+        return text == "first" || text == "last" || text == "next"
+            || text == "prev" || text == "num" || text == "name";
+    };
+    HirEnumerationMethod result;
+    std::optional<semantic::DeclarationId> declaration_id;
+    if (source.kind == semantic::sv::ExpressionKind::call
+        && source.text.size() > 1U && source.text.front() == '.'
+        && method_name(std::string_view { source.text }.substr(1U))
+        && !source.operands.empty() && source.operands.size() <= 2U) {
+        result.method = source.text.substr(1U);
+        result.receiver = source.operands.front();
+        if (source.operands.size() == 2U) {
+            if (result.method != "next" && result.method != "prev") {
+                return std::nullopt;
+            }
+            result.count = source.operands[1];
+        }
+        const auto receiver = specialized_hir_unit_->find_expression(
+            source.operands.front());
+        if (!receiver || receiver->systemverilog == nullptr
+            || receiver->systemverilog->kind
+                != semantic::sv::ExpressionKind::name
+            || receiver->systemverilog->text.find('.')
+                != std::string::npos) {
+            return std::nullopt;
+        }
+        declaration_id = hir_referenced_declaration(source.operands.front());
+    } else if (source.kind == semantic::sv::ExpressionKind::name) {
+        const auto separator = source.text.rfind('.');
+        if (separator == std::string::npos
+            || !method_name(
+                std::string_view { source.text }.substr(separator + 1U))) {
+            return std::nullopt;
+        }
+        result.method = source.text.substr(separator + 1U);
+        declaration_id = hir_referenced_declaration(expression_id);
+        if (!declaration_id) {
+            const semantic::CompiledDeclarationPredicate object
+                = [](const semantic::CompiledDeclarationView& candidate) {
+                      return candidate.systemverilog != nullptr
+                          && candidate.systemverilog->type.has_value()
+                          && (candidate.systemverilog->form
+                                  == semantic::sv::DeclarationForm::variable
+                              || candidate.systemverilog->form
+                                  == semantic::sv::DeclarationForm::net
+                              || candidate.systemverilog->form
+                                  == semantic::sv::DeclarationForm::port);
+                  };
+            declaration_id = semantic::CompiledDesignResolver {
+                *specialized_hir_unit_, hir_generic_binding_frames_
+            }.resolve_systemverilog(
+                 std::string_view { source.text }.substr(0U, separator),
+                 source.scope, object, false)
+                                 .unique();
+        }
+        const auto declaration = declaration_id
+            ? specialized_hir_unit_->find_declaration(*declaration_id)
+            : std::nullopt;
+        // Only a direct `variable.method`; a member path is not a method.
+        if (!declaration || declaration->systemverilog == nullptr
+            || declaration->systemverilog->name.size() != separator
+            || !source.text.starts_with(declaration->systemverilog->name)) {
+            return std::nullopt;
+        }
+    } else {
+        return std::nullopt;
+    }
+    if (!declaration_id) {
+        return std::nullopt;
+    }
+    const auto declaration = specialized_hir_unit_->find_declaration(
+        *declaration_id);
+    if (!declaration || declaration->systemverilog == nullptr
+        || !declaration->systemverilog->type
+        || declaration->systemverilog->type->container_form) {
+        return std::nullopt;
+    }
+    result.receiver_declaration = *declaration_id;
+    auto type = *declaration->systemverilog->type;
+    if (!type.target.target.valid()) {
+        type = semantic::CompiledDesignResolver {
+            *specialized_hir_unit_, hir_generic_binding_frames_
+        }.effective_systemverilog_type(type, declaration->systemverilog->scope)
+                   .value_or(type);
+    }
+    if (!type.target.target.valid()) {
+        return std::nullopt;
+    }
+    auto definition = specialized_hir_unit_->find_type(type.target.target);
+    std::unordered_set<std::uint32_t> aliases;
+    while (definition && definition->systemverilog != nullptr
+        && definition->systemverilog->form == semantic::sv::TypeForm::alias
+        && definition->systemverilog->base.target.target.valid()
+        && aliases.insert(
+                      definition->systemverilog->base.target.target.value())
+               .second) {
+        definition = specialized_hir_unit_->find_type(
+            definition->systemverilog->base.target.target);
+    }
+    if (!definition || definition->systemverilog == nullptr
+        || definition->systemverilog->form
+            != semantic::sv::TypeForm::enumeration
+        || definition->systemverilog->enumeration_literals.empty()) {
+        return std::nullopt;
+    }
+    const auto width = hir_systemverilog_type_width(type);
+    if (!width || *width == 0U || *width > 64U) {
+        return std::nullopt;
+    }
+    result.width = *width;
+    result.four_state = hir_systemverilog_type_four_state(type);
+    result.signed_value = type.signed_value;
+    std::optional<std::int64_t> previous;
+    for (const auto& literal :
+        definition->systemverilog->enumeration_literals) {
+        std::optional<std::int64_t> value;
+        if (literal.value) {
+            value = specialized_hir_unit_->evaluate_integral_expression(
+                *literal.value);
+        } else {
+            value = previous ? std::optional { *previous + 1 }
+                             : std::optional<std::int64_t> { 0 };
+        }
+        if (!value) {
+            return std::nullopt;
+        }
+        previous = value;
+        const auto mask = result.width == 64U
+            ? ~std::uint64_t { 0 }
+            : (std::uint64_t { 1 } << result.width) - 1U;
+        result.values.push_back(static_cast<std::uint64_t>(*value) & mask);
+        result.names.push_back(literal.name);
+    }
+    return result;
+}
+
+std::optional<RegisterId>
+Lowerer::lower_hir_systemverilog_enumeration_receiver(
+    const HirEnumerationMethod& method)
+{
+    std::optional<RegisterId> value;
+    if (method.receiver) {
+        value = lower_hir_expression(*method.receiver, method.width);
+    } else {
+        const auto binding = hir_runtime_binding(
+            method.receiver_declaration, hir_process_scope_, false);
+        if (!binding || (!binding->local && !binding->signal)) {
+            return std::nullopt;
+        }
+        const auto destination = allocate_register(
+            binding->width, binding->domain);
+        if (binding->local) {
+            process_.operations.emplace_back(
+                CopyRegister { destination, *binding->local });
+        } else {
+            process_.operations.emplace_back(ReadSignal {
+                destination,
+                *binding->signal,
+                sample_concurrent_assertion_reads_
+                    ? SignalReadKind::sampled
+                    : SignalReadKind::current,
+            });
+            record_implicit_signal_dependency(*binding->signal);
+        }
+        value = destination;
+    }
+    if (value && register_width(*value) != method.width) {
+        value = resize_register(*value, method.width, false);
+    }
+    return value;
+}
+
+std::optional<RegisterId> Lowerer::lower_hir_systemverilog_enumeration_method(
+    const semantic::ExpressionId expression_id,
+    const std::size_t expected_width)
+{
+    const auto method = hir_systemverilog_enumeration_method(expression_id);
+    if (!method || method->method == "name") {
+        return std::nullopt;
+    }
+    const auto finish = [&](RegisterId value) {
+        if (expected_width != 0U && register_width(value) != expected_width) {
+            value = resize_register(value, expected_width,
+                method->method == "num" || method->signed_value);
+        }
+        return std::optional { value };
+    };
+    const auto constant = [&](const std::uint64_t value,
+                              const std::size_t width) {
+        const auto destination = allocate_register(width,
+            method->four_state ? frontend::ValueDomain::Logic4
+                               : frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(
+            LoadConstant { destination, unsigned_value(value, width) });
+        return destination;
+    };
+    // num() is an int; first() and last() are the declared extremes
+    // (IEEE 1800-2017 6.19.5.1, 6.19.5.2, 6.19.5.5).
+    if (method->method == "num") {
+        const auto destination = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant { destination,
+            unsigned_value(method->values.size(), 32U) });
+        return finish(destination);
+    }
+    if (method->method == "first" || method->method == "last") {
+        return finish(constant(method->method == "first"
+                ? method->values.front()
+                : method->values.back(),
+            method->width));
+    }
+    std::int64_t steps = 1;
+    if (method->count) {
+        const auto count = hir_constant_integer(*method->count);
+        if (!count) {
+            const auto expression = specialized_hir_unit_->find_expression(
+                *method->count);
+            report("FSIM-ELAB-SVENUM-003",
+                "an enumeration next() or prev() count must be an "
+                "elaboration-time constant",
+                hir_source_span(expression && expression->systemverilog
+                        ? expression->systemverilog->source
+                        : semantic::SourceSpanId { }));
+            return std::nullopt;
+        }
+        steps = *count;
+    }
+    const auto receiver = lower_hir_systemverilog_enumeration_receiver(
+        *method);
+    if (!receiver) {
+        return std::nullopt;
+    }
+    // next(N) and prev(N) wrap around the declaration order; a value that
+    // is not a member yields the unknown value of the base type.
+    const auto count = static_cast<std::int64_t>(method->values.size());
+    const auto offset = method->method == "next" ? steps : -steps;
+    const auto domain = method->four_state ? frontend::ValueDomain::Logic4
+                                           : frontend::ValueDomain::Bit2;
+    auto result = allocate_register(method->width, domain);
+    process_.operations.emplace_back(LoadConstant { result,
+        method->four_state ? PackedLogic4(method->width, Logic4::x)
+                           : unsigned_value(0U, method->width) });
+    for (std::int64_t index { }; index < count; ++index) {
+        const auto literal = allocate_register(
+            method->width, register_domain(*receiver));
+        process_.operations.emplace_back(LoadConstant { literal,
+            unsigned_value(method->values[static_cast<std::size_t>(index)],
+                method->width) });
+        const auto matches = allocate_register(
+            1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::case_equal, matches, *receiver, literal });
+        const auto target = ((index + offset) % count + count) % count;
+        const auto selected = constant(
+            method->values[static_cast<std::size_t>(target)], method->width);
+        const auto next = allocate_register(method->width, domain);
+        process_.operations.emplace_back(
+            ConditionalSelect { next, matches, selected, result });
+        result = next;
+    }
+    return finish(result);
+}
+
+std::optional<StringRegisterId>
+Lowerer::lower_hir_systemverilog_enumeration_name(
+    const semantic::ExpressionId expression_id)
+{
+    const auto method = hir_systemverilog_enumeration_method(expression_id);
+    if (!method || method->method != "name") {
+        return std::nullopt;
+    }
+    const auto receiver = lower_hir_systemverilog_enumeration_receiver(
+        *method);
+    if (!receiver) {
+        return std::nullopt;
+    }
+    // name() is the literal's name, or "" for a value that is not a member
+    // (IEEE 1800-2017 6.19.5.6).
+    const auto destination = allocate_string_register();
+    process_.operations.emplace_back(
+        LoadStringConstant { destination, std::string { } });
+    std::vector<std::size_t> exits;
+    for (std::size_t index { }; index < method->values.size(); ++index) {
+        const auto literal = allocate_register(
+            method->width, register_domain(*receiver));
+        process_.operations.emplace_back(LoadConstant { literal,
+            unsigned_value(method->values[index], method->width) });
+        const auto matches = allocate_register(
+            1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::case_equal, matches, *receiver, literal });
+        const auto branch = process_.operations.size();
+        process_.operations.emplace_back(Branch {
+            matches, 0U, 0U, UnknownBranchPolicy::error });
+        const auto when_true = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(
+            LoadStringConstant { destination, method->names[index] });
+        exits.push_back(process_.operations.size());
+        process_.operations.emplace_back(Jump { 0U });
+        process_.operations[branch] = Branch { matches, when_true,
+            static_cast<InstructionIndex>(process_.operations.size()),
+            UnknownBranchPolicy::error };
+    }
+    const auto end = static_cast<InstructionIndex>(process_.operations.size());
+    for (const auto exit : exits) {
+        process_.operations[exit] = Jump { end };
+    }
+    return destination;
+}
+
 } // namespace fsim::elaboration

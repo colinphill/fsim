@@ -126,6 +126,11 @@ class VerilogParser final : private detail::ParserBase {
       StandardRevision required,
       const Token& token,
       std::string_view diagnostic_code = "FSIM-SV-PARSE-346");
+  // A later standard's system service used in an earlier revision is an
+  // implementation-defined extension there (IEEE 1364-2005 17), so it only
+  // warns.
+  void note_system_service_standard(
+      const std::string& name, StandardRevision required, const Token& token);
 
   Token expect_keyword(
       const std::string_view word,
@@ -715,8 +720,17 @@ class VerilogParser final : private detail::ParserBase {
   // The design unit's default lifetime for its tasks and functions
   // (`module automatic m;`, IEEE 1800-2017 6.21).
   bool unit_default_automatic_ = false;
+  // Typedef data types by name, latest first, so `T [N:M]` can expand a
+  // packed array of a named integral vector type (IEEE 1800-2017 7.4.1).
+  std::unordered_map<std::string, Type> packed_typedef_types_;
+  [[nodiscard]] std::optional<Type> parse_named_packed_array_type();
   std::unordered_set<std::string> body_port_declarations_;
   std::unordered_set<std::string> port_type_refinements_;
+  // Non-ANSI ports whose direction declaration names a net or data type;
+  // such a port cannot be declared again (IEEE 1800-2017 23.2.2.1).
+  std::unordered_set<std::string> explicit_port_types_;
+  void check_port_redeclaration(const Type& port_type, bool port_explicit,
+      const Type& data_type, const Token& name, std::string_view what);
   std::unordered_set<std::string> current_procedural_names_;
   std::unordered_map<std::string, Type> current_procedural_types_;
   std::unordered_set<std::string> current_function_arguments_;

@@ -242,6 +242,12 @@ Type VerilogParser::parse_systemverilog_enum_type(
         (void)apply_systemverilog_integral_type(type, "int");
     } else if (at(TokenKind::Identifier)) {
         type = parse_named_type();
+        type.systemverilog_enum_base_type = std::move(type.named_type);
+        type.named_type.clear();
+        // enum_base_type ::= type_identifier [packed_dimension] (6.19).
+        if (at(TokenKind::LeftBracket)) {
+            parse_optional_range(type);
+        }
     } else {
         (void)apply_systemverilog_integral_type(type, "int");
     }
@@ -258,9 +264,67 @@ Type VerilogParser::parse_systemverilog_enum_type(
     std::optional<std::string> previous_literal;
     while (!at_end() && !at(TokenKind::RightBrace)) {
         const auto literal = expect_identifier("enum literal name");
-        Expression value;
+        // `name[N]` declares name0 .. name(N-1) and `name[N:M]` declares
+        // nameN .. nameM; an initializer applies to the first
+        // (IEEE 1800-2017 6.19.2).
+        std::vector<std::string> names;
+        if (match(TokenKind::LeftBracket)) {
+            const auto decimal = [&]() -> std::optional<std::int64_t> {
+                const auto bound = parse_expression();
+                if (bound.kind != ExpressionKind::IntegerLiteral
+                    || bound.text.empty()
+                    || !std::ranges::all_of(bound.text, [](const char c) {
+                           return (c >= '0' && c <= '9') || c == '_';
+                       })) {
+                    error(previous(), "FSIM-SV-PARSE-388",
+                        "an enum literal range bound must be an unsized "
+                        "decimal integer literal");
+                    return std::nullopt;
+                }
+                std::int64_t value { };
+                for (const auto c : bound.text) {
+                    if (c != '_') {
+                        value = value * 10 + (c - '0');
+                    }
+                    if (value > 65536) {
+                        error(previous(), "FSIM-SV-PARSE-388",
+                            "an enum literal range exceeds 65536 literals");
+                        return std::nullopt;
+                    }
+                }
+                return value;
+            };
+            const auto first = decimal();
+            std::optional<std::int64_t> last;
+            if (match(TokenKind::Colon)) {
+                last = decimal();
+            }
+            expect(TokenKind::RightBracket,
+                "']' after enum literal range", "FSIM-SV-PARSE-084");
+            if (first && (last || *first > 0)) {
+                const auto low = last ? *first : 0;
+                const auto high = last ? *last : *first - 1;
+                const auto step = high >= low ? 1 : -1;
+                for (auto index = low;; index += step) {
+                    names.push_back(literal.text + std::to_string(index));
+                    if (index == high) {
+                        break;
+                    }
+                }
+            }
+        } else {
+            names.push_back(literal.text);
+        }
+        std::optional<Expression> explicit_value;
         if (match(TokenKind::Assign)) {
-            value = parse_expression();
+            explicit_value = parse_expression();
+        }
+        for (std::size_t name_index { }; name_index < names.size();
+             ++name_index) {
+        const auto& literal_name = names[name_index];
+        Expression value;
+        if (name_index == 0U && explicit_value) {
+            value = *explicit_value;
         } else if (!previous_literal) {
             value = Expression {
                 ExpressionKind::IntegerLiteral, "0", { }, literal.span
@@ -284,14 +348,15 @@ Type VerilogParser::parse_systemverilog_enum_type(
                 literal.span
             };
         }
-        type.enumeration_literals.push_back(literal.text);
+        type.enumeration_literals.push_back(literal_name);
         type.systemverilog_enumeration_values.push_back(value);
         if (retained_literals != nullptr) {
-            retained_literals->push_back({ literal.text,
+            retained_literals->push_back({ literal_name,
                 std::move(value),
                 cover(literal.span, previous().span) });
         }
-        previous_literal = literal.text;
+        previous_literal = literal_name;
+        }
         if (!match(TokenKind::Comma)) {
             break;
         }
@@ -300,6 +365,80 @@ Type VerilogParser::parse_systemverilog_enum_type(
         TokenKind::RightBrace,
         "'}' after enum literals",
         "FSIM-SV-PARSE-084");
+    return type;
+}
+
+std::optional<Type> VerilogParser::parse_named_packed_array_type()
+{
+    if (!at(TokenKind::Identifier) || !at(TokenKind::LeftBracket, 1)) {
+        return std::nullopt;
+    }
+    const auto found = packed_typedef_types_.find(current().text);
+    if (found == packed_typedef_types_.end()) {
+        return std::nullopt;
+    }
+    const auto& element = found->second;
+    if (!element.named_type.empty() || !element.enumeration_literals.empty()
+        || !element.packed_members.empty()
+        || element.systemverilog_container
+        || (element.domain != ValueDomain::Logic4
+            && element.domain != ValueDomain::Bit2)
+        || (element.spelling != "logic" && element.spelling != "bit"
+            && element.spelling != "reg")) {
+        return std::nullopt;
+    }
+    const auto name = advance();
+    Type outer;
+    parse_optional_range(outer);
+    std::vector<PackedRangeExpression> dimensions
+        = outer.systemverilog_packed_dimensions;
+    if (outer.packed_range_expression) {
+        dimensions.push_back(*outer.packed_range_expression);
+    }
+    if (!element.systemverilog_packed_dimensions.empty()) {
+        dimensions.insert(dimensions.end(),
+            element.systemverilog_packed_dimensions.begin(),
+            element.systemverilog_packed_dimensions.end());
+    } else if (element.packed_range_expression) {
+        dimensions.push_back(*element.packed_range_expression);
+    } else if (element.packed_range) {
+        const auto literal = [&](const std::int64_t value) {
+            return Expression { ExpressionKind::IntegerLiteral,
+                std::to_string(value), { }, name.span };
+        };
+        dimensions.push_back(PackedRangeExpression {
+            literal(element.packed_range->left),
+            literal(element.packed_range->right), name.span, std::nullopt });
+    }
+    auto type = element;
+    type.packed_range.reset();
+    type.packed_range_expression.reset();
+    type.systemverilog_packed_dimensions.clear();
+    std::uint64_t flattened = 1U;
+    bool concrete = true;
+    for (const auto& dimension : dimensions) {
+        const auto left = simple_verilog_integer_constant(dimension.left);
+        const auto right = simple_verilog_integer_constant(dimension.right);
+        if (!left || !right) {
+            concrete = false;
+            continue;
+        }
+        flattened *= PackedRange { *left, *right, *left >= *right }.width();
+    }
+    if (dimensions.size() == 1U) {
+        type.packed_range_expression = dimensions.front();
+        const auto left = simple_verilog_integer_constant(dimensions.front().left);
+        const auto right = simple_verilog_integer_constant(dimensions.front().right);
+        if (left && right) {
+            type.packed_range = PackedRange { *left, *right, *left >= *right };
+        }
+        return type;
+    }
+    type.systemverilog_packed_dimensions = std::move(dimensions);
+    if (concrete) {
+        type.packed_range = PackedRange {
+            static_cast<std::int64_t>(flattened - 1U), 0, true };
+    }
     return type;
 }
 
@@ -566,6 +705,8 @@ void VerilogParser::parse_typedef(
         || keyword("byte") || keyword("shortint") || keyword("int")
         || keyword("longint") || keyword("integer")) {
         type = parse_parameter_type();
+    } else if (auto expanded = parse_named_packed_array_type()) {
+        type = std::move(*expanded);
     } else if (is_named_type_reference_start()) {
         type = parse_named_type();
     } else {
@@ -610,6 +751,7 @@ void VerilogParser::parse_typedef(
             "duplicate typedef declaration '" + name.text + "'");
         return;
     }
+    packed_typedef_types_.insert_or_assign(name.text, type);
     unit.type_aliases.push_back({ name.text,
         std::move(type),
         cover(start.span, previous().span),

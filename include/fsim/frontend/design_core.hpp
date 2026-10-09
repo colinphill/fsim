@@ -511,6 +511,9 @@ struct Type {
     // elaboration resolves the alias in the owning specialization.
     std::string named_type;
     SourceSpan named_type_span;
+    // The type name of an enumeration's base (`enum T {...}`); the
+    // enumeration itself stays anonymous (IEEE 1800-2017 6.19).
+    std::string systemverilog_enum_base_type;
     // Non-empty for a nominal VHDL type declaration. The identity follows
     // copied/imported type views and is intentionally distinct from spelling,
     // so two equally sized enumeration types never become assignment
@@ -768,6 +771,14 @@ struct VhdlModeViewIndication {
     std::vector<VhdlModeViewPortElement> elements;
     SourceSpan span;
 };
+
+/// The hidden typedef that gives an anonymous SystemVerilog enumeration a
+/// type definition, keyed by its first literal (unique in its scope).
+[[nodiscard]] inline std::string anonymous_enumeration_type_name(
+    const std::string_view first_literal)
+{
+    return "$enum:" + std::string { first_literal };
+}
 
 struct TypeAliasDeclaration {
     std::string name;
@@ -1427,6 +1438,7 @@ struct OutputValue {
     std::uint32_t minimum_width { };
     bool left_justify { };
     bool zero_pad { };
+    std::uint32_t precision { std::numeric_limits<std::uint32_t>::max() };
 };
 
 enum class EdgeKind {
@@ -1604,6 +1616,7 @@ struct Statement {
     std::string output_suffix;
     bool output_suppress_leading_zero { };
     std::uint32_t output_minimum_width { };
+    std::uint32_t output_precision { std::numeric_limits<std::uint32_t>::max() };
     bool output_left_justify { };
     bool output_zero_pad { };
     bool output_monitor { };

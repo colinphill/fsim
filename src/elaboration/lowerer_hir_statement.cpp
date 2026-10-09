@@ -2402,9 +2402,12 @@ bool Lowerer::lower_hir_statement(
                 || lower_assignment_event_control(
                     *statement->systemverilog);
         };
+        // A class property update writes its normalized value (`a + val`)
+        // through the property path below.
         if (statement->systemverilog != nullptr
             && statement->systemverilog->update_kind
-                != semantic::sv::UpdateKind::none) {
+                != semantic::sv::UpdateKind::none
+            && !hir_class_property_profile(*target)) {
             const auto& input = *statement->systemverilog;
             const auto normalized
                 = specialized_hir_unit_->find_expression(*value);
@@ -5617,13 +5620,33 @@ bool Lowerer::lower_hir_statement(
         };
         const auto scalar_conversion = real_scalar(scalar_context)
             && real_scalar(source_scalar_kind);
-        const auto source_width = scalar_conversion
+        // An integral value assigned to a real converts its value
+        // (IEEE 1800-2017 6.12.2) rather than its bit pattern.
+        const auto integral_to_real = statement->systemverilog != nullptr
+            && real_scalar(scalar_context)
+            && source_scalar_kind == frontend::SystemVerilogScalarKind::None;
+        // A real value assigned to an integral target rounds (6.12.2).
+        const auto real_to_integral = statement->systemverilog != nullptr
+            && scalar_context == frontend::SystemVerilogScalarKind::None
+            && real_scalar(source_scalar_kind) && !vhdl_aggregate;
+        const auto source_width = integral_to_real
+            ? hir_expression_width(*value, hir_process_scope_).value_or(32U)
+            : real_to_integral
+            ? source_scalar_kind
+                    == frontend::SystemVerilogScalarKind::ShortReal
+                ? 32U
+                : 64U
+            : scalar_conversion
             ? source_scalar_kind
                     == frontend::SystemVerilogScalarKind::ShortReal
                 ? 32U
                 : 64U
             : *assignment_width;
-        const auto source_scalar_context = scalar_conversion
+        const auto source_scalar_context = integral_to_real
+            ? frontend::SystemVerilogScalarKind::None
+            : real_to_integral
+            ? source_scalar_kind
+            : scalar_conversion
             ? source_scalar_kind
             : scalar_context;
         if (statement->vhdl != nullptr && signal_assignment
@@ -5806,6 +5829,14 @@ bool Lowerer::lower_hir_statement(
                 return true;
             }
             return diagnostics_.size() != diagnostics_before;
+        }
+        if (integral_to_real) {
+            lowered = convert_hir_integral_to_real(
+                *lowered, hir_expression_signed(*value), scalar_context);
+        }
+        if (real_to_integral) {
+            lowered = convert_hir_real_to_integral(
+                *lowered, source_scalar_kind);
         }
         if (scalar_conversion
             && source_scalar_kind != scalar_context) {
@@ -9643,7 +9674,8 @@ bool Lowerer::lower_hir_statement(
                                         const bool suppress_leading_zero,
                                         const std::uint32_t minimum_width,
                                         const bool left_justify,
-                                        const bool zero_pad) -> bool {
+                                        const bool zero_pad,
+                                        const std::uint32_t precision) -> bool {
         if (format == semantic::sv::OutputFormat::hierarchy) {
             emit_deferred_assertion_action_handoff();
             process_.operations.emplace_back(Display {
@@ -9703,15 +9735,26 @@ bool Lowerer::lower_hir_statement(
             });
             return true;
         }
+        const auto runtime_format = output_format(format);
+        // %e/%f/%g convert an integral value to real (21.2.1.3).
+        const bool real_conversion
+            = (runtime_format == runtime::simir::OutputFormat::real_scientific
+                || runtime_format == runtime::simir::OutputFormat::real_fixed
+                || runtime_format == runtime::simir::OutputFormat::real_general)
+            && hir_systemverilog_scalar_kind(*expression)
+                == frontend::SystemVerilogScalarKind::None;
         const auto width = hir_expression_width(
             *expression, hir_process_scope_)
                                .value_or(32U);
-        const auto displayed_value
-            = lower_hir_expression(*expression, width);
+        auto displayed_value = lower_hir_expression(*expression, width);
         if (!displayed_value) {
             return false;
         }
-        const auto runtime_format = output_format(format);
+        if (real_conversion) {
+            displayed_value = convert_hir_integral_to_real(*displayed_value,
+                hir_expression_signed(*expression),
+                frontend::SystemVerilogScalarKind::Real);
+        }
         emit_deferred_assertion_action_handoff();
         process_.operations.emplace_back(FormatDisplay {
             *displayed_value,
@@ -9727,7 +9770,9 @@ bool Lowerer::lower_hir_statement(
                 suppress_leading_zero || left_justify, minimum_width),
             left_justify,
             zero_pad,
-            hir_systemverilog_scalar_kind(*expression),
+            real_conversion ? frontend::SystemVerilogScalarKind::Real
+                            : hir_systemverilog_scalar_kind(*expression),
+            precision,
         });
         return true;
     };
@@ -11141,7 +11186,8 @@ bool Lowerer::lower_hir_statement(
                             output.suppress_leading_zero,
                             output.minimum_width,
                             output.left_justify,
-                            output.zero_pad)) {
+                            output.zero_pad,
+                            output.precision)) {
                         return false;
                     }
                 }
@@ -11182,7 +11228,8 @@ bool Lowerer::lower_hir_statement(
                     input.output_suppress_leading_zero,
                     input.output_minimum_width,
                     input.output_left_justify,
-                    input.output_zero_pad);
+                    input.output_zero_pad,
+                    input.output_precision);
         case semantic::sv::StatementKind::report: {
             emit_deferred_assertion_action_handoff();
             const auto report_text = input.value

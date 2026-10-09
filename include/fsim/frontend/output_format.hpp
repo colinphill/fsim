@@ -4,6 +4,7 @@
 #include "fsim/frontend/design.hpp"
 
 #include <cstdint>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -17,6 +18,8 @@ struct ParsedOutputConversion {
   std::uint32_t minimum_width{};
   bool left_justify{};
   bool zero_pad{};
+  // `%.3f`: digits after the point; the maximum value is automatic.
+  std::uint32_t precision{std::numeric_limits<std::uint32_t>::max()};
 };
 
 struct ParsedOutputFormat {

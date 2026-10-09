@@ -146,8 +146,15 @@ namespace {
         : input.named_type;
     sv::TypeReference output;
     output.target = {
-        input.named_type.empty() ? semantic::TypeId { }
-                                 : find_type(scope, input.named_type),
+        !input.named_type.empty() ? find_type(scope, input.named_type)
+        : !input.enumeration_literals.empty()
+                && !projecting_typedef_base_
+            ? find_type(scope,
+                  frontend::anonymous_enumeration_type_name(
+                      input.enumeration_literals.front()))
+        : !input.systemverilog_enum_base_type.empty()
+            ? find_type(scope, input.systemverilog_enum_base_type)
+            : semantic::TypeId { },
         source(input.named_type.empty() ? fallback : input.named_type_span),
         spelling
     };
@@ -414,8 +421,10 @@ namespace {
         input.span,
         parent);
     const auto declaration_origin = declaration(id).origin;
+    projecting_typedef_base_ = true;
     const auto base = type_reference(
         input.type, input.span, scope, declaration_origin);
+    projecting_typedef_base_ = false;
     const auto type_id = ensure_type(
         input.name,
         scope,
@@ -586,8 +595,12 @@ template <typename Input>
         input.span,
         parent);
     auto& output = declaration(id);
+    // Enumeration literals stay anonymous-typed values; only objects of an
+    // anonymous enumeration refer to its hidden typedef.
+    projecting_typedef_base_ = true;
     output.type = type_reference(
         input.type, input.span, scope, output.origin);
+    projecting_typedef_base_ = false;
     if (input.default_type) {
         output.default_type = type_reference(
             *input.default_type, input.span, scope, output.origin);

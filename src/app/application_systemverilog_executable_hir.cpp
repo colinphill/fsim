@@ -1321,6 +1321,7 @@ namespace {
             output.output_suffix = input.output_suffix;
             output.output_suppress_leading_zero = input.output_suppress_leading_zero;
             output.output_minimum_width = input.output_minimum_width;
+            output.output_precision = input.output_precision;
             output.output_left_justify = input.output_left_justify;
             output.output_zero_pad = input.output_zero_pad;
             output.output_monitor = input.output_monitor;
@@ -1341,7 +1342,8 @@ namespace {
                         item.suppress_leading_zero,
                         item.minimum_width,
                         item.left_justify,
-                        item.zero_pad });
+                        item.zero_pad,
+                        item.precision });
                 }
             }
             output.output_trailing_text = input.output_trailing_text;

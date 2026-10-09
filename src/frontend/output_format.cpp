@@ -47,6 +47,20 @@ parse_output_format(const std::string_view text) {
       ++index;
     }
     const auto width_spelling = text.substr(width_start, index - width_start);
+    // An optional precision (`%8.3f`) follows the field width (21.2.1.3).
+    if (index < text.size() && text[index] == '.') {
+      ++index;
+      std::uint32_t precision{};
+      while (index < text.size() && text[index] >= '0' && text[index] <= '9') {
+        if (precision > 1000U) {
+          result.valid = false;
+          return result;
+        }
+        precision = precision * 10U + static_cast<std::uint32_t>(text[index] - '0');
+        ++index;
+      }
+      parsed.precision = precision;
+    }
     if (index >= text.size()) {
       result.valid = false;
       return result;

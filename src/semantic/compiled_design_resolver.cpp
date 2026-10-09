@@ -329,6 +329,15 @@ std::optional<std::vector<DeclarationId>> rank_systemverilog_constants(
     using Form = sv::DeclarationForm;
     auto winning_rank = 0U;
     std::vector<DeclarationId> ranked;
+    // A class-scope enum literal is also a class constant property; the
+    // literal declaration denotes it (IEEE 1800-2017 8.23).
+    const bool literal_present = std::ranges::any_of(candidates,
+        [&](const DeclarationId id) {
+            const auto declaration = find_declaration(design, effective, id);
+            return declaration && declaration->systemverilog != nullptr
+                && declaration->systemverilog->form
+                    == Form::enumeration_literal;
+        });
     for (const auto id : candidates) {
         const auto declaration = find_declaration(design, effective, id);
         if (!declaration || declaration->systemverilog == nullptr) {
@@ -337,10 +346,13 @@ std::optional<std::vector<DeclarationId>> rank_systemverilog_constants(
         const auto form = declaration->systemverilog->form;
         if (form != Form::parameter
             && form != Form::local_parameter
-            && form != Form::enumeration_literal) {
+            && form != Form::enumeration_literal
+            && !(form == Form::variable && literal_present)) {
             return std::nullopt;
         }
-        const auto rank = form == Form::enumeration_literal ? 2U : 1U;
+        const auto rank = form == Form::enumeration_literal ? 2U
+            : form == Form::variable                     ? 0U
+                                                         : 1U;
         if (rank > winning_rank) {
             ranked.clear();
             winning_rank = rank;
@@ -368,10 +380,12 @@ bool synthetic_enum_constant_duplicate(
     }
     const auto is_pair = [](const sv::Declaration& enumeration,
                             const sv::Declaration& parameter) {
+        // A class-scope literal also has a constant class property.
         return enumeration.form == sv::DeclarationForm::enumeration_literal
-            && parameter.form == sv::DeclarationForm::local_parameter
+            && ((parameter.form == sv::DeclarationForm::local_parameter
+                    && enumeration.source == parameter.source)
+                || parameter.form == sv::DeclarationForm::variable)
             && enumeration.scope == parameter.scope
-            && enumeration.source == parameter.source
             && enumeration.name == parameter.name;
     };
     return is_pair(*first->systemverilog, *second->systemverilog)

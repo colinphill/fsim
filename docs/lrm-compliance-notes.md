@@ -148,3 +148,13 @@ gives fsim's result in each case checked.
 - t_split_var_4 STOP2, t_opt_split_no STOP5: an x from an uninitialized
   register reaches the checksum or the `if` (xsim agrees: sum is x).
 - t_fourstate_no_fourstate: runs with `--no-fourstate`.
+
+## Corpus disagreements resolved by xsim (batch 18)
+
+- An unranged port or classic task argument direction declaration followed
+  by a ranged data declaration (`output a; reg [1:0] a;`) takes the data
+  declaration's range. xsim and Verilator (t_opt_merge_cond_bug_3409)
+  accept it; ivtest's module_nonansi_vec_fail2, task_nonansi_vec_fail3 and
+  pr1704013 expect a compile error. fsim follows xsim.
+- A different-type enumeration or packed-structure equality is an integral
+  comparison (xsim warns); ivtest enum_order relies on it.

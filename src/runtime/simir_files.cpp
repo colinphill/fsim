@@ -608,6 +608,17 @@ void Interpreter::Impl::execute_file(
             ++process.pc;
             return;
         }
+        // $fopen returns zero when the file cannot be opened (IEEE
+        // 1800-2017 21.3.1). A name outside the file root, or handle
+        // exhaustion, still stops the run.
+        if (!operation.vhdl
+            && std::string_view { error.what() }.starts_with(
+                "cannot open SimIR text file")) {
+            get_register(process, operation.destination)
+                = PackedLogic4::from_aval_bval(32, 0, 0);
+            ++process.pc;
+            return;
+        }
         throw InterpreterError {
             process.id, process.pc, error.what()
         };
@@ -698,7 +709,8 @@ void Interpreter::Impl::execute_file(
                 operation.minimum_width,
                 operation.left_justify,
                 operation.zero_pad,
-                operation.scalar_kind);
+                operation.scalar_kind,
+                operation.precision);
         }
         write_file(
             process.id,

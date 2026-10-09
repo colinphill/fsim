@@ -772,9 +772,7 @@ Expression VerilogParser::parse_primary()
             cover(name.span, previous().span)
         };
         if (const auto required = verilog_system_service_standard(canonical)) {
-            (void)require_standard(
-                "the system service '" + canonical + "'", *required, name,
-                "FSIM-SV-PARSE-350");
+            note_system_service_standard(canonical, *required, name);
         }
         if (canonical == "new" && at(TokenKind::LeftBracket)) {
             (void)require_standard(
@@ -786,6 +784,7 @@ Expression VerilogParser::parse_primary()
         if (match(TokenKind::LeftParen)) {
             std::vector<Expression> arguments;
             std::vector<std::string> argument_names;
+            std::optional<std::uint64_t> builtin_type_bits;
             const auto sampled_value_call = canonical == "$sampled"
                 || canonical == "$rose" || canonical == "$fell"
                 || canonical == "$stable" || canonical == "$changed"
@@ -840,6 +839,23 @@ Expression VerilogParser::parse_primary()
                         }
                         argument_names.emplace_back();
                         arguments.push_back(std::move(event));
+                    } else if (canonical == "$bits" && arguments.empty()
+                        && (keyword("logic") || keyword("reg")
+                            || keyword("bit") || keyword("byte")
+                            || keyword("shortint") || keyword("int")
+                            || keyword("longint") || keyword("integer")
+                            || keyword("time"))) {
+                        // $bits of a built-in integral data type is that
+                        // type's width (IEEE 1800-2017 20.6.2).
+                        const auto type_start = current();
+                        const auto data_type = parse_parameter_type();
+                        builtin_type_bits = data_type.width().value_or(1U);
+                        argument_names.emplace_back();
+                        arguments.push_back(Expression {
+                            ExpressionKind::IntegerLiteral,
+                            std::to_string(*builtin_type_bits),
+                            { },
+                            cover(type_start.span, previous().span) });
                     } else {
                         argument_names.emplace_back();
                         arguments.push_back(parse_expression());
@@ -994,6 +1010,11 @@ Expression VerilogParser::parse_primary()
                 expression.call_result_width = 32;
                 expression.call_result_domain = ValueDomain::Bit2;
                 expression.call_result_signed = true;
+                if (canonical == "$bits" && builtin_type_bits) {
+                    expression = Expression { ExpressionKind::IntegerLiteral,
+                        std::to_string(*builtin_type_bits), { },
+                        expression.span };
+                }
             } else if (contains_word(
                            { "$high", "$increment", "$left", "$low", "$right",
                                "$size" },

@@ -504,6 +504,17 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
   for (const auto& block : unit.systemverilog_clocking_blocks) {
     known.insert(block.name);
   }
+  // A type or callable name used as an operand (`$bits(word_t)`) is not
+  // an implicit net (IEEE 1800-2017 6.10).
+  for (const auto& alias : unit.type_aliases) {
+    known.insert(alias.name);
+  }
+  for (const auto& function : unit.functions) {
+    known.insert(function.name);
+  }
+  for (const auto& task : unit.tasks) {
+    known.insert(task.name);
+  }
   std::unordered_set<std::string> rejected;
   for (const auto& reference : implicit_net_references_) {
     const auto member_separator = reference.name.find('.');
@@ -558,6 +569,7 @@ DesignUnit VerilogParser::parse_module(
     const bool extern_declaration)
 {
     non_ansi_ports_.clear();
+    explicit_port_types_.clear();
     body_port_declarations_.clear();
     port_type_refinements_.clear();
     implicit_net_references_.clear();

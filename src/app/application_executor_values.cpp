@@ -465,7 +465,8 @@ void LlvmProcessExecutor::write_formatted(
             operation->minimum_width,
             operation->left_justify,
             operation->zero_pad,
-            operation->scalar_kind);
+            operation->scalar_kind,
+            operation->precision);
     } catch (...) {
         capture_failure(state);
     }
@@ -519,7 +520,8 @@ void LlvmProcessExecutor::write_formatted_logic9(
             operation->minimum_width,
             operation->left_justify,
             operation->zero_pad,
-            operation->scalar_kind);
+            operation->scalar_kind,
+            operation->precision);
     } catch (...) {
         capture_failure(state);
     }

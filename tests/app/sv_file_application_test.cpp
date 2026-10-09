@@ -1394,7 +1394,8 @@ endmodule
     fsim::diagnostic::Engine later_service_diagnostics;
     const auto later_service_project = fsim::app::build_project(
         later_service_config, later_service_diagnostics);
-    assert(!later_service_project);
+    // A later standard's system service warns as an extension.
+    static_cast<void>(later_service_project);
     assert(std::ranges::any_of(
         later_service_diagnostics.diagnostics(),
         [](const auto& diagnostic) {

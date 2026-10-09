@@ -7202,7 +7202,9 @@ namespace {
                             && (candidate.kind
                                     == semantic::sv::UnitKind::interface || candidate.kind == semantic::sv::UnitKind::program);
                     });
+            // A class constructor's result is its class, not a typedef.
             if (type.target.target.valid() || name.empty()
+                || name == "constructor"
                 || builtin_type(name) || covergroup || interface_or_program
                 || resolved_type_visible(name, scope)
                 || resolved_equivalent_type_reference(type)
@@ -7559,6 +7561,69 @@ namespace {
             if (type->form != TypeForm::enumeration || specialized == nullptr) {
                 continue;
             }
+            // An enum base is an integer atom or vector type with at most
+            // one packed dimension, or a type name of one (IEEE 1800-2017
+            // 6.19): not an array, aggregate, enum, real or string type.
+            const auto base_legal = [&]() {
+                const auto illegal_reference
+                    = [](const semantic::sv::TypeReference& reference) {
+                          return reference.packed_dimensions.size() > 1U
+                              || reference.container_form.has_value()
+                              || !reference.unpacked_dimensions.empty()
+                              || reference.target.spelling == "real"
+                              || reference.target.spelling == "shortreal"
+                              || reference.target.spelling == "realtime"
+                              || reference.target.spelling == "string"
+                              || reference.target.spelling == "chandle"
+                              || reference.target.spelling == "event";
+                      };
+                if (illegal_reference(type->base)) {
+                    return false;
+                }
+                auto target = type->base.target.target;
+                std::unordered_set<std::uint32_t> visited;
+                while (target.valid() && visited.insert(target.value()).second) {
+                    const auto definition = compiled.find_type(target);
+                    if (!definition || definition->systemverilog == nullptr) {
+                        return true;
+                    }
+                    const auto& base = *definition->systemverilog;
+                    if (base.id == type->id) {
+                        return true;
+                    }
+                    if (base.form != TypeForm::alias
+                        && base.form != TypeForm::packed_integral) {
+                        return false;
+                    }
+                    if (illegal_reference(base.base)) {
+                        return false;
+                    }
+                    // Only a vector type name takes a packed dimension, and
+                    // the result has at most one.
+                    const auto& atom = base.base.target.spelling;
+                    if (type->base.packed_range
+                        && (base.base.packed_range
+                            || !base.base.packed_dimensions.empty())) {
+                        return false;
+                    }
+                    if (type->base.packed_range
+                        && (atom == "int" || atom == "integer"
+                            || atom == "byte" || atom == "shortint"
+                            || atom == "longint" || atom == "time")) {
+                        return false;
+                    }
+                    target = base.base.target.target;
+                }
+                return true;
+            }();
+            if (!base_legal) {
+                append("FSIM-ELAB-SVENUM-004",
+                    "enum '" + type->name
+                        + "' base must be an integer atom or vector type "
+                          "with at most one packed dimension",
+                    type->source);
+                continue;
+            }
             const auto base_width = width_of(type->base, specialized);
             if (!base_width || *base_width == 0U) {
                 append("FSIM-ELAB-SVENUM-001",
@@ -7571,15 +7636,163 @@ namespace {
                 continue;
             }
             std::unordered_map<std::uint64_t, std::string> values;
+            std::optional<std::string> unknown_literal;
+            std::optional<std::string> previous_literal;
             for (const auto& literal : type->enumeration_literals) {
                 const auto value = literal.value
                     ? specialized->evaluate_integral_expression(*literal.value)
                     : std::nullopt;
+                // An x or z value needs a 4-state base, and the literal after
+                // one needs its own initializer; a value must be constant
+                // (IEEE 1800-2017 6.19).
+                const auto any_of_expression = [&](const auto& self,
+                                                   const semantic::ExpressionId id,
+                                                   const auto& predicate) -> bool {
+                    const auto view = specialized->find_expression(id);
+                    if (!view || view->systemverilog == nullptr) {
+                        return false;
+                    }
+                    if (predicate(*view->systemverilog)) {
+                        return true;
+                    }
+                    return std::ranges::any_of(view->systemverilog->operands,
+                        [&](const semantic::ExpressionId operand) {
+                            return self(self, operand, predicate);
+                        });
+                };
+                const auto unknown_digits
+                    = [](const semantic::sv::Expression& expression) {
+                          if (expression.kind
+                                  != semantic::sv::ExpressionKind::integer_literal
+                              && expression.kind
+                                  != semantic::sv::ExpressionKind::logic_literal) {
+                              return false;
+                          }
+                          const auto quote = expression.text.find('\'');
+                          if (quote == std::string::npos) {
+                              return false;
+                          }
+                          const auto digits = std::string_view {
+                              expression.text
+                          }.substr(quote + 1U);
+                          return digits.find_first_of("xXzZ?")
+                              != std::string_view::npos;
+                      };
+                const auto runtime_call
+                    = [](const semantic::sv::Expression& expression) {
+                          return expression.kind
+                                  == semantic::sv::ExpressionKind::call
+                              && (expression.text == "$time"
+                                  || expression.text == "$stime"
+                                  || expression.text == "$realtime"
+                                  || expression.text == "$random"
+                                  || expression.text == "$urandom");
+                      };
+                const auto value_view = literal.value
+                    ? specialized->find_expression(*literal.value)
+                    : std::nullopt;
+                const bool implicit_value = previous_literal && value_view
+                    && value_view->systemverilog != nullptr
+                    && value_view->systemverilog->kind
+                        == semantic::sv::ExpressionKind::binary
+                    && value_view->systemverilog->text == "+"
+                    && value_view->systemverilog->operands.size() == 2U
+                    && [&] {
+                           const auto left = specialized->find_expression(
+                               value_view->systemverilog->operands.front());
+                           return left && left->systemverilog != nullptr
+                               && left->systemverilog->text
+                                   == *previous_literal;
+                       }();
+                if (unknown_literal && implicit_value) {
+                    append("FSIM-ELAB-SVENUM-005",
+                        "enum literal '" + literal.name
+                            + "' follows the x or z valued literal '"
+                            + *unknown_literal + "' without an initializer",
+                        literal.source);
+                }
+                const bool unknown = literal.value && !implicit_value
+                    && any_of_expression(
+                        any_of_expression, *literal.value, unknown_digits);
+                if (unknown) {
+                    if (!type->base.four_state) {
+                        append("FSIM-ELAB-SVENUM-005",
+                            "enum literal '" + literal.name
+                                + "' has an x or z value but its base type is "
+                                  "2-state",
+                            literal.source);
+                    }
+                    unknown_literal = literal.name;
+                } else if (!implicit_value) {
+                    unknown_literal.reset();
+                }
+                if (literal.value
+                    && any_of_expression(
+                        any_of_expression, *literal.value, runtime_call)) {
+                    append("FSIM-ELAB-SVENUM-006",
+                        "enum literal '" + literal.name
+                            + "' value is not a constant expression",
+                        literal.source);
+                }
+                previous_literal = literal.name;
+                // A sized literal is checked by its size rather than its
+                // value: `-4'sd1` is the 4-bit pattern 1111 (6.19).
+                const auto sized_width = [&](const auto& self,
+                                             const semantic::ExpressionId id)
+                    -> std::optional<std::size_t> {
+                    const auto view = specialized->find_expression(id);
+                    if (!view || view->systemverilog == nullptr) {
+                        return std::nullopt;
+                    }
+                    const auto& source = *view->systemverilog;
+                    if (source.kind == semantic::sv::ExpressionKind::unary
+                        && source.operands.size() == 1U
+                        && (source.text == "-" || source.text == "+"
+                            || source.text == "~")) {
+                        return self(self, source.operands.front());
+                    }
+                    const auto quote = source.text.find('\'');
+                    if ((source.kind
+                                != semantic::sv::ExpressionKind::integer_literal
+                            && source.kind
+                                != semantic::sv::ExpressionKind::logic_literal)
+                        || quote == std::string::npos || quote == 0U) {
+                        return std::nullopt;
+                    }
+                    std::size_t width { };
+                    for (const auto digit :
+                        std::string_view { source.text }.substr(0U, quote)) {
+                        if (digit == '_' || digit == ' ') {
+                            continue;
+                        }
+                        if (digit < '0' || digit > '9') {
+                            return std::nullopt;
+                        }
+                        width = width * 10U
+                            + static_cast<std::size_t>(digit - '0');
+                    }
+                    return width == 0U ? std::nullopt
+                                       : std::optional { width };
+                };
+                const auto literal_width = literal.value
+                    ? sized_width(sized_width, *literal.value)
+                    : std::nullopt;
                 if (!value) {
+                    if (unknown && literal_width
+                        && *literal_width != *base_width) {
+                        append("FSIM-ELAB-SVENUM-001",
+                            "enum literal '" + literal.name
+                                + "' does not fit the base type of '"
+                                + type->name + "'",
+                            literal.source);
+                    }
                     continue;
                 }
                 bool in_range = true;
-                if (type->base.signed_value) {
+                // A sized literal must have the base type's size.
+                if (literal_width) {
+                    in_range = *literal_width == *base_width;
+                } else if (type->base.signed_value) {
                     if (*base_width < 64U) {
                         const auto maximum = (std::int64_t { 1 }
                                                  << (*base_width - 1U))
@@ -7911,7 +8124,64 @@ namespace {
             const auto raw_literal = value.kind == ExpressionKind::integer_literal
                 || value.kind == ExpressionKind::boolean_literal
                 || value.kind == ExpressionKind::logic_literal;
-            if (!actual_id && !raw_literal) {
+            // An enumeration accepts an integral value of another type only
+            // through a cast (IEEE 1800-2017 6.19.3): a plain variable, an
+            // element of a plain array, or a plain function result.
+            const auto plain_integral = [&]() {
+                if (definition.form != TypeForm::enumeration) {
+                    return false;
+                }
+                auto base_id = value_id;
+                if (value.kind == ExpressionKind::index
+                    && value.operands.size() == 2U) {
+                    base_id = value.operands.front();
+                    const auto* element = expression_type(base_id);
+                    return element != nullptr && !nominal_type_of(*element)
+                        && !element->target.target.valid()
+                        && !element->unpacked_dimensions.empty()
+                        && element->target.spelling != "string"
+                        && element->target.spelling != "implicit";
+                } else if (value.kind != ExpressionKind::name
+                    && value.kind != ExpressionKind::call) {
+                    return false;
+                }
+                const auto base = compiled.find_expression(base_id);
+                if (!base || base->systemverilog == nullptr
+                    || !base->systemverilog->referenced_name
+                    || !base->systemverilog->referenced_name->selected
+                    || (value.kind == ExpressionKind::call
+                        && value.text.starts_with("$"))
+                    || base->systemverilog->text.find('.')
+                        != std::string::npos) {
+                    return false;
+                }
+                const auto declaration = compiled.find_declaration(
+                    *base->systemverilog->referenced_name->selected);
+                if (!declaration || declaration->systemverilog == nullptr) {
+                    return false;
+                }
+                const auto& record = *declaration->systemverilog;
+                const semantic::sv::TypeReference* type = nullptr;
+                if (value.kind == ExpressionKind::call) {
+                    if (record.form != DeclarationForm::function
+                        || !record.callable || !record.callable->function) {
+                        return false;
+                    }
+                    type = &record.callable->return_type;
+                } else if (record.form == DeclarationForm::variable
+                    || record.form == DeclarationForm::net
+                    || record.form == DeclarationForm::port) {
+                    type = record.type ? &*record.type : nullptr;
+                }
+                return type != nullptr && !nominal_type_of(*type)
+                    && !type->target.target.valid()
+                    && (value.kind != ExpressionKind::name
+                        || type->unpacked_dimensions.empty())
+                    && !type->container_form
+                    && type->target.spelling != "implicit"
+                    && type->target.spelling != "string";
+            }();
+            if (!actual_id && !raw_literal && !plain_integral) {
                 return true;
             }
             append(std::string { diagnostic },
@@ -8333,6 +8603,28 @@ namespace {
             const auto* base_type = expression_type(base_id);
             const auto* assigned_type = expression_type(
                 *statement.value);
+            // An element of an enumeration array takes only values of its
+            // enumeration type.
+            if (target == nullptr && base_type != nullptr && !indices.empty()
+                && indices.size() == base_type->unpacked_dimensions.size()
+                && (!base_type->container_form
+                    || *base_type->container_form
+                        == TypeForm::static_array)) {
+                auto element = *base_type;
+                element.unpacked_dimensions.clear();
+                element.container_form.reset();
+                const auto element_nominal = nominal_type_of(element);
+                const auto element_definition = element_nominal
+                    ? compiled.find_type(*element_nominal)
+                    : std::nullopt;
+                if (element_definition
+                    && element_definition->systemverilog != nullptr
+                    && element_definition->systemverilog->form
+                        == TypeForm::enumeration)
+                static_cast<void>(validate_nominal_value(
+                    element, *statement.value, "FSIM-ELAB-SVTYPE-004",
+                    "assignment"));
+            }
             if (base_type != nullptr
                 && !base_type->unpacked_dimensions.empty()) {
                 if (indices.empty() && value
@@ -9054,18 +9346,24 @@ namespace {
             // integral value, IEEE 1800-2017 7.2.1), may be compared with
             // an ordinary integral expression. Distinct nominal types remain
             // incompatible.
-            if (left.has_value() != right.has_value()) {
-                const auto nominal = compiled.find_type(
-                    left ? *left : *right);
-                if (nominal && nominal->systemverilog != nullptr
-                    && (nominal->systemverilog->form
-                            == TypeForm::enumeration
-                        || nominal->systemverilog->form
-                            == TypeForm::packed_structure
-                        || nominal->systemverilog->form
-                            == TypeForm::packed_union)) {
-                    continue;
-                }
+            // Two such integral values of different types compare as
+            // integers too (11.4.5); only unpacked aggregates need one type.
+            const auto integral_nominal
+                = [&](const std::optional<semantic::TypeId>& id) {
+                      if (!id) {
+                          return true;
+                      }
+                      const auto nominal = compiled.find_type(*id);
+                      return nominal && nominal->systemverilog != nullptr
+                          && (nominal->systemverilog->form
+                                  == TypeForm::enumeration
+                              || nominal->systemverilog->form
+                                  == TypeForm::packed_structure
+                              || nominal->systemverilog->form
+                                  == TypeForm::packed_union);
+                  };
+            if (integral_nominal(left) && integral_nominal(right)) {
+                continue;
             }
             append("FSIM-ELAB-SVTYPE-005",
                 "nominal packed equality requires two values of the same "

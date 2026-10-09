@@ -351,8 +351,7 @@ endmodule
 )" },
         StandardRevision::Verilog2001);
     require(
-        !later_file_services_in_1995.ok()
-            && has_code(later_file_services_in_1995, "FSIM-SV-PARSE-350")
+        has_code(later_file_services_in_1995, "FSIM-SV-PARSE-350")
             && services_2001.ok(),
         "Verilog-2001 introduces later file signatures, input, plusarg, and memory-write services");
 
@@ -367,7 +366,7 @@ endmodule
             "module math_2005; real value; initial value = $ln(2.0); endmodule\n" },
         StandardRevision::Verilog2005);
     require(
-        !math_2001.ok() && has_code(math_2001, "FSIM-SV-PARSE-350")
+        has_code(math_2001, "FSIM-SV-PARSE-350")
             && math_2005.ok(),
         "Verilog-2005 introduces the mathematical system-function family");
 
@@ -447,8 +446,7 @@ endmodule
 )" },
         StandardRevision::SystemVerilog2005);
     require(
-        !introspection_in_verilog.ok()
-            && has_code(introspection_in_verilog, "FSIM-SV-PARSE-350")
+        has_code(introspection_in_verilog, "FSIM-SV-PARSE-350")
             && introspection_2005.ok(),
         "SystemVerilog-2005 introduces packed introspection, state-query, range-random, and string-format functions");
     const auto& introspection_block = introspection_2005.design.units.front()
@@ -474,8 +472,7 @@ endmodule
             "module global_services_2009; logic value; int result; initial begin result = $rose_gclk(value); $assertpasson; end endmodule\n" },
         StandardRevision::SystemVerilog2009);
     require(
-        !global_services_2005.ok()
-            && has_code(global_services_2005, "FSIM-SV-PARSE-350")
+        has_code(global_services_2005, "FSIM-SV-PARSE-350")
             && global_services_2009.ok(),
         "SystemVerilog-2009 introduces global-clock sampled functions and extended assertion controls");
 }

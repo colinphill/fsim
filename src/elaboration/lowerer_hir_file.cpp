@@ -547,6 +547,7 @@ Lowerer::lower_hir_formatted_string(
         StringMethod operation;
         operation.source = destination;
         operation.minimum_width = conversion.minimum_width;
+        operation.precision = conversion.precision;
         operation.left_justify = conversion.left_justify;
         operation.zero_pad = conversion.zero_pad;
         operation.suppress_leading_zero
@@ -582,16 +583,29 @@ Lowerer::lower_hir_formatted_string(
             || *width > std::numeric_limits<std::uint32_t>::max()) {
             return false;
         }
-        const auto scalar = hir_systemverilog_scalar_kind(*value);
-        const auto lowered = lower_hir_expression(
-            *value, *width, scalar);
+        // %e/%f/%g convert an integral value to real (21.2.1.3).
+        const auto real_conversion = conversion.format
+                == frontend::OutputFormat::RealScientific
+            || conversion.format == frontend::OutputFormat::RealFixed
+            || conversion.format == frontend::OutputFormat::RealGeneral;
+        auto scalar = hir_systemverilog_scalar_kind(*value);
+        auto value_width = *width;
+        auto lowered = lower_hir_expression(*value, value_width, scalar);
         if (!lowered) {
             return false;
+        }
+        if (real_conversion
+            && scalar == frontend::SystemVerilogScalarKind::None) {
+            lowered = convert_hir_integral_to_real(*lowered,
+                hir_expression_signed(*value),
+                frontend::SystemVerilogScalarKind::Real);
+            scalar = frontend::SystemVerilogScalarKind::Real;
+            value_width = 64U;
         }
         const auto width_register = allocate_register(
             32U, frontend::ValueDomain::Bit2);
         process_.operations.emplace_back(LoadConstant {
-            width_register, unsigned_value(*width, 32U) });
+            width_register, unsigned_value(value_width, 32U) });
         operation.operation = StringMethodOperator::format_packed;
         operation.first = *lowered;
         operation.second = width_register;
@@ -1292,8 +1306,9 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                                     || output
                                         == frontend::OutputFormat::
                                             RealGeneral;
+                                // A real format converts an integral
+                                // value (21.2.1.3).
                                 if ((real_scalar && !real_format)
-                                    || (!real_scalar && real_format)
                                     || (kind
                                             == frontend::
                                                 SystemVerilogScalarKind::Time
@@ -3086,16 +3101,31 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                     });
                     return true;
                 }
-                const auto width = hir_expression_width(
+                const auto format = runtime_output_format(output.format);
+                auto kind = expression_scalar_kind(*output.value);
+                const bool real_conversion
+                    = (format == runtime::simir::OutputFormat::real_scientific
+                        || format == runtime::simir::OutputFormat::real_fixed
+                        || format == runtime::simir::OutputFormat::real_general)
+                    && kind == frontend::SystemVerilogScalarKind::None;
+                if (real_conversion) {
+                    kind = frontend::SystemVerilogScalarKind::Real;
+                }
+                auto width = hir_expression_width(
                     *output.value, hir_process_scope_).value_or(32U);
-                const auto value = lower_hir_expression(
-                    *output.value, width);
+                auto value = lower_hir_expression(*output.value, width,
+                    real_conversion ? frontend::SystemVerilogScalarKind::None
+                                    : kind);
                 if (!value
                     || width > std::numeric_limits<std::uint32_t>::max()) {
                     return false;
                 }
-                const auto format = runtime_output_format(output.format);
-                const auto kind = expression_scalar_kind(*output.value);
+                if (real_conversion) {
+                    value = convert_hir_integral_to_real(*value,
+                        hir_expression_signed(*output.value),
+                        frontend::SystemVerilogScalarKind::Real);
+                    width = 64U;
+                }
                 process_.operations.emplace_back(FileWriteFormatted {
                     *handle,
                     *value,
@@ -3113,6 +3143,7 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                     output.left_justify,
                     output.zero_pad,
                     kind,
+                    output.precision,
                 });
                 return true;
             };
@@ -3148,6 +3179,7 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                 source.output_minimum_width,
                 source.output_left_justify,
                 source.output_zero_pad,
+                source.output_precision,
             },
             source.output_suffix,
             source.output_newline);

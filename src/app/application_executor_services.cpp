@@ -462,6 +462,13 @@ std::uint32_t LlvmProcessExecutor::file_open(
                 ? 3U
                 : 2U;
         }
+        // $fopen returns zero when the file cannot be opened (21.3.1).
+        if (operation != nullptr && !operation->vhdl
+            && std::string_view { error.what() }.starts_with(
+                "cannot open SimIR text file")) {
+            *result = 0;
+            return 0;
+        }
         capture_file_failure(state, process, instruction);
         return 1;
     } catch (...) {
@@ -541,7 +548,8 @@ std::uint32_t LlvmProcessExecutor::file_write(
                 formatted->minimum_width,
                 formatted->left_justify,
                 formatted->zero_pad,
-                formatted->scalar_kind);
+                formatted->scalar_kind,
+                formatted->precision);
             if (formatted->newline) {
                 state.context->write_file(handle, { }, true);
             }

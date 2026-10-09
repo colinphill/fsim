@@ -173,7 +173,8 @@ void ProcessExecutionContext::write_file_formatted(
     std::uint32_t,
     bool,
     bool,
-    SystemVerilogScalarKind)
+    SystemVerilogScalarKind,
+    std::uint32_t)
 {
     throw std::logic_error {
         "alternate process executor does not support formatted file writes"
@@ -907,7 +908,8 @@ void ProcessExecutionContext::display_formatted(
     std::uint32_t,
     bool,
     bool,
-    SystemVerilogScalarKind)
+    SystemVerilogScalarKind,
+    std::uint32_t)
 {
 }
 

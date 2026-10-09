@@ -381,9 +381,29 @@ SystemVerilogClassHirExecution::evaluate_packed(
             return runtime::PackedLogic4::from_aval_bval(64U, handle, 0U);
         }
         const auto found = environment.find(value->text);
-        return found == environment.end()
-            ? std::nullopt
-            : std::optional { found->second };
+        if (found != environment.end())
+            return found->second;
+        // A class-scope constant or enumeration literal (IEEE 1800-2017
+        // 8.25, 6.19) evaluates its declaration's constant initializer.
+        const auto* constant = value->referenced_name
+                && value->referenced_name->selected
+            ? declaration(*value->referenced_name->selected)
+            : nullptr;
+        if (constant != nullptr && constant->initializer
+            && *constant->initializer != id
+            && (constant->form
+                    == semantic::sv::DeclarationForm::local_parameter
+                || constant->form == semantic::sv::DeclarationForm::parameter
+                || constant->form
+                    == semantic::sv::DeclarationForm::enumeration_literal)
+            && constant_depth_ < 64U) {
+            ++constant_depth_;
+            auto result = evaluate_packed(
+                *constant->initializer, handle, environment);
+            --constant_depth_;
+            return result;
+        }
+        return std::nullopt;
     }
     if (value->kind == ExpressionKind::integer_literal) {
         std::int64_t integer { };

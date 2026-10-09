@@ -597,6 +597,39 @@ private:
     [[nodiscard]] std::optional<HirPackedMemberSelection>
     hir_systemverilog_member_selection(
         semantic::ExpressionId expression) const;
+    // An enumeration method (IEEE 1800-2017 6.19.5): `e.first()`, or the
+    // parenthesis-free `e.next` that the frontend keeps as a dotted name.
+    struct HirEnumerationMethod {
+        std::string method;
+        std::optional<semantic::ExpressionId> receiver;
+        semantic::DeclarationId receiver_declaration;
+        std::optional<semantic::ExpressionId> count;
+        std::vector<std::uint64_t> values;
+        std::vector<std::string> names;
+        std::size_t width { };
+        bool four_state { };
+        bool signed_value { };
+    };
+    [[nodiscard]] std::optional<HirEnumerationMethod>
+    hir_systemverilog_enumeration_method(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<RegisterId>
+    lower_hir_systemverilog_enumeration_receiver(
+        const HirEnumerationMethod& method);
+    [[nodiscard]] std::optional<RegisterId>
+    lower_hir_systemverilog_enumeration_method(
+        semantic::ExpressionId expression, std::size_t expected_width);
+    [[nodiscard]] std::optional<StringRegisterId>
+    lower_hir_systemverilog_enumeration_name(
+        semantic::ExpressionId expression);
+    // An integral value converted to a real or shortreal payload; x and z
+    // bits convert as zero (IEEE 1800-2017 6.12.2).
+    [[nodiscard]] RegisterId convert_hir_integral_to_real(RegisterId value,
+        bool signed_value, frontend::SystemVerilogScalarKind target);
+    // A real or shortreal payload rounded to a 64-bit signed integral value
+    // (IEEE 1800-2017 6.12.2: to nearest, ties away from zero).
+    [[nodiscard]] RegisterId convert_hir_real_to_integral(RegisterId value,
+        frontend::SystemVerilogScalarKind source);
     [[nodiscard]] std::optional<HirVhdlArraySelection>
     hir_vhdl_array_selection(
         semantic::ExpressionId expression) const;

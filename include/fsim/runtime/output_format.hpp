@@ -25,7 +25,10 @@ namespace fsim::runtime::simir {
     std::uint32_t minimum_width,
     bool left_justify,
     bool zero_pad,
-    SystemVerilogScalarKind scalar_kind = SystemVerilogScalarKind::None);
+    SystemVerilogScalarKind scalar_kind = SystemVerilogScalarKind::None,
+    // Digits after the point for %e/%f/%g (`%.3f`); the maximum value
+    // selects the conversion's default.
+    std::uint32_t precision = std::numeric_limits<std::uint32_t>::max());
 
 [[nodiscard]] std::string make_time_output(
     std::string_view prefix,

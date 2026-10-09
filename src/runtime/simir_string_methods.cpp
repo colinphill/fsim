@@ -296,7 +296,8 @@ void execute_string_format(
             operation.minimum_width,
             operation.left_justify,
             operation.zero_pad,
-            operation.scalar_kind);
+            operation.scalar_kind,
+            operation.precision);
     }
     if (formatted.size() > maximum_string_bytes - destination.size()) {
         throw std::length_error {

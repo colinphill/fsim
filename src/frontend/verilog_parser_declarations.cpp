@@ -180,6 +180,13 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
           spec.type = parse_named_type();
         } else {
           parse_optional_net_type(spec.type);
+          // `input wire T x`: a net port whose data type is a type name
+          // (IEEE 1800-2017 23.2.2.3).
+          if (is_named_type_reference_start()
+              && !at(TokenKind::Comma, 1) && !at(TokenKind::RightParen, 1)
+              && !at(TokenKind::LeftBracket, 1)) {
+            spec.type = parse_named_type();
+          }
         }
         require_default_port_net_type(current(), explicit_type);
         if (spec.type.named_type.empty()) {
@@ -735,7 +742,9 @@ void VerilogParser::parse_virtual_interface_declaration(
       || keyword("string") || keyword("chandle") || keyword("event")
       || keyword("process")
       || keyword("struct") || keyword("union") || keyword("enum")
-      || is_named_type_reference_start();
+      || is_named_type_reference_start()
+      || (at(TokenKind::Identifier) && at(TokenKind::LeftBracket, 1)
+          && packed_typedef_types_.contains(current().text));
 }
 
 void VerilogParser::parse_event_declaration(
@@ -843,10 +852,15 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
       spec.type.spelling = "logic";
     }
   }
+  bool port_type_explicit = false;
   if (is_direction_keyword()) {
     spec.direction = parse_direction();
     spec.type = default_port_net_type();
     const bool explicit_variable = match_keyword("var");
+    port_type_explicit = explicit_variable || is_net_type_keyword()
+        || keyword("string") || keyword("chandle") || keyword("process")
+        || keyword("struct") || keyword("union") || keyword("enum")
+        || is_named_type_reference_start();
     const bool explicit_type =
         explicit_variable || is_net_type_keyword()
         || keyword("string") || keyword("chandle")
@@ -867,6 +881,8 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
              || keyword("process")
              || keyword("struct") || keyword("union") || keyword("enum")) {
     spec.type = parse_parameter_type();
+  } else if (auto expanded = parse_named_packed_array_type()) {
+    spec.type = std::move(*expanded);
   } else if (is_named_type_reference_start()) {
     spec.type = parse_named_type();
   } else {
@@ -919,6 +935,29 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
               literal_name,
               literal_value.span,
               {}});
+    }
+    // A hidden typedef gives the anonymous enumeration a type definition,
+    // so its methods and literal names resolve as for a typedef
+    // (IEEE 1800-2017 6.19.5). Its first literal's name, unique in this
+    // scope, keys it.
+    std::vector<EnumLiteralDeclaration> literals;
+    for (std::size_t index = 0;
+         index < spec.type.enumeration_literals.size(); ++index) {
+      literals.push_back({ spec.type.enumeration_literals[index],
+          spec.type.systemverilog_enumeration_values[index],
+          spec.type.systemverilog_enumeration_values[index].span });
+    }
+    if (!literals.empty()) {
+      unit.type_aliases.push_back({
+          anonymous_enumeration_type_name(literals.front().name),
+          spec.type,
+          span_from(start, previous()),
+          std::move(literals),
+          TypeDeclarationKind::SystemVerilogTypedef,
+          { },
+          { },
+          { },
+          false });
     }
   }
   std::optional<Delay> net_delay;
@@ -1078,10 +1117,15 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
             "FSIM-SV-SEM-004",
             "duplicate port declaration '" + declaration.name + "'");
       }
+      if (port_type_explicit) {
+        explicit_port_types_.insert(declaration.name);
+      }
       // `int i; output i;` declares one port whose data type is the
       // earlier declaration's (IEEE 1800-2017 23.2.2.1).
       if (existing_port != unit.ports.end()
           && port_type_refinements_.contains(declaration.name)) {
+        check_port_redeclaration(declaration.type, port_type_explicit,
+            existing_port->type, name, "port");
         const auto port_signed = declaration.type.is_signed;
         declaration.type = existing_port->type;
         declaration.type.is_signed = declaration.type.is_signed
@@ -1119,6 +1163,11 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
             "FSIM-SV-SEM-005",
             "duplicate declaration of port '" + declaration.name + "'");
       } else {
+        if (existing_port->direction != PortDirection::Unknown) {
+          check_port_redeclaration(existing_port->type,
+              explicit_port_types_.contains(declaration.name),
+              declaration.type, name, "port");
+        }
         (void)update_existing_port_type(unit, declaration);
       }
     } else {
@@ -1182,6 +1231,8 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
       || keyword("process")
       || keyword("struct") || keyword("union") || keyword("enum")) {
     type = parse_parameter_type();
+  } else if (auto expanded = parse_named_packed_array_type()) {
+    type = std::move(*expanded);
   } else if (is_named_type_reference_start()) {
     type = parse_named_type();
   } else {
@@ -1240,6 +1291,49 @@ void VerilogParser::update_or_add_port(DesignUnit& unit,
     }
   }
   unit.ports.push_back(std::move(declaration));
+}
+
+void VerilogParser::check_port_redeclaration(
+  const Type& port_type,
+  const bool port_explicit,
+  const Type& data_type,
+  const Token& name,
+  const std::string_view what) {
+  if (port_explicit) {
+    error(name, "FSIM-SV-SEM-396",
+        std::string { what } + " '" + name.text
+            + "' declared with a net or data type cannot be declared again");
+    return;
+  }
+  // The data declaration supplies the type; an implicit port declaration
+  // may only repeat its packed range (IEEE 1800-2017 23.2.2.1).
+  const auto ranged = [](const Type& type) {
+    return type.packed_range || type.packed_range_expression
+        || !type.systemverilog_packed_dimensions.empty();
+  };
+  const bool atom = !data_type.named_type.empty()
+      || !data_type.packed_members.empty()
+      || !data_type.enumeration_literals.empty()
+      || contains_word({ "integer", "int", "shortint", "longint", "byte",
+                         "time", "real", "realtime", "shortreal", "string",
+                         "event", "chandle" },
+          data_type.spelling);
+  bool mismatch = false;
+  if (atom) {
+    mismatch = ranged(port_type);
+  } else if (ranged(port_type) && !ranged(data_type)) {
+    // An unranged port declaration takes the data declaration's range, as
+    // xsim and Verilator accept.
+    mismatch = true;
+  } else if (port_type.packed_range && data_type.packed_range) {
+    mismatch = port_type.packed_range->left != data_type.packed_range->left
+        || port_type.packed_range->right != data_type.packed_range->right;
+  }
+  if (mismatch) {
+    error(name, "FSIM-SV-SEM-396",
+        "the declarations of " + std::string { what } + " '" + name.text
+            + "' have different packed ranges or types");
+  }
 }
 
 bool VerilogParser::update_existing_port_type(

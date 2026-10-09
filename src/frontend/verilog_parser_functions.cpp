@@ -87,6 +87,15 @@ FunctionDeclaration VerilogParser::parse_function(
               && at(TokenKind::Identifier, 1)
               ? parse_named_type()
               : parse_parameter_type();
+      // A function without a return type returns a 1-bit logic value
+      // (IEEE 1800-2017 13.4), not a parameter's implicit integer.
+      if (function.return_type.spelling == "implicit"
+          && !function.return_type.packed_range
+          && !function.return_type.packed_range_expression) {
+        function.return_type.spelling = "logic";
+        function.return_type.domain = ValueDomain::Logic4;
+        function.return_type.is_signed = false;
+      }
     }
     const auto name = expect_identifier("function name");
     function.name = name.text;
@@ -584,6 +593,7 @@ TaskDeclaration VerilogParser::parse_task(
     const bool prototype,
     const bool default_automatic) {
   TaskDeclaration task;
+  std::unordered_set<std::string> explicit_task_arguments;
   if (match_keyword("automatic")) {
     (void)require_standard(
         "an automatic task",
@@ -798,19 +808,40 @@ TaskDeclaration VerilogParser::parse_task(
               ? PortDirection::Inout
               : PortDirection::Input;
       Type type;
+      bool explicit_argument_type = false;
       if (at(TokenKind::Identifier)
           && (at(TokenKind::Comma, 1)
               || at(TokenKind::Semicolon, 1)
               || at(TokenKind::Assign, 1))) {
         type = Type{ValueDomain::Integer, "implicit", std::nullopt, true};
       } else {
+        explicit_argument_type = !at(TokenKind::LeftBracket)
+            && !keyword("signed") && !keyword("unsigned");
         type = parse_parameter_type();
       }
       do {
         const auto argument_name =
             expect_identifier("classic task argument name");
-        if (!current_procedural_names_.insert(
-                argument_name.text).second) {
+        // `T x; input x;` declares one argument of type T (13.3).
+        const bool typed_earlier = std::ranges::any_of(
+            body.declarations, [&](const VariableDeclaration& variable) {
+                return variable.name == argument_name.text;
+            });
+        const bool repeated_direction = std::ranges::any_of(
+            task.arguments, [&](const TaskArgument& argument) {
+                return argument.name == argument_name.text;
+            });
+        if (typed_earlier && explicit_argument_type) {
+          error(argument_name, "FSIM-SV-SEM-396",
+              "task argument '" + argument_name.text
+                  + "' declared with a data type cannot be declared again");
+        }
+        if (explicit_argument_type) {
+          explicit_task_arguments.insert(argument_name.text);
+        }
+        if ((!current_procedural_names_.insert(
+                argument_name.text).second && !typed_earlier)
+            || repeated_direction) {
           error(
               argument_name,
               "FSIM-SV-SEM-067",
@@ -860,6 +891,22 @@ TaskDeclaration VerilogParser::parse_task(
 
   task.type_aliases = std::move(local_declarations.type_aliases);
   task.variables = std::move(body.declarations);
+  // A body declaration of a classic argument's name gives that argument
+  // its data type (`input x; T x;`, IEEE 1800-2017 13.3) rather than
+  // declaring a second object.
+  for (auto& argument : task.arguments) {
+    const auto variable = std::ranges::find(
+        task.variables, argument.name, &VariableDeclaration::name);
+    if (variable == task.variables.end() || variable->initializer) {
+      continue;
+    }
+    check_port_redeclaration(argument.type,
+        explicit_task_arguments.contains(argument.name), variable->type,
+        Token { TokenKind::Identifier, argument.name, variable->span, { } },
+        "task argument");
+    argument.type = variable->type;
+    task.variables.erase(variable);
+  }
   task.statements = std::move(body.statements);
   if (!classic_header_arguments.empty()) {
     std::vector<TaskArgument> ordered;

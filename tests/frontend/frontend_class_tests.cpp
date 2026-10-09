@@ -932,7 +932,9 @@ endpackage
                  ->element_types.size() == 1
           && uvm_types->type.systemverilog_container
                  ->element_types.front().named_type == "T"
-          && uvm_wrapper->properties.size() == 3
+          // Two enumeration literal class constants (8.23) join the
+          // three declared properties.
+          && uvm_wrapper->properties.size() == 5
           && uvm_wrapper->properties[0].is_static
           && uvm_wrapper->properties[0].is_const
           && uvm_wrapper->properties[0].declaration.initializer

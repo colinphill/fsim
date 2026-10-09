@@ -41,6 +41,9 @@ public:
     void add_design(const frontend::ParsedDesign& parsed);
 
 private:
+    // True while projecting a typedef's own base type, which must not
+    // resolve an anonymous enumeration to its hidden typedef (itself).
+    bool projecting_typedef_base_ = false;
     struct Pending {
         std::string_view physical_source;
         std::size_t offset { };

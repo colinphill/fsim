@@ -1299,7 +1299,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-PARSE-347` | error | An expression, operator, cast/pattern, assignment, timing control, process, loop, task, or function form requires a later selected Verilog/SystemVerilog revision. |
 | `FSIM-SV-PARSE-348` | error | A hierarchy, configuration, generate, bind, assertion/coverage, class/constraint, interface/modport, package/import, or compilation-unit form requires a later selected Verilog/SystemVerilog revision, or configuration syntax is disabled by `verilog-2001-noconfig`. |
 | `FSIM-SV-PARSE-349` | error | A predefined scope, value, type, method, constraint operator, or assertion/property operator requires a later selected SystemVerilog revision. |
-| `FSIM-SV-PARSE-350` | error | A system task/function or a later service signature requires a later selected Verilog/SystemVerilog revision. |
+| `FSIM-SV-PARSE-350` | warning/error | A system task or function from a later Verilog/SystemVerilog revision is used in an earlier one: a warning, since IEEE 1364-2005 17 leaves additional system services to the implementation. A later service signature (such as two-argument `$fopen` before Verilog-2001) is still an error. |
 | `FSIM-SV-PARSE-351` | error | A DPI declaration requires a selected SystemVerilog revision. |
 | `FSIM-SV-PARSE-353` | error | An `extern` declaration is not followed by `module`, `interface`, or `program`. |
 | `FSIM-SV-PARSE-354` | error | An indexed bind target or configuration instance path has an unterminated index. |
@@ -1335,6 +1335,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-PARSE-384` | error | An anonymous program omits its terminating `endprogram`. |
 | `FSIM-SV-PARSE-385` | error | A package import in a module, interface, or program header is not followed by a parameter-port list or port list. |
 | `FSIM-SV-PARSE-387` | error | A generated class declaration has an invalid qualifier/shape, or a generated interface class is used before SystemVerilog-2023. |
+| `FSIM-SV-PARSE-388` | error | An enum literal range (`name[N]`, `name[N:M]`) bound is not an unsized decimal literal, or the range exceeds 65536 literals. |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |
@@ -1771,6 +1772,7 @@ scheduler.
 | `FSIM-SV-SEM-071` | error | A bounded task return statement incorrectly supplies a value. |
 | `FSIM-SV-SEM-394` | error | A void function return statement incorrectly supplies a value (IEEE 1800-2017 13.4.1). |
 | `FSIM-SV-SEM-395` | error | A Verilog (not SystemVerilog) ANSI task or function port declaration omits its direction (IEEE 1364-2005 10.2.1, 10.3.1). |
+| `FSIM-SV-SEM-396` | error | A non-ANSI port or classic task argument declared with a net or data type is declared again, or its direction and data declarations have different packed ranges or an atom/real/aggregate data type over a ranged direction declaration (IEEE 1800-2017 23.2.2.1, 13.3). |
 | `FSIM-SV-SEM-073` | error | A module or package declares the same bounded task name more than once. |
 | `FSIM-SV-SEM-075` | error | A bounded text-file system function has the wrong argument count. |
 | `FSIM-SV-SEM-076` | error | `$fdisplay` or `$fwrite` has a nonliteral, malformed, unsupported, or multi-value format. |
@@ -2394,6 +2396,10 @@ scheduler.
 | `FSIM-ELAB-VITALMEM-004` | error | A static `VitalDeclareMemory` load file is unavailable, unreadable, or exceeds the bounded input budget. |
 | `FSIM-ELAB-SVENUM-001` | error | An enum base width is non-positive or exceeds the governed constant-width limit, or an arbitrary-width enumerator value does not fit it. |
 | `FSIM-ELAB-SVENUM-002` | error | Two literals in one bounded enum have the same value. |
+| `FSIM-ELAB-SVENUM-003` | error | An enumeration `next()` or `prev()` count is not an elaboration-time constant. |
+| `FSIM-ELAB-SVENUM-004` | error | An enum base type is not an integer atom or vector type with at most one packed dimension (an array, aggregate, enum, real or string type). |
+| `FSIM-ELAB-SVENUM-005` | error | An enum literal has an x or z value with a 2-state base type, or follows an x/z-valued literal without its own initializer. |
+| `FSIM-ELAB-SVENUM-006` | error | An enum literal value is not a constant expression (for example `$time`). |
 | `FSIM-ELAB-SVCONST-001` | error | A SystemVerilog parameter value cannot be converted to its declared bounded integral type without losing X/Z state or valid width metadata. |
 | `FSIM-ELAB-SVCONST-002` | note, warning, or error | A SystemVerilog severity system task executed during constant evaluation. Notes and warnings preserve successful elaboration; errors and fatal reports reject the design. |
 | `FSIM-ELAB-SVEXIT-001` | error | `$exit` is used outside a SystemVerilog program block. |
