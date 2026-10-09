@@ -936,6 +936,31 @@ void validate_prefix_operation(
                             *operation.transaction_signal, index);
                     }
                 } else if constexpr (
+                    std::is_same_v<OperationType, AppendContainer>) {
+                    result.uses_containers = true;
+                    validate_container_register(
+                        operation.target, index, "target");
+                    if (operation.container) {
+                        validate_container_register(
+                            *operation.container, index, "source");
+                    }
+                    if (operation.value) {
+                        record_use(*operation.value, index);
+                    }
+                    if (operation.text) {
+                        result.uses_strings = true;
+                        validate_string_register(
+                            *operation.text, index, "source");
+                    }
+                } else if constexpr (
+                    std::is_same_v<OperationType, FormatContainerPattern>) {
+                    result.uses_containers = true;
+                    result.uses_strings = true;
+                    validate_container_register(
+                        operation.source, index, "source");
+                    validate_string_register(
+                        operation.destination, index, "destination");
+                } else if constexpr (
                     std::is_same_v<OperationType, ContainerStringRead>
                     || std::is_same_v<
                         OperationType, ContainerStringWrite>) {
@@ -974,9 +999,7 @@ void validate_prefix_operation(
                                 type.fixed ? 32U : type.index_width,
                                 index);
                         }
-                        if constexpr (std::is_same_v<
-                                          OperationType,
-                                          ContainerStringRead>) {
+                        {
                             if (!operation.members.empty()) {
                                 if (type.associative) {
                                     reject(
@@ -1010,11 +1033,6 @@ void validate_prefix_operation(
                                     process, index,
                                     "string element operation requires a string container");
                             }
-                        } else if (type.element_kind
-                            != ContainerElementKind::String) {
-                            reject(
-                                process, index,
-                                "string element operation requires a string container");
                         }
                     }
                     if constexpr (std::is_same_v<

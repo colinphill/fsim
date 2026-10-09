@@ -8006,6 +8006,26 @@ namespace {
                 || definition.form == TypeForm::unpacked_structure
                 || definition.form == TypeForm::tagged_union
                 || definition.form == TypeForm::unpacked_union;
+            // A packed structure or union is integral and assignment
+            // compatible with any integral value (IEEE 1800-2017 6.22.3);
+            // only an unpacked aggregate source needs a matching type.
+            if ((definition.form == TypeForm::packed_structure
+                    || definition.form == TypeForm::packed_union)
+                && value.kind != ExpressionKind::assignment_pattern) {
+                const auto actual_type = actual_id
+                    ? compiled.find_type(*actual_id)
+                    : std::optional<semantic::CompiledTypeView> { };
+                const auto actual_form = actual_type
+                        && actual_type->systemverilog != nullptr
+                    ? std::optional { actual_type->systemverilog->form }
+                    : std::nullopt;
+                if (!actual_form
+                    || (*actual_form != TypeForm::unpacked_structure
+                        && *actual_form != TypeForm::unpacked_union
+                        && *actual_form != TypeForm::tagged_union)) {
+                    return true;
+                }
+            }
             constexpr auto tagged_prefix = std::string_view { "@sv-tagged:" };
             if (!actual_id && definition.form == TypeForm::tagged_union
                 && value.kind == ExpressionKind::call
@@ -9999,11 +10019,10 @@ namespace {
                 ? root_specialization->evaluate_integral_expression(
                       expression.operands[2])
                 : std::optional<std::int64_t> { };
-            if (index && first
-                && (*first < lower_bound || *first > upper_bound)) {
-                report_invalid_selection(expression);
-                continue;
-            }
+            // An out-of-range constant select is legal: a read yields x and
+            // a write is ignored (IEEE 1800-2017 11.5.1).
+            static_cast<void>(lower_bound);
+            static_cast<void>(upper_bound);
             if (!slice) {
                 continue;
             }
@@ -10036,8 +10055,6 @@ namespace {
                     left = valid ? *first - *second + 1 : *first;
                 }
             }
-            valid = valid && left >= lower_bound && left <= upper_bound
-                && right >= lower_bound && right <= upper_bound;
             if (expression.text != "+:" && expression.text != "-:") {
                 valid = valid
                     && (left >= right) == (bounds->first >= bounds->second);
@@ -12378,6 +12395,12 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
         diagnostics_,
     };
     lowerer.set_specialized_hir_unit(&*specialized);
+    lowerer.set_package_constant_signal(
+        [&](const semantic::DeclarationId declaration) {
+            return compiled_systemverilog_package_variable_signal(
+                *specialized, declaration, packed_type_resolver,
+                packed_default_resolver, packed_fallback_resolver);
+        });
     lowerer.set_systemverilog_interface_handles(
         &systemverilog_interface_handles_, &systemverilog_interface_types_);
     lowerer.set_hir_container_declaration_bindings(
@@ -14234,6 +14257,80 @@ std::optional<SignalId> HierarchyBuilder::compiled_vhdl_package_constant_signal(
         unit->vhdl->library + "." + unit->vhdl->name + "."
             + declaration->vhdl->name);
     return result;
+}
+
+std::optional<SignalId>
+HierarchyBuilder::compiled_systemverilog_package_variable_signal(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::DeclarationId declaration_id,
+    const SystemVerilogPackedTypeResolver& packed_type_resolver,
+    const SystemVerilogPackedDefaultResolver& packed_default_resolver,
+    const SystemVerilogPackedFallbackResolver& packed_fallback_resolver)
+{
+    const auto cached = systemverilog_package_variable_signals_.find(
+        declaration_id.value());
+    if (cached != systemverilog_package_variable_signals_.end()) {
+        return cached->second;
+    }
+    systemverilog_package_variable_signals_[declaration_id.value()]
+        = std::nullopt;
+    const auto declaration = specialization.find_declaration(declaration_id);
+    if (!declaration || declaration->systemverilog == nullptr
+        || (declaration->systemverilog->form
+                != semantic::sv::DeclarationForm::variable
+            && declaration->systemverilog->form
+                != semantic::sv::DeclarationForm::net)) {
+        return std::nullopt;
+    }
+    const auto* scope = compiled_semantic_scope(
+        *compiled_, declaration->systemverilog->scope);
+    const auto unit = scope != nullptr
+        ? compiled_->find_unit(scope->unit)
+        : std::nullopt;
+    if (!unit || unit->systemverilog == nullptr
+        || (unit->systemverilog->kind != semantic::sv::UnitKind::package
+            && unit->systemverilog->kind
+                != semantic::sv::UnitKind::compilation_unit)
+        || unit->systemverilog->scope != declaration->systemverilog->scope) {
+        return std::nullopt;
+    }
+    const std::array<semantic::DeclarationId, 1U> members { declaration_id };
+    auto alias_plan = build_systemverilog_alias_plan(
+        specialization, members, { });
+    if (!alias_plan) {
+        return std::nullopt;
+    }
+    const auto path = unit->systemverilog->name;
+    SystemVerilogHirMaterialization materialization {
+        &specialization,
+        path,
+        { },
+        { },
+        { },
+        { },
+        { },
+        { },
+        { },
+        std::move(*alias_plan),
+        { },
+    };
+    std::vector<PendingVirtualInterfaceInitializer> pending;
+    if (!materialize_compiled_systemverilog_declaration(
+            *unit->systemverilog, declaration_id, materialization,
+            *declaration->systemverilog, path,
+            semantic::sv::UnconnectedDrive::none, pending,
+            packed_type_resolver, packed_default_resolver,
+            packed_fallback_resolver)) {
+        return std::nullopt;
+    }
+    const auto found = materialization.signals.find(
+        declaration->systemverilog->name);
+    if (found == materialization.signals.end()) {
+        return std::nullopt;
+    }
+    systemverilog_package_variable_signals_[declaration_id.value()]
+        = found->second;
+    return found->second;
 }
 
 bool HierarchyBuilder::bind_compiled_vhdl_package_objects(

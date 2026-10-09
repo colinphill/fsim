@@ -46,7 +46,7 @@ using SignalOperationGroup = OperationGroup<ReadSignal, SignalEvent, SignalLastV
     WriteProjectedWaveformDynamicSlice, SignalLastActive,
     SignalDriving, SignalDrivingValue, ReadSimulationTime,
     VitalTimingCheck, VitalDelay,
-    WriteInertialDynamicPartSlice>;
+    WriteInertialDynamicPartSlice, WriteDelayed>;
 
 using StringOperationGroup = OperationGroup<LoadStringConstant, CopyStringRegister, ReadStringObject,
     WriteStringObject, ConcatenateStrings, CompareStrings,
@@ -66,8 +66,8 @@ using ContainerOperationGroup = OperationGroup<SystemVerilogScalarBinary, System
     CopyContainerAggregateElement, DeleteContainer,
     ContainerExists, TraverseContainer, LoadMemory,
     VitalMemoryDeclare,
-    PushContainer, PopContainer,
-    ContainerStringRead, ContainerStringWrite,
+    PushContainer, AppendContainer, PopContainer,
+    ContainerStringRead, ContainerStringWrite, FormatContainerPattern,
     ContainerElementRead, ContainerElementWrite,
     VhdlEnvironmentDirectory, VhdlEnvironmentGetCallPath, PlaEvaluate>;
 
@@ -328,7 +328,7 @@ static_assert(
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
         + std::variant_size_v<ClassOperationGroup::Storage>
-    == 190);
+    == 193);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept

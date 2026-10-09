@@ -1618,7 +1618,8 @@ bool Lowerer::lower_hir_container_copy_out(
 
 std::optional<Lowerer::HirClassPropertyProfile>
 Lowerer::hir_class_property_profile(
-    const semantic::ExpressionId expression_id) const
+    const semantic::ExpressionId expression_id,
+    const bool string_property) const
 {
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
@@ -1645,6 +1646,22 @@ Lowerer::hir_class_property_profile(
     };
     const auto* selected = resolver.resolve_systemverilog_class_property(
         access.class_member_identity, static_access).unique();
+    if (string_property) {
+        if (selected == nullptr
+            || selected->static_storage != static_access
+            || selected->type.value_form != semantic::sv::TypeForm::string
+            || selected->type.container_form) {
+            return std::nullopt;
+        }
+        HirClassPropertyProfile result;
+        result.identity = selected->canonical_identity;
+        if (instance) {
+            result.receiver = access.operands.front();
+        }
+        result.static_storage = selected->static_storage;
+        result.writable = !selected->constant && !selected->parameter;
+        return result;
+    }
     const auto property_width = selected != nullptr
         ? hir_systemverilog_type_width(selected->type)
         : std::nullopt;
@@ -1671,6 +1688,110 @@ Lowerer::hir_class_property_profile(
     result.static_storage = selected->static_storage;
     result.writable = !selected->constant && !selected->parameter;
     return result;
+}
+
+namespace {
+
+// The single string actual of a string property access (see the class
+// method hook in the application).
+template <typename Call>
+void prepare_string_property_call(Call& call, const StringRegisterId value,
+    const bool write)
+{
+    call.method_identity = (write ? "@string-property-write:"
+                                  : "@string-property-read:")
+        + call.method_identity;
+    call.actuals = { value };
+    call.actual_names = { "value" };
+    call.actual_directions = { static_cast<std::uint8_t>(write
+            ? semantic::sv::Direction::input
+            : semantic::sv::Direction::output) };
+    call.actual_kinds = { 1U };
+    call.result_width = 1U;
+}
+
+} // namespace
+
+std::optional<SignalId> Lowerer::hir_named_signal(
+    const std::string& name, const semantic::ScopeId scope)
+{
+    if (const auto found = signals_.find(name); found != signals_.end()) {
+        return found->second;
+    }
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto declaration
+        = semantic::CompiledDesignResolver {
+              *specialized_hir_unit_, hir_generic_binding_frames_ }
+              .resolve_systemverilog(name, scope, { }, true)
+              .unique();
+    const auto binding = declaration
+        ? hir_runtime_binding(*declaration, scope, false)
+        : std::nullopt;
+    return binding ? binding->signal : std::nullopt;
+}
+
+std::optional<StringRegisterId> Lowerer::lower_hir_class_string_property_read(
+    const semantic::ExpressionId expression_id)
+{
+    const auto property = hir_class_property_profile(expression_id, true);
+    if (!property) {
+        return std::nullopt;
+    }
+    const auto value = allocate_string_register();
+    process_.operations.emplace_back(LoadStringConstant { value, { } });
+    const auto result = allocate_register(1U, frontend::ValueDomain::Bit2);
+    if (property->static_storage) {
+        ClassStaticMethodCall call;
+        call.destination = result;
+        call.method_identity = property->identity;
+        prepare_string_property_call(call, value, false);
+        process_.operations.emplace_back(std::move(call));
+        return value;
+    }
+    const auto receiver = lower_hir_expression(*property->receiver, 64U);
+    if (!receiver || register_width(*receiver) != 64U) {
+        return std::nullopt;
+    }
+    ClassMethodCall call;
+    call.destination = result;
+    call.receiver = *receiver;
+    call.method_identity = property->identity;
+    call.virtual_dispatch = false;
+    prepare_string_property_call(call, value, false);
+    process_.operations.emplace_back(std::move(call));
+    return value;
+}
+
+bool Lowerer::lower_hir_class_string_property_write(
+    const semantic::ExpressionId target, const StringRegisterId value)
+{
+    const auto property = hir_class_property_profile(target, true);
+    if (!property || !property->writable) {
+        return false;
+    }
+    const auto result = allocate_register(1U, frontend::ValueDomain::Bit2);
+    if (property->static_storage) {
+        ClassStaticMethodCall call;
+        call.destination = result;
+        call.method_identity = property->identity;
+        prepare_string_property_call(call, value, true);
+        process_.operations.emplace_back(std::move(call));
+        return true;
+    }
+    const auto receiver = lower_hir_expression(*property->receiver, 64U);
+    if (!receiver || register_width(*receiver) != 64U) {
+        return false;
+    }
+    ClassMethodCall call;
+    call.destination = result;
+    call.receiver = *receiver;
+    call.method_identity = property->identity;
+    call.virtual_dispatch = false;
+    prepare_string_property_call(call, value, true);
+    process_.operations.emplace_back(std::move(call));
+    return true;
 }
 
 std::optional<std::vector<runtime::SystemVerilogConstraintTemplate>>

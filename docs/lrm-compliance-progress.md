@@ -249,6 +249,60 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 20: delays, memory part-selects, package variables, patterns
+
+Fixtures: `sv_patterns_and_aggregates.sv` and
+`sv_delays_packages_and_classes.sv` (both pass on xsim).
+
+Formats, aggregates and initializers (21.2.1.7, 7.2, 10.9, 10.10):
+- `%p` prints assignment patterns (`'{1,-2,3}`, `'{a:3,s:"z"}`, enum
+  names, quoted strings, nested arrays) through a new
+  `FormatContainerPattern` operation.
+- Unpacked structure members of string and real type, including singleton
+  structures; container declaration initializers (patterns, `default:`,
+  concatenations); unpacked array concatenation into queues and dynamic
+  arrays (`AppendContainer`); `new[n]('{...})`.
+- An integral value assigns to a packed structure; packed structures of
+  different types are assignment compatible (6.22.3).
+
+Delays and nonblocking writes (10.3.3, 10.4.2, 11.5.1):
+- Continuous assignments and nonblocking assignments with a run-time delay
+  (`assign #(period) y = x`, `q <= #d v`) use a new `WriteDelayed`
+  operation; an unknown integral delay counts as zero. Modules using it
+  run in the interpreter.
+- Nonblocking writes to memory elements and their part-selects, with or
+  without a delay or event control (`mem[0][3:0] <= @e v`): the operands
+  are evaluated at once and a `join_none` branch performs the update.
+- A constant part-select partially outside its vector writes only the
+  bits inside it; one wholly outside does nothing.
+- Procedural `assign` cannot target an array element; `defparam` cannot
+  override a type parameter.
+
+Packages, classes and names (26.2-26.6, 8.7, 8.25.1):
+- Package and `$unit` variables are one design-global signal with their
+  initializer, reached by explicit, wildcard or exported import and by
+  `P::x`; event controls on them work.
+- A class handle declared with `= new` is constructed before other
+  initial processes run; string class properties are read and written from
+  module code.
+- `C::name` on a parameterized class outside a class is rejected
+  (`SV-CLASS-023`); a constructor with non-ANSI ports is rejected.
+
+Parsing and legality:
+- Keywordless parameter port items, parameter ports without defaults,
+  items after `localparam` inherit it, unpacked array parameters, empty
+  positional connections, attributes inside expressions, `<->`, struct
+  nets, constant-function recursion and case signedness.
+- A procedural assignment to a net, including an element of a net array,
+  is rejected (`SVASSIGN-003`); a part-select of a scalar memory element is
+  rejected (`SVSELECT-001`); net declaration assignments on `tri`, `tri1`,
+  `wand` and the other net types are continuous.
+
+Corpus effect (interpreter): ivtest +179 (1883/2826), Verilator +39
+(766/2415), sv-tests +22 (1136/1497), nvc +8 (479/1482), VESTs +2
+(2037/3665); VHDL Compliance-Tests unchanged. 250 cases closed, no
+regressions.
+
 ### Batch 19: real values, monitors, hierarchical parameters, events
 
 Fixture: `sv_real_values_and_events.sv` (passes on xsim).

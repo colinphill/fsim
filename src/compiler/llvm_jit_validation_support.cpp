@@ -136,6 +136,8 @@ bool supports_wide_register_operation(
                     WriteContainerObjectElement>
                 || std::is_same_v<OperationType, ContainerStringRead>
                 || std::is_same_v<OperationType, ContainerStringWrite>
+                || std::is_same_v<OperationType, FormatContainerPattern>
+                || std::is_same_v<OperationType, AppendContainer>
                 || std::is_same_v<OperationType, CopyContainerAggregateElement>
                 || std::is_same_v<OperationType, DeleteContainer>
                 || std::is_same_v<OperationType, ContainerExists>
@@ -521,9 +523,11 @@ std::optional<std::string> validate_scalar_math_metadata(
             return "$rtoi requires a real operand";
         break;
     case SystemVerilogMathFunction::Itor:
+        // The callback converts an integral operand of any width; integral
+        // to real conversions (6.12.2) use it beyond the 32-bit $itor.
         if (operation.first_kind != SystemVerilogScalarKind::None
-            || operation.first_width != 32U)
-            return "$itor requires a 32-bit integral operand";
+            || operation.first_width == 0U)
+            return "$itor requires an integral operand";
         break;
     case SystemVerilogMathFunction::BitsToReal:
         if (operation.first_kind != SystemVerilogScalarKind::None

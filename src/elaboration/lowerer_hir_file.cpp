@@ -104,6 +104,8 @@ namespace {
         return Target::unformatted2;
     case Source::unformatted4:
         return Target::unformatted4;
+    case Source::pattern:
+        return Target::decimal;
     }
     return Target::decimal;
 }
@@ -136,6 +138,8 @@ namespace {
         return Target::unformatted2;
     case Source::Unformatted4:
         return Target::unformatted4;
+    case Source::Pattern:
+        return Target::decimal;
     case Source::Hierarchy:
     case Source::Time:
         break;
@@ -490,6 +494,9 @@ Lowerer::hir_string_format_expression_status(
             continue;
         }
         const auto value = call.operands[value_index++];
+        if (conversion.format == frontend::OutputFormat::Pattern) {
+            continue;
+        }
         if ((conversion.format == frontend::OutputFormat::String
                 && !hir_expression_is_string(value, process_scope))
             || (conversion.format != frontend::OutputFormat::String
@@ -537,7 +544,7 @@ Lowerer::lower_hir_formatted_string(
         process_.operations.emplace_back(ConcatenateStrings {
             destination, { destination, literal } });
     };
-    const auto append_value = [&](const frontend::ParsedOutputConversion& conversion,
+    const auto append_value_impl = [&](const frontend::ParsedOutputConversion& conversion,
                                   const std::optional<semantic::ExpressionId> value) {
         append_literal(conversion.prefix);
         if (conversion.format == frontend::OutputFormat::Hierarchy) {
@@ -620,6 +627,57 @@ Lowerer::lower_hir_formatted_string(
             conversion.minimum_width);
         process_.operations.emplace_back(operation);
         return true;
+    };
+    // `%p` (IEEE 1800-2017 21.2.1.7): an unpacked value as an assignment
+    // pattern, a string in quotes, an enumeration by name, and other
+    // singular values as `%0d` or `%g`.
+    const auto append_value = [&](const frontend::ParsedOutputConversion& conversion,
+                                  const std::optional<semantic::ExpressionId> value) {
+        if (conversion.format != frontend::OutputFormat::Pattern || !value) {
+            return append_value_impl(conversion, value);
+        }
+        const auto append_text = [&](const StringRegisterId text) {
+            process_.operations.emplace_back(ConcatenateStrings {
+                destination, { destination, text } });
+        };
+        if (hir_static_container_expression_type(*value)) {
+            const auto container = lower_hir_static_container_value(*value);
+            if (!container) {
+                return false;
+            }
+            append_literal(conversion.prefix);
+            const auto text = allocate_string_register();
+            process_.operations.emplace_back(
+                FormatContainerPattern { text, container->value });
+            append_text(text);
+            return true;
+        }
+        if (hir_expression_is_string(*value, hir_process_scope_)) {
+            const auto text = lower_hir_string_expression(*value);
+            if (!text) {
+                return false;
+            }
+            append_literal(conversion.prefix + "\"");
+            append_text(*text);
+            append_literal("\"");
+            return true;
+        }
+        if (const auto name
+            = lower_hir_systemverilog_enumeration_value_name(*value)) {
+            append_literal(conversion.prefix);
+            append_text(*name);
+            return true;
+        }
+        auto singular = conversion;
+        const auto kind = hir_systemverilog_scalar_kind(*value);
+        singular.format = kind == frontend::SystemVerilogScalarKind::Real
+                || kind == frontend::SystemVerilogScalarKind::Realtime
+                || kind == frontend::SystemVerilogScalarKind::ShortReal
+            ? frontend::OutputFormat::RealGeneral
+            : frontend::OutputFormat::Decimal;
+        singular.suppress_leading_zero = conversion.minimum_width == 0U
+            || conversion.suppress_leading_zero;
+        return append_value_impl(singular, value);
     };
 
     std::size_t value_index = default_format ? 0U : 1U;
@@ -719,13 +777,27 @@ Lowerer::HirStringFormatStatus Lowerer::hir_string_format_task_status(
     const auto binding = target_declaration
         ? hir_string_binding(*target_declaration, process_scope, false)
         : std::nullopt;
-    if (!target_expression || target_expression->systemverilog == nullptr
-        || target_expression->systemverilog->kind
-            != semantic::sv::ExpressionKind::name
-        || !binding
-        || (binding->kind == HirStringBindingKind::object
-            && (!binding->object
-                || read_only_string_objects_.contains(*binding->object)))) {
+    // The output variable may also be integral (IEEE 1800-2017 21.3.3).
+    const auto packed_target_width = !binding && target_declaration
+            && target_expression
+            && target_expression->systemverilog != nullptr
+            && !hir_expression_is_string(target, process_scope)
+            && hir_systemverilog_scalar_kind(target)
+                == frontend::SystemVerilogScalarKind::None
+        ? hir_expression_width(target, process_scope)
+        : std::nullopt;
+    const bool packed_target = packed_target_width
+        && *packed_target_width != 0U
+        && *packed_target_width <= (std::size_t { 1 } << 16U);
+    if (!packed_target
+        && (!target_expression || target_expression->systemverilog == nullptr
+            || target_expression->systemverilog->kind
+                != semantic::sv::ExpressionKind::name
+            || !binding
+            || (binding->kind == HirStringBindingKind::object
+                && (!binding->object
+                    || read_only_string_objects_.contains(
+                        *binding->object))))) {
         return HirStringFormatStatus::invalid;
     }
     const auto default_format = call.task.spelling == "$swriteb"
@@ -784,6 +856,9 @@ Lowerer::HirStringFormatStatus Lowerer::hir_string_format_task_status(
         }
         const auto value
             = *call.task_arguments[value_index++].actual;
+        if (conversion.format == frontend::OutputFormat::Pattern) {
+            continue;
+        }
         const auto width = hir_expression_width(value, process_scope);
         if ((conversion.format == frontend::OutputFormat::String
                 && !hir_expression_is_string(value, process_scope))
@@ -840,9 +915,57 @@ bool Lowerer::lower_hir_string_format_task(
         DebugPointKind::call, hir_source_span(call.source));
     const auto result = lower_hir_formatted_string(
         arguments, default_format);
-    return result
-        && lower_hir_string_copy_out(
-            *call.task_arguments.front().actual, *result);
+    if (!result) {
+        return false;
+    }
+    const auto target = *call.task_arguments.front().actual;
+    const auto target_declaration = hir_target_declaration(target);
+    const auto string_target = target_declaration
+        && hir_string_binding(*target_declaration, hir_process_scope_, false);
+    if (string_target || hir_expression_is_string(target, hir_process_scope_)) {
+        return lower_hir_string_copy_out(target, *result);
+    }
+    // An integral output variable receives the string's characters, the
+    // last character least significant, zero-filled on the left (IEEE
+    // 1800-2017 21.3.3, 5.9).
+    const auto width = hir_expression_width(target, hir_process_scope_);
+    if (!width || *width == 0U) {
+        return false;
+    }
+    const auto length = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(StringLength { length, *result });
+    auto packed = allocate_register(*width, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(
+        LoadConstant { packed, unsigned_value(0U, *width) });
+    const auto bytes = (*width + 7U) / 8U;
+    for (std::size_t byte = 0; byte < bytes; ++byte) {
+        const auto distance = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            distance, unsigned_value(byte + 1U, 32U) });
+        const auto index = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::subtract_unsigned, index, length, distance });
+        // getc of an index outside the string is zero (6.16.3).
+        const auto character = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        StringMethod getc;
+        getc.operation = StringMethodOperator::getc;
+        getc.destination = character;
+        getc.source = *result;
+        getc.first = index;
+        process_.operations.emplace_back(getc);
+        const auto bits = std::min<std::size_t>(8U, *width - byte * 8U);
+        const auto part = allocate_register(bits, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Extract {
+            part, character, 0U, static_cast<std::uint32_t>(bits) });
+        const auto next = allocate_register(*width, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Insert {
+            next, packed, part, static_cast<std::uint32_t>(byte * 8U) });
+        packed = next;
+    }
+    return lower_hir_packed_copy_out(target, packed);
 }
 
 void Lowerer::diagnose_hir_systemverilog_file_process(
@@ -1279,6 +1402,11 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                         const auto compatible = [&]
                             (const semantic::ExpressionId value,
                              const frontend::OutputFormat output) {
+                                // `%p` formats a value of any type.
+                                if (output
+                                    == frontend::OutputFormat::Pattern) {
+                                    return true;
+                                }
                                 if (output
                                         == frontend::OutputFormat::String
                                     && hir_expression_is_string(
@@ -3085,6 +3213,40 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                 if (!output.value) {
                     return false;
                 }
+                const bool pattern
+                    = output.format == semantic::sv::OutputFormat::pattern;
+                // `%p` writes an unpacked value as an assignment pattern
+                // and a string in quotes (IEEE 1800-2017 21.2.1.7).
+                if (pattern
+                    && hir_static_container_expression_type(*output.value)) {
+                    const auto container
+                        = lower_hir_static_container_value(*output.value);
+                    if (!container) {
+                        return false;
+                    }
+                    const auto text = allocate_string_register();
+                    process_.operations.emplace_back(
+                        FormatContainerPattern { text, container->value });
+                    process_.operations.emplace_back(FileWriteString {
+                        *handle, text, output.prefix, std::move(suffix),
+                        newline,
+                    });
+                    return true;
+                }
+                if (pattern
+                    && hir_expression_is_string(
+                        *output.value, hir_process_scope_)) {
+                    const auto value = lower_hir_string_expression(
+                        *output.value);
+                    if (!value) {
+                        return false;
+                    }
+                    process_.operations.emplace_back(FileWriteString {
+                        *handle, *value, output.prefix + "\"",
+                        "\"" + std::move(suffix), newline,
+                    });
+                    return true;
+                }
                 if ((output.format == semantic::sv::OutputFormat::string
                         || output.format
                             == semantic::sv::OutputFormat::decimal)
@@ -3101,8 +3263,20 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                     });
                     return true;
                 }
-                const auto format = runtime_output_format(output.format);
-                auto kind = expression_scalar_kind(*output.value);
+                auto kind = pattern
+                    ? hir_systemverilog_scalar_kind(*output.value)
+                    : expression_scalar_kind(*output.value);
+                const auto format = pattern
+                        && (kind == frontend::SystemVerilogScalarKind::Real
+                            || kind
+                                == frontend::SystemVerilogScalarKind::Realtime
+                            || kind
+                                == frontend::SystemVerilogScalarKind::ShortReal)
+                    ? runtime::simir::OutputFormat::real_general
+                    : runtime_output_format(output.format);
+                const bool suppress_leading_zero
+                    = output.suppress_leading_zero
+                    || (pattern && output.minimum_width == 0U);
                 const bool real_conversion
                     = (format == runtime::simir::OutputFormat::real_scientific
                         || format == runtime::simir::OutputFormat::real_fixed
@@ -3136,9 +3310,9 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                     newline,
                     format == runtime::simir::OutputFormat::decimal
                         && hir_expression_signed(*output.value),
-                    output.suppress_leading_zero,
+                    suppress_leading_zero,
                     hir_systemverilog_decimal_width(*output.value, format,
-                        output.suppress_leading_zero || output.left_justify,
+                        suppress_leading_zero || output.left_justify,
                         output.minimum_width),
                     output.left_justify,
                     output.zero_pad,

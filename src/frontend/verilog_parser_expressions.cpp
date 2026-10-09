@@ -282,6 +282,10 @@ std::optional<VerilogParser::BinaryOperation> VerilogParser::binary_operation() 
         || (at(TokenKind::NotEqual) && current().text == "!=")) {
         return BinaryOperation { 6, current().text };
     }
+    // `<` followed by `->` is the equivalence operator `<->`.
+    if (at(TokenKind::Less) && at(TokenKind::ThinArrow, 1)) {
+        return std::nullopt;
+    }
     if (at(TokenKind::Less) || at(TokenKind::LessEqual) || at(TokenKind::Greater) || at(TokenKind::GreaterEqual)) {
         return BinaryOperation { 7, current().text };
     }
@@ -421,12 +425,20 @@ Expression VerilogParser::parse_expression(int minimum_precedence)
                 "wildcard equality operators require SystemVerilog");
         }
         advance();
+        // An attribute instance may follow a binary operator (IEEE
+        // 1800-2017 5.12).
+        if (verilog_attribute_instance_start()) {
+            parse_verilog_attribute_instances();
+        }
         Expression right = parse_expression(operation->precedence + 1);
         const auto combined = cover(left.span, right.span);
         left = Expression { ExpressionKind::Binary, operation->name,
             { std::move(left), std::move(right) }, combined };
     }
     if (minimum_precedence == 0 && match(TokenKind::Question)) {
+        if (verilog_attribute_instance_start()) {
+            parse_verilog_attribute_instances();
+        }
         Expression when_true = parse_expression();
         expect(TokenKind::Colon, "':' in conditional expression",
             "FSIM-SV-PARSE-027");
@@ -436,6 +448,23 @@ Expression VerilogParser::parse_expression(int minimum_precedence)
             { std::move(left), std::move(when_true),
                 std::move(when_false) },
             combined };
+    }
+    // Logical equivalence `a <-> b` (IEEE 1800-2017 11.4.7) is true when
+    // both operands have the same truth value: !(!a ^ !b).
+    if (minimum_precedence == 0 && language_ == Language::SystemVerilog2017
+        && at(TokenKind::Less) && at(TokenKind::ThinArrow, 1)) {
+        advance();
+        advance();
+        Expression right = parse_expression();
+        const auto combined = cover(left.span, right.span);
+        Expression left_truth { ExpressionKind::Unary, "!",
+            { std::move(left) }, combined };
+        Expression right_truth { ExpressionKind::Unary, "!",
+            { std::move(right) }, combined };
+        Expression different { ExpressionKind::Binary, "^",
+            { std::move(left_truth), std::move(right_truth) }, combined };
+        left = Expression { ExpressionKind::Unary, "!",
+            { std::move(different) }, combined };
     }
     return left;
 }
@@ -467,6 +496,9 @@ Expression VerilogParser::parse_unary()
     }
     if (at(TokenKind::Plus) || at(TokenKind::Minus) || at(TokenKind::Bang) || at(TokenKind::Tilde) || at(TokenKind::Ampersand) || at(TokenKind::Pipe) || at(TokenKind::Caret) || at(TokenKind::TildeAmpersand) || at(TokenKind::TildePipe) || at(TokenKind::TildeCaret) || at(TokenKind::CaretTilde)) {
         const auto operation = advance();
+        if (verilog_attribute_instance_start()) {
+            parse_verilog_attribute_instances();
+        }
         Expression operand = parse_unary();
         return Expression { ExpressionKind::Unary, operation.text,
             { std::move(operand) },
@@ -780,6 +812,11 @@ Expression VerilogParser::parse_primary()
                 StandardRevision::SystemVerilog2005,
                 name,
                 "FSIM-SV-PARSE-349");
+        }
+        // An attribute instance may precede a call's arguments (IEEE
+        // 1800-2017 5.12): `f (* attribute *) (a, b)`.
+        if (verilog_attribute_instance_start()) {
+            parse_verilog_attribute_instances();
         }
         if (match(TokenKind::LeftParen)) {
             std::vector<Expression> arguments;

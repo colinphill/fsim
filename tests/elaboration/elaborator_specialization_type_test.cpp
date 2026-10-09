@@ -165,6 +165,7 @@ endmodule
         const auto result = compile_and_elaborate(
             nominal_legality.design, "sv:work." + std::string { top });
         if (result.ok() || !has_diagnostic(result, code)) {
+            std::cerr << top << ": expected " << code << '\n';
             for (const auto& diagnostic : result.diagnostics) {
                 std::cerr << top << ": " << diagnostic.code << ": "
                           << diagnostic.message << '\n';
@@ -176,16 +177,20 @@ endmodule
     rejects("invalid_enum_parameter", "FSIM-ELAB-SVCONST-001");
     rejects("invalid_enum_assignment", "FSIM-ELAB-SVTYPE-004");
     rejects("invalid_enum_raw_assignment", "FSIM-ELAB-SVTYPE-004");
-    rejects("invalid_function_argument", "FSIM-ELAB-SVTYPE-004");
-    rejects("invalid_function_return", "FSIM-ELAB-SVTYPE-004");
-    rejects("invalid_task_copyout", "FSIM-ELAB-SVTYPE-004");
-    rejects("invalid_nested_pattern", "FSIM-ELAB-SVTYPE-004");
+    // Packed structures are integral, and integral types are assignment
+    // compatible, across arguments, returns, copy-out, nested patterns,
+    // casts, and ports (IEEE 1800-2017 6.22.3).
+    for (const auto* accepted : {
+             "invalid_function_argument", "invalid_function_return",
+             "invalid_task_copyout", "invalid_nested_pattern",
+             "invalid_explicit_cast", "invalid_nominal_port" }) {
+        assert(compile_and_elaborate(nominal_legality.design,
+            "sv:work." + std::string { accepted }).ok());
+    }
     // Enumerations of different types compare as integral values
     // (IEEE 1800-2017 6.19.3, 11.4.5).
     assert(compile_and_elaborate(
         nominal_legality.design, "sv:work.invalid_enum_equality").ok());
-    rejects("invalid_explicit_cast", "FSIM-ELAB-SVTYPE-004");
-    rejects("invalid_nominal_port", "FSIM-ELAB-BIND-057");
     rejects("invalid_enum_port", "FSIM-ELAB-BIND-053");
 
     const auto invalid_aggregate = fsim::frontend::parse_text(
@@ -305,10 +310,9 @@ endmodule
     const auto invalid_member_initializer = compile_and_elaborate(
         invalid_aggregate.design,
         "sv:work.invalid_member_initializer");
-    assert(
-        !invalid_nominal.ok()
-        && has_diagnostic(
-            invalid_nominal, "FSIM-ELAB-SVTYPE-004"));
+    // A packed structure assigns to another packed structure type as an
+    // integral value (IEEE 1800-2017 6.22.3).
+    assert(invalid_nominal.ok());
     assert(
         !invalid_pattern.ok()
         && has_diagnostic(

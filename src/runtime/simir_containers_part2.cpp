@@ -12,6 +12,57 @@ void Interpreter::Impl::execute_container(
     const ContainerStringWrite& operation)
 {
     auto& target = get_container_register(process, operation.target);
+    if (!operation.members.empty()) {
+        if (target.type.element_kind != ContainerElementKind::Aggregate
+            || target.type.associative || operation.string_index) {
+            container_error(
+                process.id, process.pc,
+                "aggregate string member write requires an indexed aggregate container");
+        }
+        const auto at = target.type.aggregate_value ? std::size_t { }
+            : target.type.fixed
+            ? operation.linear_index
+                ? known_index(
+                      process.id, process.pc,
+                      get_register(process, operation.index), true,
+                      "multidimensional linear index")
+                : fixed_offset(
+                      process.id, process.pc, target.type,
+                      get_register(process, operation.index))
+            : known_index(
+                  process.id, process.pc,
+                  get_register(process, operation.index),
+                  operation.signed_index, "container index");
+        if (!target.type.aggregate_value
+            && at >= target.nested_elements.size()) {
+            container_error(
+                process.id, process.pc,
+                "aggregate container index is out of range");
+        }
+        auto* selected = target.type.aggregate_value
+            ? &target
+            : &target.nested_elements[at];
+        for (const auto member : operation.members) {
+            if (selected->type.element_kind != ContainerElementKind::Aggregate
+                || member >= selected->nested_elements.size()) {
+                container_error(
+                    process.id, process.pc,
+                    "aggregate string member write path is invalid");
+            }
+            selected = &selected->nested_elements[member];
+        }
+        if (selected->type.element_kind != ContainerElementKind::String
+            || !selected->type.fixed
+            || selected->string_elements.size() != 1U) {
+            container_error(
+                process.id, process.pc,
+                "aggregate string member write requires a scalar string leaf");
+        }
+        selected->string_elements.front()
+            = get_string_register(process, operation.source);
+        ++process.pc;
+        return;
+    }
     if (target.type.element_kind != ContainerElementKind::String) {
         container_error(
             process.id, process.pc,

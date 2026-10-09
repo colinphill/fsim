@@ -441,7 +441,8 @@ endmodule
     // IEEE 1800-2017 10.6.2: a force bit-select needs a constant index.
     assert(has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-001"));
     assert(has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-002"));
-    assert(has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-003"));
+    // A four-state value forced onto a two-state target converts.
+    assert(!has_diagnostic(rejected_force, "FSIM-ELAB-SVFORCE-003"));
 
     const auto invalid_procedural_assign = fsim::frontend::parse_text(
         "invalid_procedural_assign.sv",

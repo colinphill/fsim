@@ -3977,6 +3977,15 @@ std::optional<RegisterId> Lowerer::lower_hir_membership_expression(
 std::optional<RegisterId> Lowerer::lower_hir_container_element_index(
     const HirContainerElementBinding& element)
 {
+    // A singleton structure ignores the element index.
+    if (element.type != nullptr && element.indices.empty()
+        && element.type->aggregate_value) {
+        const auto zero = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(
+            LoadConstant { zero, unsigned_value(0U, 32U) });
+        return zero;
+    }
     if (element.type == nullptr || element.indices.empty()
         || (element.indices.size() > 1U
             && element.type->dimensions.size() != element.indices.size())) {
@@ -6260,8 +6269,17 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         }
         return result;
     }();
-    const auto fold_candidate = specialization_fold_candidate
-        || safe_vhdl_constant_candidate;
+    // A real value is not an integral constant (IEEE 1800-2017 6.12).
+    const auto folded_scalar_kind = expression->systemverilog != nullptr
+        ? hir_systemverilog_scalar_kind(expression_id)
+        : frontend::SystemVerilogScalarKind::None;
+    const bool real_valued
+        = folded_scalar_kind == frontend::SystemVerilogScalarKind::Real
+        || folded_scalar_kind == frontend::SystemVerilogScalarKind::Realtime
+        || folded_scalar_kind == frontend::SystemVerilogScalarKind::ShortReal;
+    const auto fold_candidate = (specialization_fold_candidate
+                                    || safe_vhdl_constant_candidate)
+        && !real_valued;
     const auto expression_contains_call
         = [&](const auto& self,
               const semantic::ExpressionId candidate,
@@ -10685,10 +10703,51 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             const auto width = hir_expression_width(
                 expression_id, hir_process_scope_)
                                    .value_or(expected_width);
-            const auto constant_value
-                = specialized_hir_unit_->evaluate_integral_expression(
+            // A real parameter holds its initializer converted to real
+            // (IEEE 1800-2017 6.20.2, 6.12.2).
+            const auto declared = specialized_hir_unit_->find_declaration(
+                *declaration);
+            const auto declared_spelling = declared
+                    && declared->systemverilog != nullptr
+                    && declared->systemverilog->type
+                ? std::string_view {
+                      declared->systemverilog->type->target.spelling }
+                : std::string_view { };
+            const auto declared_kind = declared_spelling == "real"
+                ? frontend::SystemVerilogScalarKind::Real
+                : declared_spelling == "realtime"
+                ? frontend::SystemVerilogScalarKind::Realtime
+                : declared_spelling == "shortreal"
+                ? frontend::SystemVerilogScalarKind::ShortReal
+                : frontend::SystemVerilogScalarKind::None;
+            std::optional<frontend::SystemVerilogScalarConstant> real_value;
+            if (declared_kind != frontend::SystemVerilogScalarKind::None) {
+                std::string error;
+                real_value = evaluate_hir_systemverilog_scalar_declaration(
+                    *specialized_hir_unit_, *declaration, error);
+                if (real_value) {
+                    real_value = frontend::convert_systemverilog_scalar_constant(
+                        *real_value, declared_kind, error);
+                }
+            }
+            const auto constant_value = real_value
+                ? std::optional<std::int64_t> { }
+                : specialized_hir_unit_->evaluate_integral_expression(
                     expression_id);
-            if (constant_value) {
+            if (real_value) {
+                const auto real_width
+                    = declared_kind == frontend::SystemVerilogScalarKind::ShortReal
+                    ? 32U
+                    : 64U;
+                const auto destination = allocate_register(
+                    real_width, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(LoadConstant {
+                    destination,
+                    PackedLogic4::from_aval_bval(
+                        real_width, real_value->bits, 0U),
+                });
+                result = destination;
+            } else if (constant_value) {
                 const auto result_width = expected_width != 0U
                     ? expected_width
                     : width;
@@ -10742,6 +10801,34 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                         *contextual_packed_pattern,
                         *declaration_record->systemverilog->type,
                         width);
+                } else if (const auto initializer_kind
+                    = hir_systemverilog_scalar_kind(*initializer);
+                    declared_kind == frontend::SystemVerilogScalarKind::None
+                    && (initializer_kind
+                            == frontend::SystemVerilogScalarKind::Real
+                        || initializer_kind
+                            == frontend::SystemVerilogScalarKind::Realtime
+                        || initializer_kind
+                            == frontend::SystemVerilogScalarKind::ShortReal)
+                    && declared && declared->systemverilog != nullptr
+                    && declared->systemverilog->type
+                    && declared->systemverilog->type->target.spelling
+                        != "implicit") {
+                    // An integral parameter rounds a real value (6.12.2).
+                    auto real_initializer = lower_hir_expression(*initializer,
+                        initializer_kind
+                                == frontend::SystemVerilogScalarKind::ShortReal
+                            ? 32U
+                            : 64U,
+                        initializer_kind);
+                    if (real_initializer) {
+                        auto integral = convert_hir_real_to_integral(
+                            *real_initializer, initializer_kind);
+                        if (register_width(integral) != width && width != 0U) {
+                            integral = resize_register(integral, width, true);
+                        }
+                        result = integral;
+                    }
                 } else {
                     result = lower_hir_expression(*initializer, width);
                 }
@@ -13204,6 +13291,40 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
         selection && selection->member < 3U) {
         return lower_hir_vhdl_environment_call_path_string_selection(
             expression_id);
+    }
+    if (hir_class_property_profile(expression_id, true)) {
+        return lower_hir_class_string_property_read(expression_id);
+    }
+    // A string member of an unpacked structure, `s.name` or `a[i].name`.
+    if (const auto member = hir_container_aggregate_selection(
+            expression_id, true);
+        member
+        && member->leaf.element_kind == ContainerElementKind::String) {
+        const auto index = lower_hir_container_element_index(
+            member->element);
+        if (!index) {
+            return std::nullopt;
+        }
+        const auto container = member->element.local
+            ? *member->element.local
+            : allocate_container_register(*member->element.type);
+        if (!member->element.local) {
+            process_.operations.emplace_back(ReadContainerObject {
+                container, member->element.object });
+            record_container_object_dependency(member->element.object);
+        }
+        const auto destination = allocate_string_register();
+        process_.operations.emplace_back(ContainerStringRead {
+            destination,
+            container,
+            *index,
+            member->element.indices.size() > 1U
+                || member->element.type->signed_indices,
+            member->element.indices.size() > 1U,
+            false,
+            member->members,
+        });
+        return destination;
     }
     if (const auto element = hir_container_element_binding(expression_id);
         element && element->selected_type != nullptr

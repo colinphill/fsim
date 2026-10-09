@@ -3,6 +3,7 @@
 #include "hierarchy_builder_internal.hpp"
 #include "hierarchy_sv_parameters_internal.hpp"
 #include "hierarchy_sv_type_layout_internal.hpp"
+#include "hierarchy_sv_constant_evaluator.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -23,6 +24,163 @@ using namespace elaboration_detail;
 using namespace hierarchy_sv_parameters_detail;
 
 namespace {
+
+    // The constant value of a container declaration initializer: a positional
+    // assignment pattern, nested patterns for the dimensions of a fixed
+    // array, `default:`, or for a queue or dynamic array an unpacked
+    // concatenation (IEEE 1800-2017 10.9, 10.10, 6.8).
+    [[nodiscard]] std::optional<ContainerValue>
+    constant_container_initializer(
+        const semantic::SpecializedHirUnit& specialization,
+        const ContainerType& type,
+        const semantic::ExpressionId initializer)
+    {
+        using semantic::sv::ExpressionKind;
+        if (type.associative || type.aggregate_value
+            || (type.element_kind != ContainerElementKind::Packed
+                && type.element_kind != ContainerElementKind::Scalar
+                && type.element_kind != ContainerElementKind::String)) {
+            return std::nullopt;
+        }
+        std::optional<std::size_t> leaf_count;
+        if (type.fixed) {
+            std::size_t product = 1U;
+            for (const auto& [left, right] : type.dimensions) {
+                const auto extent = static_cast<std::size_t>(
+                    left >= right
+                        ? static_cast<std::int64_t>(left) - right
+                        : static_cast<std::int64_t>(right) - left) + 1U;
+                if (extent > (std::size_t { 1 } << 24U) / product) {
+                    return std::nullopt;
+                }
+                product *= extent;
+            }
+            leaf_count = product;
+        }
+        if (type.fixed && (!leaf_count || *leaf_count == 0U)) {
+            return std::nullopt;
+        }
+        std::vector<semantic::ExpressionId> leaves;
+        std::optional<semantic::ExpressionId> default_value;
+        bool valid = true;
+        const auto collect = [&](const auto& self,
+                                 const semantic::ExpressionId id,
+                                 const std::size_t depth) -> void {
+            const auto expression = specialization.find_expression(id);
+            if (!expression || expression->systemverilog == nullptr) {
+                valid = false;
+                return;
+            }
+            const auto& source = *expression->systemverilog;
+            const auto nested_dimensions
+                = type.fixed ? type.dimensions.size() : 1U;
+            if (source.kind == ExpressionKind::assignment_pattern
+                && depth < nested_dimensions) {
+                for (const auto& association : source.associations) {
+                    if (association.choice_spelling == "default") {
+                        if (depth != 0U || default_value) {
+                            valid = false;
+                        }
+                        default_value = association.value;
+                        continue;
+                    }
+                    if (!association.choice_spelling.empty()) {
+                        valid = false;
+                        return;
+                    }
+                    self(self, association.value, depth + 1U);
+                }
+                return;
+            }
+            if (source.kind == ExpressionKind::concatenation && depth == 0U
+                && !type.fixed) {
+                for (const auto operand : source.operands) {
+                    self(self, operand, depth + 1U);
+                }
+                return;
+            }
+            if (depth != nested_dimensions) {
+                valid = false;
+                return;
+            }
+            leaves.push_back(id);
+        };
+        collect(collect, initializer, 0U);
+        if (!valid
+            || (type.fixed && !default_value && leaves.size() != *leaf_count)
+            || (type.fixed && leaves.size() > *leaf_count)
+            || (!type.fixed && default_value)
+            || (type.maximum_elements && leaves.size() > *type.maximum_elements)) {
+            return std::nullopt;
+        }
+        auto value = default_container_value(type);
+        const auto count = type.fixed ? *leaf_count : leaves.size();
+        std::string error;
+        const auto leaf_value = [&](const semantic::ExpressionId id,
+                                    const std::size_t at) -> bool {
+            if (type.element_kind == ContainerElementKind::String) {
+                const auto text = specialization.evaluate_string_expression(id);
+                if (!text) {
+                    return false;
+                }
+                value.string_elements[at] = *text;
+                return true;
+            }
+            if (type.element_kind == ContainerElementKind::Scalar) {
+                auto scalar = evaluate_hir_systemverilog_scalar_constant(
+                    specialization, id, error);
+                if (scalar) {
+                    scalar = frontend::convert_systemverilog_scalar_constant(
+                        *scalar, type.scalar_kind, error);
+                }
+                if (!scalar) {
+                    return false;
+                }
+                value.elements[at] = PackedLogic4::from_aval_bval(
+                    type.element_width, scalar->bits, 0U);
+                return true;
+            }
+            const auto constant = evaluate_hir_systemverilog_constant(
+                specialization, id, error);
+            if (!constant || constant->unbounded) {
+                return false;
+            }
+            PackedLogic4 element(type.element_width,
+                type.two_state ? Logic4::zero : Logic4::x);
+            const auto fill = constant->signed_value && constant->width != 0U
+                ? constant->packed.get(constant->width - 1U)
+                : Logic4::zero;
+            for (std::size_t bit = 0; bit < type.element_width; ++bit) {
+                auto state = bit < constant->packed.width()
+                    ? runtime::to_logic4(constant->packed.get_logic9(bit))
+                    : fill;
+                if (type.two_state
+                    && state != Logic4::zero && state != Logic4::one) {
+                    state = Logic4::zero;
+                }
+                element.set(bit, state);
+            }
+            value.elements[at] = std::move(element);
+            return true;
+        };
+        if (!type.fixed) {
+            if (type.element_kind == ContainerElementKind::String) {
+                value.string_elements.assign(count, std::string { });
+            } else {
+                value.elements.assign(count,
+                    PackedLogic4(type.element_width,
+                        type.two_state ? Logic4::zero : Logic4::x));
+            }
+        }
+        for (std::size_t at = 0; at < count; ++at) {
+            const auto source = at < leaves.size() ? leaves[at]
+                                                    : *default_value;
+            if (!leaf_value(source, at)) {
+                return std::nullopt;
+            }
+        }
+        return value;
+    }
 
     const std::string* compiled_physical_source(
         const semantic::CompiledDesign& compiled,
@@ -388,7 +546,13 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 return true;
             }
         }
-        if (declaration.initializer) {
+        std::optional<ContainerValue> initial_container;
+        if (declaration.initializer && executable_container_type) {
+            initial_container = constant_container_initializer(
+                working_specialization, *executable_container_type,
+                *declaration.initializer);
+        }
+        if (declaration.initializer && !initial_container) {
             report(
                 "FSIM-ELAB-HIR-001",
                 "compiled container declaration '"
@@ -477,7 +641,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             });
         design_.container_objects_.push_back(ContainerObject {
             full_name,
-            default_container_value(*type),
+            initial_container ? std::move(*initial_container)
+                              : default_container_value(*type),
             std::nullopt,
         });
         materialization.container_objects.emplace(
@@ -561,9 +726,17 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 : domain == frontend::ValueDomain::Logic4
                 ? Logic4::x
                 : Logic4::zero;
+            // A declaration initializer also sets the bridge's value.
+            const auto& initial_object
+                = design_.container_objects_.at(id).initial_value;
+            const bool initialized_bridge = declaration.initializer
+                && container_signal_bridge_width(initial_object.type)
+                    == bridge_width;
             Signal signal {
                 full_name,
-                PackedLogic4(*bridge_width, initial_value),
+                initialized_bridge
+                    ? pack_container_signal_value(initial_object, false)
+                    : PackedLogic4(*bridge_width, initial_value),
                 ResolutionKind::none,
                 value_kind(domain),
                 std::nullopt,

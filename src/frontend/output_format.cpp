@@ -72,7 +72,8 @@ parse_output_format(const std::string_view text) {
         && conversion != 'd' && conversion != 'c'
         && conversion != 's' && conversion != 'e'
         && conversion != 'f' && conversion != 'g' && conversion != 'm'
-        && conversion != 't' && conversion != 'u' && conversion != 'z') {
+        && conversion != 't' && conversion != 'u' && conversion != 'z'
+        && conversion != 'p') {
       result.valid = false;
       return result;
     }
@@ -122,6 +123,7 @@ parse_output_format(const std::string_view text) {
             : conversion == 'm' ? OutputFormat::Hierarchy
             : conversion == 't' ? OutputFormat::Time
             : conversion == 'u' ? OutputFormat::Unformatted2
+            : conversion == 'p' ? OutputFormat::Pattern
                                 : OutputFormat::Unformatted4;
     result.conversions.push_back(std::move(parsed));
   }

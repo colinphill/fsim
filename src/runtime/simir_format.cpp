@@ -31,6 +31,8 @@ namespace fsim::runtime::simir {
                 return std::optional { value.signal };
             } else if constexpr (std::is_same_v<OperationType, WriteInertial>) {
                 return std::optional { value.signal };
+            } else if constexpr (std::is_same_v<OperationType, WriteDelayed>) {
+                return std::optional { value.signal };
             } else if constexpr (std::is_same_v<OperationType, WriteProjected>) {
                 return std::optional { value.signal };
             } else if constexpr (std::is_same_v<OperationType, WriteProjectedWaveform>) {
@@ -452,6 +454,173 @@ namespace fsim::runtime::simir {
         return (old_value == Logic4::zero && (new_value == Logic4::one || new_value == Logic4::x || new_value == Logic4::z)) || ((old_value == Logic4::x || old_value == Logic4::z) && new_value == Logic4::one);
     }
     return (old_value == Logic4::one && (new_value == Logic4::zero || new_value == Logic4::x || new_value == Logic4::z)) || ((old_value == Logic4::x || old_value == Logic4::z) && new_value == Logic4::zero);
+}
+
+namespace {
+
+[[nodiscard]] std::string pattern_packed_element(
+    const PackedLogic4& value, const bool signed_value)
+{
+    if (value.is_logic9()) {
+        return format_output_value(
+            value, OutputFormat::binary, false, true);
+    }
+    bool known = true;
+    for (std::size_t bit = 0; bit < value.width(); ++bit) {
+        const auto state = value.get(bit);
+        if (state != Logic4::zero && state != Logic4::one) {
+            known = false;
+            break;
+        }
+    }
+    if (known) {
+        return format_output_value(
+            value, OutputFormat::decimal, signed_value, true);
+    }
+    return std::to_string(value.width()) + "'b"
+        + format_output_value(value, OutputFormat::binary, false, false);
+}
+
+[[nodiscard]] std::string pattern_quoted(const std::string& text)
+{
+    std::string result = "\"";
+    for (const char character : text) {
+        if (character == '"' || character == '\\') {
+            result.push_back('\\');
+        }
+        result.push_back(character);
+    }
+    result.push_back('"');
+    return result;
+}
+
+void append_assignment_pattern(std::string& text, const ContainerValue& value);
+
+void append_pattern_element(
+    std::string& text, const ContainerValue& value, const std::size_t index)
+{
+    switch (value.type.element_kind) {
+    case ContainerElementKind::Packed:
+        text += pattern_packed_element(
+            value.elements.at(index), value.type.signed_elements);
+        return;
+    case ContainerElementKind::Scalar:
+        text += make_formatted_output({ }, { }, OutputFormat::real_general,
+            value.elements.at(index), false, false, 0U, false, false,
+            value.type.scalar_kind);
+        return;
+    case ContainerElementKind::String:
+        text += pattern_quoted(value.string_elements.at(index));
+        return;
+    case ContainerElementKind::Container:
+    case ContainerElementKind::Aggregate:
+        append_assignment_pattern(text, value.nested_elements.at(index));
+        return;
+    }
+}
+
+[[nodiscard]] std::size_t pattern_element_count(const ContainerValue& value)
+{
+    switch (value.type.element_kind) {
+    case ContainerElementKind::Packed:
+    case ContainerElementKind::Scalar:
+        return value.elements.size();
+    case ContainerElementKind::String:
+        return value.string_elements.size();
+    case ContainerElementKind::Container:
+    case ContainerElementKind::Aggregate:
+        return value.nested_elements.size();
+    }
+    return 0U;
+}
+
+void append_assignment_pattern(std::string& text, const ContainerValue& value)
+{
+    if (value.type.aggregate_value) {
+        // A structure prints its members by name; a union prints only its
+        // first member.
+        text += "'{";
+        const auto count = value.type.union_aggregate
+            ? std::min<std::size_t>(value.nested_elements.size(), 1U)
+            : value.nested_elements.size();
+        for (std::size_t member = 0; member < count; ++member) {
+            if (member != 0U) {
+                text.push_back(',');
+            }
+            if (member < value.type.member_names.size()
+                && !value.type.member_names[member].empty()) {
+                text += value.type.member_names[member];
+                text.push_back(':');
+            }
+            const auto& field = value.nested_elements[member];
+            // A singular member is a fixed one-element container.
+            if (!field.type.aggregate_value && field.type.fixed
+                && field.type.dimensions.size() <= 1U
+                && pattern_element_count(field) == 1U
+                && field.type.index_left == field.type.index_right
+                && field.type.element_kind != ContainerElementKind::Container) {
+                append_pattern_element(text, field, 0U);
+            } else {
+                append_assignment_pattern(text, field);
+            }
+        }
+        text.push_back('}');
+        return;
+    }
+    // A multidimensional fixed array nests one pattern per dimension.
+    if (value.type.fixed && value.type.dimensions.size() > 1U) {
+        std::vector<std::size_t> extents;
+        for (const auto& [left, right] : value.type.dimensions) {
+            extents.push_back(static_cast<std::size_t>(left >= right
+                ? static_cast<std::int64_t>(left) - right
+                : static_cast<std::int64_t>(right) - left) + 1U);
+        }
+        std::size_t next = 0;
+        const auto nested = [&](const auto& self, const std::size_t depth)
+            -> void {
+            text += "'{";
+            for (std::size_t index = 0; index < extents[depth]; ++index) {
+                if (index != 0U) {
+                    text.push_back(',');
+                }
+                if (depth + 1U < extents.size()) {
+                    self(self, depth + 1U);
+                } else if (next < pattern_element_count(value)) {
+                    append_pattern_element(text, value, next++);
+                }
+            }
+            text.push_back('}');
+        };
+        nested(nested, 0U);
+        return;
+    }
+    text += "'{";
+    const auto count = pattern_element_count(value);
+    for (std::size_t index = 0; index < count; ++index) {
+        if (index != 0U) {
+            text.push_back(',');
+        }
+        if (value.type.associative) {
+            if (value.type.string_indices) {
+                text += pattern_quoted(value.string_keys.at(index));
+            } else {
+                text += pattern_packed_element(
+                    value.keys.at(index), value.type.signed_indices);
+            }
+            text.push_back(':');
+        }
+        append_pattern_element(text, value, index);
+    }
+    text.push_back('}');
+}
+
+} // namespace
+
+std::string format_container_assignment_pattern(const ContainerValue& value)
+{
+    std::string text;
+    append_assignment_pattern(text, value);
+    return text;
 }
 
 } // namespace fsim::runtime::simir

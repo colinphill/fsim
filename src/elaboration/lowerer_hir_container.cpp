@@ -1008,14 +1008,23 @@ Lowerer::hir_systemverilog_enumeration_method(
     if (!declaration_id) {
         return std::nullopt;
     }
+    return hir_systemverilog_enumeration_profile(
+        std::move(result), *declaration_id);
+}
+
+std::optional<Lowerer::HirEnumerationMethod>
+Lowerer::hir_systemverilog_enumeration_profile(
+    HirEnumerationMethod result,
+    const semantic::DeclarationId declaration_id) const
+{
     const auto declaration = specialized_hir_unit_->find_declaration(
-        *declaration_id);
+        declaration_id);
     if (!declaration || declaration->systemverilog == nullptr
         || !declaration->systemverilog->type
         || declaration->systemverilog->type->container_form) {
         return std::nullopt;
     }
-    result.receiver_declaration = *declaration_id;
+    result.receiver_declaration = declaration_id;
     auto type = *declaration->systemverilog->type;
     if (!type.target.target.valid()) {
         type = semantic::CompiledDesignResolver {
@@ -1209,6 +1218,38 @@ Lowerer::lower_hir_systemverilog_enumeration_name(
     if (!method || method->method != "name") {
         return std::nullopt;
     }
+    return lower_hir_systemverilog_enumeration_name(*method);
+}
+
+std::optional<StringRegisterId>
+Lowerer::lower_hir_systemverilog_enumeration_value_name(
+    const semantic::ExpressionId expression_id)
+{
+    const auto expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    const auto declaration = expression && expression->systemverilog != nullptr
+            && expression->systemverilog->kind
+                == semantic::sv::ExpressionKind::name
+        ? hir_referenced_declaration(expression_id)
+        : std::nullopt;
+    if (!declaration) {
+        return std::nullopt;
+    }
+    HirEnumerationMethod name;
+    name.method = "name";
+    name.receiver = expression_id;
+    const auto profile = hir_systemverilog_enumeration_profile(
+        std::move(name), *declaration);
+    return profile ? lower_hir_systemverilog_enumeration_name(*profile)
+                   : std::nullopt;
+}
+
+std::optional<StringRegisterId>
+Lowerer::lower_hir_systemverilog_enumeration_name(
+    const HirEnumerationMethod& method_profile)
+{
+    const auto* const method = &method_profile;
     const auto receiver = lower_hir_systemverilog_enumeration_receiver(
         *method);
     if (!receiver) {

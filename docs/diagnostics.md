@@ -1654,6 +1654,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-CLASS-020` | error | A randomization mode call has invalid arity or selects no random property or constraint block. |
 | `FSIM-SV-CLASS-021` | error | A randomization mode call violates local or protected class-member access. |
 | `FSIM-SV-CLASS-022` | error | The special `null` object-randomize checker selection is mixed with another variable-list item. |
+| `FSIM-SV-CLASS-023` | error | Outside a class, the class scope operator names a parameterized class without a parameter value assignment (`C::name` instead of `C#()::name`, IEEE 1800-2017 8.25.1). |
 
 The standardized `$dist_*` callables use source-located simulation warnings
 rather than compile diagnostics for runtime-domain failures. Nonpositive
@@ -1884,7 +1885,7 @@ scheduler.
 | `FSIM-ELAB-065` | error | Conditional-expression alternatives have different widths. |
 | `FSIM-ELAB-066` | error | A VHDL relational comparison mixes explicitly signed and unsigned packed operands without conversion. |
 | `FSIM-ELAB-067` | error | A VHDL arithmetic expression mixes explicitly signed and unsigned packed operands without conversion. |
-| `FSIM-ELAB-068` | error | A bit/part select does not have constant in-range bounds, a positive indexed width, or a direction compatible with its declared packed range. |
+| `FSIM-ELAB-068` | error | A bit/part select does not have constant bounds, a positive indexed width, or a direction compatible with its declared packed range. Constant bounds outside the range are legal: such a write affects only the bits inside it (IEEE 1800-2017 11.5.1). |
 | `FSIM-ELAB-DYNINDEX-001` | error | A dynamic packed selection has a nonconcrete, null, overflowing, or otherwise unrepresentable declared range or base offset. |
 | `FSIM-ELAB-DYNINDEX-002` | error | A dynamic packed selection index is not an executable VHDL `integer` value or the common signed 32-bit index representation required by this bounded implementation. |
 | `FSIM-ELAB-VHSLICE-001` | error | A dynamic VHDL packed slice lacks a fixed supported width, a concrete signed 32-bit source range, matching direction, or a statically sized assignment value. |
@@ -1943,7 +1944,7 @@ scheduler.
 | `FSIM-ELAB-HIER-001` | error | Duplicate elaborated instance path. |
 | `FSIM-ELAB-HIER-002` | error | Recursive instantiation was detected. |
 | `FSIM-ELAB-DEFPARAM-001` | error | A `defparam` hierarchy index or value cannot be resolved as a locally static SystemVerilog constant. |
-| `FSIM-ELAB-DEFPARAM-002` | error | A `defparam` target does not resolve to an elaborated descendant instance. |
+| `FSIM-ELAB-DEFPARAM-002` | error | A `defparam` target does not resolve to an elaborated descendant instance parameter, or names a type parameter, which a `defparam` cannot override (IEEE 1800-2017 6.20.3). |
 | `FSIM-ELAB-DEFPARAM-003` | error | Multiple overrides assign the same parameter on a `defparam` target. |
 | `FSIM-ELAB-DEFPARAM-004` | error | A `defparam` path crosses an unsupported language boundary or targets an object that cannot accept parameter overrides. |
 | `FSIM-ELAB-SVEXTERN-001` | error | An extern module, interface, or program declaration has no unique definition in its logical library. |
@@ -2418,7 +2419,7 @@ scheduler.
 | `FSIM-ELAB-SVEXPR-008` | error | A runtime-selected packed procedural target has a following selection. |
 | `FSIM-ELAB-SVFORCE-001` | error | A procedural force or release target is not a supported signal, static bit-select, static part-select, or packed member. |
 | `FSIM-ELAB-SVFORCE-002` | error | A procedural force or release target is not a visible packed signal with an executable layout. |
-| `FSIM-ELAB-SVFORCE-003` | error | A four-state value is forced onto a two-state target without explicit conversion. |
+| `FSIM-ELAB-SVFORCE-003` | error | Retired: a four-state value forced onto a two-state target now converts as an assignment does (IEEE 1800-2017 10.6.2). |
 | `FSIM-ELAB-VHFORCE-001` | error | A VHDL force or release target is not a supported signal, static index, or static slice. |
 | `FSIM-ELAB-VHFORCE-002` | error | A VHDL force or release target is not a visible packed signal with an executable layout. |
 | `FSIM-ELAB-VHFORCE-003` | error | A four- or nine-state VHDL value is forced onto a two-state target without explicit conversion. |
@@ -2568,7 +2569,7 @@ scheduler.
 | `FSIM-ELAB-SVPORT-010` | error | A mutable string module port is unconnected, crosses a language boundary, or does not use a direct same-language string object actual. |
 | `FSIM-ELAB-SVPORT-011` | error | A mutable string input port is written directly or through a descendant output/inout port. |
 | `FSIM-ELAB-SVPORT-012` | error | Sibling output/inout mutable string ports drive the same object. |
-| `FSIM-ELAB-SVPROCASSIGN-001` | error | A procedural continuous assignment cannot allocate its activation state or does not target a visible process-external packed variable. |
+| `FSIM-ELAB-SVPROCASSIGN-001` | error | A procedural continuous assignment cannot allocate its activation state or does not target a visible process-external packed variable as a whole; an array element is not a valid target, while bit- and part-selects of a packed variable are accepted (IEEE 1800-2017 10.6.1). |
 | `FSIM-ELAB-SVPROCASSIGN-002` | error | A procedural continuous assignment cannot allocate its generated reactive driver process. |
 | `FSIM-ELAB-SVSCALAR-001` | error | A contextual SystemVerilog scalar literal cannot be converted to its required scalar kind. |
 | `FSIM-ELAB-SVSCALAR-002` | error | A runtime real/time/chandle expression uses an operator outside the executable arithmetic/comparison subset. |
@@ -2613,6 +2614,8 @@ scheduler.
 | `FSIM-ELAB-SVCAST-005` | error | An assignment pattern relies on static-cast contextual typing before the SystemVerilog-2023 profile. |
 | `FSIM-ELAB-SVASSIGN-001` | error | A SystemVerilog-2023 nonblocking assignment targets an element of a dynamically sized array variable. |
 | `FSIM-ELAB-SVASSIGN-002` | error | An assignment-pattern target is empty, malformed, or contains a keyed association instead of positional lvalues. |
+| `FSIM-ELAB-SVASSIGN-003` | error | A blocking or nonblocking procedural assignment targets a net; its target must be a variable (IEEE 1800-2017 10.4). |
+| `FSIM-ELAB-SVSELECT-001` | error | A bit-select or part-select is applied to a scalar (1-bit, rangeless) unpacked array element (IEEE 1800-2017 11.5.1). |
 | `FSIM-ELAB-SVASSERT-001` | error | A concurrent assertion incorrectly carries an immediate-assertion deferred qualifier. |
 | `FSIM-ELAB-SVASSERT-002` | error | A deferred immediate assertion action cannot be lowered to its scheduler-region handoff. |
 | `FSIM-ELAB-SVSTREAM-001` | error | A streaming assignment target is malformed, uses the wrong language, or is nested inside another assignment target. |

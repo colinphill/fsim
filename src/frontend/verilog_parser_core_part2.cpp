@@ -1352,8 +1352,41 @@ bool VerilogParser::instance_start() const {
           == SystemVerilogStandardPackageMemberKind::class_type) {
     return false;
   }
-  if (at(TokenKind::LeftParen, 1) || at(TokenKind::Hash, 1)) {
+  if (at(TokenKind::LeftParen, 1)) {
     return true;
+  }
+  if (at(TokenKind::Hash, 1)) {
+    // `C #(...) name;` declares a variable of a parameterized class; an
+    // instantiation has a port list after the instance name (and its
+    // optional array dimensions).
+    std::size_t cursor = 2U;
+    if (!at(TokenKind::LeftParen, cursor)) {
+      return true;
+    }
+    std::size_t parentheses = 0U;
+    for (; !at(TokenKind::EndOfFile, cursor); ++cursor) {
+      if (at(TokenKind::LeftParen, cursor)) {
+        ++parentheses;
+      } else if (at(TokenKind::RightParen, cursor) && --parentheses == 0U) {
+        ++cursor;
+        break;
+      }
+    }
+    if (!at(TokenKind::Identifier, cursor)) {
+      return true;
+    }
+    ++cursor;
+    std::size_t brackets = 0U;
+    for (; !at(TokenKind::EndOfFile, cursor); ++cursor) {
+      if (at(TokenKind::LeftBracket, cursor)) {
+        ++brackets;
+      } else if (at(TokenKind::RightBracket, cursor)) {
+        --brackets;
+      } else if (brackets == 0U) {
+        break;
+      }
+    }
+    return at(TokenKind::LeftParen, cursor);
   }
   if (!at(TokenKind::Identifier, 1)) {
     return false;

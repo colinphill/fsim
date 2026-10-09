@@ -2092,7 +2092,7 @@ module class_hir_top;
     result = $cast(other, handle);
     handle.payload = 1;
     result = handle.read();
-    result = HirObject::count;
+    result = HirObject#()::count;
   end
 endmodule
 )",

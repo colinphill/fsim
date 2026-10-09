@@ -1569,6 +1569,41 @@ void VerilogParser::parse_parameter_group(
   for (;;) {
     const auto name = expect_identifier(
         local ? "localparam name" : "parameter name");
+    // An unpacked array parameter (IEEE 1800-2017 6.20.2) is kept as a
+    // constant container object initialized by its value.
+    if (!type_parameter && !class_list
+        && language_ == Language::SystemVerilog2017
+        && at(TokenKind::LeftBracket)) {
+      auto container_type = type;
+      (void)parse_optional_container_dimension(container_type);
+      std::optional<Expression> initializer;
+      if (match(TokenKind::Assign)) {
+        initializer = parse_expression();
+      } else {
+        error(
+            current(),
+            "FSIM-SV-PARSE-050",
+            "value parameters require a default constant expression");
+      }
+      if (container_type.systemverilog_container) {
+        unit_container_names_.insert(name.text);
+        VariableDeclaration variable {
+            name.text,
+            std::move(container_type),
+            std::move(initializer),
+            cover(start.span, previous().span) };
+        variable.systemverilog_const = true;
+        unit.variables.push_back(std::move(variable));
+      }
+      if (!match(TokenKind::Comma)) {
+        break;
+      }
+      if (port_list
+          && (keyword("parameter") || keyword("localparam"))) {
+        break;
+      }
+      continue;
+    }
     Expression value;
     std::optional<Type> default_type;
     if (match(TokenKind::Assign)) {
@@ -1577,7 +1612,11 @@ void VerilogParser::parse_parameter_group(
       } else {
         value = parse_expression();
       }
-    } else if (!type_parameter) {
+    } else if (!type_parameter
+        && !((port_list || class_list) && !local
+            && language_ == Language::SystemVerilog2017)) {
+      // IEEE 1800-2017 6.20.1: a parameter port without a default must be
+      // overridden by every instance.
       error(
           current(),
           "FSIM-SV-PARSE-050",
@@ -1618,11 +1657,20 @@ void VerilogParser::parse_parameter_group(
     if (verilog_attribute_instance_start()) {
         parse_verilog_attribute_instances();
     }
+    // In a SystemVerilog parameter port list a data type or `type` after a
+    // comma starts a new parameter declaration (IEEE 1800-2017 A.1.3).
     const bool next_class_parameter =
-        class_list
+        (class_list
+            || (port_list && language_ == Language::SystemVerilog2017))
         && (keyword("type") || keyword("string")
             || keyword("chandle") || keyword("process")
             || keyword("struct") || keyword("union") || keyword("enum")
+            || keyword("int") || keyword("integer") || keyword("logic")
+            || keyword("bit") || keyword("byte") || keyword("shortint")
+            || keyword("longint") || keyword("reg") || keyword("real")
+            || keyword("shortreal") || keyword("realtime")
+            || keyword("time") || keyword("signed")
+            || keyword("unsigned")
             || is_net_type_keyword()
             || is_named_type_reference_start());
     if (port_list
@@ -1649,18 +1697,36 @@ void VerilogParser::parse_parameter_port_list(
           ? "'(' after class parameter '#'"
           : "'(' after module parameter '#'",
       "FSIM-SV-PARSE-052");
+  // A declaration without a keyword keeps the kind of the previous one, so
+  // items after `localparam` stay local until the next `parameter`
+  // (IEEE 1800-2017 6.20.1).
+  bool previous_local = false;
   while (!at_end() && !at(TokenKind::RightParen)) {
+      const auto item_start = index_;
       if (verilog_attribute_instance_start()) {
           parse_verilog_attribute_instances();
       } else if (match_keyword("parameter")) {
+          previous_local = false;
           parse_parameter_group(
               unit, false, true, previous(), class_list);
       } else if (match_keyword("localparam")) {
+          previous_local = true;
           parse_parameter_group(
               unit, true, true, previous(), class_list);
-      } else if (class_list) {
+      } else if (class_list || language_ == Language::SystemVerilog2017) {
+          // IEEE 1800-2017 A.1.3: a parameter port list may begin with a
+          // param assignment, a data type, or `type` without `parameter`.
           parse_parameter_group(
-              unit, false, true, current(), true);
+              unit, previous_local, true, current(), class_list);
+          if (index_ == item_start) {
+              // Not a parameter declaration (an error was reported); skip
+              // the item so the list still makes progress.
+              while (!at_end() && !at(TokenKind::Comma)
+                  && !at(TokenKind::RightParen)) {
+                  advance();
+              }
+              (void)match(TokenKind::Comma);
+          }
       } else {
           error(
               current(),
@@ -1886,10 +1952,19 @@ std::vector<Instance> VerilogParser::parse_instances() {
   expect(
       TokenKind::LeftParen, "'(' after instance name",
       "FSIM-SV-PARSE-034");
-  while (!at_end() && !at(TokenKind::RightParen)) {
+  // An empty positional entry, as in `m u(a, , b);` or `m u(,);`, leaves
+  // that port unconnected (IEEE 1800-2017 23.3.2.1).
+  bool after_comma = false;
+  while (!at_end() && (after_comma || !at(TokenKind::RightParen))) {
     PortConnection connection;
+    if (verilog_attribute_instance_start()) {
+      parse_verilog_attribute_instances();
+    }
     const auto connection_start = current();
-    if (match(TokenKind::Dot)) {
+    if (at(TokenKind::Comma) || at(TokenKind::RightParen)) {
+      connection.kind = PortActualKind::Open;
+      connection.value.span = connection_start.span;
+    } else if (match(TokenKind::Dot)) {
       if (match(TokenKind::Star)) {
         connection.port = "*";
         connection.value.kind = ExpressionKind::Identifier;
@@ -1921,6 +1996,7 @@ std::vector<Instance> VerilogParser::parse_instances() {
     if (!match(TokenKind::Comma)) {
       break;
     }
+    after_comma = true;
   }
   expect(
       TokenKind::RightParen, "')' after instance connections",

@@ -1387,6 +1387,15 @@ private:
         const semantic::SpecializedHirUnit& specialization,
         std::span<const semantic::DeclarationId> declarations,
         std::span<const semantic::sv::Alias> aliases);
+    // A package variable is one design-global object (IEEE 1800-2017
+    // 26.2): it is materialized once, as `package.name`, when first
+    // referenced.
+    std::optional<SignalId> compiled_systemverilog_package_variable_signal(
+        const semantic::SpecializedHirUnit& specialization,
+        semantic::DeclarationId declaration,
+        const SystemVerilogPackedTypeResolver& packed_type_resolver,
+        const SystemVerilogPackedDefaultResolver& packed_default_resolver,
+        const SystemVerilogPackedFallbackResolver& packed_fallback_resolver);
     void finalize_systemverilog_whole_aliases(
         SystemVerilogHirMaterialization& materialization);
     void materialize_systemverilog_clocking_blocks(
@@ -1565,6 +1574,8 @@ private:
     std::unordered_set<SignalId> vhdl_unprotected_shared_signals_;
     std::unordered_map<std::uint32_t, std::optional<SignalId>>
         vhdl_package_constant_signals_;
+    std::unordered_map<std::uint32_t, std::optional<SignalId>>
+        systemverilog_package_variable_signals_;
     std::vector<std::pair<std::string, std::string>> root_generic_overrides_;
     std::vector<semantic::SpecializedHirActualIdentity>
     compiled_vhdl_root_generic_actuals(const semantic::vhdl::Unit& root);

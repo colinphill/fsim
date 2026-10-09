@@ -1267,6 +1267,29 @@ bool VerilogParser::parse_optional_container_dimension(Type& type)
         while (match(TokenKind::LeftBracket)) {
             const auto dimension_start = previous();
             auto left = parse_expression();
+            // A C-style size `[N]` is `[0:N-1]` (IEEE 1800-2017 7.4.2).
+            if (at(TokenKind::RightBracket)) {
+                if (const auto size = simple_verilog_integer_constant(left);
+                    size && *size > 0) {
+                    advance();
+                    const auto size_span = left.span;
+                    container.static_range_expressions.push_back(
+                        PackedRangeExpression {
+                            Expression {
+                                ExpressionKind::IntegerLiteral,
+                                "0",
+                                { },
+                                size_span },
+                            Expression {
+                                ExpressionKind::IntegerLiteral,
+                                std::to_string(*size - 1),
+                                { },
+                                size_span },
+                            cover(dimension_start.span, previous().span),
+                            std::nullopt });
+                    continue;
+                }
+            }
             expect(
                 TokenKind::Colon,
                 "':' in a multidimensional static unpacked range",

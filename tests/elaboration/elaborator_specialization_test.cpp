@@ -1016,6 +1016,9 @@ endmodule
         assert(has_diagnostic(
             invalid_systemverilog_package_result, code));
     }
+    // Constant selects outside the member range are legal (writes outside
+    // it have no effect, IEEE 1800-2017 11.5.1); the zero-width part-select
+    // remains an error.
     assert(
         std::count_if(
             invalid_systemverilog_package_result.diagnostics.begin(),
@@ -1023,7 +1026,7 @@ endmodule
             [](const auto& diagnostic) {
                 return diagnostic.code == "FSIM-ELAB-068";
             })
-        >= 4);
+        >= 1);
 
     const auto generic_parsed = fsim::frontend::parse_text(
         "generic-specialization.vhd",

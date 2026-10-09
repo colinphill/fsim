@@ -2025,6 +2025,7 @@ void Interpreter::Impl::prepare_systemverilog_update_pool()
         for (const auto& operation : program.operations()) {
             count_if_tagged(operation_get_if<WriteUpdate>(&operation));
             count_if_tagged(operation_get_if<WriteAfter>(&operation));
+            count_if_tagged(operation_get_if<WriteDelayed>(&operation));
             count_if_tagged(operation_get_if<WriteUpdateSlice>(&operation));
             count_if_tagged(operation_get_if<WriteAfterSlice>(&operation));
             count_if_tagged(

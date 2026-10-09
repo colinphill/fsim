@@ -398,6 +398,8 @@ Interpreter::Impl::prepare_region_runtime_snapshot(
                             &operation))
                         || writes_target(operation_get_if<WriteInertial>(
                             &operation))
+                        || writes_target(operation_get_if<WriteDelayed>(
+                            &operation))
                         || writes_target(operation_get_if<
                             WriteProjectedWaveform>(&operation))
                         || writes_target(operation_get_if<WriteBlockingSlice>(
@@ -706,6 +708,7 @@ Interpreter::Impl::prepare_region_runtime_snapshot(
                             || std::is_same_v<T, WriteUpdate>
                             || std::is_same_v<T, WriteAfter>
                             || std::is_same_v<T, WriteInertial>
+                            || std::is_same_v<T, WriteDelayed>
                             || std::is_same_v<T, WriteProjected>
                             || std::is_same_v<T, WriteProjectedWaveform>
                             || std::is_same_v<T, WriteBlockingSlice>
@@ -820,6 +823,7 @@ Interpreter::Impl::prepare_region_runtime_snapshot(
                             || std::is_same_v<T, WriteUpdate>
                             || std::is_same_v<T, WriteAfter>
                             || std::is_same_v<T, WriteInertial>
+                            || std::is_same_v<T, WriteDelayed>
                             || std::is_same_v<T, WriteProjected>
                             || std::is_same_v<T, WriteProjectedWaveform>
                             || std::is_same_v<T, WriteBlockingSlice>

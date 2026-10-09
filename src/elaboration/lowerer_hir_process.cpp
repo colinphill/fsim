@@ -297,6 +297,7 @@ void Lowerer::validate_read_only_signal_writes(
                     || std::is_same_v<Operation, WriteUpdate>
                     || std::is_same_v<Operation, WriteAfter>
                     || std::is_same_v<Operation, WriteInertial>
+                    || std::is_same_v<Operation, WriteDelayed>
                     || std::is_same_v<Operation, WriteProjected>
                     || std::is_same_v<Operation, WriteProjectedWaveform>
                     || std::is_same_v<Operation, WriteBlockingSlice>
@@ -1485,10 +1486,7 @@ std::optional<Process> Lowerer::lower_hir_process(
                 }
             }
             if (!signal) {
-                const auto found = signals_.find(sensitivity.signal);
-                if (found != signals_.end()) {
-                    signal = found->second;
-                }
+                signal = hir_named_signal(sensitivity.signal, input.scope);
             }
             if (!signal) {
                 return std::nullopt;
@@ -1569,10 +1567,7 @@ std::optional<Process> Lowerer::lower_hir_process(
                 }
             }
             if (!signal) {
-                const auto found = signals_.find(sensitivity.signal);
-                if (found != signals_.end()) {
-                    signal = found->second;
-                }
+                signal = hir_named_signal(sensitivity.signal, input.scope);
             }
             if (!signal) {
                 return std::nullopt;
@@ -2325,7 +2320,9 @@ std::optional<Process> Lowerer::lower_hir_process_body(
         return std::nullopt;
     }
     process_.static_sensitivity = description.sensitivities;
-    if (language == frontend::Language::SystemVerilog2017
+    // Procedural continuous assignments are also Verilog statements (IEEE
+    // 1364-2005 9.3).
+    if (language != frontend::Language::Vhdl2008
         && !description.statements.empty()) {
         prepare_hir_procedural_continuous_assignments(
             description.statements);
@@ -2473,12 +2470,22 @@ std::optional<Process> Lowerer::lower_hir_process_body(
         return std::nullopt;
     }
     if (procedural_driver) {
-        const auto active = allocate_register(
-            1U, frontend::ValueDomain::Logic4);
+        // The driver forces its value while its assignment owns the target.
+        const auto owner = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
         process_.operations.emplace_back(ReadSignal {
-            active, *description.procedural_assignment_active });
+            owner, *description.procedural_assignment_active });
         record_implicit_signal_dependency(
             *description.procedural_assignment_active);
+        const auto selected = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            selected,
+            unsigned_value(description.procedural_assignment_owner, 32U) });
+        const auto active = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::case_equal, active, owner, selected });
         const auto branch = static_cast<InstructionIndex>(
             process_.operations.size());
         process_.operations.emplace_back(Branch {

@@ -278,6 +278,21 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
             continue;
         }
         const auto& override_binding = override_bindings.bindings.front();
+        // A defparam cannot override a type parameter (IEEE 1800-2017
+        // 6.20.3).
+        const auto overridden
+            = compiled_->find_declaration(override_binding.formal);
+        if (overridden && overridden->systemverilog != nullptr
+            && overridden->systemverilog->form
+                == semantic::sv::DeclarationForm::type_parameter) {
+            add_diagnostic(
+                "FSIM-ELAB-DEFPARAM-002",
+                "defparam cannot override type parameter '"
+                    + defparam.target_path + "."
+                    + defparam.parameter + "'",
+                defparam.source);
+            continue;
+        }
         const auto duplicate = std::ranges::find(
             parameter_bindings.bindings,
             override_binding.formal,

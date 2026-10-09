@@ -892,6 +892,18 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     spec.type = parse_named_type();
   } else {
     parse_optional_net_type(spec.type);
+    // A net of an aggregate or enumeration data type (IEEE 1800-2017
+    // 6.7.1): `wire struct packed {...} w;`.
+    if (language_ == Language::SystemVerilog2017
+        && contains_word(
+            {"wire", "tri", "tri0", "tri1", "wand", "triand", "wor",
+                "trior", "trireg", "uwire", "supply0", "supply1"},
+            spec.type.spelling)
+        && (keyword("struct") || keyword("union") || keyword("enum"))) {
+      const auto net_kind = spec.type.spelling;
+      spec.type = parse_parameter_type();
+      spec.type.systemverilog_net_type = net_kind;
+    }
   }
   auto drive_strength = parse_verilog_drive_strength("net declaration");
   auto charge_strength = parse_verilog_charge_strength("net declaration");
@@ -1062,6 +1074,29 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
             "FSIM-SV-SEM-006",
             "duplicate variable declaration '" + name.text + "'");
       } else {
+        // A class handle initialized by `new` is constructed before any
+        // initial or always procedure starts (IEEE 1800-2017 6.21, 8.7);
+        // the construction runs in a leading initializer process.
+        const auto& named = declaration_type.named_type;
+        const bool class_construction = named_construction
+            && !package_variable && !systemverilog_const
+            && (unit.kind == UnitKind::VerilogModule
+                || unit.kind == UnitKind::SystemVerilogProgram
+                || unit.kind == UnitKind::SystemVerilogInterface)
+            && named != "mailbox" && named != "semaphore"
+            && named != "process"
+            // A scoped type may name a package covergroup.
+            && named.find("::") == std::string::npos
+            && std::ranges::none_of(
+                unit.systemverilog_covergroups,
+                [&](const SystemVerilogCovergroupDeclaration& covergroup) {
+                  return covergroup.name == named;
+                });
+        std::optional<Expression> construction;
+        if (class_construction) {
+          construction = std::move(initializer);
+          initializer.reset();
+        }
         VariableDeclaration variable{
             name.text,
             std::move(declaration_type),
@@ -1069,6 +1104,27 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
             span_from(start, previous())};
         variable.systemverilog_const = systemverilog_const;
         unit.variables.push_back(std::move(variable));
+        if (construction) {
+          Statement assignment;
+          assignment.kind = StatementKind::Assignment;
+          assignment.assignment_kind = AssignmentKind::Blocking;
+          assignment.target = Expression {
+              ExpressionKind::Identifier, name.text, { }, name.span
+          };
+          assignment.value = std::move(*construction);
+          assignment.span = cover(name.span, assignment.value.span);
+          Process initializer_process;
+          initializer_process.kind = ProcessKind::Initial;
+          initializer_process.name = "$class_initializer_" + name.text;
+          initializer_process.statements.push_back(std::move(assignment));
+          initializer_process.span
+              = initializer_process.statements.front().span;
+          const auto position = std::ranges::find_if(
+              unit.processes, [](const Process& process) {
+                return !process.name.starts_with("$class_initializer_");
+              });
+          unit.processes.insert(position, std::move(initializer_process));
+        }
       }
       if (!match(TokenKind::Comma)) {
         break;
@@ -1194,9 +1250,17 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
         unit.signals.push_back(std::move(declaration));
       }
     }
+    // A net declaration assignment is a continuous assignment to the net
+    // (IEEE 1800-2017 6.7.1, 10.3.1).
+    const auto net_spelling = [](const std::string_view spelling) {
+      return spelling == "wire" || spelling == "tri" || spelling == "tri0"
+          || spelling == "tri1" || spelling == "wand" || spelling == "triand"
+          || spelling == "wor" || spelling == "trior" || spelling == "uwire"
+          || spelling == "supply0" || spelling == "supply1";
+    };
     if (initializer
-        && (spec.type.spelling == "wire"
-            || spec.type.systemverilog_net_type == "wire")
+        && (net_spelling(spec.type.spelling)
+            || net_spelling(spec.type.systemverilog_net_type))
         && spec.direction == PortDirection::Unknown) {
       Statement driver;
       driver.kind = StatementKind::Assignment;

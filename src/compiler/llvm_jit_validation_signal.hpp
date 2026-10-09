@@ -27,7 +27,7 @@ template <typename OperationType, typename ExactSignalWidth,
     SignalWidth&&,
     RecordUse&& record_use,
     ConstrainWidth&& constrain_width,
-    RecordUnsupported&&,
+    RecordUnsupported&& record_unsupported,
     ValidateTarget&& validate_target,
     ValidateCallStack&& validate_call_stack,
     RecordDefinition&& record_definition,
@@ -277,6 +277,15 @@ template <typename OperationType, typename ExactSignalWidth,
         } else {
             result.uses_write_inertial = true;
         }
+    } else if constexpr (std::is_same_v<OperationType, WriteDelayed>) {
+        (void)exact_signal_width(operation.signal, index);
+        record_use(operation.source, index);
+        if (operation.delay.source) {
+            record_use(*operation.delay.source, index);
+        }
+        // A delay computed at run time is scheduled by the interpreter.
+        record_unsupported(
+            index, "a signal write with a run-time delay is interpreted");
     } else if constexpr (std::is_same_v<OperationType, WriteProjected>) {
         const auto target_width = exact_signal_width(operation.signal, index);
         record_use(operation.source, index);

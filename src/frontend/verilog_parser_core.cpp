@@ -417,6 +417,14 @@ ParseResult VerilogParser::run() {
             for (const auto& parameter : package.parameters) {
                 exports.insert(parameter.name);
             }
+            // Package variables and nets are visible through a wildcard
+            // import, so they are not implicit nets (IEEE 1800-2017 26.3).
+            for (const auto& variable : package.variables) {
+                exports.insert(variable.name);
+            }
+            for (const auto& signal : package.signals) {
+                exports.insert(signal.name);
+            }
             design.units.push_back(std::move(package));
         } else if (dpi_declaration_start("import")) {
             compilation_unit_has_design_item_ = true;
@@ -578,6 +586,9 @@ void VerilogParser::parse_compilation_unit_declaration() {
     }
     for (auto index = signals; index < unit.signals.size(); ++index) {
         exports.insert(unit.signals[index].name);
+    }
+    for (const auto& variable : unit.variables) {
+        exports.insert(variable.name);
     }
 }
 

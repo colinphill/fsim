@@ -447,6 +447,7 @@ Lowerer::lower_hir_container_assignment_pattern(
                     : target.type->fixed,
                 target.type->fixed && dimensions.size() > 1U,
                 target.type->string_indices,
+                { },
             });
             return true;
         }
@@ -788,6 +789,8 @@ namespace {
         using Source = semantic::sv::OutputFormat;
         using Target = runtime::simir::OutputFormat;
         switch (format) {
+        case Source::pattern:
+            return Target::decimal;
         case Source::binary:
             return Target::binary;
         case Source::hexadecimal:
@@ -1297,8 +1300,40 @@ bool Lowerer::lower_hir_force_release(
         return true;
     }
     auto force_value = lowered_value;
+    // A forced value converts between integral and real like an
+    // assignment (IEEE 1800-2017 10.6.2, 6.12.2).
+    const auto target_kind = !member && !constant_selection
+            && !dynamic_selection
+        ? design_.signal_info_.at(*binding->signal).systemverilog_scalar
+        : frontend::SystemVerilogScalarKind::None;
+    const auto real_kind = [](const frontend::SystemVerilogScalarKind kind) {
+        return kind == frontend::SystemVerilogScalarKind::Real
+            || kind == frontend::SystemVerilogScalarKind::Realtime
+            || kind == frontend::SystemVerilogScalarKind::ShortReal;
+    };
     if (!force_value && value) {
-        force_value = lower_hir_expression(*value, *width);
+        const auto value_kind = hir_systemverilog_scalar_kind(*value);
+        if (real_kind(value_kind) && !real_kind(target_kind)) {
+            force_value = lower_hir_expression(*value,
+                value_kind == frontend::SystemVerilogScalarKind::ShortReal
+                    ? 32U
+                    : 64U,
+                value_kind);
+            if (force_value) {
+                force_value = convert_hir_real_to_integral(
+                    *force_value, value_kind);
+            }
+        } else if (real_kind(target_kind) && !real_kind(value_kind)) {
+            force_value = lower_hir_expression(*value,
+                hir_expression_width(*value, hir_process_scope_)
+                    .value_or(32U));
+            if (force_value) {
+                force_value = convert_hir_integral_to_real(*force_value,
+                    hir_expression_signed(*value), target_kind);
+            }
+        } else {
+            force_value = lower_hir_expression(*value, *width, target_kind);
+        }
     }
     if (!force_value) {
         return false;
@@ -1306,26 +1341,15 @@ bool Lowerer::lower_hir_force_release(
     if (register_width(*force_value) != *width) {
         force_value = resize_register(
             *force_value, *width,
-            value && hir_expression_signed(*value));
+            value && (hir_expression_signed(*value)
+                || real_kind(hir_systemverilog_scalar_kind(*value))));
     }
     const auto domain = member ? member->domain : binding->domain;
+    // A forced value converts to a two-state target as an assignment does:
+    // x and z bits become zero (IEEE 1800-2017 10.6.2, 6.11.2).
     if (is_two_state_domain(domain)
         && !is_two_state_domain(register_domain(*force_value))) {
-        auto value_span = span;
-        if (value) {
-            const auto value_expression
-                = specialized_hir_unit_->find_expression(*value);
-            if (value_expression
-                && value_expression->systemverilog != nullptr) {
-                value_span = hir_source_span(
-                    value_expression->systemverilog->source);
-            }
-        }
-        report(
-            "FSIM-ELAB-SVFORCE-003",
-            "force of a two-state target requires an explicit conversion",
-            value_span);
-        return true;
+        force_value = convert_to_two_state(*force_value);
     }
     process_.operations.emplace_back(ForceSignalSlice {
         *binding->signal,
@@ -1809,6 +1833,43 @@ bool Lowerer::lower_hir_statement(
         }
         return magnitude * multiplier;
     };
+    // A delay that is not locally constant is evaluated when the assignment
+    // executes and carries WaitFor's dynamic-delay metadata (IEEE 1800-2017
+    // 10.3.3 and 10.4.2).
+    const auto dynamic_delay = [&](const auto& delay) -> std::optional<WaitFor> {
+        if (!delay.expression) {
+            return std::nullopt;
+        }
+        const auto scalar_kind = hir_systemverilog_scalar_kind(
+            *delay.expression);
+        if (scalar_kind == frontend::SystemVerilogScalarKind::Chandle) {
+            return std::nullopt;
+        }
+        const auto width = scalar_kind
+                == frontend::SystemVerilogScalarKind::ShortReal
+            ? std::size_t { 32U }
+            : scalar_kind == frontend::SystemVerilogScalarKind::Real
+                || scalar_kind == frontend::SystemVerilogScalarKind::Realtime
+                || scalar_kind == frontend::SystemVerilogScalarKind::Time
+            ? std::size_t { 64U }
+            : hir_expression_width(*delay.expression, hir_process_scope_)
+                  .value_or(32U);
+        if (width == 0U || width > 64U) {
+            return std::nullopt;
+        }
+        const auto source_register = lower_hir_expression(
+            *delay.expression, width, scalar_kind);
+        if (!source_register || register_width(*source_register) != width) {
+            return std::nullopt;
+        }
+        WaitFor wait;
+        wait.delay = delay.magnitude;
+        wait.source = *source_register;
+        wait.source_width = static_cast<std::uint32_t>(width);
+        wait.source_kind = scalar_kind;
+        wait.source_signed = hir_expression_signed(*delay.expression);
+        return wait;
+    };
 
     const auto lower_condition = [&](const semantic::ExpressionId expression)
         -> std::optional<RegisterId> {
@@ -1907,8 +1968,9 @@ bool Lowerer::lower_hir_statement(
             signals.reserve(sensitivities.size());
             edges.reserve(sensitivities.size());
             for (const auto& sensitivity : sensitivities) {
-                const auto found = signals_.find(sensitivity.signal);
-                if (found == signals_.end()) {
+                const auto found = hir_named_signal(
+                    sensitivity.signal, hir_process_scope_);
+                if (!found) {
                     report(
                         "FSIM-ELAB-059",
                         "unknown wait signal '" + sensitivity.signal + "'",
@@ -1916,7 +1978,7 @@ bool Lowerer::lower_hir_statement(
                     return true;
                 }
                 if (sensitivity.edge != semantic::sv::EdgeKind::any
-                    && design_.signal_info_[found->second].width != 1U) {
+                    && design_.signal_info_[*found].width != 1U) {
                     report(
                         "FSIM-ELAB-060",
                         "dynamic edge-qualified wait signal '"
@@ -1924,7 +1986,7 @@ bool Lowerer::lower_hir_statement(
                         hir_source_span(sensitivity.source));
                     return true;
                 }
-                signals.push_back(found->second);
+                signals.push_back(*found);
                 edges.push_back(event_edge(sensitivity.edge));
             }
             process_.operations.emplace_back(WaitOn {
@@ -1957,17 +2019,18 @@ bool Lowerer::lower_hir_statement(
                     expression_dependencies.begin(),
                     expression_dependencies.end());
             } else {
-                const auto found = signals_.find(sensitivity.signal);
-                if (found == signals_.end()) {
+                const auto found = hir_named_signal(
+                    sensitivity.signal, hir_process_scope_);
+                if (!found) {
                     report(
                         "FSIM-ELAB-059",
                         "unknown wait signal '" + sensitivity.signal + "'",
                         hir_source_span(sensitivity.source));
                     return true;
                 }
-                state.signal = found->second;
-                width = design_.signal_info_[found->second].width;
-                dependencies.push_back(found->second);
+                state.signal = *found;
+                width = design_.signal_info_[*found].width;
+                dependencies.push_back(*found);
             }
             if (dependencies.size() == dependency_start) {
                 report(
@@ -2289,6 +2352,71 @@ bool Lowerer::lower_hir_statement(
                       << " value=" << value->value() << '\n';
         };
         trace_generated("target-expression");
+        // The target of a blocking or nonblocking procedural assignment is
+        // a variable, never a net (IEEE 1800-2017 10.4).
+        if (statement->systemverilog != nullptr
+            && statement->systemverilog->kind
+                == semantic::sv::StatementKind::assignment
+            && statement->systemverilog->assignment_kind
+                != semantic::sv::AssignmentKind::continuous
+            && !signal_assignment) {
+            // The root object of the target, through element and part
+            // selects.
+            std::optional<semantic::DeclarationId> target_declaration;
+            auto root = *target;
+            for (std::size_t depth { }; depth < 8U && !target_declaration;
+                ++depth) {
+                target_declaration = hir_target_declaration(root);
+                if (!target_declaration) {
+                    if (const auto element
+                        = hir_container_element_binding(root)) {
+                        target_declaration = element->declaration;
+                        break;
+                    }
+                }
+                const auto selected = specialized_hir_unit_->find_expression(
+                    root);
+                if (target_declaration || !selected
+                    || selected->systemverilog == nullptr
+                    || (selected->systemverilog->kind
+                            != semantic::sv::ExpressionKind::index
+                        && selected->systemverilog->kind
+                            != semantic::sv::ExpressionKind::slice)
+                    || selected->systemverilog->operands.empty()) {
+                    break;
+                }
+                root = selected->systemverilog->operands.front();
+            }
+            const auto record = target_declaration
+                ? specialized_hir_unit_->find_declaration(*target_declaration)
+                : std::nullopt;
+            // An array of nets is kept as an unpacked variable whose type
+            // retains its net keyword.
+            static constexpr std::array<std::string_view, 12U> net_keywords {
+                "wire", "tri", "tri0", "tri1", "wand", "triand", "wor",
+                "trior", "trireg", "supply0", "supply1", "uwire",
+            };
+            const auto net_object = record && record->systemverilog != nullptr
+                && (record->systemverilog->form
+                        == semantic::sv::DeclarationForm::variable
+                    || record->systemverilog->form
+                        == semantic::sv::DeclarationForm::net)
+                && record->systemverilog->type
+                && (std::ranges::find(net_keywords,
+                        record->systemverilog->type->target.spelling)
+                        != net_keywords.end()
+                    || !record->systemverilog->type->systemverilog_net_type
+                            .empty());
+            if (net_object) {
+                report(
+                    "FSIM-ELAB-SVASSIGN-003",
+                    "procedural assignment target '"
+                        + record->systemverilog->name
+                        + "' is a net, not a variable",
+                    span);
+                return true;
+            }
+        }
         const auto vhdl_array_call = statement->vhdl != nullptr
             ? hir_vhdl_array_selection(*target)
             : std::nullopt;
@@ -2465,6 +2593,185 @@ bool Lowerer::lower_hir_statement(
                 || lower_assignment_event_control(
                     *statement->systemverilog);
         };
+        // A nonblocking assignment with an intra-assignment timing control
+        // evaluates its operands now; a forked branch waits for the control
+        // and then schedules the update, so the process continues
+        // (IEEE 1800-2017 10.4.2).
+        struct NonblockingHandoff {
+            InstructionIndex fork { };
+            InstructionIndex jump { };
+        };
+        const bool timed_nonblocking = nonblocking && !signal_assignment
+            && statement->systemverilog != nullptr
+            && statement->systemverilog->update_kind
+                == semantic::sv::UpdateKind::none
+            && (statement->systemverilog->assignment_control
+                    == semantic::sv::AssignmentControl::event
+                || (statement->systemverilog->assignment_control
+                        == semantic::sv::AssignmentControl::delay
+                    && statement->systemverilog->delay
+                    && statement->systemverilog->delay->additional.empty()));
+        const auto begin_nonblocking_handoff = [&]()
+            -> std::optional<NonblockingHandoff> {
+            const auto& input = *statement->systemverilog;
+            std::optional<WaitFor> wait;
+            if (input.assignment_control
+                == semantic::sv::AssignmentControl::delay) {
+                if (const auto constant
+                    = delay_magnitude(input.delay->primary)) {
+                    wait = WaitFor { *constant };
+                } else {
+                    wait = dynamic_delay(input.delay->primary);
+                }
+                if (!wait) {
+                    return std::nullopt;
+                }
+            }
+            NonblockingHandoff handoff {
+                static_cast<InstructionIndex>(process_.operations.size()),
+                static_cast<InstructionIndex>(
+                    process_.operations.size() + 1U),
+            };
+            process_.operations.emplace_back(Fork { });
+            process_.operations.emplace_back(Jump { });
+            if (wait) {
+                process_.operations.emplace_back(*wait);
+            } else if (!lower_assignment_event_control(input)) {
+                return std::nullopt;
+            }
+            return handoff;
+        };
+        const auto end_nonblocking_handoff
+            = [&](const NonblockingHandoff& handoff) {
+                  process_.operations.emplace_back(ForkEnd { });
+                  const auto continuation = static_cast<InstructionIndex>(
+                      process_.operations.size());
+                  process_.operations[handoff.fork] = Fork {
+                      { handoff.jump + 1U },
+                      runtime::simir::ForkJoinKind::none
+                  };
+                  process_.operations[handoff.jump] = Jump { continuation };
+              };
+        // A write through a constant select wholly outside the target's
+        // declared range has no effect (IEEE 1800-2017 11.5.1).
+        if (target_expression->systemverilog != nullptr
+            && (target_expression->systemverilog->kind
+                    == semantic::sv::ExpressionKind::index
+                || target_expression->systemverilog->kind
+                    == semantic::sv::ExpressionKind::slice)) {
+            const auto& select = *target_expression->systemverilog;
+            const bool is_slice = select.kind
+                == semantic::sv::ExpressionKind::slice;
+            const auto base = select.operands.empty()
+                ? std::nullopt
+                : specialized_hir_unit_->find_expression(
+                      select.operands.front());
+            const auto base_declaration = base && base->systemverilog != nullptr
+                    && base->systemverilog->kind
+                        == semantic::sv::ExpressionKind::name
+                ? hir_referenced_declaration(select.operands.front())
+                : std::nullopt;
+            const auto base_binding = base_declaration
+                ? hir_runtime_binding(*base_declaration, hir_process_scope_,
+                      false)
+                : std::nullopt;
+            const auto* base_info = base_binding && base_binding->signal
+                    && !hir_container_object_binding(select.operands.front())
+                ? &design_.signal_info_.at(*base_binding->signal)
+                : nullptr;
+            const auto first = select.operands.size() >= 2U
+                ? hir_constant_integer(select.operands[1])
+                : std::nullopt;
+            const auto second = is_slice && select.operands.size() == 3U
+                ? hir_constant_integer(select.operands[2])
+                : std::nullopt;
+            // The declared range of the selected object; a port bound to
+            // another language's signal keeps its own index range.
+            const auto declared_range = base_info != nullptr
+                    && hir_systemverilog_packed_shape(
+                           select.operands.front()).size() <= 1U
+                ? hir_expression_range(select.operands.front(),
+                      hir_process_scope_)
+                : std::nullopt;
+            if (base_info != nullptr && declared_range && first
+                && (!is_slice || second)) {
+                auto low = *first;
+                auto high = *first;
+                if (is_slice && select.text == "+:") {
+                    high = *first + *second - 1;
+                } else if (is_slice && select.text == "-:") {
+                    low = *first - *second + 1;
+                } else if (is_slice) {
+                    low = std::min(*first, *second);
+                    high = std::max(*first, *second);
+                }
+                const auto range_low = std::min(declared_range->left,
+                    declared_range->right);
+                const auto range_high = std::max(
+                    declared_range->left, declared_range->right);
+                if (high < range_low || low > range_high) {
+                    return true;
+                }
+                // A partially out-of-range select writes only the bits
+                // inside the declared range.
+                const auto* input = statement->systemverilog != nullptr
+                    ? &*statement->systemverilog : nullptr;
+                if ((low < range_low || high > range_high) && input != nullptr
+                    && input->assignment_kind
+                        != semantic::sv::AssignmentKind::continuous
+                    && ((input->assignment_control
+                                == semantic::sv::AssignmentControl::none
+                            && !input->delay)
+                        || timed_nonblocking)
+                    && high - low < 4096) {
+                    const auto width = static_cast<std::size_t>(
+                        high - low + 1);
+                    const auto lowered_value
+                        = lower_statement_packed_expression(*value, width);
+                    if (!lowered_value
+                        || register_width(*lowered_value) != width) {
+                        return false;
+                    }
+                    const auto clipped_low = std::max(low, range_low);
+                    const auto clipped_high = std::min(high, range_high);
+                    const bool descending
+                        = declared_range->left >= declared_range->right;
+                    const auto value_offset = descending
+                        ? clipped_low - low : high - clipped_high;
+                    const auto signal_offset = descending
+                        ? clipped_low - range_low : range_high - clipped_high;
+                    const auto clipped_width = static_cast<std::uint32_t>(
+                        clipped_high - clipped_low + 1);
+                    const auto clipped = allocate_register(
+                        clipped_width, register_domain(*lowered_value));
+                    process_.operations.emplace_back(Extract {
+                        clipped, *lowered_value,
+                        static_cast<std::uint32_t>(value_offset),
+                        clipped_width });
+                    std::optional<NonblockingHandoff> handoff;
+                    if (timed_nonblocking) {
+                        handoff = begin_nonblocking_handoff();
+                        if (!handoff) {
+                            return false;
+                        }
+                    }
+                    if (signal_assignment || nonblocking) {
+                        process_.operations.emplace_back(WriteUpdateSlice {
+                            *base_binding->signal, clipped,
+                            static_cast<std::uint32_t>(signal_offset),
+                            update_domain });
+                    } else {
+                        process_.operations.emplace_back(WriteBlockingSlice {
+                            *base_binding->signal, clipped,
+                            static_cast<std::uint32_t>(signal_offset) });
+                    }
+                    if (handoff) {
+                        end_nonblocking_handoff(*handoff);
+                    }
+                    return true;
+                }
+            }
+        }
         // A class property update writes its normalized value (`a + val`)
         // through the property path below.
         // A real target updates through its normalized real operation.
@@ -2561,9 +2868,18 @@ bool Lowerer::lower_hir_statement(
             const bool direct_container_object = element
                 && element->object < design_.container_objects_.size()
                 && !design_.container_objects_[element->object].slice_alias;
+            // A constant range select is written through the element's
+            // part-write path when it is nonblocking or reaches outside the
+            // element, which then writes only the bits inside it.
+            const bool constant_memory_range = slice
+                && selected.operands.size() == 3U
+                && selected.text != "+:" && selected.text != "-:"
+                && (nonblocking
+                    || !hir_constant_selection(*target, hir_process_scope_));
             const bool dynamic_memory_part
                 = slice && selected.operands.size() == 3U
-                && (selected.text == "+:" || selected.text == "-:")
+                && (selected.text == "+:" || selected.text == "-:"
+                    || constant_memory_range)
                 && packed_element && element->type != nullptr
                 && element->selected_type == element->type
                 && direct_container_object && !element->local
@@ -2573,9 +2889,10 @@ bool Lowerer::lower_hir_statement(
                 && element->type->dimensions.size()
                     == element->indices.size()
                 && !element->read_only && !signal_assignment
-                && statement->systemverilog->assignment_control
-                    == semantic::sv::AssignmentControl::none
-                && !statement->systemverilog->delay
+                && ((statement->systemverilog->assignment_control
+                            == semantic::sv::AssignmentControl::none
+                        && !statement->systemverilog->delay)
+                    || timed_nonblocking)
                 && statement->systemverilog->update_kind
                     == semantic::sv::UpdateKind::none;
             if (signal_assignment && packed_element
@@ -3073,6 +3390,106 @@ bool Lowerer::lower_hir_statement(
             return lower_hir_container_copy_out(
                 *target, container_source->value);
         }
+        // An unpacked array concatenation assigned to a queue or dynamic
+        // array (IEEE 1800-2017 10.10): `q = {q, x}`, `q = {}`.
+        if (statement->systemverilog != nullptr && container
+            && container->type != nullptr && !container->type->fixed
+            && !container->type->associative
+            && !container->type->aggregate_value
+            && container_value_expression
+            && container_value_expression->systemverilog != nullptr
+            && container_value_expression->systemverilog->kind
+                == semantic::sv::ExpressionKind::concatenation) {
+            const auto& input = *statement->systemverilog;
+            if (signal_assignment || nonblocking
+                || input.assignment_kind
+                    != semantic::sv::AssignmentKind::blocking
+                || input.assignment_control
+                    != semantic::sv::AssignmentControl::none
+                || input.delay
+                || input.update_kind != semantic::sv::UpdateKind::none) {
+                return false;
+            }
+            if (container->read_only) {
+                report(
+                    "FSIM-ELAB-SVPORT-009",
+                    "an input container port is read-only",
+                    span);
+                return true;
+            }
+            const auto& type = *container->type;
+            const auto built = allocate_container_register(type);
+            process_.operations.emplace_back(
+                AppendContainer { built, true, { }, { }, { } });
+            for (const auto operand :
+                container_value_expression->systemverilog->operands) {
+                if (hir_static_container_expression_type(operand)) {
+                    const auto part = lower_hir_static_container_value(
+                        operand);
+                    if (!part) {
+                        return false;
+                    }
+                    process_.operations.emplace_back(AppendContainer {
+                        built, false, part->value, { }, { } });
+                    continue;
+                }
+                if (type.element_kind == ContainerElementKind::String) {
+                    const auto text = lower_hir_string_expression(operand);
+                    if (!text) {
+                        return false;
+                    }
+                    process_.operations.emplace_back(AppendContainer {
+                        built, false, { }, { }, *text });
+                    continue;
+                }
+                if (type.element_kind != ContainerElementKind::Packed
+                    && type.element_kind != ContainerElementKind::Scalar) {
+                    return false;
+                }
+                const auto element_kind
+                    = type.element_kind == ContainerElementKind::Scalar
+                    ? type.scalar_kind
+                    : frontend::SystemVerilogScalarKind::None;
+                const auto operand_kind
+                    = hir_systemverilog_scalar_kind(operand);
+                std::optional<RegisterId> element_value;
+                if (element_kind != frontend::SystemVerilogScalarKind::None
+                    && operand_kind
+                        == frontend::SystemVerilogScalarKind::None) {
+                    element_value = lower_hir_expression(operand,
+                        hir_expression_width(operand, hir_process_scope_)
+                            .value_or(32U));
+                    if (element_value) {
+                        element_value = convert_hir_integral_to_real(*element_value,
+                            hir_expression_signed(operand), element_kind);
+                    }
+                } else {
+                    element_value = lower_hir_expression(
+                        operand, type.element_width, element_kind);
+                }
+                if (!element_value) {
+                    return false;
+                }
+                if (register_width(*element_value) != type.element_width) {
+                    element_value = resize_register(*element_value, type.element_width,
+                        hir_expression_signed(operand));
+                }
+                if (type.two_state
+                    && !is_two_state_domain(register_domain(*element_value))) {
+                    element_value = convert_to_two_state(*element_value);
+                }
+                process_.operations.emplace_back(AppendContainer {
+                    built, false, { }, *element_value, { } });
+            }
+            if (container->local) {
+                process_.operations.emplace_back(
+                    CopyContainerRegister { *container->local, built });
+            } else {
+                process_.operations.emplace_back(WriteContainerObject {
+                    container->object, built, std::nullopt });
+            }
+            return true;
+        }
         if (statement->systemverilog != nullptr && container
             && container_value_expression
             && container_value_expression->systemverilog != nullptr) {
@@ -3229,7 +3646,22 @@ bool Lowerer::lower_hir_statement(
                         *size, 32U, hir_expression_signed(size_id));
                 }
                 std::optional<ContainerRegisterId> initializer;
-                if (constructor_call
+                const auto initial_expression = constructor_call
+                        && container_source.operands.size() == 2U
+                    ? specialized_hir_unit_->find_expression(
+                          container_source.operands.back())
+                    : std::nullopt;
+                // An assignment pattern initializer (IEEE 1800-2017 7.5.1).
+                if (initial_expression
+                    && initial_expression->systemverilog != nullptr
+                    && initial_expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::assignment_pattern) {
+                    initializer = lower_hir_container_assignment_pattern(
+                        container_source.operands.back(), *container);
+                    if (!initializer) {
+                        return true;
+                    }
+                } else if (constructor_call
                     && container_source.operands.size() == 2U) {
                     const auto initial = hir_container_object_binding(
                         container_source.operands.back());
@@ -3257,6 +3689,57 @@ bool Lowerer::lower_hir_statement(
                 return true;
             }
         }
+        // A string member of an unpacked structure (IEEE 1800-2017 7.2).
+        if (const auto string_member
+            = hir_container_aggregate_selection(*target, true);
+            string_member && statement->systemverilog != nullptr
+            && string_member->leaf.element_kind
+                == ContainerElementKind::String) {
+            const auto& input = *statement->systemverilog;
+            if (signal_assignment || nonblocking
+                || input.assignment_control
+                    != semantic::sv::AssignmentControl::none
+                || input.delay
+                || input.update_kind != semantic::sv::UpdateKind::none) {
+                return false;
+            }
+            if (string_member->element.read_only) {
+                report(
+                    "FSIM-ELAB-SVPORT-009",
+                    "an input container port is read-only",
+                    span);
+                return true;
+            }
+            const auto element_index = lower_hir_container_element_index(
+                string_member->element);
+            const auto text = lower_hir_string_expression(*value);
+            if (!element_index || !text) {
+                return false;
+            }
+            const auto member_container = string_member->element.local
+                ? *string_member->element.local
+                : allocate_container_register(*string_member->element.type);
+            if (!string_member->element.local) {
+                process_.operations.emplace_back(ReadContainerObject {
+                    member_container, string_member->element.object });
+            }
+            process_.operations.emplace_back(ContainerStringWrite {
+                member_container,
+                *element_index,
+                *text,
+                string_member->element.indices.size() > 1U
+                    || string_member->element.type->signed_indices,
+                string_member->element.indices.size() > 1U,
+                false,
+                string_member->members,
+            });
+            if (!string_member->element.local) {
+                process_.operations.emplace_back(WriteContainerObject {
+                    string_member->element.object, member_container,
+                    std::nullopt });
+            }
+            return true;
+        }
         if (const auto aggregate_member
             = hir_container_aggregate_selection(*target)) {
             const auto& input = *statement->systemverilog;
@@ -3276,8 +3759,25 @@ bool Lowerer::lower_hir_statement(
             }
             const auto element_index = lower_hir_container_element_index(
                 aggregate_member->element);
-            auto lowered = lower_hir_expression(
-                *value, aggregate_member->leaf.element_width);
+            // An integral value assigned to a real member converts
+            // (IEEE 1800-2017 6.12.2).
+            const auto leaf_kind = aggregate_member->leaf.element_kind
+                    == ContainerElementKind::Scalar
+                ? aggregate_member->leaf.scalar_kind
+                : frontend::SystemVerilogScalarKind::None;
+            const auto value_kind = hir_systemverilog_scalar_kind(*value);
+            auto lowered = leaf_kind != frontend::SystemVerilogScalarKind::None
+                    && value_kind == frontend::SystemVerilogScalarKind::None
+                ? lower_hir_expression(*value,
+                      hir_expression_width(*value, hir_process_scope_)
+                          .value_or(32U))
+                : lower_hir_expression(*value,
+                      aggregate_member->leaf.element_width, leaf_kind);
+            if (lowered && leaf_kind != frontend::SystemVerilogScalarKind::None
+                && value_kind == frontend::SystemVerilogScalarKind::None) {
+                lowered = convert_hir_integral_to_real(*lowered,
+                    hir_expression_signed(*value), leaf_kind);
+            }
             if (!element_index || !lowered
                 || aggregate_member->leaf.element_width == 0U) {
                 return false;
@@ -3353,18 +3853,86 @@ bool Lowerer::lower_hir_statement(
                 && element->type->dimensions.size()
                     == element->indices.size()
                 && !element->read_only && !signal_assignment
-                && input.assignment_control
-                    == semantic::sv::AssignmentControl::none
-                && !input.delay
+                && ((input.assignment_control
+                            == semantic::sv::AssignmentControl::none
+                        && !input.delay)
+                    || timed_nonblocking)
                 && input.update_kind
                     == semantic::sv::UpdateKind::none) {
-                const auto width = hir_dynamic_part_width(
-                    *target, hir_process_scope_);
-                const auto dynamic = width
-                    ? lower_hir_dynamic_index(
-                          selection.operands.front(),
-                          selection.operands[1], element->width)
+                // A bit- or part-select of a scalar element is illegal
+                // (IEEE 1800-2017 11.5.1).
+                if (const auto record = specialized_hir_unit_
+                            ->find_declaration(element->declaration);
+                    record && record->systemverilog != nullptr
+                    && record->systemverilog->type
+                    && !record->systemverilog->type->packed_range
+                    && record->systemverilog->type->packed_dimensions.empty()
+                    && element->width == 1U) {
+                    report(
+                        "FSIM-ELAB-SVSELECT-001",
+                        "a bit-select or part-select cannot select from the "
+                        "scalar element of '"
+                            + record->systemverilog->name + "'",
+                        span);
+                    return true;
+                }
+                const bool indexed_part = selection.text == "+:"
+                    || selection.text == "-:";
+                const auto first_bound
+                    = hir_constant_integer(selection.operands[1]);
+                const auto second_bound
+                    = hir_constant_integer(selection.operands[2]);
+                // An indexed part-select with a constant base is a constant
+                // range select.
+                const bool constant_range = !indexed_part
+                    || (first_bound && second_bound && *second_bound > 0
+                        && *second_bound < 65536);
+                const auto range_left = !constant_range ? std::nullopt
+                    : !indexed_part ? first_bound
+                    : selection.text == "+:"
+                    ? std::optional<std::int64_t> {
+                          *first_bound + *second_bound - 1 }
+                    : first_bound;
+                const auto range_right = !constant_range ? std::nullopt
+                    : !indexed_part ? second_bound
+                    : selection.text == "+:"
+                    ? first_bound
+                    : std::optional<std::int64_t> {
+                          *first_bound - *second_bound + 1 };
+                const auto element_range = constant_range
+                    ? hir_expression_range(
+                          selection.operands.front(), hir_process_scope_)
                     : std::nullopt;
+                std::optional<std::size_t> width;
+                std::optional<DynamicIndex> dynamic;
+                if (!constant_range) {
+                    width = hir_dynamic_part_width(
+                        *target, hir_process_scope_);
+                    if (width) {
+                        dynamic = lower_hir_dynamic_index(
+                            selection.operands.front(),
+                            selection.operands[1], element->width);
+                    }
+                } else if (range_left && range_right && element_range
+                    && index_distance(element_range->left,
+                           element_range->right) + 1U == element->width
+                    && std::max(*range_left, *range_right)
+                            - std::min(*range_left, *range_right)
+                        < 65536) {
+                    // `[a:b]` writes the same bits as `[min(a,b) +: n]`.
+                    width = static_cast<std::size_t>(
+                        std::max(*range_left, *range_right)
+                        - std::min(*range_left, *range_right) + 1);
+                    const auto base = allocate_register(
+                        32U, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(LoadConstant {
+                        base,
+                        integer_value(
+                            std::min(*range_left, *range_right), 32U) });
+                    dynamic = DynamicIndex {
+                        base, element_range->left, element_range->right,
+                        0U, false };
+                }
                 const auto element_index
                     = lower_hir_container_element_index(*element);
                 if (!width || *width == 0U
@@ -3389,7 +3957,13 @@ bool Lowerer::lower_hir_statement(
                         converted, *lowered });
                     lowered = converted;
                 }
-                if (!lower_intra_assignment_control()) {
+                std::optional<NonblockingHandoff> handoff;
+                if (timed_nonblocking) {
+                    handoff = begin_nonblocking_handoff();
+                    if (!handoff) {
+                        return false;
+                    }
+                } else if (!lower_intra_assignment_control()) {
                     return false;
                 }
                 const auto write_guard = begin_hir_fixed_array_write(
@@ -3410,11 +3984,14 @@ bool Lowerer::lower_hir_statement(
                             dynamic->right,
                             dynamic->base_offset,
                             static_cast<std::uint32_t>(*width),
-                            selection.text == "+:",
+                            constant_range || selection.text == "+:",
                             dynamic->left >= dynamic->right,
                         },
                     });
                 end_hir_fixed_array_write(write_guard);
+                if (handoff) {
+                    end_nonblocking_handoff(*handoff);
+                }
                 return true;
             }
         }
@@ -3428,11 +4005,18 @@ bool Lowerer::lower_hir_statement(
                     == frontend::SystemVerilogScalarKind::Realtime
                 || update_target_kind
                     == frontend::SystemVerilogScalarKind::ShortReal;
-            if (input.assignment_control
-                    != semantic::sv::AssignmentControl::none
-                || input.delay
-                || (input.update_kind != semantic::sv::UpdateKind::none
-                    && !real_element_update)) {
+            // A nonblocking assignment with an intra-assignment delay
+            // evaluates now and updates the element after the delay
+            // (IEEE 1800-2017 10.4.2).
+            const bool delayed_nonblocking_element = timed_nonblocking
+                && !element->local && element->type != nullptr
+                && !element->type->string_indices;
+            if (!delayed_nonblocking_element
+                && (input.assignment_control
+                        != semantic::sv::AssignmentControl::none
+                    || input.delay
+                    || (input.update_kind != semantic::sv::UpdateKind::none
+                        && !real_element_update))) {
                 trace_generated("fixed-net-control");
                 return false;
             }
@@ -3831,6 +4415,7 @@ bool Lowerer::lower_hir_statement(
                         || path->type->signed_indices,
                     path->indices.size() > 1U,
                     path->type->string_indices,
+                    { },
                 });
                 publish_hir_container_element_path(*element, *path);
                 return true;
@@ -3943,6 +4528,13 @@ bool Lowerer::lower_hir_statement(
                     converted, *lowered });
                 lowered = converted;
             }
+            std::optional<NonblockingHandoff> handoff;
+            if (delayed_nonblocking_element) {
+                handoff = begin_nonblocking_handoff();
+                if (!handoff) {
+                    return false;
+                }
+            }
             const auto write_guard = begin_hir_fixed_array_write(
                 *element, *element_index);
             if (element->local) {
@@ -3992,6 +4584,9 @@ bool Lowerer::lower_hir_statement(
                     });
             }
             end_hir_fixed_array_write(write_guard);
+            if (handoff) {
+                end_nonblocking_handoff(*handoff);
+            }
             return true;
         }
         if (target_expression->systemverilog != nullptr
@@ -4132,6 +4727,19 @@ bool Lowerer::lower_hir_statement(
                 false,
             });
             return true;
+        }
+        if (hir_class_property_profile(*target, true)) {
+            const auto& input = *statement->systemverilog;
+            if (signal_assignment || nonblocking
+                || input.assignment_control
+                    != semantic::sv::AssignmentControl::none
+                || input.delay
+                || input.update_kind != semantic::sv::UpdateKind::none) {
+                return false;
+            }
+            const auto lowered = lower_hir_string_expression(*value);
+            return lowered
+                && lower_hir_class_string_property_write(*target, *lowered);
         }
         if (const auto property = hir_class_property_profile(*target)) {
             if (signal_assignment || nonblocking || !property->writable) {
@@ -4374,6 +4982,7 @@ bool Lowerer::lower_hir_statement(
         }
         std::optional<TransitionDelays> transition_delays;
         std::optional<runtime::SimulationTick> procedural_delay;
+        std::optional<WaitFor> runtime_delay;
         struct VhdlProjectedAssignment {
             runtime::SimulationTick delay { };
             runtime::SimulationTick rejection { };
@@ -4415,7 +5024,16 @@ bool Lowerer::lower_hir_statement(
                 ? transition_delay(*net_delay)
                 : std::optional<TransitionDelays> { };
             if ((driver_delay && !driver) || (net_delay && !net)) {
-                return false;
+                // One delay that is not constant is evaluated at run time.
+                const auto* single = driver_delay && !net_delay
+                    ? driver_delay
+                    : net_delay && !driver_delay ? net_delay : nullptr;
+                if (single != nullptr && single->additional.empty()) {
+                    runtime_delay = dynamic_delay(single->primary);
+                }
+                if (!runtime_delay) {
+                    return false;
+                }
             }
             transition_delays = driver ? driver : net;
             if (driver && net) {
@@ -4447,10 +5065,15 @@ bool Lowerer::lower_hir_statement(
             }
         } else if (driver_delay != nullptr) {
             const auto primary = delay_magnitude(driver_delay->primary);
-            if (!primary) {
+            if (!primary && delayed_nonblocking_assignment) {
+                runtime_delay = dynamic_delay(driver_delay->primary);
+            }
+            if (!primary && !runtime_delay) {
                 return false;
             }
-            procedural_delay = *primary;
+            if (primary) {
+                procedural_delay = *primary;
+            }
         }
         if (statement->vhdl != nullptr && signal_assignment) {
             const auto& input = *statement->vhdl;
@@ -6242,6 +6865,26 @@ bool Lowerer::lower_hir_statement(
                 vhdl_projected_assignment->rejection,
                 vhdl_projected_assignment->mode,
             });
+        } else if (runtime_delay && (constant_selection || (!index && !slice))) {
+            process_.operations.emplace_back(WriteDelayed {
+                *binding->signal,
+                *lowered,
+                *runtime_delay,
+                constant_selection
+                    ? std::optional<std::uint32_t> {
+                          static_cast<std::uint32_t>(
+                              constant_selection->offset) }
+                    : std::nullopt,
+                continuous_assignment,
+                update_domain,
+            });
+        } else if (runtime_delay) {
+            report(
+                "FSIM-ELAB-SVDELAY-004",
+                "an assignment with a run-time delay requires a whole "
+                "variable or a constant select target",
+                span);
+            return true;
         } else if (constant_selection && transition_delays) {
             process_.operations.emplace_back(WriteInertialSlice {
                 *binding->signal,
@@ -8138,6 +8781,69 @@ bool Lowerer::lower_hir_statement(
                         : span);
                 return LoweredChoice { make_false(), { } };
             }
+            // A real case expression or item compares as real (IEEE
+            // 1800-2017 12.5, 11.3.1).
+            using ScalarKind = frontend::SystemVerilogScalarKind;
+            const auto real_kind = [](const ScalarKind kind) {
+                return kind == ScalarKind::Real
+                    || kind == ScalarKind::Realtime
+                    || kind == ScalarKind::ShortReal;
+            };
+            const auto as_real = [&](const RegisterId value,
+                                     const ScalarKind kind,
+                                     const bool signed_value) {
+                if (!real_kind(kind)) {
+                    return convert_hir_integral_to_real(
+                        value, signed_value, ScalarKind::Real);
+                }
+                if (kind != ScalarKind::ShortReal) {
+                    return value;
+                }
+                const auto widened = allocate_register(
+                    64U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(SystemVerilogScalarBinary {
+                    runtime::SystemVerilogScalarBinaryOperator::Convert,
+                    widened, value, value, kind, kind, ScalarKind::Real });
+                return widened;
+            };
+            if (systemverilog && !inside_matching && !pattern_matching) {
+                const auto selector_kind
+                    = hir_systemverilog_scalar_kind(*condition);
+                const bool case_real = real_kind(selector_kind)
+                    || std::ranges::any_of(alternatives,
+                        [&](const auto& alternative) {
+                            return std::ranges::any_of(alternative.choices,
+                                [&](const auto item) {
+                                    return real_kind(
+                                        hir_systemverilog_scalar_kind(item));
+                                });
+                        });
+                if (case_real) {
+                    const auto choice_kind
+                        = hir_systemverilog_scalar_kind(choice);
+                    const auto choice_value = real_kind(choice_kind)
+                        ? lower_hir_expression(choice,
+                              choice_kind == ScalarKind::ShortReal ? 32U
+                                                                   : 64U,
+                              choice_kind)
+                        : lower_hir_expression(choice, *choice_width);
+                    if (!choice_value) {
+                        return std::nullopt;
+                    }
+                    const auto left = as_real(*selector, selector_kind,
+                        hir_expression_signed(*condition));
+                    const auto right = as_real(*choice_value, choice_kind,
+                        hir_expression_signed(choice));
+                    const auto matched = allocate_register(
+                        1U, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(
+                        SystemVerilogScalarBinary {
+                            runtime::SystemVerilogScalarBinaryOperator::Equal,
+                            matched, left, right, ScalarKind::Real,
+                            ScalarKind::Real, ScalarKind::None });
+                    return LoweredChoice { matched, { } };
+                }
+            }
             auto lowered = lower_hir_expression(choice, *choice_width);
             if (!lowered) {
                 trace_case_failure("choice-lowering", choice);
@@ -8145,12 +8851,25 @@ bool Lowerer::lower_hir_statement(
             }
             auto comparison_selector = *selector;
             if (systemverilog) {
+                // The case expression and every case item form one
+                // context: signed only when all of them are (IEEE
+                // 1800-2017 12.5, 11.8.1).
+                const bool all_signed = selector_operand.signed_value
+                    && std::ranges::all_of(alternatives,
+                        [&](const auto& alternative) {
+                            return std::ranges::all_of(alternative.choices,
+                                [&](const auto item) {
+                                    return hir_expression_signed(item);
+                                });
+                        });
+                auto case_selector = selector_operand;
+                case_selector.signed_value = all_signed;
                 const auto operands = size_integral_comparison(
-                    selector_operand,
+                    case_selector,
                     InsideIntegralOperand {
                         *lowered,
                         register_width(*lowered),
-                        hir_expression_signed(choice),
+                        all_signed,
                     });
                 comparison_selector = operands.lhs;
                 lowered = operands.rhs;
@@ -9826,7 +10545,7 @@ bool Lowerer::lower_hir_statement(
         return true;
     };
 
-    const auto lower_output_value = [&](const std::optional<semantic::ExpressionId> expression,
+    const auto lower_output_value_impl = [&](const std::optional<semantic::ExpressionId> expression,
                                         const semantic::sv::OutputFormat format,
                                         std::string prefix,
                                         std::string suffix,
@@ -9936,6 +10655,70 @@ bool Lowerer::lower_hir_statement(
             precision,
         });
         return true;
+    };
+    // `%p` prints an unpacked value as an assignment pattern, a string in
+    // quotes, and a singular value as `%0d` or `%g` would (IEEE 1800-2017
+    // 21.2.1.7).
+    const auto lower_output_value = [&](const std::optional<semantic::ExpressionId> expression,
+                                        const semantic::sv::OutputFormat format,
+                                        std::string prefix,
+                                        std::string suffix,
+                                        const bool newline,
+                                        const bool postponed,
+                                        const bool suppress_leading_zero,
+                                        const std::uint32_t minimum_width,
+                                        const bool left_justify,
+                                        const bool zero_pad,
+                                        const std::uint32_t precision) -> bool {
+        if (format != semantic::sv::OutputFormat::pattern || !expression) {
+            return lower_output_value_impl(expression, format,
+                std::move(prefix), std::move(suffix), newline, postponed,
+                suppress_leading_zero, minimum_width, left_justify, zero_pad,
+                precision);
+        }
+        if (hir_static_container_expression_type(*expression)) {
+            const auto value = lower_hir_static_container_value(*expression);
+            if (!value) {
+                return false;
+            }
+            const auto text = allocate_string_register();
+            process_.operations.emplace_back(
+                FormatContainerPattern { text, value->value });
+            emit_deferred_assertion_action_handoff();
+            process_.operations.emplace_back(StringDisplay {
+                text, std::move(prefix), std::move(suffix), newline,
+                postponed });
+            return true;
+        }
+        if (hir_expression_is_string(*expression, hir_process_scope_)) {
+            const auto value = lower_hir_string_expression(*expression);
+            if (!value) {
+                return false;
+            }
+            emit_deferred_assertion_action_handoff();
+            process_.operations.emplace_back(StringDisplay {
+                *value, std::move(prefix) + "\"", "\"" + std::move(suffix),
+                newline, postponed });
+            return true;
+        }
+        if (const auto name
+            = lower_hir_systemverilog_enumeration_value_name(*expression)) {
+            emit_deferred_assertion_action_handoff();
+            process_.operations.emplace_back(StringDisplay {
+                *name, std::move(prefix), std::move(suffix), newline,
+                postponed });
+            return true;
+        }
+        const auto kind = hir_systemverilog_scalar_kind(*expression);
+        const bool real_value = kind == frontend::SystemVerilogScalarKind::Real
+            || kind == frontend::SystemVerilogScalarKind::Realtime
+            || kind == frontend::SystemVerilogScalarKind::ShortReal;
+        return lower_output_value_impl(expression,
+            real_value ? semantic::sv::OutputFormat::real_general
+                       : semantic::sv::OutputFormat::decimal,
+            std::move(prefix), std::move(suffix), newline, postponed,
+            minimum_width == 0U || suppress_leading_zero, minimum_width,
+            left_justify, zero_pad, precision);
     };
 
     if (statement->systemverilog != nullptr) {
@@ -10374,12 +11157,13 @@ bool Lowerer::lower_hir_statement(
                         [](const semantic::sv::TaskAssociation& argument) {
                             return !argument.formal && argument.actual;
                         });
-                if (language_ != frontend::Language::SystemVerilog2017
-                    || !complete) {
+                // $timeformat is also a Verilog task (IEEE 1364-2005
+                // 17.3.2).
+                if (!complete) {
                     report(
                         "FSIM-ELAB-SVTIME-001",
                         "$timeformat requires units, precision, suffix, and "
-                        "minimum width in SystemVerilog",
+                        "minimum width",
                         span);
                     return true;
                 }
@@ -13283,10 +14067,9 @@ bool Lowerer::lower_hir_statement(
                             dependencies.end());
                         continue;
                     }
-                } else if (const auto found = signals_.find(
-                               sensitivity.signal);
-                    found != signals_.end()) {
-                    signal = found->second;
+                } else {
+                    signal = hir_named_signal(
+                        sensitivity.signal, hir_process_scope_);
                 }
                 if (!signal) {
                     report(
@@ -13445,6 +14228,20 @@ bool Lowerer::hir_procedural_target_is_visible(
                 });
     }
     const auto declaration = hir_target_declaration(expression_id);
+    // The target shall not be an array element (IEEE 1800-2017 10.6.1).
+    // Bit- and part-selects of a packed variable stay accepted, as other
+    // simulators allow them.
+    if (source.kind != semantic::sv::ExpressionKind::name && declaration) {
+        const auto target
+            = specialized_hir_unit_->find_declaration(*declaration);
+        if (target && target->systemverilog != nullptr
+            && target->systemverilog->type
+            && (target->systemverilog->type->container_form
+                || !target->systemverilog->type->unpacked_dimensions
+                        .empty())) {
+            return false;
+        }
+    }
     const auto binding = declaration
         ? hir_runtime_binding(*declaration, hir_process_scope_, false)
         : std::nullopt;
@@ -13483,40 +14280,17 @@ void Lowerer::prepare_hir_procedural_continuous_assignments(
                     = hir_procedural_target_is_visible(*source.target);
                 const auto index
                     = procedural_continuous_assignments_.size();
-                assignment.active_name = process_.name
-                    + ".$procedural_assign_"
-                    + std::to_string(statement_id.value())
-                    + ".active";
-                if (!assignment.valid) {
-                    // Direct statement lowering owns the source diagnostic.
-                } else if (design_.signals_.size()
-                    > std::numeric_limits<SignalId>::max()) {
-                    report(
-                        "FSIM-ELAB-SVPROCASSIGN-001",
-                        "the design has too many signals for a procedural "
-                        "continuous assignment driver",
-                        hir_source_span(source.source));
-                    assignment.valid = false;
-                } else {
-                    assignment.active = static_cast<SignalId>(
-                        design_.signals_.size());
-                    SignalInfo info;
-                    info.id = assignment.active;
-                    info.name = assignment.active_name;
-                    info.width = 1U;
-                    info.type_name = "logic";
-                    info.source_domain = frontend::ValueDomain::Logic4;
-                    info.declaration_span
-                        = hir_source_span(source.source);
-                    design_.signal_info_.push_back(std::move(info));
-                    design_.signals_.push_back(Signal {
-                        assignment.active_name,
-                        PackedLogic4 { 1U, Logic4::zero },
-                        ResolutionKind::none,
-                        ValueKind::logic4,
-                    });
-                    design_.signal_by_name_.emplace(
-                        assignment.active_name, assignment.active);
+                assignment.owner = statement_id.value() + 1U;
+                if (assignment.valid) {
+                    const auto owner
+                        = hir_procedural_assign_owner(*source.target);
+                    if (!owner) {
+                        assignment.valid = false;
+                    } else {
+                        assignment.active = *owner;
+                        assignment.active_name
+                            = design_.signal_info_.at(*owner).name;
+                    }
                 }
                 procedural_continuous_assignment_by_statement_.emplace(
                     assignment.statement_key, index);
@@ -13550,10 +14324,10 @@ bool Lowerer::lower_hir_procedural_continuous_assignment(
     }
     const auto& source = *statement->systemverilog;
     const auto target = *source.target;
-    const auto key = hir_procedural_target_key(target);
-    const auto matches
-        = procedural_continuous_assignments_by_target_.find(key);
-    if (matches == procedural_continuous_assignments_by_target_.end()) {
+    const auto owner = hir_procedural_target_is_visible(target)
+        ? hir_procedural_assign_owner(target)
+        : std::nullopt;
+    if (!owner) {
         report(
             "FSIM-ELAB-SVPROCASSIGN-001",
             "procedural assign/deassign requires a visible packed variable "
@@ -13561,18 +14335,11 @@ bool Lowerer::lower_hir_procedural_continuous_assignment(
             hir_source_span(source.source));
         return true;
     }
-    const auto zero = allocate_register(
-        1U, frontend::ValueDomain::Logic4);
+    // A new assign replaces the active one; deassign ends it (10.6.1).
+    const auto zero = allocate_register(32U, frontend::ValueDomain::Bit2);
     process_.operations.emplace_back(
-        LoadConstant { zero, PackedLogic4 { 1U, Logic4::zero } });
-    for (const auto index : matches->second) {
-        const auto& assignment
-            = procedural_continuous_assignments_[index];
-        if (assignment.valid) {
-            process_.operations.emplace_back(
-                WriteBlocking { assignment.active, zero });
-        }
-    }
+        LoadConstant { zero, unsigned_value(0U, 32U) });
+    process_.operations.emplace_back(WriteBlocking { *owner, zero });
 
     if (source.kind == semantic::sv::StatementKind::deassign) {
         const auto width = hir_expression_width(
@@ -13610,15 +14377,77 @@ bool Lowerer::lower_hir_procedural_continuous_assignment(
             target, source.value, std::nullopt, true, source.source)) {
         return false;
     }
-    const auto one = allocate_register(
-        1U, frontend::ValueDomain::Logic4);
-    process_.operations.emplace_back(
-        LoadConstant { one, PackedLogic4 { 1U, Logic4::one } });
-    process_.operations.emplace_back(WriteBlocking {
-        procedural_continuous_assignments_[found->second].active,
-        one,
+    const auto selected = allocate_register(
+        32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(LoadConstant {
+        selected,
+        unsigned_value(
+            procedural_continuous_assignments_[found->second].owner, 32U),
     });
+    process_.operations.emplace_back(WriteBlocking { *owner, selected });
     return true;
+}
+
+std::optional<SignalId> Lowerer::hir_procedural_assign_owner(
+    const semantic::ExpressionId target)
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    // The owner is keyed by the target signals' names, so processes of
+    // other instances or lowered in any order share it.
+    std::string key;
+    const auto collect = [&](const auto& self,
+                             const semantic::ExpressionId expression_id)
+        -> bool {
+        const auto expression
+            = specialized_hir_unit_->find_expression(expression_id);
+        if (!expression || expression->systemverilog == nullptr) {
+            return false;
+        }
+        if (expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::concatenation) {
+            return std::ranges::all_of(expression->systemverilog->operands,
+                [&](const auto operand) { return self(self, operand); });
+        }
+        const auto declaration = hir_target_declaration(expression_id);
+        const auto binding = declaration
+            ? hir_runtime_binding(*declaration, hir_process_scope_, false)
+            : std::nullopt;
+        if (!binding || !binding->signal) {
+            return false;
+        }
+        key += (key.empty() ? "" : "|")
+            + design_.signal_info_.at(*binding->signal).name;
+        return true;
+    };
+    if (!collect(collect, target) || key.empty()) {
+        return std::nullopt;
+    }
+    const auto name = key + ".$procedural_assign_owner";
+    if (const auto found = design_.signal_by_name_.find(name);
+        found != design_.signal_by_name_.end()) {
+        return found->second;
+    }
+    if (design_.signals_.size() >= std::numeric_limits<SignalId>::max()) {
+        return std::nullopt;
+    }
+    const auto id = static_cast<SignalId>(design_.signals_.size());
+    SignalInfo info;
+    info.id = id;
+    info.name = name;
+    info.width = 32U;
+    info.type_name = "int";
+    info.source_domain = frontend::ValueDomain::Bit2;
+    design_.signal_info_.push_back(std::move(info));
+    design_.signals_.push_back(Signal {
+        name,
+        PackedLogic4 { 32U, Logic4::zero },
+        ResolutionKind::none,
+        ValueKind::logic4,
+    });
+    design_.signal_by_name_.emplace(name, id);
+    return id;
 }
 
 void Lowerer::materialize_hir_procedural_continuous_assignments()
@@ -13663,6 +14492,7 @@ void Lowerer::materialize_hir_procedural_continuous_assignments()
         description.name = "$procedural_assign_"
             + std::to_string(index);
         description.procedural_assignment_active = assignment.active;
+        description.procedural_assignment_owner = assignment.owner;
         description.procedural_assignment_target = assignment.target;
         description.procedural_assignment_value = assignment.value;
         description.kind

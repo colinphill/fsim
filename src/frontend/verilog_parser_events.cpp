@@ -359,7 +359,41 @@ bool VerilogParser::cycle_paths_are_safe(
     return result;
   };
   const auto paths = analyze_paths(analyze_paths, statements);
-  return (paths & (fallthrough | unsafe_cycle)) == 0;
+  if ((paths & (fallthrough | unsafe_cycle)) == 0) {
+    return true;
+  }
+  // A path that does not suspend is legal and only loops at run time when
+  // taken (IEEE 1800-2017 9.2.2.1); report only a body that cannot suspend
+  // at all.
+  const auto may_suspend = [](const auto& self,
+                              const std::vector<Statement>& children)
+      -> bool {
+    return std::ranges::any_of(children, [&](const Statement& child) {
+      if (child.kind == StatementKind::Delay
+          || child.kind == StatementKind::WaitOn
+          || child.kind == StatementKind::WaitUntil
+          || child.kind == StatementKind::WaitFork
+          || child.kind == StatementKind::WaitOrder
+          || child.kind == StatementKind::Fork
+          || child.kind == StatementKind::TaskCall
+          || child.kind == StatementKind::Pause
+          || child.kind == StatementKind::Finish
+          || (child.kind == StatementKind::Assignment
+              && child.procedural_assignment_control
+                  != ProceduralAssignmentControl::None)) {
+        return true;
+      }
+      if (self(self, child.statements)
+          || self(self, child.else_statements)) {
+        return true;
+      }
+      return std::ranges::any_of(child.case_alternatives,
+          [&](const CaseAlternative& alternative) {
+            return self(self, alternative.statements);
+          });
+    });
+  };
+  return may_suspend(may_suspend, statements);
 }
 
 Statement VerilogParser::parse_forever_statement(const Token& start) {

@@ -281,7 +281,26 @@ SystemVerilogClassMethod VerilogParser::parse_class_method(
     }
     method.span = std::move(task.span);
   } else {
+    // A constructor declares its formals only in a parenthesized list
+    // (IEEE 1800-2017 A.1.9 class_constructor_declaration).
+    bool header_without_ports = false;
+    for (std::size_t offset = 0; offset < 8U; ++offset) {
+      if (keyword("new", offset)) {
+        header_without_ports = at(TokenKind::Semicolon, offset + 1U);
+        break;
+      }
+      if (at(TokenKind::Semicolon, offset)) {
+        break;
+      }
+    }
     auto function = parse_function(start, prototype, true);
+    if (header_without_ports && !function.arguments.empty()) {
+      error(
+          start,
+          "FSIM-SV-PARSE-001",
+          "a class constructor declares its arguments in a parenthesized "
+          "port list");
+    }
     method.name = std::move(function.name);
     method.kind = method.name == "new"
             || method.name.ends_with("::new")

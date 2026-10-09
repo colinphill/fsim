@@ -534,6 +534,18 @@ void ContainerOperationLowerer::lower(
         "container.string-read");
 }
 void ContainerOperationLowerer::lower(
+    const runtime::simir::AppendContainer& value)
+{
+    invoke(value.value, std::nullopt, std::nullopt,
+        "container.append");
+}
+void ContainerOperationLowerer::lower(
+    const runtime::simir::FormatContainerPattern&)
+{
+    invoke(std::nullopt, std::nullopt, std::nullopt,
+        "container.format-pattern");
+}
+void ContainerOperationLowerer::lower(
     const runtime::simir::ContainerStringWrite& value)
 {
     invoke(

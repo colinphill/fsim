@@ -802,6 +802,7 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
                     || std::is_same_v<Type, WriteUpdate>
                     || std::is_same_v<Type, WriteAfter>
                     || std::is_same_v<Type, WriteInertial>
+                    || std::is_same_v<Type, WriteDelayed>
                     || std::is_same_v<Type, WriteProjected>
                     || std::is_same_v<Type, WriteBlockingSlice>
                     || std::is_same_v<Type, WriteUpdateSlice>
@@ -821,6 +822,9 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
                     || std::is_same_v<Type, WriteProjectedDynamicSlice>) {
                     known = true;
                     used = value.source == register_id;
+                    if constexpr (std::is_same_v<Type, WriteDelayed>) {
+                        used = used || value.delay.source == register_id;
+                    }
                     if constexpr (
                         std::is_same_v<Type, WriteBlockingDynamicSlice>
                         || std::is_same_v<Type, WriteUpdateDynamicSlice>

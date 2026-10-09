@@ -551,6 +551,31 @@ Simulation::Impl::Impl(
                 specialization, declared_type, actuals, string_actuals,
                 actual_names, scope);
         });
+    // A string class property read or written from a process travels as
+    // the single string actual of a reserved method identity,
+    // `@string-property-read:<property>` or `@string-property-write:...`.
+    static constexpr std::string_view string_property_prefix {
+        "@string-property-"
+    };
+    const auto access_string_property
+        = [](runtime::SystemVerilogClassPropertyValue& property,
+              const std::string_view method,
+              std::vector<std::string>& string_actuals) {
+              if (property.kind
+                      != runtime::SystemVerilogClassPropertyKind::String
+                  || string_actuals.size() != 1U) {
+                  throw std::invalid_argument {
+                      "class string property access has no string "
+                      "property or actual"
+                  };
+              }
+              if (method.starts_with("@string-property-write:")) {
+                  property.string = string_actuals.front();
+              } else {
+                  string_actuals.front() = property.string;
+              }
+              return runtime::PackedLogic4(1U, runtime::Logic4::zero);
+          };
     interpreter->set_class_property_read_hook(
         [this](const std::uint64_t handle, const std::string_view property) {
             return packed_property_value(class_heap.property(handle, property));
@@ -565,7 +590,7 @@ Simulation::Impl::Impl(
             notify_class_changes(before);
         });
     interpreter->set_class_method_call_hook(
-        [this](const std::uint64_t handle,
+        [this, access_string_property](const std::uint64_t handle,
             const std::string_view method,
             std::vector<runtime::PackedLogic4>& actuals,
             std::vector<std::string>& string_actuals,
@@ -576,6 +601,14 @@ Simulation::Impl::Impl(
             const bool virtual_dispatch) {
             const auto before = packed_class_snapshot();
             const auto static_before = packed_static_snapshot();
+            if (method.starts_with(string_property_prefix)) {
+                auto result = access_string_property(
+                    class_heap.property(handle,
+                        method.substr(method.find(':') + 1U)),
+                    method, string_actuals);
+                notify_class_changes(before);
+                return result;
+            }
             auto result = method.starts_with("@container-")
                 ? invoke_class_container(handle, method, actuals)
                 : method.starts_with("@checked-cast:")
@@ -611,13 +644,22 @@ Simulation::Impl::Impl(
             notify_static_changes(before);
         });
     interpreter->set_class_static_method_call_hook(
-        [this](const std::string_view method,
+        [this, access_string_property](const std::string_view method,
             std::vector<runtime::PackedLogic4>& actuals,
             std::vector<std::string>& string_actuals,
             const std::span<const std::string> names,
             const std::span<const std::uint8_t> directions) {
             const auto class_before = packed_class_snapshot();
             const auto static_before = packed_static_snapshot();
+            if (method.starts_with(string_property_prefix)) {
+                const auto [owner, name] = static_property_parts(
+                    method.substr(method.find(':') + 1U));
+                auto result = access_string_property(
+                    class_static_store.property(owner, name),
+                    method, string_actuals);
+                notify_static_changes(static_before);
+                return result;
+            }
             auto result = invoke_source_static_function(
                 method, actuals, string_actuals, names, directions);
             notify_class_changes(class_before);

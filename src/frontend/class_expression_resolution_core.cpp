@@ -1119,6 +1119,24 @@ void Resolver::retain_result_type(
     const auto owner_name = expression.text.substr(0, selected);
     const auto member = expression.text.substr(selected + 2U);
     const auto owners = resolve_class_name(owner_name, scope);
+    // Outside a class, the class scope operator needs a specialization of
+    // a parameterized class, `C#(...)::name` (IEEE 1800-2017 8.25.1).
+    if (owners.size() == 1U && scope.class_owner == nullptr
+        && owner_name.find('#') == std::string::npos
+        && std::ranges::any_of(
+            owners.front()->parameters,
+            [](const ParameterDeclaration& parameter) {
+              return !parameter.local;
+            })) {
+      diagnose(
+          diagnostics_,
+          "FSIM-SV-CLASS-023",
+          "class scope resolution of parameterized class '" + owner_name
+              + "' requires a parameter value assignment, as in '"
+              + owner_name + "#()::" + member + "'",
+          expression.span);
+      return std::nullopt;
+    }
     if (owners.size() == 1U) {
       const auto match = find_property(
           owners.front()->canonical_identity, member);

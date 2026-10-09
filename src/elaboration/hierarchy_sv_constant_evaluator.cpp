@@ -97,7 +97,9 @@ systemverilog_constant_name_declaration(
 constexpr std::uint32_t maximum_constant_width
     = hir_systemverilog_maximum_constant_width;
 constexpr std::uint64_t maximum_constant_work_units = 64U * 1024U * 1024U;
-constexpr std::size_t maximum_constant_call_depth = 1024U;
+// Each constant call frame uses several native frames; deeper recursion
+// falls back to run-time evaluation instead of exhausting the stack.
+constexpr std::size_t maximum_constant_call_depth = 256U;
 constexpr std::size_t maximum_constant_local_array_elements = 65536U;
 constexpr std::uint64_t maximum_constant_local_array_bits
     = 8U * 1024U * 1024U;
@@ -951,12 +953,15 @@ public:
     {
         // The active expressions form a short stack; a linear scan is
         // cheaper than hashing.
-        if (std::ranges::find(active_expressions_, expression.value())
+        // A recursive function call re-evaluates an expression in a deeper
+        // frame; only re-entry within one frame is a cycle.
+        const auto active = std::pair { frames_.size(), expression.value() };
+        if (std::ranges::find(active_expressions_, active)
             != active_expressions_.end()) {
             error_ = "recursive SystemVerilog constant expression";
             return std::nullopt;
         }
-        active_expressions_.push_back(expression.value());
+        active_expressions_.push_back(active);
         auto result = evaluate_impl(expression);
         active_expressions_.pop_back();
         return result;
@@ -2507,6 +2512,30 @@ private:
                     *declaration->systemverilog, record);
             }
         }
+        // Inside a function body its name also denotes the result
+        // variable; a call names the function itself (IEEE 1800-2017
+        // 13.4.1), so a recursive call resolves to the function.
+        if (!record.text.starts_with("$") && !record.text.starts_with("@")) {
+            const semantic::CompiledDeclarationPredicate function
+                = [](const semantic::CompiledDeclarationView& candidate) {
+                      return candidate.systemverilog != nullptr
+                          && candidate.systemverilog->form
+                              == semantic::sv::DeclarationForm::function
+                          && candidate.systemverilog->callable
+                          && candidate.systemverilog->callable->function;
+                  };
+            const auto resolved = semantic::CompiledDesignResolver {
+                specialization_ }
+                                      .resolve_systemverilog(record.text,
+                                          record.scope, function, false)
+                                      .unique();
+            const auto declaration = resolved
+                ? specialization_.find_declaration(*resolved)
+                : std::nullopt;
+            if (declaration && declaration->systemverilog != nullptr) {
+                return evaluate_callable(*declaration->systemverilog, record);
+            }
+        }
         error_ = "unsupported SystemVerilog integral constant call '"
             + record.text + "'";
         return std::nullopt;
@@ -3075,6 +3104,18 @@ private:
                 return Flow::failed;
             }
             const semantic::sv::CaseAlternative* fallback { };
+            // The case expression and items compare signed only when all of
+            // them are signed (IEEE 1800-2017 12.5, 11.8.1).
+            bool all_signed = selector->signed_value;
+            if (record.case_match == semantic::sv::CaseMatchKind::exact) {
+                for (const auto& alternative : record.case_alternatives) {
+                    for (const auto choice : alternative.choices) {
+                        const auto candidate = evaluate(choice);
+                        all_signed = all_signed && candidate
+                            && candidate->signed_value;
+                    }
+                }
+            }
             for (const auto& alternative : record.case_alternatives) {
                 if (alternative.is_default) {
                     fallback = &alternative;
@@ -3089,14 +3130,16 @@ private:
                                 == semantic::sv::CaseMatchKind::inside
                         ? match_inside_choice(choice, *selector)
                         : [&]() -> std::optional<bool> {
-                              const auto candidate = evaluate(choice);
-                              return candidate && candidate->known()
-                                      && selector->known()
-                                  ? std::optional {
-                                        compare_known(
-                                            *candidate, *selector)
-                                        == 0 }
-                                  : std::nullopt;
+                              auto candidate = evaluate(choice);
+                              if (!candidate || !candidate->known()
+                                  || !selector->known()) {
+                                  return std::nullopt;
+                              }
+                              auto left = *candidate;
+                              auto right = *selector;
+                              left.signed_value = all_signed;
+                              right.signed_value = all_signed;
+                              return compare_known(left, right) == 0;
                           }();
                     if (!matched) {
                         frames_.back().pattern_values = bindings;
@@ -3181,7 +3224,7 @@ private:
 
     const semantic::SpecializedHirUnit& specialization_;
     std::string& error_;
-    std::vector<std::uint32_t> active_expressions_;
+    std::vector<std::pair<std::size_t, std::uint32_t>> active_expressions_;
     std::unordered_set<std::uint32_t> active_declarations_;
     std::vector<Frame> frames_;
     std::uint64_t work_units_used_ { };

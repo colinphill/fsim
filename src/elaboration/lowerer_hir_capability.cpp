@@ -3806,6 +3806,11 @@ Lowerer::hir_runtime_binding(
             && source.form != semantic::sv::DeclarationForm::variable) {
             return std::nullopt;
         }
+        // A package variable binds to its single design-global signal.
+        if (!process_variable && package_constant_signal_
+            && source.form != semantic::sv::DeclarationForm::port) {
+            package_constant = package_constant_signal_(declaration_id);
+        }
         if (process_variable) {
             const auto width = source.type
                 ? hir_systemverilog_type_width(*source.type)
@@ -4213,9 +4218,21 @@ Lowerer::hir_container_object_binding(
     }
     const auto declaration_id = hir_referenced_declaration(
         expression_id);
-    const auto declaration = declaration_id
-        ? specialized_hir_unit_->find_declaration(*declaration_id)
-        : std::nullopt;
+    if (!declaration_id) {
+        return std::nullopt;
+    }
+    return hir_container_object_binding_for_declaration(*declaration_id);
+}
+
+std::optional<Lowerer::HirContainerObjectBinding>
+Lowerer::hir_container_object_binding_for_declaration(
+    const semantic::DeclarationId declaration_value) const
+{
+    const std::optional<semantic::DeclarationId> declaration_id {
+        declaration_value
+    };
+    const auto declaration
+        = specialized_hir_unit_->find_declaration(*declaration_id);
     if (!declaration) {
         return std::nullopt;
     }
@@ -5021,7 +5038,7 @@ Lowerer::hir_static_container_signal_extract(
 
 std::optional<Lowerer::HirContainerAggregateSelection>
 Lowerer::hir_container_aggregate_selection(
-    const semantic::ExpressionId expression_id) const
+    const semantic::ExpressionId expression_id, const bool allow_string) const
 {
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
@@ -5073,10 +5090,81 @@ Lowerer::hir_container_aggregate_selection(
         }
         names.insert(names.begin(), embedded.begin(), embedded.end());
     }
+    std::optional<HirContainerElementBinding> element;
+    // A member of an unpacked structure variable, `s.a.b` (IEEE 1800-2017
+    // 7.2): the structure is a singleton aggregate container.
+    if (names.empty() && base_expression
+        && base_expression->systemverilog != nullptr
+        && base_expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::name) {
+        const std::string_view text = base_expression->systemverilog->text;
+        const auto separator = text.find('.');
+        if (separator != std::string_view::npos && separator != 0U) {
+            const auto structure_name = text.substr(0U, separator);
+            auto declaration = hir_referenced_declaration(base);
+            const auto named = declaration
+                ? specialized_hir_unit_->find_declaration(*declaration)
+                : std::nullopt;
+            if (!named || named->systemverilog == nullptr
+                || named->systemverilog->name != structure_name) {
+                const semantic::CompiledDeclarationPredicate object
+                    = [](const semantic::CompiledDeclarationView& candidate) {
+                          return candidate.systemverilog != nullptr
+                              && candidate.systemverilog->type.has_value()
+                              && (candidate.systemverilog->form
+                                      == semantic::sv::DeclarationForm::
+                                          variable
+                                  || candidate.systemverilog->form
+                                      == semantic::sv::DeclarationForm::port);
+                      };
+                declaration = semantic::CompiledDesignResolver {
+                    *specialized_hir_unit_, hir_generic_binding_frames_
+                }.resolve_systemverilog(structure_name,
+                     base_expression->systemverilog->scope, object, false)
+                                  .unique();
+            }
+            const auto object = declaration
+                ? hir_container_object_binding_for_declaration(*declaration)
+                : std::nullopt;
+            if (object && object->type != nullptr
+                && object->type->aggregate_value) {
+                auto remaining = text.substr(separator + 1U);
+                while (!remaining.empty()) {
+                    const auto next = remaining.find('.');
+                    const auto segment = remaining.substr(0U, next);
+                    if (segment.empty()) {
+                        return std::nullopt;
+                    }
+                    names.push_back(segment);
+                    if (next == std::string_view::npos) {
+                        break;
+                    }
+                    remaining.remove_prefix(next + 1U);
+                }
+                element = HirContainerElementBinding {
+                    object->declaration,
+                    object->name,
+                    object->object,
+                    object->local,
+                    object->type,
+                    object->type,
+                    { },
+                    object->type->element_width,
+                    object->type->two_state ? frontend::ValueDomain::Bit2
+                                            : frontend::ValueDomain::Logic4,
+                    object->type->signed_elements,
+                    object->read_only,
+                    std::nullopt,
+                };
+            }
+        }
+    }
     if (names.empty()) {
         return std::nullopt;
     }
-    auto element = hir_container_element_binding(base);
+    if (!element) {
+        element = hir_container_element_binding(base);
+    }
     if (!element || element->type == nullptr
         || element->type->element_kind
             != ContainerElementKind::Aggregate) {
@@ -5104,9 +5192,12 @@ Lowerer::hir_container_aggregate_selection(
         members.push_back(static_cast<std::uint32_t>(index));
         current = &current->element_types[index];
     }
-    if ((current->element_kind != ContainerElementKind::Packed
-            && current->element_kind != ContainerElementKind::Scalar)
-        || current->element_width == 0U) {
+    const bool string_leaf = allow_string
+        && current->element_kind == ContainerElementKind::String;
+    if (!string_leaf
+        && ((current->element_kind != ContainerElementKind::Packed
+                && current->element_kind != ContainerElementKind::Scalar)
+            || current->element_width == 0U)) {
         return std::nullopt;
     }
     return HirContainerAggregateSelection {
@@ -5120,6 +5211,9 @@ bool Lowerer::hir_sv_dynamic_aggregate_member_read_supported(
     using TypeForm = semantic::sv::TypeForm;
 
     const auto& element = selection.element;
+    if (element.indices.empty()) {
+        return false;
+    }
     if (process_.scheduling_domain
             != ProcessSchedulingDomain::systemverilog
         || specialized_hir_unit_ == nullptr
@@ -5794,6 +5888,17 @@ bool Lowerer::hir_expression_is_string(
         expression_id);
     if (!expression) {
         return false;
+    }
+    if (expression->systemverilog != nullptr) {
+        if (const auto member = hir_container_aggregate_selection(
+                expression_id, true);
+            member
+            && member->leaf.element_kind == ContainerElementKind::String) {
+            return true;
+        }
+        if (hir_class_property_profile(expression_id, true)) {
+            return true;
+        }
     }
     if (expression->vhdl != nullptr) {
         const auto& source = *expression->vhdl;
@@ -7572,6 +7677,11 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
             return frontend::ValueDomain::String;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
+            && (source.text == "$random" || source.text == "$urandom"
+                || source.text == "$urandom_range")) {
+            return frontend::ValueDomain::Bit2;
+        }
+        if (source.kind == semantic::sv::ExpressionKind::call
             && source.text == ".len" && source.operands.size() == 1U
             && hir_expression_is_string(
                 source.operands.front(), process_scope)) {
@@ -7687,8 +7797,21 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
             auto result = frontend::ValueDomain::Bit2;
             for (std::size_t index = first;
                 index < source.operands.size(); ++index) {
-                const auto domain = hir_expression_domain(
+                auto domain = hir_expression_domain(
                     source.operands[index], process_scope);
+                // A string literal operand is its two-state character bits
+                // (IEEE 1800-2017 5.9).
+                const auto operand = specialized_hir_unit_->find_expression(
+                    source.operands[index]);
+                if (domain
+                    && (*domain == frontend::ValueDomain::Integer
+                        || (*domain == frontend::ValueDomain::String
+                            && operand && operand->systemverilog != nullptr
+                            && operand->systemverilog->kind
+                                == semantic::sv::ExpressionKind::
+                                    string_literal))) {
+                    domain = frontend::ValueDomain::Bit2;
+                }
                 if (!domain || (*domain != frontend::ValueDomain::Bit2 && *domain != frontend::ValueDomain::Logic4)) {
                     return std::nullopt;
                 }
@@ -8134,6 +8257,20 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
         if (const auto parameter = hir_hierarchical_parameter(expression_id);
             parameter && parameter->scalar_kind != Kind::None) {
             return parameter->scalar_kind;
+        }
+    }
+    // A real member of an unpacked structure (7.2).
+    if (source.kind == semantic::sv::ExpressionKind::name
+        || source.kind == semantic::sv::ExpressionKind::index
+        || (source.kind == semantic::sv::ExpressionKind::call
+            && source.text.starts_with("@sv-select:"))) {
+        if (const auto member = hir_container_aggregate_selection(
+                expression_id);
+            member
+            && member->leaf.element_kind
+                == runtime::simir::ContainerElementKind::Scalar
+            && member->leaf.scalar_kind != Kind::None) {
+            return member->leaf.scalar_kind;
         }
     }
 
@@ -9102,6 +9239,18 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
                 return 64U;
             }
             return literal_width(source.text, 32U);
+        }
+        // A string literal in an integral context is eight bits per
+        // character (IEEE 1800-2017 5.9); "" is one NUL byte.
+        if (source.kind == semantic::sv::ExpressionKind::string_literal
+            && source.decoded_string) {
+            return std::max<std::size_t>(source.decoded_string->size(), 1U)
+                * 8U;
+        }
+        if (source.kind == semantic::sv::ExpressionKind::call
+            && (source.text == "$random" || source.text == "$urandom"
+                || source.text == "$urandom_range")) {
+            return 32U;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
             && source.text == ".len" && source.operands.size() == 1U

@@ -4265,6 +4265,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void execute_container(ProcessState&, const WriteContainerObjectElement&);
     void execute_container(ProcessState&, const ContainerStringRead&);
     void execute_container(ProcessState&, const ContainerStringWrite&);
+    void execute_container(ProcessState&, const FormatContainerPattern&);
     void execute_container(ProcessState&, const ContainerElementRead&);
     void execute_container(ProcessState&, const ContainerElementWrite&);
     void execute_container(ProcessState&, const ContainerAggregateRead&);
@@ -4277,6 +4278,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void execute_container(ProcessState&, const LoadMemory&);
     void execute_container(ProcessState&, const VitalMemoryDeclare&);
     void execute_container(ProcessState&, const PushContainer&);
+    void execute_container(ProcessState&, const AppendContainer&);
     void execute_container(ProcessState&, const PopContainer&);
     void execute_string(ProcessState&, const StringMethod&);
     void execute_stochastic_queue(

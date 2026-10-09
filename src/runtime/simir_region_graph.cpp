@@ -212,6 +212,11 @@ ReadRegisterFlow build_read_register_flow(const OperationList& operations)
                 || std::is_same_v<T, WriteInertial>
                 || std::is_same_v<T, WriteProjected>) {
                 use(value.source);
+            } else if constexpr (std::is_same_v<T, WriteDelayed>) {
+                use(value.source);
+                if (value.delay.source) {
+                    use(*value.delay.source);
+                }
             } else if constexpr (std::is_same_v<T, WriteBlockingSlice>
                 || std::is_same_v<T, WriteUpdateSlice>
                 || std::is_same_v<T, WriteAfterSlice>
@@ -403,6 +408,7 @@ bool visit_known_region_accesses(
             || std::is_same_v<T, WriteUpdate>
             || std::is_same_v<T, WriteAfter>
             || std::is_same_v<T, WriteInertial>
+            || std::is_same_v<T, WriteDelayed>
             || std::is_same_v<T, WriteProjected>
             || std::is_same_v<T, WriteProjectedWaveform>
             || std::is_same_v<T, WriteBlockingSlice>
@@ -561,6 +567,7 @@ bool visit_known_region_accesses(
             || std::is_same_v<T, ContainerWrite>
             || std::is_same_v<T, ContainerStringRead>
             || std::is_same_v<T, ContainerStringWrite>
+            || std::is_same_v<T, FormatContainerPattern>
             || std::is_same_v<T, ContainerElementRead>
             || std::is_same_v<T, ContainerElementWrite>
             || std::is_same_v<T, ContainerAggregateRead>
@@ -570,6 +577,7 @@ bool visit_known_region_accesses(
             || std::is_same_v<T, ContainerExists>
             || std::is_same_v<T, TraverseContainer>
             || std::is_same_v<T, PushContainer>
+            || std::is_same_v<T, AppendContainer>
             || std::is_same_v<T, PopContainer>) {
             // These operations address only this process's container-register
             // file. Object-ID operations remain opaque because an object can

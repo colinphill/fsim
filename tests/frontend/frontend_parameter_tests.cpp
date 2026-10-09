@@ -1171,8 +1171,10 @@ endmodule
           return diagnostic.code == code;
         });
   };
+  // A parameter port without a default is legal; every instance must then
+  // override it (IEEE 1800-2017 6.20.1).
   require(
-      !invalid.ok() && has_code("FSIM-SV-PARSE-050")
+      !invalid.ok() && !has_code("FSIM-SV-PARSE-050")
           && has_code("FSIM-SV-SEM-017")
           && has_code("FSIM-SV-SEM-018")
           && has_code("FSIM-SV-SEM-019")

@@ -1617,7 +1617,10 @@ public:
             const auto cached = expressions_.find(expression);
             return cached->second;
         }
-        if (!active_expressions_.insert(expression).second) {
+        // A recursive call re-evaluates the same expression in a deeper
+        // frame; only re-entry at the same depth is a cycle.
+        const auto active_key = std::pair { call_frames_.size(), expression };
+        if (!active_expressions_.insert(active_key).second) {
             return std::nullopt;
         }
         const auto view = unit_.find_expression(expression);
@@ -1627,7 +1630,7 @@ public:
         } else if (view && view->vhdl != nullptr) {
             result = evaluate_expression(*view->vhdl);
         }
-        active_expressions_.erase(expression);
+        active_expressions_.erase(active_key);
         if (call_frames_.empty()) {
             expressions_.insert_or_assign(expression, result);
         }
@@ -5971,6 +5974,18 @@ private:
                 return selected;
             }
         }
+        // Inside a function its name is also the result variable; a call
+        // of that name is a recursive call (IEEE 1800-2017 13.4.1).
+        for (auto frame = call_frames_.rbegin();
+            frame != call_frames_.rend(); ++frame) {
+            const auto active = unit_.find_declaration(frame->callable);
+            if (active && active->systemverilog != nullptr
+                && active->systemverilog->name == expression.text
+                && active->systemverilog->callable
+                && active->systemverilog->callable->function) {
+                return frame->callable;
+            }
+        }
         const CompiledDeclarationPredicate function
             = [](const CompiledDeclarationView& candidate) {
                   return candidate.systemverilog != nullptr
@@ -6252,7 +6267,7 @@ private:
                 return StatementFlow::failed;
             }
             const auto condition = evaluate_nonzero(*statement.condition);
-            if (!condition) {
+                if (!condition) {
                 return StatementFlow::failed;
             }
             return execute(*condition
@@ -6306,8 +6321,10 @@ private:
             if (!statement.target || !statement.value) {
                 return StatementFlow::failed;
             }
-            return assign(*statement.target, *statement.value)
-                ? StatementFlow::normal : StatementFlow::failed;
+            {
+            const auto ok_assign = assign(*statement.target, *statement.value);
+                return ok_assign ? StatementFlow::normal : StatementFlow::failed;
+            }
         }
         case sv::StatementKind::loop: {
             if (statement.loop_repeat) {
@@ -6491,7 +6508,16 @@ private:
             if (!actual) {
                 return std::nullopt;
             }
-            frame.values.emplace(formals[index], evaluate(*actual));
+            // An argument is assigned to its formal, taking the formal's
+            // width and signedness (IEEE 1800-2017 13.3).
+            const auto formal_view = unit_.find_declaration(formals[index]);
+            auto value = evaluate(*actual);
+            if (value && formal_view && formal_view->systemverilog != nullptr
+                && formal_view->systemverilog->type) {
+                value = fit_integral_to_type(
+                    *value, *formal_view->systemverilog->type);
+            }
+            frame.values.emplace(formals[index], value);
             frame.string_values.emplace(
                 formals[index], evaluate_string(*actual));
         }
@@ -6535,13 +6561,38 @@ private:
             }
             return StatementFlow::normal;
         }();
-        const auto result = flow == StatementFlow::returned
+        auto result = flow == StatementFlow::returned
                 || (flow == StatementFlow::normal
                     && call_frames_.back().result)
             ? call_frames_.back().result
             : std::nullopt;
         call_frames_.pop_back();
+        if (result && declaration.callable->function) {
+            result = fit_integral_to_type(
+                *result, declaration.callable->return_type);
+        }
         return result;
+    }
+
+    // An integral value truncated to a type's width and extended by its
+    // signedness; a type without a bounded width keeps the value.
+    [[nodiscard]] static std::int64_t fit_integral_to_type(
+        const std::int64_t value, const sv::TypeReference& type)
+    {
+        if (!type.executable_width || *type.executable_width == 0U
+            || *type.executable_width >= 64U
+            || type.target.spelling == "real"
+            || type.target.spelling == "realtime"
+            || type.target.spelling == "shortreal") {
+            return value;
+        }
+        const auto width = static_cast<unsigned>(*type.executable_width);
+        const auto mask = (std::uint64_t { 1 } << width) - 1U;
+        auto bits = static_cast<std::uint64_t>(value) & mask;
+        if (type.signed_value && ((bits >> (width - 1U)) & 1U) != 0U) {
+            bits |= ~mask;
+        }
+        return static_cast<std::int64_t>(bits);
     }
 
     [[nodiscard]] std::optional<DeclarationId> callable_declaration(
@@ -7734,7 +7785,7 @@ private:
         string_declarations_;
     std::map<ExpressionId, std::optional<std::string>> string_expressions_;
     std::set<DeclarationId> active_declarations_;
-    std::set<ExpressionId> active_expressions_;
+    std::set<std::pair<std::size_t, ExpressionId>> active_expressions_;
     std::set<DeclarationId> active_vhdl_declarations_;
     std::set<ExpressionId> active_vhdl_value_expressions_;
     std::set<DeclarationId> active_string_declarations_;

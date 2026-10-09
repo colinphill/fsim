@@ -40,6 +40,7 @@ collect_driver_regions(
               || std::is_same_v<OperationType, WriteUpdate>
               || std::is_same_v<OperationType, WriteAfter>
               || std::is_same_v<OperationType, WriteInertial>
+              || std::is_same_v<OperationType, WriteDelayed>
               || std::is_same_v<OperationType, WriteProjected>
               || std::is_same_v<OperationType, WriteProjectedWaveform>
               || std::is_same_v<

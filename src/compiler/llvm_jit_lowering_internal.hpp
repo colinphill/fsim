@@ -557,6 +557,8 @@ struct ContainerOperationLowerer {
     void lower(const runtime::simir::WriteContainerObjectElement&);
     void lower_bound_literal(const runtime::simir::LoadConstant&);
     void lower(const runtime::simir::ContainerStringRead&);
+    void lower(const runtime::simir::FormatContainerPattern&);
+    void lower(const runtime::simir::AppendContainer&);
     void lower(const runtime::simir::ContainerStringWrite&);
     void lower(const runtime::simir::ContainerElementRead&);
     void lower(const runtime::simir::ContainerElementWrite&);

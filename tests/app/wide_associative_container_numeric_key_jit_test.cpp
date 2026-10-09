@@ -157,7 +157,7 @@ Outcome run_numeric_key_methods(
         WriteStringObject { readback_object, 1U },
         LoadStringConstant { 0U, "at-136" },
         LoadConstant { 0U, key_with_bit(136U) },
-        ContainerStringWrite { 0U, 0U, 0U, false, false, false },
+        ContainerStringWrite { 0U, 0U, 0U, false, false, false, { } },
         LoadConstant { 0U, key_with_bit(120U) },
         TraverseContainer {
             4U, 0U, 0U, ContainerTraversal::next, false },

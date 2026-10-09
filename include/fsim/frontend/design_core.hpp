@@ -1428,6 +1428,8 @@ enum class OutputFormat {
     Time,
     Unformatted2,
     Unformatted4,
+    // `%p`: an assignment pattern (IEEE 1800-2017 21.2.1.7).
+    Pattern,
 };
 
 struct OutputValue {

@@ -458,6 +458,13 @@ struct ContainerStringRead {
     std::vector<std::uint32_t> members;
 };
 
+/// Format a container value as an assignment pattern for `%p`
+/// (IEEE 1800-2017 21.2.1.7).
+struct FormatContainerPattern {
+    StringRegisterId destination { };
+    ContainerRegisterId source { };
+};
+
 struct ContainerStringWrite {
     ContainerRegisterId target { };
     RegisterId index { };
@@ -465,6 +472,9 @@ struct ContainerStringWrite {
     bool signed_index { true };
     bool linear_index { };
     bool string_index { };
+    // A string member path inside an unpacked structure element, as for
+    // ContainerStringRead.
+    std::vector<std::uint32_t> members;
 };
 
 struct ContainerElementRead {
@@ -583,6 +593,17 @@ struct PushContainer {
     RegisterId source { };
     bool front { };
     std::optional<RegisterId> index { };
+};
+
+/// Build a queue or dynamic array for an unpacked array concatenation
+/// (IEEE 1800-2017 10.10): optionally clear the target, then append the
+/// elements of `container`, one packed or real `value`, or one `text`.
+struct AppendContainer {
+    ContainerRegisterId target { };
+    bool clear { };
+    std::optional<ContainerRegisterId> container;
+    std::optional<RegisterId> value;
+    std::optional<StringRegisterId> text;
 };
 
 struct PopContainer {
@@ -1131,6 +1152,21 @@ struct WaitFor {
     SystemVerilogScalarKind source_kind { SystemVerilogScalarKind::None };
     bool source_signed { };
     SimulationTick rounding_quantum { 1 };
+};
+
+/// Queue a value after a delay computed at run time, as a continuous
+/// assignment (inertial) or a nonblocking assignment (transport) with a
+/// non-constant delay expression. `delay` carries the dynamic-delay metadata
+/// of a WaitFor; an unknown integral delay counts as zero (IEEE 1800-2017
+/// 9.4.1).
+struct WriteDelayed {
+    SignalId signal { };
+    RegisterId source { };
+    WaitFor delay;
+    // The bit offset of a constant select target; whole signal when empty.
+    std::optional<std::uint32_t> offset;
+    bool inertial { };
+    SignalUpdateDomain domain { SignalUpdateDomain::generic };
 };
 
 /// Suspend and resume later in the current time slot. This is used when one

@@ -176,3 +176,15 @@ gives fsim's result in each case checked.
   blocking write to its driver, before the continuous assignment can
   update it; xsim rejects `wire real` altogether.
 
+## Corpus disagreements resolved by the LRM and xsim (batch 20)
+
+- ivtest `pv_wr_vec*_nb_ec` read a vector right after `-> e` and expect
+  the `x[...] <= @e v` update to be visible. The update matures in the NBA
+  region of that time step (10.4.2), after the reading statement.
+- ivtest marks bit- and part-select targets of a procedural `assign`
+  (`assign bus[0] = ...`) as legal, while 10.6.1 restricts the target to a
+  whole variable. fsim keeps accepting packed selects and rejects array
+  elements, which ivtest also expects to fail.
+- Packed structures of different types are assignment compatible as
+  integral values (6.22.3), so fsim no longer rejects passing one where
+  another is expected.

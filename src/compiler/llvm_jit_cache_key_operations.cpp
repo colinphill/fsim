@@ -62,6 +62,7 @@ struct OperationCacheTraits;
     X(WriteUpdate, "WriteUpdate") \
     X(WriteAfter, "WriteAfter") \
     X(WriteInertial, "WriteInertial") \
+    X(WriteDelayed, "WriteDelayed") \
     X(WriteProjected, "WriteProjected") \
     X(WriteProjectedWaveform, "WriteProjectedWaveform") \
     X(WriteBlockingSlice, "WriteBlockingSlice") \
@@ -132,6 +133,8 @@ struct OperationCacheTraits;
     X(PushContainer, "PushContainer") \
     X(PopContainer, "PopContainer") \
     X(ContainerStringRead, "ContainerStringRead") \
+    X(FormatContainerPattern, "FormatContainerPattern") \
+    X(AppendContainer, "AppendContainer") \
     X(ContainerStringWrite, "ContainerStringWrite") \
     X(ContainerElementRead, "ContainerElementRead") \
     X(ContainerElementWrite, "ContainerElementWrite") \
@@ -270,7 +273,7 @@ consteval bool unique_operation_cache_tags()
     return true;
 }
 
-static_assert(operation_cache_tags.size() == 190U);
+static_assert(operation_cache_tags.size() == 193U);
 static_assert(unique_operation_cache_tags());
 #undef FSIM_CACHE_OPERATIONS
 

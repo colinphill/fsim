@@ -1336,6 +1336,49 @@ void Interpreter::Impl::execute(ProcessId id)
                                     driver, signal, std::move(value));
                             });
                     }
+                } else if constexpr (std::is_same_v<OperationType, WriteDelayed>) {
+                    auto value = get_register(process, op.source);
+                    const auto payload
+                        = get_register(process, *op.delay.source);
+                    // An unknown integral delay counts as zero (9.4.1).
+                    const auto delay
+                        = op.delay.source_kind
+                                    == SystemVerilogScalarKind::None
+                                && payload.low_word().bval != 0U
+                            ? SimulationTick { 0U }
+                            : normalized_dynamic_wait_delay(
+                                  op.delay, payload);
+                    ++process.pc;
+                    if (op.inertial) {
+                        schedule_inertial(
+                            process.id,
+                            op.signal,
+                            std::move(value),
+                            op.offset,
+                            TransitionDelays { delay, delay, delay },
+                            op.domain);
+                    } else if (op.domain != SignalUpdateDomain::generic) {
+                        schedule_systemverilog_update(
+                            process.id, op.signal, std::move(value),
+                            op.offset, op.domain, delay);
+                    } else {
+                        scheduler.schedule_after(
+                            delay, SchedulerPhase::update, process.id,
+                            [this,
+                                driver = process.id,
+                                signal = op.signal,
+                                offset = op.offset,
+                                value = std::move(value)](Scheduler&) mutable {
+                                if (offset) {
+                                    stage_update_slice(
+                                        driver, signal, std::move(value),
+                                        *offset);
+                                } else {
+                                    stage_update(
+                                        driver, signal, std::move(value));
+                                }
+                            });
+                    }
                 } else if constexpr (std::is_same_v<OperationType, WriteInertial>) {
                     auto value = get_register(process, op.source);
                     ++process.pc;

@@ -284,6 +284,7 @@ private:
         std::optional<SignalId> output_actual_source;
         std::optional<semantic::ExpressionId> output_actual;
         std::optional<SignalId> procedural_assignment_active;
+        std::uint32_t procedural_assignment_owner { };
         std::optional<semantic::ExpressionId> procedural_assignment_target;
         std::optional<semantic::ExpressionId> procedural_assignment_value;
         std::optional<semantic::ExpressionId> vhdl_guard;
@@ -622,6 +623,16 @@ private:
     [[nodiscard]] std::optional<HirEnumerationMethod>
     hir_systemverilog_enumeration_method(
         semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<HirEnumerationMethod>
+    hir_systemverilog_enumeration_profile(HirEnumerationMethod method,
+        semantic::DeclarationId declaration) const;
+    // The literal name of an enumeration variable's value, or "" (6.19.5.6).
+    [[nodiscard]] std::optional<StringRegisterId>
+    lower_hir_systemverilog_enumeration_value_name(
+        semantic::ExpressionId expression);
+    [[nodiscard]] std::optional<StringRegisterId>
+    lower_hir_systemverilog_enumeration_name(
+        const HirEnumerationMethod& method);
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_systemverilog_enumeration_receiver(
         const HirEnumerationMethod& method);
@@ -1177,6 +1188,9 @@ private:
     [[nodiscard]] std::optional<HirContainerObjectBinding>
     hir_container_object_binding(
         semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<HirContainerObjectBinding>
+    hir_container_object_binding_for_declaration(
+        semantic::DeclarationId declaration) const;
     struct HirContainerElementBinding {
         semantic::DeclarationId declaration;
         std::string name;
@@ -1228,9 +1242,10 @@ private:
         std::vector<std::uint32_t> members;
         runtime::simir::ContainerType leaf;
     };
+    // `allow_string` also admits a string member leaf.
     [[nodiscard]] std::optional<HirContainerAggregateSelection>
     hir_container_aggregate_selection(
-        semantic::ExpressionId expression) const;
+        semantic::ExpressionId expression, bool allow_string = false) const;
     [[nodiscard]] bool hir_sv_dynamic_aggregate_member_read_supported(
         const HirContainerAggregateSelection& selection) const;
     struct HirPackedContainerAggregateProfile {
@@ -1420,7 +1435,18 @@ private:
     };
     [[nodiscard]] std::optional<HirClassPropertyProfile>
     hir_class_property_profile(
-        semantic::ExpressionId expression) const;
+        semantic::ExpressionId expression,
+        bool string_property = false) const;
+    // A string class property read into a string register, or written from
+    // one, through the class method boundary.
+    [[nodiscard]] std::optional<StringRegisterId>
+    lower_hir_class_string_property_read(semantic::ExpressionId expression);
+    // The signal a plain event-control name denotes: a local signal, or an
+    // imported package variable.
+    [[nodiscard]] std::optional<SignalId> hir_named_signal(
+        const std::string& name, semantic::ScopeId scope);
+    [[nodiscard]] bool lower_hir_class_string_property_write(
+        semantic::ExpressionId target, StringRegisterId value);
     struct HirClassMethodActual {
         semantic::DeclarationId formal;
         semantic::ExpressionId expression;
@@ -1806,7 +1832,14 @@ private:
         std::string active_name;
         std::string target_key;
         bool valid { };
+        // The owner value that selects this assignment's driver.
+        std::uint32_t owner { };
     };
+    // The shared owner signal of a procedural continuous assignment target:
+    // zero, or the owner value of the assignment that currently drives it
+    // (IEEE 1800-2017 10.6.1). Every process finds it by the target's name.
+    [[nodiscard]] std::optional<SignalId> hir_procedural_assign_owner(
+        semantic::ExpressionId target);
     std::vector<ProceduralContinuousAssignment>
         procedural_continuous_assignments_;
     struct PendingMonitorDriver {

@@ -30,6 +30,11 @@ namespace fsim::runtime::simir {
     // selects the conversion's default.
     std::uint32_t precision = std::numeric_limits<std::uint32_t>::max());
 
+// A container value as an assignment pattern, as `%p` prints it
+// (IEEE 1800-2017 21.2.1.7): `'{1,-2,3}`, `'{a:1,s:"x"}`, `'{"k":1}`.
+[[nodiscard]] std::string format_container_assignment_pattern(
+    const ContainerValue& value);
+
 [[nodiscard]] std::string make_time_output(
     std::string_view prefix,
     std::string_view suffix,

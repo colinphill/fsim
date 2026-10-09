@@ -3120,6 +3120,79 @@ void Interpreter::Impl::execute_container(
 
 void Interpreter::Impl::execute_container(
     ProcessState& process,
+    const AppendContainer& operation)
+{
+    auto& target = get_container_register(process, operation.target);
+    if (target.type.fixed || target.type.associative
+        || target.type.aggregate_value) {
+        container_error(process.id, process.pc,
+            "an unpacked array concatenation requires a queue or dynamic array");
+    }
+    if (operation.clear) {
+        target.elements.clear();
+        target.string_elements.clear();
+        target.nested_elements.clear();
+    }
+    if (operation.container) {
+        const auto source
+            = read_container_register(process, *operation.container);
+        if (source.type.element_kind != target.type.element_kind
+            || source.type.associative
+            || ((target.type.element_kind == ContainerElementKind::Packed
+                    || target.type.element_kind
+                        == ContainerElementKind::Scalar)
+                && source.type.element_width != target.type.element_width)) {
+            container_error(process.id, process.pc,
+                "an unpacked array concatenation operand has an incompatible element type");
+        }
+        target.elements.insert(target.elements.end(),
+            source.elements.begin(), source.elements.end());
+        target.string_elements.insert(target.string_elements.end(),
+            source.string_elements.begin(), source.string_elements.end());
+        target.nested_elements.insert(target.nested_elements.end(),
+            source.nested_elements.begin(), source.nested_elements.end());
+    }
+    if (operation.value) {
+        auto value = get_register(process, *operation.value);
+        if (value.width() != target.type.element_width) {
+            container_error(process.id, process.pc,
+                "an unpacked array concatenation element has the wrong width");
+        }
+        target.elements.push_back(std::move(value));
+    }
+    if (operation.text) {
+        target.string_elements.push_back(
+            get_string_register(process, *operation.text));
+    }
+    // A bounded queue keeps its first elements (7.10.5).
+    if (target.type.maximum_elements) {
+        const auto limit = static_cast<std::size_t>(
+            *target.type.maximum_elements);
+        if (target.elements.size() > limit) {
+            target.elements.resize(limit);
+        }
+        if (target.string_elements.size() > limit) {
+            target.string_elements.resize(limit);
+        }
+        if (target.nested_elements.size() > limit) {
+            target.nested_elements.resize(limit);
+        }
+    }
+    ++process.pc;
+}
+
+void Interpreter::Impl::execute_container(
+    ProcessState& process,
+    const FormatContainerPattern& operation)
+{
+    get_string_register(process, operation.destination)
+        = format_container_assignment_pattern(
+            read_container_register(process, operation.source));
+    ++process.pc;
+}
+
+void Interpreter::Impl::execute_container(
+    ProcessState& process,
     const ContainerStringRead& operation)
 {
     const auto& source = read_container_register(process, operation.source);
@@ -3130,7 +3203,9 @@ void Interpreter::Impl::execute_container(
                 process.id, process.pc,
                 "aggregate string member read requires an indexed aggregate container");
         }
-        const auto at = source.type.fixed
+        // A structure value is its own element.
+        const auto at = source.type.aggregate_value ? std::size_t { }
+            : source.type.fixed
             ? operation.linear_index
                 ? known_index(
                       process.id, process.pc,
@@ -3143,12 +3218,15 @@ void Interpreter::Impl::execute_container(
                   process.id, process.pc,
                   get_register(process, operation.index),
                   operation.signed_index, "container index");
-        if (at >= source.nested_elements.size()) {
+        if (!source.type.aggregate_value
+            && at >= source.nested_elements.size()) {
             container_error(
                 process.id, process.pc,
                 "aggregate container index is out of range");
         }
-        const auto* selected = &source.nested_elements[at];
+        const auto* selected = source.type.aggregate_value
+            ? &source
+            : &source.nested_elements[at];
         for (const auto member : operation.members) {
             if (selected->type.element_kind != ContainerElementKind::Aggregate
                 || member >= selected->nested_elements.size()) {
@@ -3211,12 +3289,12 @@ void Interpreter::Impl::execute_container(
               process.id, process.pc,
               get_register(process, operation.index),
               operation.signed_index, "container index");
-    if (at >= source.string_elements.size()) {
-        container_error(
-            process.id, process.pc,
-            "string container index is out of range");
-    }
-    get_string_register(process, operation.destination) = source.string_elements[at];
+    // Reading an invalid index yields the empty string (IEEE 1800-2017
+    // 7.4.6).
+    get_string_register(process, operation.destination)
+        = at < source.string_elements.size()
+        ? source.string_elements[at]
+        : std::string { };
     ++process.pc;
 }
 

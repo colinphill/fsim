@@ -185,6 +185,7 @@ using runtime::simir::WriteBlockingDynamicPartSlice;
 using runtime::simir::WriteBlockingDynamicSlice;
 using runtime::simir::WriteBlockingSlice;
 using runtime::simir::WriteInertial;
+using runtime::simir::WriteDelayed;
 using runtime::simir::WriteInertialDynamicPartSlice;
 using runtime::simir::WriteInertialDynamicSlice;
 using runtime::simir::WriteInertialSlice;
