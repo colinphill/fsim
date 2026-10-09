@@ -545,11 +545,11 @@ void test_display(
     assert(reference.output[1].text == "+line\nembedded \"quote\" \\ A");
     assert(reference.output[1].newline);
     assert(reference.output[1].time == 0);
-    assert(reference.output[2].text == "42");
+    assert(reference.output[2].text == " 42");
     assert(reference.output[2].newline);
     assert(reference.output[2].time == 0);
     assert(reference.output[2].delta == 0);
-    assert(reference.output[3].text == "-1");
+    assert(reference.output[3].text == "  -1");
     assert(reference.output[3].newline);
     assert(reference.output[3].time == 0);
     assert(reference.output[3].delta == 0);
@@ -570,10 +570,10 @@ void test_display(
     assert(reference.output[8].text == "d=165");
     assert(reference.output[8].newline);
     assert(reference.output[8].time == 0);
-    assert(reference.output[9].text == "s=-1");
+    assert(reference.output[9].text == "s=  -1");
     assert(reference.output[9].newline);
     assert(reference.output[9].time == 0);
-    assert(reference.output[10].text == "u=x");
+    assert(reference.output[10].text == "u= x");
     assert(reference.output[10].newline);
     assert(reference.output[10].time == 0);
     assert(reference.output[11].text == "c=A");
@@ -597,9 +597,9 @@ void test_display(
     assert(!reference.output[18].newline);
     assert(reference.output[19].text == "/a5");
     assert(!reference.output[19].newline);
-    assert(reference.output[20].text == " tail=-1");
+    assert(reference.output[20].text == " tail=  -1");
     assert(reference.output[20].newline);
-    assert(reference.output[21].text == "3");
+    assert(reference.output[21].text == " 3");
     assert(!reference.output[21].newline);
     assert(reference.output[22].text == "165");
     assert(reference.output[22].newline);
@@ -619,16 +619,17 @@ void test_display(
     assert(reference.output[31].time == 3);
     assert(reference.output[32].text == "time=0004");
     assert(reference.output[32].time == 4);
-    assert(reference.output[33].text == "18446744073709551616");
+    assert(reference.output[33].text == " 18446744073709551616");
     assert(reference.output[33].newline);
     assert(reference.output[33].time == 4);
-    assert(reference.output[34].text == "18446744073709551616");
+    assert(reference.output[34].text
+        == std::string(58U, ' ') + "18446744073709551616");
     assert(reference.output[34].newline);
     assert(reference.output[34].time == 4);
     assert(reference.output[35].text == "-18446744073709551616");
     assert(reference.output[35].newline);
     assert(reference.output[35].time == 4);
-    assert(reference.output[36].text == "1");
+    assert(reference.output[36].text == std::string(1233U, ' ') + "1");
     assert(reference.output[36].newline);
     assert(reference.output[36].time == 4);
     assert(reference.output[37].text == "0111");
@@ -1054,22 +1055,29 @@ end architecture;
         assert(result == 0);
         assert(error.str().empty());
         assert(
+            // Decimal values without an explicit field width are padded to
+            // the width of their largest magnitude (IEEE 1800-2017
+            // 21.2.1.3): 78 digits for 257 bits, 1234 for 4097 bits.
             output.str().find(
-                "first\t+line\nembedded \"quote\" \\ A\n"
-                "42\n-1\nq=%:10xz!\n[10xz]h=x\no=245\n"
-                "d=165\ns=-1\nu=x\nc=A\ntext=test\ncompact=a5\n"
-                "upper=a5\nwidth=    a5\nleft=a5    !\n"
-                "zero=-00001\nmulti=0011/a5 tail=-1\n3165\n"
-                "scope=display_test q=0011\n"
-                "post=1110 compact-time=0\n1110\na5\n245\n"
-                "mon=1110 t=                   0\n"
-                "mon=0101 t=                   1\n"
-                "mon=0111 t=                   3\ntime=0004\n"
-                "18446744073709551616\n18446744073709551616\n"
-                "-18446744073709551616\n1\n"
-                "0111\na5\n245\n0111a5245\nsecond\n"
-                "sformat-time=4\n"
-                "simulation stopped at tick 4")
+                std::string { "first\t+line\nembedded \"quote\" \\ A\n"
+                              " 42\n  -1\nq=%:10xz!\n[10xz]h=x\no=245\n"
+                              "d=165\ns=  -1\nu= x\nc=A\ntext=test\n"
+                              "compact=a5\n"
+                              "upper=a5\nwidth=    a5\nleft=a5    !\n"
+                              "zero=-00001\nmulti=0011/a5 tail=  -1\n"
+                              " 3165\n"
+                              "scope=display_test q=0011\n"
+                              "post=1110 compact-time=0\n1110\na5\n245\n"
+                              "mon=1110 t=                   0\n"
+                              "mon=0101 t=                   1\n"
+                              "mon=0111 t=                   3\ntime=0004\n"
+                              " 18446744073709551616\n" }
+                + std::string(58U, ' ') + "18446744073709551616\n"
+                + "-18446744073709551616\n" + std::string(1233U, ' ')
+                + "1\n"
+                  "0111\na5\n245\n0111a5245\nsecond\n"
+                  "sformat-time=4\n"
+                  "simulation stopped at tick 4")
             != std::string::npos);
     }
 

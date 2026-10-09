@@ -600,6 +600,9 @@ Lowerer::lower_hir_formatted_string(
         operation.signed_decimal
             = operation.format == OutputFormat::decimal
             && hir_expression_signed(*value);
+        operation.minimum_width = hir_systemverilog_decimal_width(*value,
+            operation.format, conversion.suppress_leading_zero,
+            conversion.minimum_width);
         process_.operations.emplace_back(operation);
         return true;
     };
@@ -3011,6 +3014,9 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                     value.kind = MonitorValueKind::signal;
                     value.signal = *binding->signal;
                     value.format = runtime_output_format(output.format);
+                    value.minimum_width = hir_systemverilog_decimal_width(
+                        *output.value, value.format,
+                        output.suppress_leading_zero, output.minimum_width);
                     value.scalar_kind = expression_scalar_kind(
                         *output.value);
                     value.signed_decimal
@@ -3099,7 +3105,8 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                     format == runtime::simir::OutputFormat::decimal
                         && hir_expression_signed(*output.value),
                     output.suppress_leading_zero,
-                    output.minimum_width,
+                    hir_systemverilog_decimal_width(*output.value, format,
+                        output.suppress_leading_zero, output.minimum_width),
                     output.left_justify,
                     output.zero_pad,
                     kind,

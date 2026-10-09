@@ -525,7 +525,7 @@ endprogram
       R"(
 package invalid_values;
   initial;
-  typedef string unsupported_t;
+  typedef 42 unsupported_t;
   typedef logic duplicate_t;
   typedef bit duplicate_t;
   typedef enum { DEFAULT_BASE } default_base_t;

@@ -930,7 +930,135 @@ std::optional<Statement> VerilogParser::parse_statement()
         statement.output_newline = newline;
         statement.output_postponed = postponed;
         statement.output_monitor = monitor;
-        if (match(TokenKind::LeftParen)) {
+        // An argument list with an empty argument, or with a string literal
+        // after the first argument, is formatted left to right: an empty
+        // argument prints a space, and every string literal argument is a
+        // format consuming the following arguments (IEEE 1364-2005 17.1.1).
+        const auto general_arguments = [&] {
+            if (!at(TokenKind::LeftParen) || at(TokenKind::RightParen, 1)) {
+                return false;
+            }
+            std::size_t depth { };
+            bool argument_start = true;
+            bool first_argument = true;
+            for (std::size_t offset = 1U;
+                !at(TokenKind::EndOfFile, offset); ++offset) {
+                const bool close = at(TokenKind::RightParen, offset);
+                if (depth == 0U
+                    && (at(TokenKind::Comma, offset) || close)) {
+                    if (argument_start) {
+                        return true;
+                    }
+                    if (close) {
+                        return false;
+                    }
+                    argument_start = true;
+                    first_argument = false;
+                    continue;
+                }
+                if (depth == 0U && argument_start && !first_argument
+                    && at(TokenKind::StringLiteral, offset)
+                    && (at(TokenKind::Comma, offset + 1U)
+                        || at(TokenKind::RightParen, offset + 1U))) {
+                    return true;
+                }
+                argument_start = false;
+                if (at(TokenKind::LeftParen, offset)
+                    || at(TokenKind::LeftBrace, offset)
+                    || at(TokenKind::LeftBracket, offset)) {
+                    ++depth;
+                } else if (close || at(TokenKind::RightBrace, offset)
+                    || at(TokenKind::RightBracket, offset)) {
+                    if (depth == 0U) {
+                        return false;
+                    }
+                    --depth;
+                }
+            }
+            return false;
+        }();
+        if (general_arguments) {
+            expect(TokenKind::LeftParen, "'(' after " + std::string { task_name },
+                close_code);
+            std::string pending;
+            const auto argument_end = [&] {
+                return at(TokenKind::Comma) || at(TokenKind::RightParen);
+            };
+            for (;;) {
+                if (argument_end()) {
+                    pending += ' ';
+                } else if (at(TokenKind::StringLiteral)
+                    && (at(TokenKind::Comma, 1U)
+                        || at(TokenKind::RightParen, 1U))) {
+                    const auto format_token = advance();
+                    auto parsed_format = parse_output_format(
+                        decoded_string_literal_text(format_token));
+                    const bool has_unformatted = std::ranges::any_of(
+                        parsed_format.conversions,
+                        [](const auto& conversion) {
+                            return conversion.format
+                                    == OutputFormat::Unformatted2
+                                || conversion.format
+                                    == OutputFormat::Unformatted4;
+                        });
+                    if (!parsed_format.valid || has_unformatted) {
+                        error(
+                            format_token,
+                            "FSIM-SV-SEM-042",
+                            "the current formatted-output slice supports "
+                            "%b, %h/%x, %o, %d, %c, %s, %e/%f/%g, %m, or %t "
+                            "conversion, field width, left/zero padding, "
+                            "and %%");
+                    }
+                    for (auto& conversion : parsed_format.conversions) {
+                        Expression value;
+                        const bool takes_value
+                            = conversion.format != OutputFormat::Hierarchy;
+                        if (takes_value && at(TokenKind::Comma)
+                            && !at(TokenKind::Comma, 1U)
+                            && !at(TokenKind::RightParen, 1U)) {
+                            advance();
+                            value = parse_expression();
+                        } else if (takes_value
+                            && conversion.format != OutputFormat::Time) {
+                            error(
+                                format_token,
+                                semantic_code,
+                                std::string { task_name }
+                                    + " format conversions require matching "
+                                      "value arguments");
+                        }
+                        statement.output_values.push_back(OutputValue {
+                            std::move(value),
+                            conversion.format,
+                            pending + conversion.prefix,
+                            conversion.suppress_leading_zero,
+                            conversion.minimum_width,
+                            conversion.left_justify,
+                            conversion.zero_pad });
+                        pending.clear();
+                    }
+                    pending += parsed_format.trailing_text;
+                } else {
+                    statement.output_values.push_back(OutputValue {
+                        parse_expression(),
+                        default_format,
+                        std::exchange(pending, std::string { }) });
+                }
+                if (!match(TokenKind::Comma)) {
+                    break;
+                }
+            }
+            if (statement.output_values.empty()) {
+                statement.output_text = std::move(pending);
+            } else {
+                statement.output_trailing_text = std::move(pending);
+            }
+            expect(
+                TokenKind::RightParen,
+                "')' after " + std::string { task_name } + " arguments",
+                close_code);
+        } else if (match(TokenKind::LeftParen)) {
             if (!at(TokenKind::RightParen)) {
                 if (at(TokenKind::StringLiteral)) {
                     const auto format_token = advance();
@@ -1055,7 +1183,7 @@ std::optional<Statement> VerilogParser::parse_statement()
                                 == ExpressionKind::IntegerLiteral
                             || values.front().kind
                                 == ExpressionKind::LogicLiteral)) {
-                        const auto value = constant_output_number(values.front().text);
+                        const auto value = constant_display_number(values.front().text);
                         if (!value) {
                             error(
                                 start,

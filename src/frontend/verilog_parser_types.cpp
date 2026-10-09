@@ -561,7 +561,7 @@ void VerilogParser::parse_typedef(
         }
     } else if (keyword("shortreal") || keyword("real")
         || keyword("realtime") || keyword("time")
-        || keyword("chandle") || keyword("process")
+        || keyword("chandle") || keyword("process") || keyword("string")
         || keyword("logic") || keyword("reg") || keyword("bit")
         || keyword("byte") || keyword("shortint") || keyword("int")
         || keyword("longint") || keyword("integer")) {

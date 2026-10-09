@@ -424,6 +424,14 @@ private:
     [[nodiscard]] std::optional<std::uint64_t>
     hir_vhdl_character_literal_code(
         semantic::ExpressionId expression, std::size_t expected_width) const;
+    // The field width of a SystemVerilog decimal conversion: without an
+    // explicit width or %0d, a value is padded to the width of its largest
+    // magnitude (IEEE 1800-2017 21.2.1.3).
+    [[nodiscard]] std::uint32_t hir_systemverilog_decimal_width(
+        semantic::ExpressionId expression,
+        runtime::simir::OutputFormat format,
+        bool suppress_leading_zero,
+        std::uint32_t minimum_width) const;
     // Whether a VHDL expression has the predefined CHARACTER type.
     [[nodiscard]] bool hir_vhdl_character_typed(
         semantic::ExpressionId expression) const;

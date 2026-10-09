@@ -451,7 +451,9 @@ Lowerer::lower_hir_systemverilog_container_expression(
             span);
         return invalid_result();
     }
-    const bool query = call.text == ".size" || call.text == ".exists"
+    // num() is size() for an associative array (IEEE 1800-2017 7.9.1).
+    const bool size_query = call.text == ".size" || call.text == ".num";
+    const bool query = size_query || call.text == ".exists"
         || call.text == ".first" || call.text == ".last"
         || call.text == ".next" || call.text == ".prev";
     const bool pop = call.text == ".pop_front" || call.text == ".pop_back";
@@ -489,7 +491,7 @@ Lowerer::lower_hir_systemverilog_container_expression(
         }
         return invalid_result();
     }
-    if (call.text == ".size") {
+    if (size_query) {
         if (call.operands.size() != 1U) {
             return invalid_result();
         }
@@ -642,7 +644,7 @@ Lowerer::lower_hir_systemverilog_container_expression(
                   binding->type->signed_elements) }
             : std::optional { destination };
     }
-    if (call.operands.size() != (call.text == ".size" ? 1U : 2U)) {
+    if (call.operands.size() != (size_query ? 1U : 2U)) {
         return invalid_result();
     }
     if (!source->type.associative) {

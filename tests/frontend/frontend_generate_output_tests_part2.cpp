@@ -696,26 +696,28 @@ endmodule
       Language::SystemVerilog2017);
   require(numeric.ok(), "constant numeric output tasks must parse");
   const auto& numeric_statements = numeric.design.units.front().processes.front().statements;
+  // Decimal display output is padded to the literal's largest magnitude
+  // (IEEE 1800-2017 21.2.1.3); an unsized decimal is a signed integer.
   require(
       numeric_statements.size() == 15
-          && numeric_statements[0].output_text == "42"
+          && numeric_statements[0].output_text == "         42"
           && numeric_statements[0].output_newline
           && numeric_statements[1].output_text
-              == "18446744073709551616"
-          && numeric_statements[2].output_text == "42"
+              == " 18446744073709551616"
+          && numeric_statements[2].output_text == " 42"
           && !numeric_statements[2].output_newline
           && numeric_statements[3].output_text == "42"
           && numeric_statements[3].output_postponed
-          && numeric_statements[4].output_text == "-1"
+          && numeric_statements[4].output_text == "  -1"
           && numeric_statements[4].output_newline
-          && numeric_statements[5].output_text == "7"
+          && numeric_statements[5].output_text == " 7"
           && !numeric_statements[5].output_newline
           && std::all_of(
               numeric_statements.begin() + 6,
               numeric_statements.begin() + 10,
               [](const Statement& statement) {
                   return statement.output_text
-                      == "18446744073709551616";
+                      == std::string(58U, ' ') + "18446744073709551616";
               })
           && numeric_statements[10].output_text
               == "-18446744073709551616"
@@ -723,7 +725,8 @@ endmodule
               == "18446744073709551616"
           && numeric_statements[12].output_text
               == "-34359738368"
-          && numeric_statements[13].output_text == "1"
+          && numeric_statements[13].output_text
+              == std::string(1233U, ' ') + "1"
           && numeric_statements[14].output_text == "1",
       "arbitrary-width binary, octal, decimal, and hex output literal folding");
 

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
 
+#include <cmath>
+
 namespace fsim::frontend {
 
 namespace detail {
@@ -201,15 +203,31 @@ std::optional<std::size_t> output_unsigned_integer_bit_width(
         : std::nullopt;
 }
 
-[[nodiscard]] std::optional<std::string>
-constant_output_number(const std::string_view spelling)
+namespace {
+
+struct ConstantOutputText {
+    std::string text;
+    // The literal's width and signedness, which size its decimal display
+    // field; zero when the width exceeds the host size.
+    std::size_t width { };
+    bool is_signed { };
+};
+
+[[nodiscard]] std::optional<ConstantOutputText>
+constant_output_text(const std::string_view spelling)
 {
     const auto quote = spelling.find('\'');
     if (quote == std::string_view::npos) {
         const auto value = detail::OutputUnsignedInteger::parse(spelling, 10U);
-        return value
-            ? std::optional { value->decimal_string() }
-            : std::nullopt;
+        if (!value) {
+            return std::nullopt;
+        }
+        // An unsized decimal number is a signed integer of at least 32 bits.
+        return ConstantOutputText {
+            value->decimal_string(),
+            std::max(std::size_t { 32 }, value->bit_width() + 1U),
+            true,
+        };
     }
     std::optional<detail::OutputLiteralWidth> explicit_width;
     const auto width_text = spelling.substr(0, quote);
@@ -284,7 +302,44 @@ constant_output_number(const std::string_view spelling)
     if (negative) {
         value->twos_complement_magnitude(selected_width);
     }
-    return (negative ? "-" : "") + value->decimal_string();
+    return ConstantOutputText {
+        (negative ? "-" : "") + value->decimal_string(),
+        selected_width_exceeds_host ? std::size_t { } : selected_width,
+        is_signed,
+    };
+}
+
+} // namespace
+
+[[nodiscard]] std::optional<std::string>
+constant_output_number(const std::string_view spelling)
+{
+    auto result = constant_output_text(spelling);
+    return result ? std::optional { std::move(result->text) } : std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::string>
+constant_display_number(const std::string_view spelling)
+{
+    auto result = constant_output_text(spelling);
+    if (!result) {
+        return std::nullopt;
+    }
+    if (result->width != 0U) {
+        // A decimal value without an explicit field width is padded to the
+        // width of its largest magnitude (IEEE 1800-2017 21.2.1.3).
+        const auto magnitude_bits = result->is_signed
+            ? result->width - 1U
+            : result->width;
+        const auto digits = static_cast<std::size_t>(std::floor(
+                                static_cast<long double>(magnitude_bits)
+                                * std::log10(2.0L)))
+            + 1U + (result->is_signed ? 1U : 0U);
+        if (result->text.size() < digits) {
+            result->text.insert(0U, digits - result->text.size(), ' ');
+        }
+    }
+    return std::move(result->text);
 }
 
 [[nodiscard]] std::optional<std::int64_t> simple_verilog_integer_constant(

@@ -649,15 +649,11 @@ void test_simir_text_files()
     };
     (void)ownership.add_process(std::move(owner));
     (void)ownership.add_process(std::move(borrower));
-    try {
-        (void)ownership.run();
-        require(false, "cross-process file-handle use must fail");
-    } catch (const InterpreterError& error) {
-        require(
-            std::string_view { error.what() }.find("owned by another process")
-                != std::string_view::npos,
-            "file handles retain process ownership");
-    }
+    // A file descriptor is a design-wide value (IEEE 1800-2017 21.3.1): a
+    // process may close a file another process opened.
+    require(
+        ownership.run().status == RunStatus::completed,
+        "a file opened by one process is closed by another");
 }
 
 } // namespace fsim::tests::runtime

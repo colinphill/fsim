@@ -224,7 +224,9 @@ FileHandle Interpreter::Impl::open_file(
 }
 
 Interpreter::Impl::FileState& Interpreter::Impl::checked_file(
-    const ProcessId process,
+    // File descriptors are design-wide (IEEE 1800-2017 21.3.1): any process
+    // may use a file another process opened.
+    const ProcessId /*process*/,
     const FileHandle handle)
 {
     if (handle == 0) {
@@ -237,11 +239,6 @@ Interpreter::Impl::FileState& Interpreter::Impl::checked_file(
         throw std::runtime_error {
             "unknown SimIR file handle "
             + std::to_string(handle)
-        };
-    }
-    if (found->second.owner != process) {
-        throw std::runtime_error {
-            "SimIR file handle is owned by another process"
         };
     }
     if (found->second.closed || !found->second.stream) {
@@ -546,9 +543,11 @@ void Interpreter::Impl::flush_file(
             flush(*file);
         return;
     }
+    // $fflush with no argument flushes every open file (IEEE 1800-2017
+    // 21.3.6), whichever process opened it.
     for (auto& [id, file] : files) {
         static_cast<void>(id);
-        if (file.owner == process && !file.closed && file.stream)
+        if (!file.closed && file.stream)
             flush(file);
     }
 }

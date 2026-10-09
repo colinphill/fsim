@@ -1971,11 +1971,13 @@ tests/feature_matrix/vhdl_synopsys_package_inventory.tsv
 tests/fixtures/compliance/run_compliance.cmake
 tests/fixtures/compliance/sv_class_statements.sv
 tests/fixtures/compliance/sv_compilation_unit_declarations.sv
+tests/fixtures/compliance/sv_display_arguments.sv
 tests/fixtures/compliance/sv_function_statements.sv
 tests/fixtures/compliance/sv_hierarchical_references.sv
 tests/fixtures/compliance/sv_net_data_types.sv
 tests/fixtures/compliance/sv_port_width_mismatch.sv
 tests/fixtures/compliance/sv_streaming_unpack.sv
+tests/fixtures/compliance/sv_string_containers.sv
 tests/fixtures/compliance/sv_time_without_timescale.sv
 tests/fixtures/compliance/verilog_2005_begin_keywords.v
 tests/fixtures/compliance/vhdl_character_type.vhd

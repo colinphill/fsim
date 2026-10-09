@@ -4,6 +4,7 @@
 
 #include <array>
 #include <charconv>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 #include <set>
@@ -8004,6 +8005,33 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
     return contextual_kind;
 }
 
+std::uint32_t Lowerer::hir_systemverilog_decimal_width(
+    const semantic::ExpressionId expression,
+    const runtime::simir::OutputFormat format,
+    const bool suppress_leading_zero,
+    const std::uint32_t minimum_width) const
+{
+    const auto scalar = hir_systemverilog_scalar_kind(expression);
+    if (format != runtime::simir::OutputFormat::decimal
+        || suppress_leading_zero || minimum_width != 0U
+        || (scalar != frontend::SystemVerilogScalarKind::None
+            && scalar != frontend::SystemVerilogScalarKind::Time)) {
+        return minimum_width;
+    }
+    const auto width = hir_expression_width(expression, hir_process_scope_);
+    if (!width || *width == 0U) {
+        return minimum_width;
+    }
+    // The digits of 2^w - 1 (unsigned) or of 2^(w-1) plus a sign; neither
+    // power of two is a power of ten, so the digit count is exact.
+    const bool signed_value = hir_expression_signed(expression);
+    const auto magnitude_bits = signed_value ? *width - 1U : *width;
+    const auto digits = static_cast<std::uint32_t>(
+        std::floor(static_cast<long double>(magnitude_bits)
+            * std::log10(2.0L))) + 1U;
+    return digits + (signed_value ? 1U : 0U);
+}
+
 bool Lowerer::hir_vhdl_character_typed(
     const semantic::ExpressionId expression_id) const
 {
@@ -11786,7 +11814,8 @@ bool Lowerer::can_lower_hir_expression(
             return supported;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
-            && (source.text == ".size" || source.text == ".sum"
+            && (source.text == ".size" || source.text == ".num"
+                || source.text == ".sum"
                 || source.text == ".product" || source.text == ".and"
                 || source.text == ".or" || source.text == ".xor"
                 || source.text == ".exists" || source.text == ".first"

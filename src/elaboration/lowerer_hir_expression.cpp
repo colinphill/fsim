@@ -7771,6 +7771,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
         && (expression->systemverilog->text == ".size"
+            || expression->systemverilog->text == ".num"
             || expression->systemverilog->text == ".sum"
             || expression->systemverilog->text == ".product"
             || expression->systemverilog->text == ".and"

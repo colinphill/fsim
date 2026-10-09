@@ -39,6 +39,10 @@ struct VerilogTypeSpec {
 
 [[nodiscard]] std::optional<std::string> constant_output_number(
     std::string_view spelling);
+// The constant as `$display` prints it, padded to its automatic decimal
+// field width.
+[[nodiscard]] std::optional<std::string> constant_display_number(
+    std::string_view spelling);
 [[nodiscard]] std::optional<std::size_t> output_unsigned_integer_bit_width(
     std::string_view spelling, unsigned base);
 [[nodiscard]] std::optional<std::int64_t> simple_verilog_integer_constant(

@@ -9611,7 +9611,8 @@ bool Lowerer::lower_hir_statement(
             runtime_format == runtime::simir::OutputFormat::decimal
                 && hir_expression_signed(*expression),
             suppress_leading_zero,
-            minimum_width,
+            hir_systemverilog_decimal_width(*expression, runtime_format,
+                suppress_leading_zero, minimum_width),
             left_justify,
             zero_pad,
             hir_systemverilog_scalar_kind(*expression),
@@ -10968,6 +10969,10 @@ bool Lowerer::lower_hir_statement(
                     monitor_value.kind = MonitorValueKind::signal;
                     monitor_value.signal = *binding->signal;
                     monitor_value.format = output_format(format);
+                    monitor_value.minimum_width
+                        = hir_systemverilog_decimal_width(*expression,
+                            monitor_value.format, suppress_leading_zero,
+                            minimum_width);
                     monitor_value.scalar_kind
                         = hir_systemverilog_scalar_kind(
                         *expression);

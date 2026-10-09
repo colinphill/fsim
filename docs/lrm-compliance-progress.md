@@ -249,6 +249,30 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 12: display arguments, decimal field widths, shared file handles
+
+- Display and write tasks accept empty arguments, which print a space
+  (`$display(a,,b)`). A string literal after the first argument is a format
+  for the arguments that follow (`$monitor($time,, "A=%b", a)`). IEEE
+  1364-2005 17.1.1 / 1800-2017 21.2.1.
+- A decimal value with no explicit field width (`%d`, or a default-format
+  argument) is padded to the width of its largest magnitude (IEEE 1800-2017
+  21.2.1.3). Examples: `logic [3:0]` prints ` 5`, `integer` prints
+  `         42`, `time` prints 20 characters. This applies to `$display`,
+  `$monitor`, `$strobe`, `$fdisplay`, `$sformatf` and constant arguments.
+  `%0d` still prints the minimal form. Before, fsim never padded, so its
+  output differed from every other simulator's. Two application tests had
+  encoded the unpadded form and were updated. VHDL images are unchanged.
+- A file descriptor opened by one process may be used and closed by
+  another, and `$fflush()` flushes every open file (IEEE 1800-2017 21.3).
+  Before, using another process's descriptor was a runtime error.
+
+- `typedef string T[...]` (string-element containers, IEEE 1800-2017 6.18)
+  and `num()` of an associative array (7.9.1).
+
+Fixtures: `sv_display_arguments.sv` and `sv_string_containers.sv`, both
+checked against xsim.
+
 ### Batch 11: package signals, declarative use clauses, generate configurations
 
 - Package signals (IEEE 1076-2008 4.7, 6.4.2.3). Each is one design-wide
@@ -459,6 +483,11 @@ error, and each exposes an existing gap:
 | VHDL: library-level package instantiation (`package p is new work.g generic map (...)`) | 21 nvc/VHDL-Compliance cases (`FSIM-VHDL-UNSUPPORTED-022` 'new') |
 | VHDL: names in a configuration are not resolved against the configured architecture (architecture-local constants in generate specifications); design-wide unique names are used as a fallback | nvc config cases (`FSIM-ELAB-VHCONFIG-010`) |
 | VHDL: aggregate initializers of arrays of SEVERITY_LEVEL (`(others => note)`) | VESTs |
+| VHDL: typed files of non-integer elements (`file of real`, records, arrays, TIME), read in the VESTs text format (one value image per line; composites space-separated) | 111 VESTs/nvc cases (`FSIM-ELAB-VHFILE-011`) plus 20 VESTs reads |
+| SV: an X/Z or out-of-range dynamic index in a signal write must skip the write instead of failing (interpreter and LLVM paths) | Verilator, ivtest (`FSIM-RUN-0001`) |
+| SV: `void'($fgets(...))` and other discarded system-function calls | sv-tests chapter 21 |
+| SV: packed arrays of a named type (`T [3:0] v;`, `typedef T1 [7:0] T2;`) | ~80 ivtest/Verilator cases (`FSIM-SV-UNSUPPORTED-004`/`-024`) |
+| SV: typedefs of interface-port member types (`typedef ifc.t t;`) | ~20 Verilator cases |
 | VHDL: an array element such as `bit_vector(0 to N-1)`, constrained with non-literal bounds, was treated as unconstrained and gated to VHDL-2008 (fixed in batch 4) | 126 nvc/VESTs cases (`FSIM-FE-VHSTD-003`) |
 | VHDL: unconstrained array ports (`port (d : in bit_vector)`) bind with width 1 (`FSIM-ELAB-BIND-020`) | VESTs, generic-width library cells |
 | VHDL: analysis-time legality (index-constraint bounds and types, slices of multidimensional arrays, labels as primaries) | about 33 VESTs negative tests exposed by batch 4, part of the 724 accepted-invalid cases |
