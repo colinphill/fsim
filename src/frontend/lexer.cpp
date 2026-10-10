@@ -505,13 +505,47 @@ class Lexer {
       // IEEE 1076-2008 15.5: an underline in an abstract literal stands
       // between two digits, and an integer literal has no negative exponent.
       const auto& text = result_.tokens.back().text;
-      const auto digit = [](const char character) {
-        return std::isalnum(static_cast<unsigned char>(character)) != 0;
+      const auto first_sharp = text.find_first_of("#:");
+      const auto last_sharp = text.find_last_of("#:");
+      // Extended digits (A to F) appear only between a based literal's
+      // sharps; elsewhere an underline stands between decimal digits.
+      const auto digit = [&](const std::size_t index) {
+        const auto character = static_cast<unsigned char>(text[index]);
+        const bool extended = first_sharp != std::string::npos
+            && index > first_sharp && index < last_sharp;
+        return extended ? std::isxdigit(character) != 0
+                        : std::isdigit(character) != 0;
       };
+      if (first_sharp != std::string::npos && last_sharp > first_sharp) {
+        // IEEE 1076-2008 15.5.3: each extended digit is less than the base.
+        std::uint64_t base { };
+        for (std::size_t index = 0U; index < first_sharp; ++index) {
+          if (std::isdigit(static_cast<unsigned char>(text[index])) != 0) {
+            base = base * 10U + static_cast<std::uint64_t>(text[index] - '0');
+          }
+        }
+        for (auto index = first_sharp + 1U; index < last_sharp; ++index) {
+          const auto character = static_cast<unsigned char>(text[index]);
+          if (character == '_' || character == '.') {
+            continue;
+          }
+          const auto value = std::isdigit(character) != 0
+              ? static_cast<std::uint64_t>(character - '0')
+              : std::isxdigit(character) != 0
+              ? static_cast<std::uint64_t>(std::tolower(character) - 'a' + 10)
+              : 99U;
+          if (value >= base) {
+            diagnose("FSIM-VHDL-LEX-005",
+                "a digit of a VHDL based literal must be less than its base",
+                begin);
+            break;
+          }
+        }
+      }
       for (std::size_t index = 0U; index < text.size(); ++index) {
         if (text[index] == '_'
             && (index == 0U || index + 1U == text.size()
-                || !digit(text[index - 1U]) || !digit(text[index + 1U]))) {
+                || !digit(index - 1U) || !digit(index + 1U))) {
           diagnose("FSIM-VHDL-LEX-005",
               "an underline in a VHDL abstract literal must stand between two "
               "digits",

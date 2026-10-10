@@ -604,3 +604,34 @@ gives fsim's result in each case checked.
   REAL subtype, or by a constant with a static packed value, are evaluated.
 - Member names of signals whose subtype is a resolved record subtype follow
   the subtype to its record definition.
+
+## Entity constants, orderings and literal checks (batch 32)
+
+- Constants of an entity declarative part are kept with the generics as
+  local values; the HIR makes them constants, not generics. A signal
+  assignment inside a subprogram declared in the entity is not an entity
+  statement for the passive check.
+- Function formals of class signal are accepted and passed by value (the
+  formal keeps the signal object class); attributes such as `'event` of
+  such a formal are not supported yet. `FSIM-ELAB-VHCALL-003` rejects a
+  positional actual that is not a signal name.
+- Ordering operators on one-dimensional arrays of discrete elements of
+  equal length are lowered as a lexicographic chain from the left element
+  (signed for INTEGER elements). Arrays of different lengths are still
+  rejected (`FSIM-ELAB-VHARRAY-007`).
+- Index constraints of array type definitions and the ranges of integer
+  type definitions accept range attributes (`T range x'range`); a descending
+  attribute range of an integer type definition is taken as ascending, since
+  the integer range expression has no direction-from-bounds flag.
+  `FSIM-ELAB-VHARRAY-012` rejects non-discrete index subtypes.
+- A user attribute value may be indexed or sliced (`PT'AT1(2 to 4)`); an
+  integer or Boolean value may not (`FSIM-VHDL-SEM-126`). Slices of slices
+  parse, and a slice with constant bounds has that index range for a
+  further slice or index.
+- A call whose name is an object's record element (`v.re1(1)`) becomes an
+  indexed name when the element exists in the object's record type.
+- `'ACTIVE` of a statically indexed signal element is that of the whole
+  signal, since transactions are tracked per signal.
+- Port bindings treat BOOLEAN and BIT element domains alike.
+- Decimal literals require decimal digits around an underline, and the
+  digits of a based literal must be below the base (`FSIM-VHDL-LEX-005`).

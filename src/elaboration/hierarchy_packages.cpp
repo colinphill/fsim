@@ -19657,8 +19657,15 @@ bool HierarchyBuilder::validate_compiled_vhdl_port_actual_compatibility(
         = !has_semantic_actual_domain
         || actual_hir_type->domain == actual_info.source_domain
         || has_semantic_state_domain_alias;
+    // BOOLEAN and BIT elements share the two-state encoding; arrays of
+    // BOOLEAN may be described by either domain.
+    const auto two_state = [](const frontend::ValueDomain domain) {
+        return domain == frontend::ValueDomain::Boolean
+            ? frontend::ValueDomain::Bit2
+            : domain;
+    };
     if (!actual_domain_is_supported
-        || formal_domain != actual_domain) {
+        || two_state(formal_domain) != two_state(actual_domain)) {
         report(
             "FSIM-ELAB-BIND-019",
             "value-domain mismatch on '" + child_path

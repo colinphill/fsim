@@ -1330,8 +1330,45 @@ class VhdlExecutableBuilder final {
           separator != std::string_view::npos) {
         designator.remove_prefix(separator + 1U);
       }
+      // A selected record element of the object (`v.re1(1)`) is an indexed
+      // name too.
+      const auto record_member = [&] {
+        const auto text = canonical_vhdl_name(expression.text);
+        const auto root = canonical_vhdl_name(declaration->name);
+        const auto at = text.find(root + ".");
+        if (at == std::string::npos
+            || (at != 0U && text[at - 1U] != '.')) {
+          return false;
+        }
+        auto member = std::string_view { text }.substr(at + root.size() + 1U);
+        member = member.substr(0U, member.find('.'));
+        auto type_id = declaration->subtype->type_mark.target;
+        std::unordered_set<std::uint32_t> visiting;
+        while (type_id.valid() && visiting.insert(type_id.value()).second) {
+          const auto type = std::ranges::find_if(hir_.types(),
+              [&](const vh::TypeDefinition& candidate) {
+                return candidate.id == type_id;
+              });
+          if (type == hir_.types().end()) {
+            return false;
+          }
+          if (type->form == vh::TypeForm::record) {
+            return std::ranges::any_of(type->record_elements,
+                [&](const vh::RecordElement& element) {
+                  return canonical_vhdl_name(element.name) == member;
+                });
+          }
+          if (type->form != vh::TypeForm::subtype
+              && type->form != vh::TypeForm::alias) {
+            return false;
+          }
+          type_id = type->base.type_mark.target;
+        }
+        return false;
+      };
       if (canonical_vhdl_name(std::string { designator })
-          != canonical_vhdl_name(declaration->name)) {
+              != canonical_vhdl_name(declaration->name)
+          && !record_member()) {
         // A selected-name method with one actual can resolve its receiver as
         // an object while callable overload resolution is still pending. It
         // is not an indexed name merely because that receiver is indexable.

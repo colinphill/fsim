@@ -439,13 +439,16 @@ VhdlParser::parse_vhdl_function_parameters() {
     const auto declaration_start = current();
     bool supported_class = true;
     bool file_class = false;
+    bool signal_class = false;
     if (match_keyword("constant", true)) {
       // Constant is the default class for function parameters.
     } else if (match_keyword("file", true)) {
       file_class = true;
-    } else if (
-        match_keyword("signal", true)
-        || match_keyword("variable", true)) {
+    } else if (match_keyword("signal", true)) {
+      // A signal parameter of a function is read-only (IEEE 1076-1993
+      // 2.1.1.2); its value is passed like a constant's.
+      signal_class = true;
+    } else if (match_keyword("variable", true)) {
       supported_class = false;
       error(
           previous(),
@@ -524,6 +527,7 @@ VhdlParser::parse_vhdl_function_parameters() {
             false,
             default_value,
             file_class});
+        arguments.back().vhdl_signal = signal_class;
       }
     }
 

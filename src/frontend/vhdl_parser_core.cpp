@@ -523,6 +523,13 @@ DesignUnit VhdlParser::parse_entity(const Token& start)
             if (auto item = parse_context_item()) {
                 unit.vhdl_context.push_back(std::move(*item));
             }
+        } else if (match_keyword("constant", true)) {
+            // Entity declarative constants (IEEE 1076-2008 3.2.3), retained
+            // as local values after the generics.
+            GenerateBody declarations;
+            declarations.constants = std::move(unit.parameters);
+            parse_vhdl_generate_constant(declarations, previous());
+            unit.parameters = std::move(declarations.constants);
         } else if (match_keyword("signal", true)) {
             // Entity declarative signals (IEEE 1076-2008 3.2.3).
             parse_signal_declaration(unit.signals, &unit.parameters);

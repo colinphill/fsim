@@ -1585,6 +1585,10 @@ private:
     [[nodiscard]] std::optional<PackedLogic4> hir_vhdl_default_value(
         const semantic::vhdl::SubtypeIndication& subtype, std::size_t width,
         std::size_t depth = 0U, bool scalar = false) const;
+    // VHDL ordering of one-dimensional discrete arrays of equal length
+    // (IEEE 1076-2008 9.2.3), lexicographic from the left element.
+    [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_array_ordering(
+        const semantic::vhdl::Expression& source);
     [[nodiscard]] std::optional<HirCallableType> hir_callable_type(
         semantic::DeclarationId declaration,
         std::size_t contextual_width = 0U) const;

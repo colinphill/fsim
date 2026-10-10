@@ -497,15 +497,17 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
   }
   if (match_keyword("range", true)) {
     const auto range_start = previous();
-    auto left_expression = parse_expression();
-    bool descending = false;
-    if (match_keyword("downto", true)) {
-      descending = true;
-    } else if (!match_keyword("to", true)) {
+    // A range or a range attribute (`type t is range a'range(1)`).
+    auto parsed_range = parse_vhdl_discrete_range(false);
+    if (!parsed_range) {
       error(current(), "FSIM-VHDL-PARSE-238",
             "expected 'to' or 'downto' in physical type range");
+      parsed_range.emplace();
     }
-    auto right_expression = parse_expression();
+    auto left_expression = std::move(parsed_range->left);
+    auto right_expression = std::move(parsed_range->right);
+    const bool descending = parsed_range->descending
+        && !parsed_range->direction_from_bounds;
     const auto range_span = cover(range_start.span, previous().span);
     if (!keyword("units", 0, true)) {
       // IEEE 1076-2008 5.2.3 and 5.2.5: a range constraint without units
@@ -796,18 +798,15 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
         dimension.constraint = DiscreteRangeExpression{
             bound("left"), bound("right"), dimension.index_span, false};
       } else if (!dimension.unconstrained) {
-        auto left_expression = parse_expression();
-        bool descending = false;
-        if (match_keyword("downto", true)) {
-          descending = true;
-        } else if (!match_keyword("to", true)) {
+        // A range or a range attribute (`T range x'range`).
+        auto range = parse_vhdl_discrete_range(false);
+        if (!range) {
           error(current(), "FSIM-VHDL-PARSE-145",
                 "expected 'to' or 'downto' in array index range");
+          range.emplace();
         }
-        auto right_expression = parse_expression();
-        dimension.constraint = DiscreteRangeExpression{
-            std::move(left_expression), std::move(right_expression),
-            cover(index_start.span, previous().span), descending};
+        range->span = cover(index_start.span, previous().span);
+        dimension.constraint = std::move(*range);
       }
       array.dimensions.push_back(std::move(dimension));
     } while (match(TokenKind::Comma));

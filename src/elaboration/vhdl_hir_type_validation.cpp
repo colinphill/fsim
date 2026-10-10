@@ -1158,6 +1158,36 @@ private:
             for (const auto& dimension : type.array_dimensions) {
                 validate_range_bound_types(
                     dimension.constraint, false, dimension.source);
+                // An index subtype is discrete (IEEE 1076-1993 3.2.1).
+                const auto index_declaration = dimension.index_subtype.selected
+                    ? specialization_.find_declaration(*dimension.index_subtype.selected)
+                    : std::nullopt;
+                if (!index_declaration) {
+                    auto spelling = std::string_view { dimension.index_subtype.spelling };
+                    spelling.remove_prefix(spelling.find_last_of(".:") + 1U);
+                    for (const auto predefined : { "bit_vector", "string", "real", "time",
+                             "std_logic_vector", "std_ulogic_vector" }) {
+                        if (name_equal(spelling, predefined)) {
+                            report("FSIM-ELAB-VHARRAY-012",
+                                "a VHDL array index subtype must be discrete",
+                                dimension.source.valid() ? dimension.source : type.source);
+                            break;
+                        }
+                    }
+                }
+                if (index_declaration && index_declaration->vhdl != nullptr
+                    && index_declaration->vhdl->declared_type) {
+                    SubtypeIndication index;
+                    index.type_mark.spelling = dimension.index_subtype.spelling;
+                    index.type_mark.target = *index_declaration->vhdl->declared_type;
+                    const auto kind = subtype_operand_type(index, 0U).kind;
+                    if (kind == OperandClass::array || kind == OperandClass::record
+                        || kind == OperandClass::floating) {
+                        report("FSIM-ELAB-VHARRAY-012",
+                            "a VHDL array index subtype must be discrete",
+                            dimension.source.valid() ? dimension.source : type.source);
+                    }
+                }
             }
         }
     }
@@ -2790,6 +2820,60 @@ private:
                 "no visible function '" + expression.text
                     + "' has formals matching this call's actuals",
                 expression.source);
+            return;
+        }
+        // A formal of class signal is associated with a signal name (IEEE
+        // 1076-1993 2.1.1.2).
+        if (candidates.size() != 1U) {
+            return;
+        }
+        const auto body = specialization_.find_declaration(candidates.front().body);
+        if (!body || body->vhdl == nullptr || !body->vhdl->callable) {
+            return;
+        }
+        const auto& formals = body->vhdl->callable->formals;
+        const auto signal_name = [&](semantic::ExpressionId id) {
+            for (std::size_t depth { }; depth < 16U; ++depth) {
+                const auto actual = specialization_.find_expression(id);
+                if (!actual || actual->vhdl == nullptr) {
+                    return true;
+                }
+                if ((actual->vhdl->kind == semantic::vhdl::ExpressionKind::index
+                        || actual->vhdl->kind == semantic::vhdl::ExpressionKind::slice)
+                    && !actual->vhdl->operands.empty()) {
+                    id = actual->vhdl->operands.front();
+                    continue;
+                }
+                if (actual->vhdl->kind != semantic::vhdl::ExpressionKind::name
+                    || !actual->vhdl->referenced_name
+                    || !actual->vhdl->referenced_name->selected) {
+                    return false;
+                }
+                const auto declaration = specialization_.find_declaration(
+                    *actual->vhdl->referenced_name->selected);
+                return !declaration || declaration->vhdl == nullptr
+                    || declaration->vhdl->form == semantic::vhdl::DeclarationForm::signal
+                    || declaration->vhdl->form == semantic::vhdl::DeclarationForm::port
+                    || declaration->vhdl->object_class
+                        == semantic::vhdl::ObjectClass::signal;
+            }
+            return true;
+        };
+        for (std::size_t index { }; index < actuals.size() && index < formals.size();
+            ++index) {
+            if (!actuals[index].first.empty()) {
+                break;
+            }
+            const auto formal = specialization_.find_declaration(formals[index]);
+            if (formal && formal->vhdl != nullptr
+                && formal->vhdl->object_class == semantic::vhdl::ObjectClass::signal
+                && !signal_name(actuals[index].second)) {
+                report("FSIM-ELAB-VHCALL-003",
+                    "the actual for signal formal '" + formal->vhdl->name
+                        + "' of function '" + expression.text
+                        + "' is not a signal name",
+                    expression.source);
+            }
         }
     }
 
@@ -5740,10 +5824,33 @@ private:
                     == semantic::vhdl::StatementKind::signal_assignment
                 && statement.target) {
                 // IEEE 1076-2008 3.2.4: entity statements are passive.
+                // A subprogram declared in the entity is not an entity
+                // statement.
+                const auto in_subprogram = [&](semantic::ScopeId scope) {
+                    const auto& scopes = specialization_.design().semantics.scopes();
+                    for (std::size_t depth { }; depth < 64U && scope.valid()
+                         && scope.value() < scopes.size(); ++depth) {
+                        if (std::ranges::any_of(
+                                specialization_.design().vhdl_hir.declarations(),
+                                [&](const semantic::vhdl::Declaration& candidate) {
+                                    return candidate.callable
+                                        && candidate.nested_scope == scope;
+                                })) {
+                            return true;
+                        }
+                        const auto parent = scopes[scope.value()].parent;
+                        if (!parent) {
+                            break;
+                        }
+                        scope = *parent;
+                    }
+                    return false;
+                };
                 if (const auto& all_scopes = specialization_.design().semantics.scopes();
                     statement.scope.valid() && statement.scope.value() < all_scopes.size()
                     && all_scopes[statement.scope.value()].unit == entity_.id
-                    && entity_.id != architecture_.id) {
+                    && entity_.id != architecture_.id
+                    && !in_subprogram(statement.scope)) {
                     report("FSIM-ELAB-VHPASSIVE-001",
                         "a VHDL entity statement must be passive (it assigns a signal)",
                         statement.source);
@@ -6081,7 +6188,22 @@ private:
             const auto relational = expression.text == "<"
                 || expression.text == "<=" || expression.text == ">"
                 || expression.text == ">=";
-            if (relational && (left || right)) {
+            // Ordering is defined for one-dimensional arrays of discrete
+            // elements (IEEE 1076-2008 9.2.3), which the lowerer supports.
+            const auto discrete_array = [&](const std::optional<semantic::TypeId> root) {
+                const auto* definition = root ? type_definition(*root) : nullptr;
+                if (definition == nullptr || definition->form != TypeForm::array
+                    || definition->array_dimensions.size() != 1U
+                    || !definition->element_subtype) {
+                    return false;
+                }
+                const auto element = subtype_operand_type(
+                    *definition->element_subtype, 0U);
+                return element.kind == OperandClass::integer
+                    || element.kind == OperandClass::enumeration;
+            };
+            if (relational && (left || right)
+                && !(discrete_array(left) || discrete_array(right))) {
                 report(
                     "FSIM-ELAB-VHARRAY-007",
                     "only equality and inequality are supported for VHDL "

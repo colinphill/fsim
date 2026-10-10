@@ -1772,6 +1772,19 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_expression_range(
         }
     }
     if (expression->vhdl != nullptr) {
+        // A slice has the index range of its discrete range (IEEE
+        // 1076-2008 8.5), so it can itself be sliced or indexed.
+        if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::slice
+            && expression->vhdl->operands.size() == 3U) {
+            const auto left = hir_constant_integer(expression->vhdl->operands[1]);
+            const auto right = hir_constant_integer(expression->vhdl->operands[2]);
+            const bool descending = expression->vhdl->text == "downto";
+            if (left && right && *left != *right
+                && descending == (*left > *right)
+                && *width % (index_distance(*left, *right) + 1U) == 0U) {
+                return HirPackedRange { *left, *right, descending };
+            }
+        }
         if (expression->vhdl->kind
             == semantic::vhdl::ExpressionKind::name) {
             const auto declaration = hir_target_declaration(expression_id);
@@ -7939,6 +7952,15 @@ Lowerer::hir_vhdl_signal_attribute_profile(
         && hir_constant_integer(prefix->vhdl->operands.back())) {
         element = signal_prefix;
         signal_prefix = prefix->vhdl->operands.front();
+    } else if (const auto indexed = specialized_hir_unit_->find_expression(
+                   signal_prefix);
+        source.text == "'active" && indexed && indexed->vhdl != nullptr
+        && indexed->vhdl->kind == semantic::vhdl::ExpressionKind::index
+        && indexed->vhdl->operands.size() == 2U
+        && hir_constant_integer(indexed->vhdl->operands.back())) {
+        // Transactions are tracked per signal, so an element is taken as
+        // active when its signal is.
+        signal_prefix = indexed->vhdl->operands.front();
     }
     const auto declaration = hir_referenced_declaration(signal_prefix);
     const auto binding = declaration
@@ -9642,6 +9664,90 @@ void Lowerer::collect_hir_vhdl_character_contexts() const
             mark(*declaration.initializer);
         }
     }
+}
+
+std::optional<RegisterId> Lowerer::lower_hir_vhdl_array_ordering(
+    const semantic::vhdl::Expression& source)
+{
+    if (source.operands.size() != 2U || specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto subtype = hir_vhdl_expression_subtype(source.operands[0]);
+    const auto* array = subtype && subtype->type_mark.target.valid()
+        ? vhdl_array_definition(*specialized_hir_unit_, subtype->type_mark.target)
+        : nullptr;
+    if (array == nullptr || array->array_dimensions.size() != 1U
+        || !array->element_subtype) {
+        return std::nullopt;
+    }
+    const auto element = hir_effective_vhdl_subtype(*array->element_subtype);
+    const auto element_width = element ? vhdl_runtime_width(*element)
+                                       : std::nullopt;
+    const auto domain = element ? vhdl_domain(element->domain)
+                                : frontend::ValueDomain::Unknown;
+    const auto width = hir_expression_width(
+        source.operands[0], hir_process_scope_);
+    const auto other_width = hir_expression_width(
+        source.operands[1], hir_process_scope_);
+    if (!element_width || *element_width == 0U || !width || !other_width
+        || *width != *other_width || *width % *element_width != 0U
+        || (domain != frontend::ValueDomain::Integer
+            && domain != frontend::ValueDomain::Bit2
+            && domain != frontend::ValueDomain::Boolean)) {
+        return std::nullopt;
+    }
+    const bool swap = source.text == ">" || source.text == ">=";
+    const bool inclusive = source.text == "<=" || source.text == ">=";
+    auto lhs = lower_hir_expression(source.operands[swap ? 1U : 0U], *width);
+    auto rhs = lower_hir_expression(source.operands[swap ? 0U : 1U], *width);
+    if (!lhs || !rhs) {
+        return std::nullopt;
+    }
+    const bool signed_elements = domain == frontend::ValueDomain::Integer;
+    const auto count = *width / *element_width;
+    const auto element_at = [&](const RegisterId value, const std::size_t index) {
+        const auto destination = allocate_register(*element_width, domain);
+        process_.operations.emplace_back(Extract {
+            destination, value,
+            static_cast<std::uint32_t>((count - 1U - index) * *element_width),
+            static_cast<std::uint32_t>(*element_width) });
+        return destination;
+    };
+    const auto compare = [&](const BinaryOperator operation, const RegisterId left,
+                             const RegisterId right) {
+        const auto destination = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary { operation, destination, left, right });
+        return destination;
+    };
+    const auto less = signed_elements ? BinaryOperator::less_signed
+                                      : BinaryOperator::less_unsigned;
+    const auto less_equal = signed_elements ? BinaryOperator::less_equal_signed
+                                            : BinaryOperator::less_equal_unsigned;
+    // From the right: r = last element compare; r = lt(i) or (eq(i) and r).
+    std::optional<RegisterId> result;
+    for (std::size_t index = count; index-- > 0U;) {
+        const auto left = element_at(*lhs, index);
+        const auto right = element_at(*rhs, index);
+        if (!result) {
+            result = compare(inclusive ? less_equal : less, left, right);
+            continue;
+        }
+        const auto lt = compare(less, left, right);
+        const auto eq = compare(BinaryOperator::equal, left, right);
+        const auto both = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LogicalBinary {
+            LogicalBinaryOperator::logical_and, both, eq, *result });
+        const auto either = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LogicalBinary {
+            LogicalBinaryOperator::logical_or, either, lt, both });
+        result = either;
+    }
+    if (!result) {
+        return std::nullopt;
+    }
+    const auto boolean = allocate_register(1U, frontend::ValueDomain::Boolean);
+    process_.operations.emplace_back(CopyRegister { boolean, *result });
+    return boolean;
 }
 
 std::optional<PackedLogic4> Lowerer::hir_vhdl_default_value(

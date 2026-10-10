@@ -2341,9 +2341,14 @@ Lowerer::hir_class_task_profile(
         : std::string { identity };
     result.interface_receiver = std::move(interface_receiver);
     result.static_method = static_call;
+    // Class methods have automatic lifetime unless declared static (IEEE
+    // 1800-2017 8.6).
     result.automatic = native_uvm
         || callable.callable->lifetime
-            == semantic::sv::Lifetime::automatic;
+            == semantic::sv::Lifetime::automatic
+        || (class_call
+            && callable.callable->lifetime
+                != semantic::sv::Lifetime::static_lifetime);
     if (instance_call) {
         const auto& receiver = call.task_arguments.front();
         if (!receiver.actual
@@ -2778,6 +2783,11 @@ bool Lowerer::allocate_hir_static_callable_declarations(
                 return false;
             }
             const auto& input = *statement->systemverilog;
+            // A class task call retains its callee's body for the class
+            // executor; those locals belong to the callee's own frame.
+            if (input.kind == semantic::sv::StatementKind::task_call) {
+                continue;
+            }
             const bool scoped
                 = input.kind == semantic::sv::StatementKind::block
                 || input.kind == semantic::sv::StatementKind::fork;

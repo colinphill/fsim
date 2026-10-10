@@ -12758,6 +12758,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             if (array_relational
                 && (array_operand(lhs_composite)
                     || array_operand(rhs_composite))) {
+                if (const auto ordered = expression->vhdl != nullptr
+                        ? lower_hir_vhdl_array_ordering(*expression->vhdl)
+                        : std::nullopt) {
+                    return ordered;
+                }
                 report(
                     "FSIM-ELAB-VHARRAY-007",
                     "only equality and inequality are supported for VHDL "

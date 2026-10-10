@@ -962,6 +962,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-SEM-123` | error | The simple name at the end of a VHDL architecture does not repeat its name (IEEE 1076-2008 3.3.1). |
 | `FSIM-VHDL-SEM-124` | error | A VHDL function designator string is not an operator symbol, or an operator function has the wrong number of parameters (IEEE 1076-2008 4.5.2). |
 | `FSIM-VHDL-SEM-125` | error | Before VHDL-2008, a subprogram body's specification does not repeat the lexical elements of its earlier declaration in the same declarative region (IEEE 1076-1993 2.7). |
+| `FSIM-VHDL-SEM-126` | error | An indexed name or slice has a scalar attribute value as its prefix (IEEE 1076-1993 6.4). |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -2143,6 +2144,7 @@ scheduler.
 | `FSIM-ELAB-VHBODY-001` | error | A subprogram declared in an entity, architecture, block, process or subprogram declarative part has no body in that declarative part (IEEE 1076-2008 4.2.1). |
 | `FSIM-ELAB-VHCALL-001` | error | No visible function of the called name has formals that the call's positional and named actuals associate one to one, with defaults for the rest (IEEE 1076-2008 9.3.4, 6.5.7.1). |
 | `FSIM-ELAB-VHCALL-002` | error | No visible procedure accepts the actuals of a procedure call, by count, formal name or scalar type (IEEE 1076-2008 4.2.2.1). |
+| `FSIM-ELAB-VHCALL-003` | error | The actual associated with a function formal of class signal is not a signal name (IEEE 1076-1993 2.1.1.2). |
 | `FSIM-ELAB-VHNAME-002` | error | A simple name used as a value (an operand, an assignment value, a condition or an initial value) denotes no visible declaration, for example a statement label, a design-unit name or a record element name (IEEE 1076-2008 12.3). |
 | `FSIM-ELAB-VHNAME-003` | error | A selected name whose prefix is an object names something other than an element of the object's record type, for example a selection from an array or scalar object (IEEE 1076-2008 8.3). |
 | `FSIM-ELAB-VHNAME-004` | error | A name used as a value denotes a type, subtype, component, package instance, or block or generate label (IEEE 1076-2008 9.1). |
@@ -2415,6 +2417,7 @@ scheduler.
 | `FSIM-ELAB-VHARRAY-009` | error | Before VHDL-2008, an array element or record element has an unconstrained array subtype (IEEE 1076-1993 3.2.1.1, 3.2.2). |
 | `FSIM-ELAB-VHARRAY-010` | error | A VHDL signal or variable has an unconstrained array subtype (IEEE 1076-2008 6.4.2.3, 6.4.2.4). |
 | `FSIM-ELAB-VHARRAY-011` | error | An index constraint of a BIT_VECTOR or STRING object has a bound outside NATURAL or POSITIVE (IEEE 1076-2008 5.3.2.2). |
+| `FSIM-ELAB-VHARRAY-012` | error | A VHDL array index subtype is not a discrete subtype (IEEE 1076-1993 3.2.1). |
 | `FSIM-ELAB-VHARRAYAGG-002` | error | Contextual VHDL array layout or aggregate-choice HIR metadata is inconsistent with the aggregate value. |
 | `FSIM-ELAB-VHARRAYAGG-003` | error | A VHDL array aggregate choice is nonstatic or outside the contextual index range. |
 | `FSIM-ELAB-VHARRAYAGG-004` | error | A VHDL array aggregate covers an index more than once, has too many positional values, or repeats `others`. |

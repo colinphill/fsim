@@ -367,7 +367,8 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
         semantic::DeclarationKind::port,
         semantic::ValueKind::parameter,
         input.vhdl_file ? vh::ObjectClass::file
-                        : vh::ObjectClass::constant,
+            : input.vhdl_signal ? vh::ObjectClass::signal
+                                : vh::ObjectClass::constant,
         vhdl_direction(input.direction),
         input.default_value);
 }

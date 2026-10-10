@@ -931,6 +931,8 @@ struct FunctionArgument {
     bool static_reference { };
     std::optional<Expression> default_value;
     bool vhdl_file { };
+    // A VHDL function formal of class signal (IEEE 1076-1993 2.1.1.2).
+    bool vhdl_signal { };
 
     FunctionArgument() = default;
     FunctionArgument(std::string argument_name, Type argument_type,

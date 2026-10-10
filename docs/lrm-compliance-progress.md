@@ -253,6 +253,31 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 32: entity constants, array orderings, names and literal checks
+
+Fixture: `vhdl_names_and_orderings.vhd` (passes on xsim).
+
+- Constants in entity declarative parts; signal-class function formals
+  (passed by value, with a signal-actual check, `FSIM-ELAB-VHCALL-003`).
+- Ordering operators on equal-length discrete arrays.
+- Range attributes as array index constraints and integer type ranges;
+  non-discrete index subtypes rejected (`FSIM-ELAB-VHARRAY-012`).
+- Indexed and sliced user attribute values; slices of slices; indexed
+  record elements of objects (`v.re1(1)`).
+- `'ACTIVE` of a signal element; BOOLEAN-array port bindings.
+- Class methods have automatic lifetime by default, and a class task call's
+  retained callee body is not allocated as the caller's static locals (the
+  UVM `run_test` frame now lowers; UVM classes still fail to specialize).
+- Literal checks: underlines between decimal digits, based digits below
+  the base (`FSIM-VHDL-LEX-005`); a scalar attribute value cannot be
+  indexed (`FSIM-VHDL-SEM-126`); entity subprograms are not entity
+  statements for the passive check.
+
+Corpus effect (interpreter, w96 plus tc1076 fixed after it): VESTs +31
+(3135), nvc +4 (560). VESTs tc1127 (an out-of-range index of a slice at
+analysis) is accepted again: it failed before only because chained slices
+did not parse.
+
 ### Batch 31: VHDL resolution functions and default values
 
 Fixture: `vhdl_resolution_functions.vhd` (passes on xsim).
