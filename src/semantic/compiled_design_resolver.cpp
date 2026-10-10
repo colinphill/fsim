@@ -624,7 +624,8 @@ VhdlProfileTypeClass vhdl_profile_type_class(
         }
     }
     const auto spelling = simple_vhdl_name(subtype.type_mark.spelling);
-    if (same_vhdl_identifier(spelling, "time")) {
+    if (same_vhdl_identifier(spelling, "time")
+        || same_vhdl_identifier(spelling, "delay_length")) {
         return VhdlProfileTypeClass::physical;
     }
     if (same_vhdl_identifier(spelling, "real")) {

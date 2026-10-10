@@ -1909,6 +1909,36 @@ std::uint32_t Interpreter::add_module_path(ModulePath path)
     }
     validate_module_path_expression(path.condition, impl_->signals);
     validate_module_path_expression(path.data_source, impl_->signals);
+    // The drivers of a path-delayed net start X on its unknown bits (see
+    // add_signal).
+    for (const auto driver : path.drivers) {
+        for (const auto& destination : path.destinations) {
+            const auto delayed
+                = impl_->delayed_net_initial_values.find(destination.signal);
+            if (delayed == impl_->delayed_net_initial_values.end()) {
+                continue;
+            }
+            auto* record
+                = impl_->driver_values.at(destination.signal).find(driver);
+            if (record == nullptr) {
+                continue;
+            }
+            impl_->prepare_region_authoritative_write(destination.signal);
+            for (auto bit = static_cast<std::size_t>(destination.offset);
+                bit < static_cast<std::size_t>(destination.offset)
+                        + destination.width
+                && bit < record->value.width();
+                ++bit) {
+                if (delayed->second.get(bit) == Logic4::x) {
+                    record->value.set(bit, Logic4::x);
+                }
+            }
+            const auto resolved
+                = impl_->resolved_driver_value(destination.signal);
+            impl_->driven_values[destination.signal] = resolved;
+            impl_->signals[destination.signal].initial_value = resolved;
+        }
+    }
     impl_->module_paths.push_back(std::move(path));
     return id;
 }

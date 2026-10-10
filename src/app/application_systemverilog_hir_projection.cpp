@@ -206,6 +206,13 @@ namespace {
                 packed_range(dimension, scope, parent));
         }
     }
+    // An interface port array keeps its dimensions without a container
+    // form: its elements are interface bindings, not stored values.
+    for (const auto& dimension :
+        input.systemverilog_interface_array_dimensions) {
+        output.unpacked_dimensions.push_back(
+            packed_range(dimension, scope, parent));
+    }
     if (input.systemverilog_container) {
         const auto& container = *input.systemverilog_container;
         output.container_form = type_form(input);

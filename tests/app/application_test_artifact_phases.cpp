@@ -2330,15 +2330,13 @@ end architecture;
         assert(scalar_interpreted.bit2_copy_owner
             == scalar_cold.bit2_copy_owner
             && scalar_cold.bit2_copy_owner == scalar_warm.bit2_copy_owner);
-        assert(scalar_interpreted.bit2_copy_changes.size() == 1U);
+        // The constant-driven variable starts at its constant, so its
+        // time-0 write changes nothing.
+        assert(scalar_interpreted.bit2_copy_changes.empty());
         assert(scalar_interpreted.bit2_copy_changes
             == scalar_cold.bit2_copy_changes);
         assert(scalar_cold.bit2_copy_changes
             == scalar_warm.bit2_copy_changes);
-        assert(std::get<2>(scalar_interpreted.bit2_copy_changes.front())
-            == "01011010");
-        assert(std::get<0>(scalar_interpreted.bit2_copy_changes.front())
-            == 0U);
         assert(scalar_interpreted.bit2_copy_debug_points.size() == 3U);
         assert(scalar_interpreted.bit2_copy_debug_points
             == scalar_cold.bit2_copy_debug_points);

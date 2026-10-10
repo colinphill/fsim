@@ -566,8 +566,41 @@ namespace {
                     input.span,
                     scope);
             }
+            // A function named without parentheses is a call with no
+            // arguments (IEEE 1800-2017 13.4.1), except inside its own body,
+            // where the name denotes the result variable.
+            if (input.kind == frontend::ExpressionKind::Identifier
+                && output.kind == sv::ExpressionKind::name
+                && output.referenced_name
+                && output.referenced_name->selected) {
+                const auto callable = std::ranges::find(hir_.declarations(),
+                    *output.referenced_name->selected,
+                    &sv::Declaration::id);
+                if (callable != hir_.declarations().end()
+                    && callable->callable && callable->callable->function
+                    && callable->callable->formals.empty()) {
+                    bool inside = false;
+                    for (auto visible = std::optional<semantic::ScopeId> {
+                             scope };
+                        visible; visible = parent_scope(*visible)) {
+                        if (callable->nested_scope
+                            && *visible == *callable->nested_scope) {
+                            inside = true;
+                            break;
+                        }
+                    }
+                    if (!inside) {
+                        output.kind = sv::ExpressionKind::call;
+                    }
+                }
+            }
             output.argument_names = input.call_argument_names;
+            const auto omitted = systemverilog_hir_detail::omit_systemverilog_call_arguments(
+                input, output.referenced_name, hir_, output.argument_names);
             for (std::size_t index = 0; index < input.operands.size(); ++index) {
+                if (omitted[index]) {
+                    continue;
+                }
                 const auto& operand = input.operands[index];
                 const auto operand_id = expression(operand, scope, expression_origin);
                 if (operand_id) {
@@ -575,9 +608,14 @@ namespace {
                 }
                 if (input.kind == frontend::ExpressionKind::Call) {
                     sv::CallAssociation association;
-                    if (index < input.call_argument_names.size()
-                        && !input.call_argument_names[index].empty()) {
-                        association.formal = input.call_argument_names[index];
+                    // The kept operand's name, which an omitted argument before
+                    // it may have supplied.
+                    const auto kept = static_cast<std::size_t>(
+                        std::count(omitted.begin(), omitted.begin()
+                            + static_cast<std::ptrdiff_t>(index), false));
+                    if (kept < output.argument_names.size()
+                        && !output.argument_names[kept].empty()) {
+                        association.formal = output.argument_names[kept];
                     }
                     association.actual = operand_id;
                     association.source = operand.valid()

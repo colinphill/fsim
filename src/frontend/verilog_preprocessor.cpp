@@ -541,7 +541,21 @@ namespace {
                     && mapped_tokens[index + 1].kind == TokenKind::Identifier) {
                     const auto directive = mapped_tokens[index + 1].text;
                     if (is_directive(directive)) {
-                        const auto end = line_end(tokens, index);
+                        auto end = line_end(tokens, index);
+                        // Text may follow a conditional directive on its
+                        // line (`ifdef X a `else b `endif); only the
+                        // directive and its macro name belong to it.
+                        if ((directive == "else" || directive == "endif")
+                            && index + 2 < end) {
+                            end = index + 2;
+                        } else if ((directive == "ifdef"
+                                       || directive == "ifndef"
+                                       || directive == "elsif")
+                            && index + 3 < end
+                            && mapped_tokens[index + 2].kind
+                                == TokenKind::Identifier) {
+                            end = index + 3;
+                        }
                         if (directive == "line" && active()) {
                             const auto next_physical_line = end == index
                                 ? tokens[index].span.end.line + 1
@@ -1759,7 +1773,44 @@ namespace {
             const auto append_argument = [&](const std::size_t parameter) {
                 for (std::size_t index = 0;
                     index < arguments[parameter].size(); ++index) {
-                    if (index != 0) {
+                    // Tokens adjacent in their source stay adjacent in the
+                    // string (IEEE 1800-2017 22.5.1).
+                    const auto& token = arguments[parameter][index];
+                    const auto word = [](const std::string_view text) {
+                        return !text.empty()
+                            && (std::isalnum(
+                                    static_cast<unsigned char>(text.back()))
+                                    != 0
+                                || text.back() == '_' || text.back() == '$');
+                    };
+                    const auto word_start = [](const std::string_view text) {
+                        return !text.empty()
+                            && (std::isalnum(
+                                    static_cast<unsigned char>(text.front()))
+                                    != 0
+                                || text.front() == '_' || text.front() == '$');
+                    };
+                    const auto* previous_token = index != 0
+                        ? &arguments[parameter][index - 1]
+                        : nullptr;
+                    // Tokens expanded from a macro body share their
+                    // invocation's span; separate only two words there.
+                    const auto same_span = previous_token != nullptr
+                        && previous_token->span.source_name
+                            == token.span.source_name
+                        && previous_token->span.begin.offset
+                            == token.span.begin.offset
+                        && previous_token->span.end.offset
+                            == token.span.end.offset;
+                    const auto adjacent = previous_token != nullptr
+                        && (same_span
+                                ? !(word(previous_token->text)
+                                      && word_start(token.text))
+                                : previous_token->span.source_name
+                                        == token.span.source_name
+                                    && previous_token->span.end.offset
+                                        == token.span.begin.offset);
+                    if (index != 0 && !adjacent) {
                         result.push_back(' ');
                     }
                     append_escaped(arguments[parameter][index].text);

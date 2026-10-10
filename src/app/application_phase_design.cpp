@@ -1641,8 +1641,20 @@ int elaborate_built_workspace(
         return 1;
     }
     const auto root_count = built ? built->design.roots().size() : 0;
-    const auto sdf_request = make_cli_sdf_request(invocation,
+    auto sdf_request = make_cli_sdf_request(invocation,
         SdfControlPhase::Elaborate, config.run.delay_mode);
+    // Procedural `$sdf_annotate` calls annotate at elaboration, after any
+    // command-line SDF files.
+    if (built) {
+        for (const auto& annotation :
+            built->design.sdf_annotation_requests()) {
+            sdf_request.inputs.push_back({ annotation.file,
+                annotation.scope.empty() ? std::string { "*" }
+                                         : annotation.scope,
+                "*", static_cast<std::uint64_t>(sdf_request.inputs.size()),
+                0U });
+        }
+    }
     if (!built || !apply_sdf_session_inputs(*built, sdf_request, diagnostics)
         || !publish_design_artifact(config, std::move(*built),
             *invocation.artifact_output, diagnostics)) {

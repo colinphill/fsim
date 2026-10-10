@@ -249,6 +249,100 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 23: interface ports, declarations, time-zero values, VHDL ports
+
+Fixtures: `sv_interface_ports_and_waits.sv` and `sv_declarations_and_calls.sv`
+(both pass on xsim).
+
+Interfaces (25.5, 25.9, 25.10):
+- Interface port arrays (`ifc ports[2]`) bind element by element, and their
+  elements' parameters and members are reachable (`ports[i].x`,
+  `$bits(ports[0].data)`).
+- A non-ANSI interface port declared in the module body (`module m(c);
+  ifc c;`).
+- Virtual interface members are read and written through the handle, and
+  `@(vif.member)`, `@(posedge vif.member)` and `wait (vif.member ...)`
+  wait on the selected instance.
+- A modport segment in a hierarchical member reference
+  (`ifc.mp.member`).
+
+Declarations and statements:
+- Non-ANSI ports bind positionally in header order, not in the order of
+  their body declarations (23.3.2.1).
+- An unpacked structure local to a procedure, and bit- and part-selects of
+  a structure member as assignment targets (7.2).
+- `for` loops with empty initializer, condition or step (12.7.1).
+- `always_ff` with several events, such as an asynchronous reset
+  (9.2.2.4).
+- Nets of a user-defined type (`wire byte_t w;`); a net of a class type is
+  rejected (`SV-SEM-407`).
+- Omitted positional call arguments (`f(, 1)`) take their defaults, and
+  named arguments bind by name in constant function calls (13.5).
+- A real `repeat` count rounds (12.7.2).
+- A formal hides a parameter of the same name in a constant function call
+  (13.4.3); constant functions assign and read packed structure members.
+- Typed assignment patterns (`T'{...}`), `default clocking` blocks, and
+  the `edge` event (9.4.2).
+- Constant `.toupper`, `.tolower` and `.substr` of string parameters.
+- Statement calls of `$fgets`, `$fscanf` and the like discard the value.
+
+Rejected input:
+- An edge event on a `real` variable (`SV-SEM-406`).
+
+Time zero (4.7, 6.8, 10.3):
+- A SystemVerilog variable's constant declaration initializer takes effect
+  before any process starts, so `logic clk = 0; always @(negedge clk)`
+  sees no edge at time zero.
+- A net or variable whose only driver is a constant continuous assignment
+  starts at the constant, so initial procedures read it at time zero. A net that a
+  process waits on for any change keeps its time-zero event.
+- An edge event on a bit-select or expression follows table 9-2 (9.4.2): a
+  posedge leaves 0 or arrives at 1, so a net's change from Z to X at time
+  zero is no edge.
+
+Specify blocks and SDF: `$sdf_annotate` calls load their SDF file at
+elaboration (`ELAB-SDF-001`); module path delays drive X, not Z, until
+their first delayed value.
+
+Preprocessor and lexing: text after `` `ifdef X``, `` `else`` and
+`` `endif`` on the same line; stringification keeps the spacing of its
+argument; fractional delays without a timescale (`SV-SEM-050` retired).
+
+Performance: a long chain of nested `?:` lowers in linear rather than
+exponential time (ivtest `pr3022502` elaborated in 90 seconds).
+
+VHDL:
+- An omitted port mode is `in`, and `linkage` is accepted (6.5.2).
+- A resolution function in a signal's subtype indication (`signal s :
+  resolve bit;`) and the `bus`/`register` signal kinds.
+- An object alias without a subtype indication (`VHDL-UNSUPPORTED-054`
+  retired).
+- `use` clauses in a process declarative part.
+- `DELAY_LENGTH` and the STANDARD.CHARACTER control literals (`NUL`,
+  `DEL`, ...) in constant expressions.
+- Before VHDL-2008, an input port's actual may be a conversion function of
+  a name or a globally static expression (1076-1993 1.1.1.2).
+- Aggregate assignment targets (`(a, b) := v;`, `(a, b) <= T'("10");`),
+  sequential and concurrent; the value must be an array object or a
+  qualified aggregate or string.
+- An attribute specification sees attributes declared in earlier units
+  (entities, packages). An attribute of a design unit is specified only in
+  that unit's own declarative part (`VHDL-SEM-118`); a generic clause after
+  the port clause (`VHDL-SEM-117`) and `end;` closing a process are
+  rejected.
+
+Runner: Verilator `TEST_DUMPFILE`, data files named as `t/...`, and
+`--file-root`; ivtest `-Tmin/-Ttyp/-Tmax` select the delay mode.
+
+Corpus effect (interpreter, against Batch 22): ivtest +43 (2044/2826),
+Verilator +61 (966/2415), sv-tests +8 (1277/1497; UVM 3/103), nvc +19
+(499/1482), VESTs +65 with 5 newly failing (2098/3665); VHDL
+Compliance-Tests unchanged (16/72). 196 cases closed, 191 net. The five VESTs
+cases are negative tests that had failed analysis only through the
+previously unsupported port forms; they need checks not yet implemented
+(static names in port maps, block specifications, guarded-signal
+assignments, variable targets of signal assignments).
+
 ### Batch 22: class execution, interface typedefs, foreach, equality, constraints
 
 Fixtures: `sv_class_construction_in_methods.sv` (passes on xsim) and
@@ -986,7 +1080,17 @@ error, and each exposes an existing gap:
 
 | Gap | Evidence |
 |---|---|
-| SV: interface array ports (`a_if.mp p [N]`) and their element bindings | 35 Verilator cases (`FSIM-SV-PARSE-002`) |
+| SV: multidimensional interface instance arrays (`ifc a[2][3] ()`); one-dimensional arrays and port arrays done in batch 23 | 14 Verilator cases (`FSIM-SV-PARSE-008`) |
+| SV: parameterized class-scoped types (`C#(int)::T v;`) | ~14 Verilator cases (`FSIM-SV-PARSE-001`) |
+| SV: the `process` class (`process::self()`, `status`, `kill`, `await`) | 11 Verilator/sv-tests cases |
+| SV: modport expressions (`modport mp(input .p(expr))`) | 9 Verilator cases |
+| SV: static task/function locals shared across processes and reachable hierarchically (`task.var`) | ivtest `ldelay1`, `pr307a`, `br1004` |
+| SV: `force` with a non-constant expression follows the expression's changes | ivtest `pr245` and others |
+| SV: `%v` strength format | 17 ivtest cases (`FSIM-SV-SEM-042`) |
+| VHDL: record element constraints (`rec(y(1 to 3))`) | 26 nvc cases (`FSIM-VHDL-PARSE-009`) |
+| VHDL: slice and index alias targets (`alias a : string(1 to 4) is s(1 to 4);`) | 19 VESTs cases (`FSIM-VHDL-PARSE-236`) |
+| VHDL: chained signal attributes (`clk'delayed'last_event`) | 16 VESTs cases (`FSIM-VHDL-PARSE-046`) |
+| VHDL: operator type checks (predefined operators applied to wrong type classes) | ~240 VESTs negative cases (sections 7.2.x) |
 | SV: UVM `run_test` from source: the phase, objection and report services exist but are only driven through the C++ API | 100 UVM sv-tests |
 | SV: interface parameters read through a port (`a.PARAM`) | Verilator interface cases |
 | SV hierarchical references (`s.a`) in expressions | ~361 Verilator cases (`FSIM-ELAB-HIR-001` kind 3) |

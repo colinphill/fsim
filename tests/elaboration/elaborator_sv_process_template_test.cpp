@@ -731,10 +731,12 @@ endmodule
             .to_msb_string() == "ZZZZ");
     assert(initial_state.signals.at(uwire_actual).initial_value
             .to_msb_string() == "ZZZZ");
+    // A variable's declaration initializer is its value before time zero
+    // (IEEE 1800-2017 6.8).
     assert(initial_state.signals.at(custom_formal).initial_value
-            .to_msb_string() == "XXXX");
+            .to_msb_string() == "0101");
     assert(initial_state.signals.at(uwire_formal).initial_value
-            .to_msb_string() == "XXXX");
+            .to_msb_string() == "0110");
 
     const auto has_driver = [&](const Process& process,
                                 const SignalId destination) {

@@ -300,3 +300,52 @@ gives fsim's result in each case checked.
 - `%t` of a value other than `$time` (a `time` variable, a plain vector)
   ignores `$timeformat` and the default width of 20, and fails for a
   vector without time metadata (ivtest `automatic_events3`).
+
+## Time zero, implicit nets and corpus disagreements (batch 23)
+
+- Undeclared identifiers in expressions still become implicit nets. A check
+  that rejected them outside port connections, gate terminals and
+  continuous-assignment targets (6.10) was tried and withdrawn: system task
+  arguments, `randomize` variable lists, specify blocks, `matches` pattern
+  variables, `let` and constraint bodies all name things the unit does not
+  declare, and it rejected valid designs. Names of classes, `$unit`
+  declarations, DPI imports, modports, covergroups and imported package
+  types no longer become implicit nets.
+- A SystemVerilog variable's constant declaration initializer takes effect
+  before any process starts (6.8), with no time-zero event. The parser keeps
+  the initializer as an initial process; elaboration moves its value into
+  the variable's initial value, so the process then writes the value the
+  variable already holds. Verilog-2005 units keep the time-zero write.
+- A net whose only driver is a strong constant continuous assignment starts
+  at the constant (initial procedures read it at time zero), unless it is
+  forced, released, or waited on for any change (`always @*`, `@(n)`): ivtest
+  `pr2986528` needs the time-zero change to wake an `always @*`, while
+  Verilator `t_always_ff_never` needs an edge wait on a constant input not to
+  fire. Both orders are races under the LRM (4.7).
+- A non-ANSI module's ports bind positionally in header order. Before, body
+  declarations reordered them, so `module m(a, b); input b; input a;` bound
+  its first actual to `b`.
+- A nested chain of `?:` lowered both arms again in its unknown-condition
+  path at every level, doubling the work per level. Nested conditionals now
+  lower each arm once, skipped when the condition excludes it, and merge
+  with a conditional select.
+- Omitted call arguments (`f(, 1)`) are dropped when the HIR is built, and
+  the positional actuals after them are named by their formals. Both
+  constant-function evaluators now bind named actuals by name.
+- Static task and function locals are still per-process registers, not one
+  shared variable, so a hierarchical reference to a task's local
+  (`t.count = 0`) is not supported and two processes calling a static task
+  see separate copies.
+- `force net = expr` evaluates its expression once; a forced value does not
+  follow later changes of the expression (ivtest `pr245`).
+- `%v` (strength) is not implemented (17 ivtest cases).
+- Packed arrays of packed structures (`s_t [3:0] a;`) are not represented;
+  the dimension replaces the structure's width.
+- VESTs reads of `iofile.*` depend on files written by other tests in GHDL's
+  run order, in an implementation-defined binary format; they fail when each
+  test runs alone.
+- VHDL: an omitted port mode is `in`; `linkage` stays unsupported, which
+  also keeps VESTs `tc120`-`tc125` (reading a `linkage` port) rejected.
+  Aggregate assignment targets (`(a, b) := v;`) are split into one
+  assignment per name: an aggregate value by element, a string literal by
+  character, and an array object `v` by `v(v'left + k * sign)`.

@@ -515,6 +515,38 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
   for (const auto& task : unit.tasks) {
     known.insert(task.name);
   }
+  for (const auto& declaration : unit.systemverilog_dpi_declarations) {
+    known.insert(declaration.systemverilog_name);
+  }
+  for (const auto& modport : unit.systemverilog_modports) {
+    known.insert(modport.name);
+  }
+  for (const auto& covergroup : unit.systemverilog_covergroups) {
+    known.insert(covergroup.name);
+  }
+  for (const auto& declared : unit.systemverilog_classes) {
+    known.insert(declared.name);
+  }
+  for (const auto& let : unit.systemverilog_lets) {
+    known.insert(let.name);
+  }
+  known.insert(known_class_names_.begin(), known_class_names_.end());
+  // Compilation-unit declarations are visible in every module.
+  if (compilation_unit_package_) {
+    const auto& outer = *compilation_unit_package_;
+    for (const auto& item : outer.parameters) known.insert(item.name);
+    for (const auto& item : outer.signals) known.insert(item.name);
+    for (const auto& item : outer.variables) known.insert(item.name);
+    for (const auto& item : outer.type_aliases) known.insert(item.name);
+    for (const auto& item : outer.functions) known.insert(item.name);
+    for (const auto& item : outer.tasks) known.insert(item.name);
+    for (const auto& item : outer.systemverilog_classes) {
+      known.insert(item.name);
+    }
+    for (const auto& item : outer.systemverilog_dpi_declarations) {
+      known.insert(item.systemverilog_name);
+    }
+  }
   std::unordered_set<std::string> rejected;
   for (const auto& reference : implicit_net_references_) {
     const auto member_separator = reference.name.find('.');
@@ -1167,7 +1199,31 @@ DesignUnit VerilogParser::parse_module(
                     "a program block cannot contain an always procedure or "
                     "a module, interface, or program instance");
             }
+            const auto always_start = current();
             unit.processes.push_back(parse_always());
+            // An edge event on a real variable is illegal (IEEE 1800-2017
+            // 9.4.2).
+            for (const auto& sensitivity :
+                unit.processes.back().sensitivities) {
+                if (sensitivity.edge == EdgeKind::Any
+                    || sensitivity.signal.empty()) {
+                    continue;
+                }
+                const auto real_signal = std::ranges::find_if(
+                    unit.signals, [&](const SignalDeclaration& signal) {
+                        const auto scalar = signal.type.systemverilog_scalar;
+                        return signal.name == sensitivity.signal
+                            && (scalar == SystemVerilogScalarKind::Real
+                                || scalar == SystemVerilogScalarKind::ShortReal
+                                || scalar == SystemVerilogScalarKind::Realtime);
+                    });
+                if (real_signal != unit.signals.end()) {
+                    error(always_start, "FSIM-SV-SEM-406",
+                        "an edge event cannot name the real variable '"
+                            + sensitivity.signal + "'");
+                    break;
+                }
+            }
         } else if (keyword("initial")) {
             module_has_non_time_item_ = true;
             unit.processes.push_back(parse_initial());
@@ -1278,6 +1334,24 @@ DesignUnit VerilogParser::parse_module(
                 std::string { unit_kind }
                     + " end name does not match '" + unit.name + "'");
         }
+    }
+    // A non-ANSI port declared in the body only by a type name and never
+    // given a direction is an interface port: `module m(c); ifc c;`
+    // (IEEE 1800-2017 25.5).
+    if (language_ == Language::SystemVerilog2017) {
+      for (auto& port : unit.ports) {
+        if (port.direction == PortDirection::Unknown
+            && port.interface_type.empty()
+            && non_ansi_ports_.contains(port.name)
+            && !port.type.named_type.empty()
+            && port.type.named_type.find("::") == std::string::npos
+            && !port.type.packed_range
+            && port.type.systemverilog_class_name.empty()) {
+          port.interface_type = port.type.named_type;
+          port.type = Type{ValueDomain::Unknown, "interface", std::nullopt,
+              false};
+        }
+      }
     }
     normalize_systemverilog_generate_names(unit);
     for (const auto& use : external_genvar_uses_) {

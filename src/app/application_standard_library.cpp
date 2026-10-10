@@ -63,7 +63,8 @@ namespace {
         if (standard >= frontend::VhdlStandard::Vhdl1993) {
             append_strings(
                 result.declarations,
-                std::array<std::string, 2> { "file_open_kind", "file_open_status" });
+                std::array<std::string, 3> {
+                    "file_open_kind", "file_open_status", "delay_length" });
         }
         if (standard >= frontend::VhdlStandard::Vhdl2008) {
             append_strings(

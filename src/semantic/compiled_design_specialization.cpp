@@ -1860,6 +1860,34 @@ private:
                 return ordinal;
             }
         }
+        // The control-character literals of STANDARD.CHARACTER (IEEE
+        // 1076-2008 16.3).
+        static constexpr std::array<std::string_view, 32U> controls {
+            "nul", "soh", "stx", "etx", "eot", "enq", "ack", "bel",
+            "bs", "ht", "lf", "vt", "ff", "cr", "so", "si",
+            "dle", "dc1", "dc2", "dc3", "dc4", "nak", "syn", "etb",
+            "can", "em", "sub", "esc", "fsp", "gsp", "rsp", "usp",
+        };
+        for (std::size_t code { }; code < controls.size(); ++code) {
+            if (vhdl_name_equal(expression.text, controls[code])) {
+                return static_cast<int>(code);
+            }
+        }
+        if (vhdl_name_equal(expression.text, "del")) {
+            return 127;
+        }
+        if (expression.text.size() == 4U
+            && (expression.text.front() == 'c'
+                || expression.text.front() == 'C')) {
+            int code { };
+            const auto parsed = std::from_chars(expression.text.data() + 1,
+                expression.text.data() + expression.text.size(), code);
+            if (parsed.ec == std::errc { }
+                && parsed.ptr == expression.text.data() + expression.text.size()
+                && code >= 128 && code <= 159) {
+                return code;
+            }
+        }
         return std::nullopt;
     }
 
@@ -6498,16 +6526,47 @@ private:
         }
         CallFrame frame;
         frame.callable = *callable_id;
-        const auto actual_count = expression.call_arguments.empty()
-            ? expression.operands.size()
-            : expression.call_arguments.size();
-        for (std::size_t index { }; index < actual_count; ++index) {
-            const auto actual = expression.call_arguments.empty()
-                ? std::optional<ExpressionId> { expression.operands[index] }
-                : expression.call_arguments[index].actual;
-            if (!actual) {
-                return std::nullopt;
+        // Actuals bind to formals by position, then by name (13.5.4).
+        std::vector<std::optional<ExpressionId>> bound(formals.size());
+        if (expression.call_arguments.empty()) {
+            for (std::size_t index { };
+                index < expression.operands.size(); ++index) {
+                bound[index] = expression.operands[index];
             }
+        } else {
+            std::size_t positional { };
+            for (const auto& association : expression.call_arguments) {
+                if (!association.actual) {
+                    return std::nullopt;
+                }
+                auto target = positional;
+                if (association.formal && !association.formal->empty()) {
+                    target = formals.size();
+                    for (std::size_t index { }; index < formals.size();
+                        ++index) {
+                        const auto formal = unit_.find_declaration(
+                            formals[index]);
+                        if (formal && formal->systemverilog != nullptr
+                            && formal->systemverilog->name
+                                == *association.formal) {
+                            target = index;
+                            break;
+                        }
+                    }
+                } else {
+                    ++positional;
+                }
+                if (target >= formals.size() || bound[target]) {
+                    return std::nullopt;
+                }
+                bound[target] = association.actual;
+            }
+        }
+        for (std::size_t index { }; index < formals.size(); ++index) {
+            if (!bound[index]) {
+                continue;
+            }
+            const auto actual = bound[index];
             // An argument is assigned to its formal, taking the formal's
             // width and signedness (IEEE 1800-2017 13.3).
             const auto formal_view = unit_.find_declaration(formals[index]);
@@ -6521,8 +6580,10 @@ private:
             frame.string_values.emplace(
                 formals[index], evaluate_string(*actual));
         }
-        for (std::size_t index = actual_count;
-            index < formals.size(); ++index) {
+        for (std::size_t index { }; index < formals.size(); ++index) {
+            if (bound[index]) {
+                continue;
+            }
             const auto formal = unit_.find_declaration(formals[index]);
             if (!formal || formal->systemverilog == nullptr
                 || !formal->systemverilog->initializer) {
@@ -7417,6 +7478,17 @@ private:
             }
             if (const auto declaration = find_actual_declaration(
                     expression.text, expression.scope, systemverilog)) {
+                // A member of a structure parameter (`P.m`) is not the
+                // whole parameter's value.
+                const auto selected = unit_.find_declaration(*declaration);
+                const auto dot = expression.text.find('.');
+                if (dot != std::string::npos && selected
+                    && selected->systemverilog != nullptr
+                    && selected->systemverilog->name
+                        == std::string_view { expression.text }.substr(
+                            0U, dot)) {
+                    return std::nullopt;
+                }
                 return evaluate_declaration(*declaration);
             }
             if (const auto declaration

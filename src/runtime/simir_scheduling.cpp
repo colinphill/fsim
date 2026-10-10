@@ -144,9 +144,11 @@ bool Interpreter::Impl::route_module_path_update(
             if (source_terminal && terminal_index != *source_terminal)
                 continue;
             const auto& terminal = path.sources[terminal_index];
+            // The driver runs in a later delta of the time step in which
+            // the source changed (IEEE 1800-2017 30.4: a path delay is
+            // measured from the source transition).
             const auto& stamp = signal_events.at(terminal.signal);
-            if (!stamp || stamp->first != scheduler.now()
-                || stamp->second != scheduler.delta()) {
+            if (!stamp || stamp->first != scheduler.now()) {
                 continue;
             }
             const auto begin = parallel_bit.value_or(0U);

@@ -29,6 +29,7 @@ void VerilogParser::add_class_declaration(
     std::vector<SystemVerilogClassDeclaration>& declarations,
     SystemVerilogClassDeclaration declaration,
     const Token& location) {
+  known_class_names_.insert(declaration.name);
   const auto existing = std::ranges::find(
       declarations, declaration.name,
       &SystemVerilogClassDeclaration::name);

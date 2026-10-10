@@ -200,8 +200,7 @@ module bad_always_ff;
   logic clk;
   logic reset;
   logic q;
-  always_ff @(clk) q <= 1'b0;
-  always_ff @(posedge clk or negedge reset) q <= 1'b0;
+  always_ff q <= 1'b0;
   always_ff @(posedge clk) #1 q <= 1'b0;
 endmodule
 )",

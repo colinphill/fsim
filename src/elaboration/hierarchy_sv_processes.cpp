@@ -830,3 +830,242 @@ bool HierarchyBuilder::lower_deferred_systemverilog_processes(
 }
 
 } // namespace fsim::elaboration
+
+namespace fsim::elaboration {
+
+/// A net or variable whose only driver is a constant continuous assignment
+/// starts at that constant. The assignment's time-0 update then changes nothing, and initial
+/// procedures read the constant at time zero, as other simulators' time-0
+/// ordering lets them (the order is a race; IEEE 1800-2017 4.7). Forced or
+/// released nets keep their resolution, which release re-evaluates, and
+/// nets a process waits on keep the time-0 change that wakes it.
+void HierarchyBuilder::initialize_constant_driven_nets()
+{
+    using namespace runtime::simir;
+    std::vector<std::uint32_t> drivers(design_.signals_.size());
+    // Forced or released signals, and nets a process waits on, whose
+    // time-0 change from X must remain an event.
+    std::vector<bool> forced(design_.signals_.size());
+    std::vector<bool> waited(design_.signals_.size());
+    for (std::size_t index = 0U; index < design_.process_count(); ++index) {
+        const auto view = design_.process_view(index);
+        for (const auto& region : view.driver_regions()) {
+            if (region.signal < drivers.size()) {
+                ++drivers[region.signal];
+            }
+        }
+        // Only a wait for any change needs the time-0 change; an edge wait
+        // on a constant net is not woken by its initialization.
+        for (const auto& sensitivity : view.static_sensitivity()) {
+            if (sensitivity.signal < waited.size()
+                && sensitivity.edge == EdgeKind::any) {
+                waited[sensitivity.signal] = true;
+            }
+        }
+        const auto& operations = view.operations();
+        for (std::size_t operation = 0U; operation < operations.size();
+            ++operation) {
+            const auto expanded = operations.expanded(operation);
+            if (const auto* wait = operation_get_if<WaitOn>(&expanded)) {
+                for (std::size_t position = 0U;
+                    position < wait->signals.size(); ++position) {
+                    const auto signal = wait->signals[position];
+                    const bool any_change = position >= wait->edges.size()
+                        || wait->edges[position] == EdgeKind::any;
+                    if (signal < waited.size() && any_change) {
+                        waited[signal] = true;
+                    }
+                }
+                continue;
+            }
+            if (const auto* force
+                = operation_get_if<ForceSignalSlice>(&expanded);
+                force != nullptr && force->signal < forced.size()) {
+                forced[force->signal] = true;
+            } else if (const auto* release
+                = operation_get_if<ReleaseSignalSlice>(&expanded);
+                release != nullptr && release->signal < forced.size()) {
+                forced[release->signal] = true;
+            }
+        }
+    }
+    // A SystemVerilog variable declaration's constant initializer takes
+    // effect before any process starts, without a time-0 event (IEEE
+    // 1800-2017 6.8). The parser keeps it as an initial process, which then
+    // writes the value the variable already holds.
+    for (std::size_t index = 0U; index < design_.process_count(); ++index) {
+        const auto view = design_.process_view(index);
+        if (view.name().find("$declaration_initializer_") == std::string::npos
+            || !(view.language_standard() == "2009"
+                || view.language_standard() == "2012"
+                || view.language_standard() == "2017"
+                || view.language_standard() == "2023")
+            || !view.static_sensitivity().empty()) {
+            continue;
+        }
+        const auto& operations = view.operations();
+        std::unordered_map<RegisterId, PackedLogic4> constants;
+        for (std::size_t operation = 0U; operation < operations.size();
+            ++operation) {
+            const auto expanded = operations.expanded(operation);
+            if (const auto* load = operation_get_if<LoadConstant>(&expanded)) {
+                constants.insert_or_assign(load->destination, load->value);
+            } else if (const auto* copy
+                = operation_get_if<CopyRegister>(&expanded)) {
+                const auto source = constants.find(copy->source);
+                if (source != constants.end()) {
+                    auto value = source->second;
+                    constants.insert_or_assign(
+                        copy->destination, std::move(value));
+                }
+            } else if (const auto* write
+                = operation_get_if<WriteBlocking>(&expanded)) {
+                const auto constant = constants.find(write->source);
+                if (constant == constants.end()
+                    || write->signal >= design_.signals_.size()
+                    || forced[write->signal]) {
+                    break;
+                }
+                auto& signal = design_.signals_[write->signal];
+                if (constant->second.width()
+                        == signal.initial_value.width()
+                    && signal.resolution == ResolutionKind::none
+                    && !signal.event_variable
+                    && signal.systemverilog_scalar
+                        == frontend::SystemVerilogScalarKind::None) {
+                    signal.initial_value = constant->second;
+                }
+                break;
+            } else if (!operation_get_if<DebugPoint>(&expanded)) {
+                break;
+            }
+        }
+    }
+    for (std::size_t index = 0U; index < design_.process_count(); ++index) {
+        const auto view = design_.process_view(index);
+        if (!constant_continuous_driver(view)
+            || !(view.drive_strength() == DriveStrength { })) {
+            continue;
+        }
+        const auto& operations = view.operations();
+        std::unordered_map<RegisterId, PackedLogic4> constants;
+        for (std::size_t operation = 0U;
+            operation + 1U < operations.size(); ++operation) {
+            const auto expanded = operations.expanded(operation);
+            if (const auto* load = operation_get_if<LoadConstant>(&expanded)) {
+                constants.insert_or_assign(load->destination, load->value);
+                continue;
+            }
+            if (const auto* concatenate
+                = operation_get_if<Concatenate>(&expanded)) {
+                // The first operand is the most significant.
+                PackedLogic4 value { concatenate->width, Logic4::x };
+                std::size_t position = concatenate->width;
+                bool complete = true;
+                for (const auto operand : concatenate->operands) {
+                    const auto part = constants.find(operand);
+                    if (part == constants.end()
+                        || part->second.width() > position) {
+                        complete = false;
+                        break;
+                    }
+                    position -= part->second.width();
+                    for (std::size_t bit = 0U; bit < part->second.width();
+                        ++bit) {
+                        value.set(position + bit, part->second.get(bit));
+                    }
+                }
+                if (complete && position == 0U) {
+                    constants.insert_or_assign(
+                        concatenate->destination, std::move(value));
+                } else {
+                    constants.erase(concatenate->destination);
+                }
+                continue;
+            }
+            if (const auto* extract = operation_get_if<Extract>(&expanded)) {
+                const auto source = constants.find(extract->source);
+                if (source == constants.end()) {
+                    constants.erase(extract->destination);
+                    continue;
+                }
+                PackedLogic4 value { extract->width, Logic4::x };
+                for (std::size_t bit = 0U; bit < extract->width; ++bit) {
+                    if (extract->offset + bit < source->second.width()) {
+                        value.set(bit,
+                            source->second.get(extract->offset + bit));
+                    }
+                }
+                constants.insert_or_assign(
+                    extract->destination, std::move(value));
+                continue;
+            }
+            if (const auto* insert = operation_get_if<Insert>(&expanded)) {
+                const auto target = constants.find(insert->target);
+                const auto source = constants.find(insert->source);
+                if (target == constants.end() || source == constants.end()) {
+                    constants.erase(insert->destination);
+                    continue;
+                }
+                auto value = target->second;
+                for (std::size_t bit = 0U; bit < source->second.width()
+                    && insert->offset + bit < value.width(); ++bit) {
+                    value.set(insert->offset + bit, source->second.get(bit));
+                }
+                constants.insert_or_assign(
+                    insert->destination, std::move(value));
+                continue;
+            }
+            if (const auto* copy = operation_get_if<CopyRegister>(&expanded)) {
+                const auto source = constants.find(copy->source);
+                if (source != constants.end()) {
+                    auto value = source->second;
+                    constants.insert_or_assign(
+                        copy->destination, std::move(value));
+                } else {
+                    constants.erase(copy->destination);
+                }
+                continue;
+            }
+            const auto* write = operation_get_if<WriteUpdate>(&expanded);
+            if (write == nullptr) {
+                continue;
+            }
+            const auto constant = constants.find(write->source);
+            if (constant == constants.end()
+                || write->signal >= design_.signals_.size()
+                || drivers[write->signal] != 1U || forced[write->signal]
+                || waited[write->signal]) {
+                continue;
+            }
+            auto& signal = design_.signals_[write->signal];
+            const auto& value = constant->second;
+            if (value.width() != signal.initial_value.width()
+                || signal.event_variable || signal.charge_strength
+                || signal.implicit_driver
+                || (signal.resolution != ResolutionKind::none
+                    && signal.resolution != ResolutionKind::sv_wire)) {
+                continue;
+            }
+            bool known = true;
+            for (std::size_t bit = 0U; bit < value.width(); ++bit) {
+                if (value.get(bit) == Logic4::z) {
+                    known = false;
+                    break;
+                }
+            }
+            // A lone strong constant driver resolves to its own value, so
+            // the net needs no resolution and starts at the constant.
+            if (known) {
+                signal.initial_value = value;
+                signal.resolution = ResolutionKind::none;
+                if (write->signal < design_.signal_info_.size()) {
+                    design_.signal_info_[write->signal].resolution
+                        = ResolutionKind::none;
+                }
+            }
+        }
+    }
+}
+
+} // namespace fsim::elaboration

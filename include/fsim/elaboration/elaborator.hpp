@@ -804,6 +804,19 @@ public:
 
     [[nodiscard]] const std::string& top() const noexcept;
     [[nodiscard]] const std::vector<std::string>& roots() const noexcept;
+    /// A procedural `$sdf_annotate` call found while lowering: the SDF file
+    /// and the hierarchical scope its cells are relative to (IEEE 1364-2005
+    /// 17.4.6 / IEEE 1800-2017 32.5). Elaboration applies it as an SDF
+    /// annotation; the requests are not retained in the design state.
+    struct SdfAnnotationRequest {
+        std::string file;
+        std::string scope;
+    };
+    [[nodiscard]] const std::vector<SdfAnnotationRequest>&
+    sdf_annotation_requests() const noexcept
+    {
+        return sdf_annotation_requests_;
+    }
     [[nodiscard]] const semantic::HierarchyPathTable&
     hierarchy_paths() const noexcept;
     /// Accept an extended table only when every existing ID still names the
@@ -952,6 +965,7 @@ private:
 
     std::string top_;
     std::vector<std::string> roots_;
+    std::vector<SdfAnnotationRequest> sdf_annotation_requests_;
     std::vector<SignalInfo> signal_info_;
     std::vector<BoundaryConversionInfo> boundary_conversions_;
     std::vector<runtime::simir::Signal> signals_;

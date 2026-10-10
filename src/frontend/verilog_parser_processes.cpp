@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
 
+#include <array>
 #include <functional>
 
 namespace fsim::frontend {
@@ -1537,6 +1538,35 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                    || at(TokenKind::Dot, lookahead))
             && at(TokenKind::Identifier, lookahead + 1)) {
             lookahead += 2;
+        }
+        // A system function called as a statement discards its value
+        // (IEEE 1800-2017 13.4.1), as `void'($fgets(s, fd));` does.
+        static constexpr std::array discardable_system_functions {
+            std::string_view { "$fgets" }, std::string_view { "$fgetc" },
+            std::string_view { "$ungetc" }, std::string_view { "$fscanf" },
+            std::string_view { "$sscanf" }, std::string_view { "$fread" },
+            std::string_view { "$ftell" }, std::string_view { "$fseek" },
+            std::string_view { "$rewind" }, std::string_view { "$feof" },
+            std::string_view { "$ferror" },
+            std::string_view { "$value$plusargs" },
+            std::string_view { "$test$plusargs" },
+            std::string_view { "$urandom" }, std::string_view { "$random" },
+            std::string_view { "$urandom_range" },
+        };
+        if (language_ == Language::SystemVerilog2017
+            && at(TokenKind::LeftParen, lookahead)
+            && std::ranges::find(discardable_system_functions,
+                   std::string_view { current().text })
+                != discardable_system_functions.end()) {
+            const auto start = current();
+            Statement statement;
+            statement.kind = StatementKind::ContainerMethod;
+            statement.value = parse_expression();
+            expect(TokenKind::Semicolon,
+                "';' after system function call statement",
+                "FSIM-SV-PARSE-329");
+            statement.span = span_from(start, previous());
+            return statement;
         }
         if (at(TokenKind::LeftParen, lookahead) || at(TokenKind::Semicolon, lookahead)) {
             const auto start = advance();

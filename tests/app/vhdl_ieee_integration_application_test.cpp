@@ -430,11 +430,11 @@ void verify_revision_environments(const std::filesystem::path& directory)
     };
     for (const auto& expected : std::array {
              Expected { "1987", 13, 28, 15, 8 },
-             Expected { "1993", 15, 36, 30, 14 },
-             Expected { "2000", 15, 36, 30, 14 },
-             Expected { "2002", 15, 36, 30, 14 },
-             Expected { "2008", 19, 45, 32, 17 },
-             Expected { "2019", 19, 45, 34, 17 } }) {
+             Expected { "1993", 16, 36, 30, 14 },
+             Expected { "2000", 16, 36, 30, 14 },
+             Expected { "2002", 16, 36, 30, 14 },
+             Expected { "2008", 20, 45, 32, 17 },
+             Expected { "2019", 20, 45, 34, 17 } }) {
         const auto source = directory / ("environment-" + std::string { expected.year } + ".vhd");
         const auto unit_name = "environment_" + std::string { expected.year };
         {

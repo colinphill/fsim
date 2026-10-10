@@ -76,13 +76,10 @@ DelayAlternative VerilogParser::parse_verilog_delay_alternative()
                 alternative.magnitude *= module_time_unit_magnitude_;
                 alternative.unit = module_time_unit_;
             }
-        } else if (alternative.divisor != 1) {
-            error(
-                magnitude,
-                "FSIM-SV-SEM-050",
-                "a fractional delay requires an explicit time unit or an "
-                "active `timescale/timeunit");
         }
+        // Without a timescale, a fractional delay counts ticks of the
+        // project resolution, the implementation's default time unit
+        // (IEEE 1800-2017 3.14.2.3), and rounds to it.
     } else if (
         expression.kind == ExpressionKind::IntegerLiteral
         || expression.kind == ExpressionKind::LogicLiteral) {
@@ -624,6 +621,8 @@ Expression VerilogParser::parse_primary()
                     { std::move(default_choice) });
                 pattern.operands.push_back(parse_pattern_value());
             } else {
+                const auto references_before
+                    = implicit_net_references_.size();
                 auto first = parse_expression();
                 // A replication pattern `'{n{a, b}}` (IEEE 1800-2017
                 // 10.10.1) repeats its items n times.
@@ -654,6 +653,19 @@ Expression VerilogParser::parse_primary()
                     break;
                 }
                 if (match(TokenKind::Colon)) {
+                    // A member key (`'{a: 1}`) names a member or type, not a
+                    // net.
+                    if (first.kind == ExpressionKind::Identifier) {
+                        for (auto index = implicit_net_references_.size();
+                            index > references_before; --index) {
+                            if (implicit_net_references_[index - 1U].name
+                                == first.text) {
+                                implicit_net_references_.erase(
+                                    implicit_net_references_.begin()
+                                    + static_cast<std::ptrdiff_t>(index - 1U));
+                            }
+                        }
+                    }
                     pattern.aggregate_choices.push_back("@key");
                     pattern.aggregate_choice_expressions.push_back(
                         { std::move(first) });
@@ -854,6 +866,14 @@ Expression VerilogParser::parse_primary()
                     name,
                     "FSIM-SV-SEM-125",
                     "type casts require SystemVerilog-2017");
+            }
+            if (at(TokenKind::LeftBrace)) {
+                // A typed assignment pattern `T'{...}` (IEEE 1800-2017
+                // 10.9): the pattern takes the named type.
+                --index_;
+                auto pattern = parse_primary();
+                pattern.nominal_type = canonical;
+                return parse_postfix(std::move(pattern));
             }
             expect(
                 TokenKind::LeftParen,

@@ -308,7 +308,9 @@ void test_extended_typed_values(const std::filesystem::path& directory)
     assert(bytes.find("state_value") != std::string::npos);
     assert(bytes.find("string_value") != std::string::npos);
     assert(bytes.find("typed-string") != std::string::npos);
-    assert(bytes.find("xxx") != std::string::npos);
+    // The enumeration starts at its initializer, BUSY, with no X before it
+    // (IEEE 1800-2017 6.8).
+    assert(bytes.find("xxx") == std::string::npos);
 }
 
 void test_logic9_value(const std::filesystem::path& directory)

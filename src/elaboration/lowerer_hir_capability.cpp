@@ -3342,6 +3342,108 @@ bool Lowerer::hir_expression_is_residual(
     return false;
 }
 
+std::optional<Lowerer::HirVirtualInterfaceMember>
+Lowerer::hir_virtual_interface_member(
+    const semantic::ExpressionId expression_id) const
+{
+    if (specialized_hir_unit_ == nullptr
+        || systemverilog_interface_handles_ == nullptr
+        || systemverilog_interface_types_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->systemverilog == nullptr
+        || expression->systemverilog->kind
+            != semantic::sv::ExpressionKind::name) {
+        return std::nullopt;
+    }
+    return hir_virtual_interface_member(
+        expression->systemverilog->text, expression->systemverilog->scope);
+}
+
+std::optional<Lowerer::HirVirtualInterfaceMember>
+Lowerer::hir_virtual_interface_member(
+    const std::string_view name, const semantic::ScopeId scope) const
+{
+    if (specialized_hir_unit_ == nullptr
+        || systemverilog_interface_handles_ == nullptr
+        || systemverilog_interface_types_ == nullptr) {
+        return std::nullopt;
+    }
+    const std::string text { name };
+    const auto separator = text.find('.');
+    if (separator == std::string::npos || separator == 0U) {
+        return std::nullopt;
+    }
+    // The handle variable is the first segment of the name.
+    auto declaration_id = semantic::CompiledDesignResolver {
+        *specialized_hir_unit_, hir_generic_binding_frames_
+    }.resolve_systemverilog(
+         std::string_view { text }.substr(0U, separator),
+         scope,
+         [](const semantic::CompiledDeclarationView& candidate) {
+             return candidate.systemverilog != nullptr
+                 && candidate.systemverilog->type.has_value()
+                 && candidate.systemverilog->type->virtual_interface;
+         },
+         false)
+                              .unique();
+    const auto declaration = declaration_id
+        ? specialized_hir_unit_->find_declaration(*declaration_id)
+        : std::nullopt;
+    if (!declaration || declaration->systemverilog == nullptr
+        || declaration->systemverilog->name != text.substr(0U, separator)
+        || !declaration->systemverilog->type
+        || !declaration->systemverilog->type->virtual_interface
+        || declaration->systemverilog->type->interface_type.empty()) {
+        return std::nullopt;
+    }
+    // Every interface instance must be elaborated: resolve in the second
+    // lowering pass.
+    if (hierarchical_reference_retry_) {
+        hierarchical_reference_missed_ = true;
+        return std::nullopt;
+    }
+    const auto& interface_type
+        = declaration->systemverilog->type->interface_type;
+    const auto member = text.substr(separator + 1U);
+    HirVirtualInterfaceMember result;
+    result.receiver = *declaration_id;
+    std::set<std::uint64_t> handles;
+    std::vector<std::string> paths;
+    for (const auto& [path, type] : *systemverilog_interface_types_) {
+        if (type == interface_type) {
+            paths.push_back(path);
+        }
+    }
+    std::ranges::sort(paths);
+    for (const auto& path : paths) {
+        const auto handle = systemverilog_interface_handles_->find(path);
+        if (handle == systemverilog_interface_handles_->end()
+            || !handles.insert(handle->second).second) {
+            continue;
+        }
+        const auto signal = design_.signal_by_name_.find(path + "." + member);
+        if (signal == design_.signal_by_name_.end()
+            || signal->second >= design_.signal_info_.size()) {
+            continue;
+        }
+        const auto& info = design_.signal_info_[signal->second];
+        if (result.candidates.empty()) {
+            result.width = info.width;
+            result.domain = info.source_domain;
+        } else if (info.width != result.width) {
+            continue;
+        }
+        result.candidates.emplace_back(handle->second, signal->second);
+    }
+    if (result.candidates.empty() || result.width == 0U) {
+        return std::nullopt;
+    }
+    return result;
+}
+
 std::optional<SignalId> Lowerer::hir_direct_signal(
     const semantic::ExpressionId expression_id) const
 {
@@ -3351,16 +3453,43 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
     constexpr std::string_view indexed_member_prefix { "index." };
-    if (expression && expression->systemverilog != nullptr
-        && expression->systemverilog->kind
-            == semantic::sv::ExpressionKind::index
-        && expression->systemverilog->text.starts_with(indexed_member_prefix)
-        && expression->systemverilog->operands.size() == 2U) {
+    constexpr std::string_view selected_member_prefix { "@sv-select:" };
+    // `bus[2].data` outside procedural code is a member selection of the
+    // indexed element.
+    const auto* selected_index = [&]() -> const semantic::sv::Expression* {
+        if (!expression || expression->systemverilog == nullptr
+            || expression->systemverilog->kind
+                != semantic::sv::ExpressionKind::call
+            || !expression->systemverilog->text.starts_with(
+                selected_member_prefix)
+            || expression->systemverilog->operands.size() != 1U) {
+            return nullptr;
+        }
+        const auto element = specialized_hir_unit_->find_expression(
+            expression->systemverilog->operands.front());
+        return element && element->systemverilog != nullptr
+                && element->systemverilog->kind
+                    == semantic::sv::ExpressionKind::index
+                && element->systemverilog->text.find('.') == std::string::npos
+                && element->systemverilog->operands.size() == 2U
+            ? element->systemverilog
+            : nullptr;
+    }();
+    if ((expression && expression->systemverilog != nullptr
+            && expression->systemverilog->kind
+                == semantic::sv::ExpressionKind::index
+            && expression->systemverilog->text.starts_with(
+                indexed_member_prefix)
+            && expression->systemverilog->operands.size() == 2U)
+        || selected_index != nullptr) {
         // A member of an element of an interface instance array,
         // `bus[2].data`, is that element instance's signal; the member
         // path follows `index.` in the selection's text.
+        const auto& indexed = selected_index != nullptr
+            ? *selected_index
+            : *expression->systemverilog;
         const auto array = specialized_hir_unit_->find_expression(
-            expression->systemverilog->operands.front());
+            indexed.operands.front());
         if (!array || array->systemverilog == nullptr
             || array->systemverilog->kind
                 != semantic::sv::ExpressionKind::name
@@ -3369,7 +3498,7 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
         }
         const auto element = specialized_hir_unit_
                                  ->evaluate_integral_expression(
-                                     expression->systemverilog->operands.back());
+                                     indexed.operands.back());
         if (!element) {
             return std::nullopt;
         }
@@ -3398,8 +3527,11 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
         if (!element_path) {
             return std::nullopt;
         }
-        const auto member = expression->systemverilog->text.substr(
-            indexed_member_prefix.size());
+        const auto member = selected_index != nullptr
+            ? expression->systemverilog->text.substr(
+                  selected_member_prefix.size())
+            : expression->systemverilog->text.substr(
+                  indexed_member_prefix.size());
         if (const auto found = signals_.find(occurrence + "." + member);
             found != signals_.end()
             && found->second < design_.signal_info_.size()) {
@@ -3494,7 +3626,36 @@ std::optional<SignalId> Lowerer::hir_hierarchical_signal(
                 : scope.substr(0U, separator);
         }
     }
-    return lookup(std::string { path });
+    if (const auto signal = lookup(std::string { path })) {
+        return signal;
+    }
+    // `ifc.mp.member` names a member through a modport of an interface
+    // instance (IEEE 1800-2017 25.5): the member of the instance itself.
+    const auto first = path.find('.');
+    const auto second = first == std::string_view::npos
+        ? std::string_view::npos
+        : path.find('.', first + 1U);
+    if (second == std::string_view::npos
+        || systemverilog_interface_handles_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto instance = path.substr(0U, first);
+    const auto member = path.substr(second + 1U);
+    for (std::string_view scope = hierarchy_;;) {
+        const auto prefix = scope.empty()
+            ? std::string { instance }
+            : std::string { scope } + "." + std::string { instance };
+        if (systemverilog_interface_handles_->contains(prefix)) {
+            return lookup(prefix + "." + std::string { member });
+        }
+        if (scope.empty()) {
+            return std::nullopt;
+        }
+        const auto separator = scope.find_last_of('.');
+        scope = separator == std::string_view::npos
+            ? std::string_view { }
+            : scope.substr(0U, separator);
+    }
 }
 
 std::optional<Lowerer::HirRuntimeBinding>
@@ -8820,6 +8981,9 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
     }
     if (const auto parameter = hir_hierarchical_parameter(expression_id)) {
         return parameter->value.width();
+    }
+    if (const auto member = hir_virtual_interface_member(expression_id)) {
+        return member->width;
     }
     if (const auto method = hir_systemverilog_enumeration_method(
             expression_id)) {

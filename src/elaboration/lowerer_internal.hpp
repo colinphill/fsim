@@ -416,6 +416,24 @@ private:
         std::uint32_t member_offset = 0U);
     [[nodiscard]] std::optional<semantic::DeclarationId>
     hir_target_declaration(semantic::ExpressionId expression) const;
+    // A member selected through a virtual interface handle (`vif.data`):
+    // the handle's declaration and, for every elaborated instance of the
+    // interface type, its handle and member signal.
+    struct HirVirtualInterfaceMember {
+        semantic::DeclarationId receiver;
+        std::vector<std::pair<std::uint64_t, SignalId>> candidates;
+        std::size_t width { };
+        frontend::ValueDomain domain { frontend::ValueDomain::Logic4 };
+    };
+    [[nodiscard]] std::optional<HirVirtualInterfaceMember>
+    hir_virtual_interface_member(semantic::ExpressionId expression_id) const;
+    [[nodiscard]] std::optional<HirVirtualInterfaceMember>
+    hir_virtual_interface_member(
+        std::string_view name, semantic::ScopeId scope) const;
+    [[nodiscard]] std::optional<RegisterId> lower_hir_virtual_interface_read(
+        const HirVirtualInterfaceMember& member);
+    [[nodiscard]] std::optional<RegisterId> lower_hir_virtual_interface_handle(
+        semantic::DeclarationId receiver);
     [[nodiscard]] std::optional<SignalId> hir_direct_signal(
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<SignalId>
@@ -821,6 +839,10 @@ private:
         std::size_t expected_width,
         frontend::SystemVerilogScalarKind scalar_context
         = frontend::SystemVerilogScalarKind::None);
+    [[nodiscard]] std::optional<RegisterId> lower_hir_expression_untraced(
+        semantic::ExpressionId expression,
+        std::size_t expected_width,
+        frontend::SystemVerilogScalarKind scalar_context);
     [[nodiscard]] std::optional<RegisterId> lower_hir_expression_impl(
         semantic::ExpressionId expression,
         std::size_t expected_width,

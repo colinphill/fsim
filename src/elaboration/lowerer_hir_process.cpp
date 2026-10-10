@@ -488,6 +488,19 @@ std::vector<SignalId> Lowerer::hir_signal_dependencies(
                 dependencies.push_back(*binding->signal);
             }
         }
+        if (const auto member = hir_virtual_interface_member(current)) {
+            // A virtual interface member may change in any instance the
+            // handle can name, and when the handle itself is reassigned.
+            for (const auto& [identity, signal] : member->candidates) {
+                (void)identity;
+                dependencies.push_back(signal);
+            }
+            const auto binding = hir_runtime_binding(
+                member->receiver, process_scope, false);
+            if (binding && binding->signal) {
+                dependencies.push_back(*binding->signal);
+            }
+        }
         if (const auto container = hir_container_object_binding(current);
             container && !container->local) {
             bool element_alias = false;
@@ -790,11 +803,26 @@ bool Lowerer::initialize_hir_declarations(
                 hir_source_span(local_source));
             continue;
         }
+        // An unpacked structure or union local is a singleton aggregate
+        // container, as at module scope (IEEE 1800-2017 7.2).
+        const auto aggregate_local = declaration->systemverilog != nullptr
+                && declaration->systemverilog->type
+                && !declaration->systemverilog->type->container_form
+            ? hir_systemverilog_container_type(
+                  *declaration->systemverilog->type)
+            : std::nullopt;
+        const bool aggregate_value_local = aggregate_local
+            && aggregate_local->element_kind
+                == ContainerElementKind::Aggregate
+            && aggregate_local->aggregate_value;
         if (declaration->systemverilog != nullptr
             && declaration->systemverilog->type
-            && declaration->systemverilog->type->container_form) {
+            && (declaration->systemverilog->type->container_form
+                || aggregate_value_local)) {
             const auto& input = *declaration->systemverilog;
-            const auto type = hir_systemverilog_container_type(*input.type);
+            const auto type = aggregate_value_local
+                ? aggregate_local
+                : hir_systemverilog_container_type(*input.type);
             if (!type) {
                 return false;
             }
@@ -2399,51 +2427,41 @@ std::optional<Process> Lowerer::lower_hir_process_body(
         process_.operations.emplace_back(LogicalNot { changed, equal });
         auto matched = changed;
         if (description.event_edge != runtime::simir::EdgeKind::any) {
-            const auto previous_forbidden = allocate_register(
+            // A posedge leaves 0 or arrives at 1, and a negedge leaves 1 or
+            // arrives at 0 (IEEE 1800-2017 table 9-2); z-to-x is neither.
+            const bool rising = description.event_edge
+                == runtime::simir::EdgeKind::posedge;
+            const auto left_start = allocate_register(
                 1U, frontend::ValueDomain::Bit2);
-            const auto current_forbidden = allocate_register(
+            const auto reached_end = allocate_register(
                 1U, frontend::ValueDomain::Bit2);
             process_.operations.emplace_back(Binary {
                 BinaryOperator::case_equal,
-                previous_forbidden,
+                left_start,
                 *event_baseline,
-                description.event_edge
-                        == runtime::simir::EdgeKind::posedge
-                    ? one
-                    : zero,
+                rising ? zero : one,
             });
             process_.operations.emplace_back(Binary {
                 BinaryOperator::case_equal,
-                current_forbidden,
+                reached_end,
                 *current,
-                description.event_edge
-                        == runtime::simir::EdgeKind::posedge
-                    ? zero
-                    : one,
+                rising ? one : zero,
             });
-            const auto previous_allowed = allocate_register(
-                1U, frontend::ValueDomain::Bit2);
-            const auto current_allowed = allocate_register(
-                1U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(LogicalNot {
-                previous_allowed, previous_forbidden });
-            process_.operations.emplace_back(LogicalNot {
-                current_allowed, current_forbidden });
-            const auto first = allocate_register(
+            const auto edge = allocate_register(
                 1U, frontend::ValueDomain::Bit2);
             process_.operations.emplace_back(LogicalBinary {
-                LogicalBinaryOperator::logical_and,
-                first,
-                matched,
-                previous_allowed,
+                LogicalBinaryOperator::logical_or,
+                edge,
+                left_start,
+                reached_end,
             });
             const auto edge_matched = allocate_register(
                 1U, frontend::ValueDomain::Bit2);
             process_.operations.emplace_back(LogicalBinary {
                 LogicalBinaryOperator::logical_and,
                 edge_matched,
-                first,
-                current_allowed,
+                matched,
+                edge,
             });
             matched = edge_matched;
         }

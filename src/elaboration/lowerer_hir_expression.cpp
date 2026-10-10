@@ -5288,6 +5288,30 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
     const std::size_t expected_width,
     const frontend::SystemVerilogScalarKind scalar_context)
 {
+    auto result = lower_hir_expression_untraced(
+        expression_id, expected_width, scalar_context);
+    if (!result && std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr
+        && specialized_hir_unit_ != nullptr) {
+        const auto record = specialized_hir_unit_->find_expression(
+            expression_id);
+        if (record && record->systemverilog != nullptr) {
+            std::cerr << "[fsim-hir-lower] expression-failure kind="
+                      << static_cast<int>(record->systemverilog->kind)
+                      << " text=" << record->systemverilog->text
+                      << " operands="
+                      << record->systemverilog->operands.size()
+                      << " width=" << expected_width
+                      << " retry=" << hierarchical_reference_retry_ << '\n';
+        }
+    }
+    return result;
+}
+
+std::optional<RegisterId> Lowerer::lower_hir_expression_untraced(
+    const semantic::ExpressionId expression_id,
+    const std::size_t expected_width,
+    const frontend::SystemVerilogScalarKind scalar_context)
+{
     const auto unsigned_extension
         = std::exchange(hir_unsigned_extension_, false);
     const auto unsigned_expression = unsigned_extension
@@ -5358,15 +5382,50 @@ Lowerer::hir_hierarchical_parameter(
     }
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
-    if (!expression || expression->systemverilog == nullptr
-        || expression->systemverilog->kind
-            != semantic::sv::ExpressionKind::name) {
+    if (!expression || expression->systemverilog == nullptr) {
         return std::nullopt;
     }
-    std::string_view name = expression->systemverilog->text;
+    // `ifcs[1].P`: a parameter of an element of an interface array.
+    std::string selected_name;
+    constexpr std::string_view selected_prefix { "@sv-select:" };
+    if (expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::call
+        && expression->systemverilog->text.starts_with(selected_prefix)
+        && expression->systemverilog->operands.size() == 1U
+        && systemverilog_interface_handles_ != nullptr) {
+        const auto element = specialized_hir_unit_->find_expression(
+            expression->systemverilog->operands.front());
+        if (!element || element->systemverilog == nullptr
+            || element->systemverilog->kind
+                != semantic::sv::ExpressionKind::index
+            || element->systemverilog->operands.size() != 2U) {
+            return std::nullopt;
+        }
+        const auto base = specialized_hir_unit_->find_expression(
+            element->systemverilog->operands.front());
+        const auto index = specialized_hir_unit_
+                               ->evaluate_integral_expression(
+                                   element->systemverilog->operands.back());
+        if (!base || base->systemverilog == nullptr
+            || base->systemverilog->kind
+                != semantic::sv::ExpressionKind::name
+            || !index) {
+            return std::nullopt;
+        }
+        selected_name = base->systemverilog->text + "["
+            + std::to_string(*index) + "]."
+            + expression->systemverilog->text.substr(selected_prefix.size());
+    } else if (expression->systemverilog->kind
+        != semantic::sv::ExpressionKind::name) {
+        return std::nullopt;
+    }
+    std::string_view name = selected_name.empty()
+        ? std::string_view { expression->systemverilog->text }
+        : std::string_view { selected_name };
     const auto separator = name.find_last_of('.');
     if (separator == std::string_view::npos || separator == 0U
-        || hir_referenced_declaration(expression_id)
+        || (selected_name.empty()
+            && hir_referenced_declaration(expression_id))
         || signals_.contains(std::string { name })
         || hir_hierarchical_signal(name)) {
         return std::nullopt;
@@ -5378,8 +5437,26 @@ Lowerer::hir_hierarchical_parameter(
     const auto parameter = name.substr(name.find_last_of('.') + 1U);
     const auto lookup = [&](const std::string& path)
         -> std::optional<HirHierarchicalParameter> {
+        // An interface port or array element names the interface instance
+        // with the same handle (25.5).
+        std::optional<std::uint64_t> handle;
+        if (systemverilog_interface_handles_ != nullptr) {
+            if (const auto found = systemverilog_interface_handles_->find(path);
+                found != systemverilog_interface_handles_->end()) {
+                handle = found->second;
+            }
+        }
         for (const auto& specialization : design_.specializations_) {
-            if (specialization.instance != path) {
+            if (specialization.instance != path
+                && !(handle
+                    && [&] {
+                           const auto found
+                               = systemverilog_interface_handles_->find(
+                                   specialization.instance);
+                           return found
+                                   != systemverilog_interface_handles_->end()
+                               && found->second == *handle;
+                       }())) {
                 continue;
             }
             for (const auto& [formal, identity] :
@@ -5428,6 +5505,61 @@ Lowerer::hir_hierarchical_parameter(
     }
     hierarchical_reference_missed_ = true;
     return std::nullopt;
+}
+
+std::optional<RegisterId> Lowerer::lower_hir_virtual_interface_read(
+    const HirVirtualInterfaceMember& member)
+{
+    // The member of whichever interface instance the handle names (IEEE
+    // 1800-2017 25.9); an unbound handle reads X.
+    const auto handle = lower_hir_virtual_interface_handle(member.receiver);
+    if (!handle) {
+        return std::nullopt;
+    }
+    auto result = allocate_register(member.width, member.domain);
+    process_.operations.emplace_back(LoadConstant {
+        result, PackedLogic4 { member.width, Logic4::x } });
+    for (const auto& [identity, signal] : member.candidates) {
+        const auto constant = allocate_register(
+            64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            constant, unsigned_value(identity, 64U) });
+        const auto selected = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::case_equal, selected, *handle, constant });
+        const auto value = allocate_register(member.width, member.domain);
+        process_.operations.emplace_back(ReadSignal {
+            value, signal, SignalReadKind::current });
+        record_implicit_signal_dependency(signal);
+        const auto next = allocate_register(member.width, member.domain);
+        process_.operations.emplace_back(ConditionalSelect {
+            next, selected, value, result });
+        result = next;
+    }
+    return result;
+}
+
+std::optional<RegisterId> Lowerer::lower_hir_virtual_interface_handle(
+    const semantic::DeclarationId receiver)
+{
+    const auto binding = hir_runtime_binding(
+        receiver, hir_process_scope_, false);
+    if (!binding || binding->width != 64U) {
+        return std::nullopt;
+    }
+    const auto handle = allocate_register(64U, frontend::ValueDomain::Bit2);
+    if (binding->kind == HirRuntimeBindingKind::local && binding->local) {
+        process_.operations.emplace_back(CopyRegister {
+            handle, *binding->local });
+    } else if (binding->signal) {
+        process_.operations.emplace_back(ReadSignal {
+            handle, *binding->signal, SignalReadKind::current });
+        record_implicit_signal_dependency(*binding->signal);
+    } else {
+        return std::nullopt;
+    }
+    return handle;
 }
 
 std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
@@ -5937,6 +6069,14 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 destination, expected_width, false);
         }
         return destination;
+    }
+    if (const auto member = hir_virtual_interface_member(expression_id)) {
+        auto result = lower_hir_virtual_interface_read(*member);
+        if (result && expected_width != 0U
+            && expected_width != member->width) {
+            result = resize_register(*result, expected_width, false);
+        }
+        return result;
     }
     if (const auto signal = hir_direct_signal(expression_id)) {
         const auto& info = design_.signal_info_[*signal];
@@ -8388,11 +8528,28 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 ? hir_static_container_expression_type(
                       call.operands.front())
                 : std::nullopt;
-            const auto packed_bits = call.text == "$bits"
+            auto packed_bits = call.text == "$bits"
                     && call.operands.size() == 1U && !receiver_type
                 ? hir_expression_width(
                       call.operands.front(), hir_process_scope_)
                 : std::nullopt;
+            // A hierarchical reference (`ifc.member`) has its signal's
+            // width.
+            if (!packed_bits && call.text == "$bits"
+                && call.operands.size() == 1U && !receiver_type) {
+                const bool missed = std::exchange(
+                    hierarchical_reference_missed_, false);
+                if (const auto signal
+                    = hir_direct_signal(call.operands.front())) {
+                    packed_bits = design_.signal_info_[*signal].width;
+                } else if (hierarchical_reference_missed_) {
+                    // The referenced instance is elaborated later; the
+                    // statement is lowered again then.
+                    return std::nullopt;
+                }
+                hierarchical_reference_missed_
+                    = hierarchical_reference_missed_ || missed;
+            }
             if (packed_bits && *packed_bits != 0U) {
                 const auto destination = allocate_register(
                     32U, frontend::ValueDomain::Bit2);
@@ -11767,6 +11924,68 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             process_.operations.emplace_back(Binary {
                 BinaryOperator::case_equal, is_false, *condition, zero });
 
+            // A nested conditional would be lowered twice per level by the
+            // known/unknown split below. Lower each alternative once,
+            // skipped when the condition excludes it, and merge.
+            const auto nested_conditional = [&](
+                                                const semantic::ExpressionId id) {
+                const auto nested = specialized_hir_unit_->find_expression(id);
+                return nested && nested->systemverilog != nullptr
+                    && nested->systemverilog->kind
+                        == semantic::sv::ExpressionKind::call
+                    && nested->systemverilog->text == "?:";
+            };
+            if (nested_conditional(source.operands[1])
+                || nested_conditional(source.operands[2])) {
+                const auto true_value = allocate_register(
+                    *value_width, *domain);
+                const auto false_value = allocate_register(
+                    *value_width, *domain);
+                process_.operations.emplace_back(LoadConstant {
+                    true_value, PackedLogic4(*value_width, Logic4::x) });
+                process_.operations.emplace_back(LoadConstant {
+                    false_value, PackedLogic4(*value_width, Logic4::x) });
+                const auto skip_true = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations.emplace_back(Branch {
+                    is_false, 0U, 0U, UnknownBranchPolicy::when_false });
+                const auto true_start = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                const auto when_true = lower_alternative(source.operands[1]);
+                if (!when_true) {
+                    trace_generated_conditional("sv-true-value");
+                    return std::nullopt;
+                }
+                process_.operations.emplace_back(CopyRegister {
+                    true_value, *when_true });
+                const auto skip_false = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations.emplace_back(Branch {
+                    is_true, 0U, 0U, UnknownBranchPolicy::when_false });
+                const auto false_start = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                const auto when_false = lower_alternative(source.operands[2]);
+                if (!when_false) {
+                    trace_generated_conditional("sv-false-value");
+                    return std::nullopt;
+                }
+                process_.operations.emplace_back(CopyRegister {
+                    false_value, *when_false });
+                const auto merge = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations.emplace_back(ConditionalSelect {
+                    destination, *condition, true_value, false_value,
+                });
+                process_.operations[skip_true] = Branch {
+                    is_false, skip_false, true_start,
+                    UnknownBranchPolicy::when_false,
+                };
+                process_.operations[skip_false] = Branch {
+                    is_true, merge, false_start,
+                    UnknownBranchPolicy::when_false,
+                };
+                result = destination;
+            } else {
             const auto select_true = static_cast<InstructionIndex>(
                 process_.operations.size());
             process_.operations.emplace_back(Branch {
@@ -11831,6 +12050,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             process_.operations[true_finish] = Jump { end };
             process_.operations[false_finish] = Jump { end };
             result = destination;
+            }
         }
     } else if (source.unary && source.operands.size() == 1U) {
         using ScalarKind = frontend::SystemVerilogScalarKind;

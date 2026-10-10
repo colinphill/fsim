@@ -1189,6 +1189,14 @@ Process VhdlParser::parse_process(
           process.variables, previous());
       continue;
     }
+    if (keyword("use", 0, true)) {
+      // A use clause in a process declarative part (IEEE 1076-2008 12.4)
+      // is treated as part of the enclosing unit's context clause.
+      if (auto item = parse_context_item()) {
+        deferred_context_items_.push_back(std::move(*item));
+      }
+      continue;
+    }
     if (parse_vhdl_local_nonobject_declaration(
             process.constants,
             process.type_aliases,
@@ -1283,7 +1291,7 @@ Process VhdlParser::parse_process(
         "FSIM-VHDL-SEM-103",
         "an ordinary process cannot use postponed in its closing clause");
   }
-  match_keyword("process", true);
+  expect_keyword("process", true, "FSIM-VHDL-PARSE-023");
   parse_statement_end_label(process.name, "process");
   expect(TokenKind::Semicolon, "';' after process",
          "FSIM-VHDL-PARSE-023");

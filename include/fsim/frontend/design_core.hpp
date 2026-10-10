@@ -506,6 +506,9 @@ struct Type {
     // are retained here while packed_range mirrors their flattened width once
     // every bound is concrete.
     std::vector<PackedRangeExpression> systemverilog_packed_dimensions;
+    // The unpacked dimensions of an interface port array (`a_if p [N]`),
+    // whose elements bind to the connected interface array's elements.
+    std::vector<PackedRangeExpression> systemverilog_interface_array_dimensions;
     // Non-empty for a SystemVerilog user-defined type reference. Package
     // qualification is retained verbatim (for example `values::word_t`) until
     // elaboration resolves the alias in the owning specialization.

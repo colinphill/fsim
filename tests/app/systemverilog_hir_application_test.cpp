@@ -2880,12 +2880,14 @@ endmodule
         assert(design_state.signals.at(*uwire_port_actual)
                    .initial_value.to_msb_string()
             == "ZZZZZZZZ");
+        // A variable's declaration initializer is its value before time
+        // zero (IEEE 1800-2017 6.8).
         assert(design_state.signals.at(*port_formal)
                    .initial_value.to_msb_string()
-            == "XXXXXXXX");
+            == "10100101");
         assert(design_state.signals.at(*uwire_port_formal)
                    .initial_value.to_msb_string()
-            == "XXXXXXXX");
+            == "00111100");
         const auto has_initializer = [&](
                                          const std::string_view suffix,
                                          const fsim::runtime::simir::SignalId target) {

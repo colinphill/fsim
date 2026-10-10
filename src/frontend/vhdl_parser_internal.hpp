@@ -40,6 +40,14 @@ private:
   static std::string string_literal_text(const Token &token);
 
   std::optional<VhdlContextItem> parse_context_item();
+  [[nodiscard]] std::optional<Statement> split_vhdl_aggregate_assignment(
+      const Statement& statement,
+      const std::vector<Expression>& targets) const;
+  // Use clauses of process declarative parts, joined to the enclosing
+  // unit's context clause when the unit ends.
+  std::vector<VhdlContextItem> deferred_context_items_;
+  // Attribute names declared by any unit analyzed so far.
+  std::unordered_set<std::string> vhdl_declared_attributes_;
 
   Token expect_identifier(std::string_view description);
 

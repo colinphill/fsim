@@ -465,6 +465,20 @@ ParseResult VerilogParser::run() {
             for (const auto& signal : package.signals) {
                 exports.insert(signal.name);
             }
+            // Types and subroutines named through an import are not nets
+            // either.
+            for (const auto& alias : package.type_aliases) {
+                exports.insert(alias.name);
+            }
+            for (const auto& function : package.functions) {
+                exports.insert(function.name);
+            }
+            for (const auto& task : package.tasks) {
+                exports.insert(task.name);
+            }
+            for (const auto& declared : package.systemverilog_classes) {
+                exports.insert(declared.name);
+            }
             design.units.push_back(std::move(package));
         } else if (dpi_declaration_start("import")) {
             compilation_unit_has_design_item_ = true;

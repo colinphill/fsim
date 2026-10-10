@@ -812,6 +812,109 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
             || (formal_declaration.type
                 && formal_declaration.type->target.spelling
                     == "interface");
+        if (interface_port && formal_declaration.type
+            && !formal_declaration.type->unpacked_dimensions.empty()
+            && !formal_declaration.type->container_form) {
+            // An interface port array binds element by element, left to
+            // right, to the connected interface array (IEEE 1800-2017
+            // 25.5).
+            const auto& dimensions
+                = formal_declaration.type->unpacked_dimensions;
+            const auto bound = [&](const std::optional<std::int64_t>& value,
+                                   const std::optional<semantic::ExpressionId>&
+                                       expression)
+                -> std::optional<std::int64_t> {
+                if (value) {
+                    return value;
+                }
+                return expression
+                    ? child_interface_specialization
+                          ->evaluate_integral_expression(*expression)
+                    : std::nullopt;
+            };
+            const auto left = bound(dimensions.front().left,
+                dimensions.front().left_expression);
+            const auto right = bound(dimensions.front().right,
+                dimensions.front().right_expression);
+            std::vector<std::int64_t> formal_indices;
+            if (dimensions.size() == 1U && left && right
+                && (*left > *right ? *left - *right : *right - *left)
+                    < (std::int64_t { 1 } << 20)) {
+                for (auto index = *left;; index += *left > *right ? -1 : 1) {
+                    formal_indices.push_back(index);
+                    if (index == *right) {
+                        break;
+                    }
+                }
+            }
+            // The actual's elements: an interface instance array of this
+            // unit, or an interface port array forwarded into it.
+            std::optional<std::vector<std::int64_t>> actual_indices;
+            std::string actual_base;
+            for (const auto instance_id : unit.instances) {
+                const auto candidate = compiled_->find_instance(instance_id);
+                if (candidate && candidate->systemverilog != nullptr
+                    && candidate->systemverilog->name == actual_name
+                    && (!candidate->systemverilog->array_indices.empty()
+                        || candidate->systemverilog->array_left)) {
+                    actual_indices = compiled_instance_array_indices(
+                        *candidate->systemverilog, working_specialization);
+                    break;
+                }
+            }
+            for (auto lexical = std::string { working_path };;) {
+                const auto candidate = lexical + "." + actual_name;
+                if (!actual_indices) {
+                    if (const auto forwarded
+                        = systemverilog_interface_array_indices_.find(
+                            candidate);
+                        forwarded
+                        != systemverilog_interface_array_indices_.end()) {
+                        actual_indices = forwarded->second;
+                    }
+                }
+                if (actual_indices && !actual_indices->empty()
+                    && systemverilog_interface_handles_.contains(
+                        candidate + "["
+                        + std::to_string(actual_indices->front()) + "]")) {
+                    actual_base = candidate;
+                    break;
+                }
+                if (lexical.find('.') == std::string::npos) {
+                    break;
+                }
+                lexical.resize(lexical.rfind('.'));
+            }
+            if (formal_indices.empty() || !actual_indices
+                || actual_base.empty()
+                || actual_indices->size() != formal_indices.size()) {
+                report(
+                    "FSIM-ELAB-SVIFACE-002",
+                    "interface port array '" + formal_declaration.name
+                        + "' requires an interface array actual of the "
+                          "same size; '"
+                        + actual_name + "' is not one",
+                    compiled_source_span(*compiled_, binding.source));
+                child_ports_valid = false;
+                continue;
+            }
+            for (std::size_t position = 0;
+                position < formal_indices.size(); ++position) {
+                auto element = formal_declaration;
+                element.name += "["
+                    + std::to_string(formal_indices[position]) + "]";
+                if (!forward_interface_port(element,
+                        actual_base + "["
+                            + std::to_string((*actual_indices)[position])
+                            + "]")) {
+                    child_ports_valid = false;
+                }
+            }
+            systemverilog_interface_array_indices_.insert_or_assign(
+                child_path + "." + formal_declaration.name,
+                std::move(formal_indices));
+            continue;
+        }
         const auto interface_path
             = interface_port
             ? resolved_interface_path(actual_name)

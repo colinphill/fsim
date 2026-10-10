@@ -13917,9 +13917,75 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                 && source.operands.size() == 1U
                 && self(self, source.operands.front());
         };
+        // Before VHDL-2008 an input port's actual is a name, a type
+        // conversion or conversion function of a name, or a globally static
+        // expression (IEEE 1076-1993 1.1.1.2, 4.3.2.2).
+        const auto static_actual = [&](const auto& self,
+                                       const semantic::ExpressionId id)
+            -> bool {
+            const auto candidate
+                = port_actual_specialization.find_expression(id);
+            if (!candidate || candidate->vhdl == nullptr) {
+                return false;
+            }
+            using Kind = semantic::vhdl::ExpressionKind;
+            const auto& source = *candidate->vhdl;
+            switch (source.kind) {
+            case Kind::integer_literal:
+            case Kind::real_literal:
+            case Kind::boolean_literal:
+            case Kind::logic_literal:
+            case Kind::string_literal:
+                return true;
+            case Kind::name: {
+                if (!source.referenced_name
+                    || !source.referenced_name->selected) {
+                    return false;
+                }
+                const auto declaration
+                    = port_actual_specialization.find_declaration(
+                        *source.referenced_name->selected);
+                using Form = semantic::vhdl::DeclarationForm;
+                return declaration && declaration->vhdl != nullptr
+                    && (declaration->vhdl->form == Form::constant
+                        || declaration->vhdl->form == Form::generic_constant
+                        || declaration->vhdl->form
+                            == Form::enumeration_literal);
+            }
+            case Kind::unary:
+            case Kind::binary:
+            case Kind::aggregate:
+            case Kind::concatenation:
+            case Kind::call:
+                return std::ranges::all_of(source.operands,
+                           [&](const semantic::ExpressionId operand) {
+                               return self(self, operand);
+                           })
+                    && std::ranges::all_of(source.associations,
+                        [&](const semantic::vhdl::AggregateAssociation&
+                                association) {
+                            return self(self, association.value);
+                        });
+            default:
+                return false;
+            }
+        };
+        const auto conversion_actual = [&] {
+            const auto candidate = port_actual_specialization.find_expression(
+                *binding.expression);
+            return candidate && candidate->vhdl != nullptr
+                && candidate->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::call
+                && !candidate->vhdl->text.starts_with("@")
+                && candidate->vhdl->operands.size() == 1U
+                && name_actual(name_actual,
+                    candidate->vhdl->operands.front());
+        };
         if (accepts_input && pre_2008
             && !name_actual(
-                name_actual, *binding.expression)) {
+                name_actual, *binding.expression)
+            && !conversion_actual()
+            && !static_actual(static_actual, *binding.expression)) {
             report(
                 "FSIM-ELAB-VHPORT-001",
                 "VHDL input port '" + formal_declaration.name

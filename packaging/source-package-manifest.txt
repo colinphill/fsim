@@ -1976,12 +1976,14 @@ tests/fixtures/compliance/sv_class_construction_in_methods.sv
 tests/fixtures/compliance/sv_class_statements.sv
 tests/fixtures/compliance/sv_compilation_unit_declarations.sv
 tests/fixtures/compliance/sv_copies_and_constructors.sv
+tests/fixtures/compliance/sv_declarations_and_calls.sv
 tests/fixtures/compliance/sv_delays_packages_and_classes.sv
 tests/fixtures/compliance/sv_display_arguments.sv
 tests/fixtures/compliance/sv_enum_methods.sv
 tests/fixtures/compliance/sv_expression_widths.sv
 tests/fixtures/compliance/sv_function_statements.sv
 tests/fixtures/compliance/sv_hierarchical_references.sv
+tests/fixtures/compliance/sv_interface_ports_and_waits.sv
 tests/fixtures/compliance/sv_module_items.sv
 tests/fixtures/compliance/sv_net_data_types.sv
 tests/fixtures/compliance/sv_operand_signedness.sv

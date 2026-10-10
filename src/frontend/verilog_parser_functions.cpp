@@ -238,7 +238,11 @@ FunctionDeclaration VerilogParser::parse_function(
             "direction");
       }
       Type type;
-      if (implicit_var_formal) {
+      if (language_ == Language::SystemVerilog2017 && keyword("virtual")) {
+        // A virtual interface formal (IEEE 1800-2017 25.9).
+        type = parse_virtual_interface_type(advance());
+        inherited_type = type;
+      } else if (implicit_var_formal) {
         type = default_verilog_type();
         type.spelling = "logic";
         inherited_type = type;
@@ -764,7 +768,11 @@ TaskDeclaration VerilogParser::parse_task(
             "direction");
       }
       Type type;
-      if (implicit_var_formal) {
+      if (language_ == Language::SystemVerilog2017 && keyword("virtual")) {
+        // A virtual interface formal (IEEE 1800-2017 25.9).
+        type = parse_virtual_interface_type(advance());
+        inherited_type = type;
+      } else if (implicit_var_formal) {
         type = default_verilog_type();
         type.spelling = "logic";
         inherited_type = type;

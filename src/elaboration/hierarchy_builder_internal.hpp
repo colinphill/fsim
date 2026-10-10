@@ -1019,6 +1019,7 @@ private:
     };
 
     void finish();
+    void initialize_constant_driven_nets();
     [[nodiscard]] ElementNetRewriteCensus
     rewrite_eligible_element_net_families();
     static ResolutionKind native_resolution(const SignalInfo& signal);
@@ -1566,6 +1567,9 @@ private:
     std::uint64_t next_systemverilog_interface_handle_ { 1 };
     std::unordered_set<std::string>
         systemverilog_interface_port_paths_;
+    // The element indices, left to right, of an interface port array.
+    std::unordered_map<std::string, std::vector<std::int64_t>>
+        systemverilog_interface_array_indices_;
     std::unordered_map<std::string, std::string>
         systemverilog_interface_modport_views_;
     std::unordered_map<std::string, SignalId>

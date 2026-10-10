@@ -551,7 +551,12 @@ namespace systemverilog_hir_detail {
             output.referenced_name = name(input.text, input.span, scope);
         }
         output.argument_names = input.call_argument_names;
+        const auto omitted = omit_systemverilog_call_arguments(
+            input, output.referenced_name, hir_, output.argument_names);
         for (std::size_t index = 0; index < input.operands.size(); ++index) {
+            if (omitted[index]) {
+                continue;
+            }
             const auto& operand = input.operands[index];
             const auto operand_id = expression(
                 operand, scope, expression_origin);
@@ -560,9 +565,14 @@ namespace systemverilog_hir_detail {
             }
             if (input.kind == frontend::ExpressionKind::Call) {
                 sv::CallAssociation association;
-                if (index < input.call_argument_names.size()
-                    && !input.call_argument_names[index].empty()) {
-                    association.formal = input.call_argument_names[index];
+                // The kept operand's name, which an omitted argument before
+                // it may have supplied.
+                const auto kept = static_cast<std::size_t>(
+                    std::count(omitted.begin(), omitted.begin()
+                        + static_cast<std::ptrdiff_t>(index), false));
+                if (kept < output.argument_names.size()
+                    && !output.argument_names[kept].empty()) {
+                    association.formal = output.argument_names[kept];
                 }
                 association.actual = operand_id;
                 association.source = operand.valid()
@@ -1386,6 +1396,24 @@ namespace systemverilog_hir_detail {
         queue(input.systemverilog_modports, 7, output.scope, output.origin, pending,
             &SystemVerilogHirBuilder::add_modport);
         std::stable_sort(pending.begin(), pending.end(), pending_less);
+        // Ports keep the module header's order, which positional
+        // connections follow, even when non-ANSI body declarations list
+        // them in another order (IEEE 1800-2017 23.3.2.1).
+        {
+            std::vector<std::size_t> port_slots;
+            std::vector<Pending> ports;
+            for (std::size_t slot = 0; slot < pending.size(); ++slot) {
+                if (pending[slot].category == 1U) {
+                    port_slots.push_back(slot);
+                    ports.push_back(std::move(pending[slot]));
+                }
+            }
+            std::ranges::stable_sort(ports, std::less<> { }, &Pending::index);
+            for (std::size_t position = 0; position < ports.size();
+                ++position) {
+                pending[port_slots[position]] = std::move(ports[position]);
+            }
+        }
         for (auto& item : pending) {
             output.declarations.push_back(item.build());
         }

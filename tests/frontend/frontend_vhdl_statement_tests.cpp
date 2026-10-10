@@ -1196,14 +1196,11 @@ timeprecision 1ps;
         "unitless-fractional.sv",
         "module bad; initial #1.5 $finish; endmodule\n",
         Language::SystemVerilog2017);
+    // Without a timescale the delay counts project-resolution ticks and
+    // its fraction rounds at elaboration (IEEE 1800-2017 3.14.2.3).
     require(
-        !unitless.ok()
-            && std::ranges::any_of(
-                unitless.diagnostics,
-                [](const Diagnostic& diagnostic) {
-                    return diagnostic.code == "FSIM-SV-SEM-050";
-                }),
-        "a unitless fractional delay without time context is rejected");
+        unitless.ok(),
+        "a unitless fractional delay without time context is accepted");
 
     const auto verilog = parse_text(
         "verilog-timeunit.v",

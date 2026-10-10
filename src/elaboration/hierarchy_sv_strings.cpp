@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_builder_internal.hpp"
 
+#include <cctype>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -90,6 +91,49 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_string_declaration(
                 }
                 erase();
                 return result;
+            }
+            // Constant string methods (IEEE 1800-2017 6.16): toupper,
+            // tolower, and substr of a constant receiver.
+            if (source.kind == semantic::sv::ExpressionKind::call
+                && !source.operands.empty()
+                && (source.text == ".toupper" || source.text == ".tolower"
+                    || source.text == ".substr")) {
+                auto receiver = self(self, source.operands.front());
+                if (!receiver) {
+                    erase();
+                    return std::nullopt;
+                }
+                if (source.text == ".substr") {
+                    const auto first = source.operands.size() == 3U
+                        ? working_specialization.evaluate_integral_expression(
+                              source.operands[1])
+                        : std::nullopt;
+                    const auto last = source.operands.size() == 3U
+                        ? working_specialization.evaluate_integral_expression(
+                              source.operands[2])
+                        : std::nullopt;
+                    erase();
+                    if (!first || !last) {
+                        return std::nullopt;
+                    }
+                    // An out-of-range selection is the empty string.
+                    if (*first < 0 || *last < *first
+                        || static_cast<std::size_t>(*last)
+                            >= receiver->size()) {
+                        return std::string { };
+                    }
+                    return receiver->substr(
+                        static_cast<std::size_t>(*first),
+                        static_cast<std::size_t>(*last - *first + 1));
+                }
+                for (auto& character : *receiver) {
+                    const auto byte = static_cast<unsigned char>(character);
+                    character = static_cast<char>(source.text == ".toupper"
+                            ? std::toupper(byte)
+                            : std::tolower(byte));
+                }
+                erase();
+                return receiver;
             }
             if (source.kind == semantic::sv::ExpressionKind::name
                 && source.referenced_name

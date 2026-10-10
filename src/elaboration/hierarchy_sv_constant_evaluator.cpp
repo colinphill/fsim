@@ -1444,6 +1444,34 @@ private:
                 return found->second;
             }
         }
+        if (const auto member = frame_member(record)) {
+            const auto& root = *member->root;
+            runtime::PackedLogic4 selected {
+                static_cast<std::size_t>(member->width), Logic4::x };
+            for (std::uint64_t bit = 0U; bit < member->width; ++bit) {
+                if (member->offset + bit < root.packed.width()) {
+                    selected.set(bit, root.packed.get(member->offset + bit));
+                }
+            }
+            Value result;
+            result.packed = std::move(selected);
+            result.width = static_cast<std::uint32_t>(member->width);
+            result.domain = root.domain;
+            return result;
+        }
+        // A function's formals and locals hide same-named parameters of the
+        // enclosing scope (IEEE 1800-2017 13.4.3).
+        if (!frames_.empty() && record.referenced_name) {
+            if (const auto selected = record.referenced_name->selected) {
+                for (auto frame = frames_.rbegin(); frame != frames_.rend();
+                    ++frame) {
+                    if (const auto found = frame->values.find(*selected);
+                        found != frame->values.end()) {
+                        return found->second;
+                    }
+                }
+            }
+        }
         const auto& hierarchy_identities
             = specialization_.specialization().hierarchy_identities;
         const auto hierarchy = std::ranges::find(
@@ -1468,6 +1496,38 @@ private:
             return std::nullopt;
         }
         auto result = value_for_declaration(*selected);
+        // A member of a structure parameter (`P.m`, IEEE 1800-2017 7.2.1).
+        if (const auto dot = record.text.find('.');
+            result && dot != std::string::npos) {
+            const auto declaration = specialization_.find_declaration(
+                *selected);
+            if (declaration && declaration->systemverilog != nullptr
+                && declaration->systemverilog->name
+                    == std::string_view { record.text }.substr(0U, dot)) {
+                const auto slice = declaration->systemverilog->type
+                    ? packed_member_slice(*declaration->systemverilog->type,
+                          std::string_view { record.text }.substr(dot + 1U))
+                    : std::nullopt;
+                if (!slice) {
+                    error_ = "cannot select member '" + record.text + "'";
+                    return std::nullopt;
+                }
+                runtime::PackedLogic4 member {
+                    static_cast<std::size_t>(slice->second), Logic4::x };
+                for (std::uint64_t bit = 0U; bit < slice->second; ++bit) {
+                    if (slice->first + bit < result->packed.width()) {
+                        member.set(bit,
+                            result->packed.get(slice->first + bit));
+                    }
+                }
+                Value selected_member;
+                selected_member.packed = std::move(member);
+                selected_member.width
+                    = static_cast<std::uint32_t>(slice->second);
+                selected_member.domain = result->domain;
+                return selected_member;
+            }
+        }
         if (result) {
             const auto declaration = specialization_.find_declaration(
                 *selected);
@@ -2600,11 +2660,42 @@ private:
         Frame frame;
         frame.callable = callable.id;
         const auto& formals = callable.callable->formals;
+        // Bind actuals to formals by position, then by name (13.5.4).
+        std::vector<std::optional<semantic::ExpressionId>> actuals(
+            formals.size());
+        std::size_t positional { };
+        for (std::size_t operand = 0U; operand < call.operands.size();
+            ++operand) {
+            const auto name = operand < call.argument_names.size()
+                ? std::string_view { call.argument_names[operand] }
+                : std::string_view { };
+            std::size_t target = positional;
+            if (!name.empty()) {
+                target = formals.size();
+                for (std::size_t index = 0U; index < formals.size();
+                    ++index) {
+                    const auto formal
+                        = specialization_.find_declaration(formals[index]);
+                    if (formal && formal->systemverilog != nullptr
+                        && formal->systemverilog->name == name) {
+                        target = index;
+                        break;
+                    }
+                }
+            } else {
+                ++positional;
+            }
+            if (target >= formals.size() || actuals[target]) {
+                error_ = "constant function actual does not match a formal";
+                return std::nullopt;
+            }
+            actuals[target] = call.operands[operand];
+        }
         for (std::size_t index = 0U; index < formals.size(); ++index) {
             const auto formal = specialization_.find_declaration(formals[index]);
             std::optional<Value> value;
-            if (index < call.operands.size()) {
-                value = evaluate(call.operands[index]);
+            if (actuals[index]) {
+                value = evaluate(*actuals[index]);
             } else if (formal && formal->systemverilog != nullptr
                 && formal->systemverilog->initializer) {
                 value = evaluate(*formal->systemverilog->initializer);
@@ -2672,6 +2763,105 @@ private:
             std::move(value), callable.callable->return_type);
     }
 
+    /// The bit offset and width of `path` (`a.b`) within a packed
+    /// structure or union type.
+    [[nodiscard]] std::optional<std::pair<std::uint64_t, std::uint64_t>>
+    packed_member_slice(
+        semantic::sv::TypeReference type, std::string_view path) const
+    {
+        std::uint64_t offset { };
+        while (!path.empty()) {
+            const auto separator = path.find('.');
+            const auto segment = path.substr(0U, separator);
+            if (const auto effective
+                = semantic::CompiledDesignResolver { specialization_ }
+                      .effective_systemverilog_type(
+                          type, specialization_.scope())) {
+                type = *effective;
+            }
+            const auto definition = type.target.target.valid()
+                ? specialization_.find_type(type.target.target)
+                : std::nullopt;
+            if (!definition || definition->systemverilog == nullptr
+                || (definition->systemverilog->form
+                        != semantic::sv::TypeForm::packed_structure
+                    && definition->systemverilog->form
+                        != semantic::sv::TypeForm::packed_union)) {
+                return std::nullopt;
+            }
+            const auto& members = definition->systemverilog->members;
+            const auto member = std::ranges::find(
+                members, segment, &semantic::sv::PackedMember::name);
+            if (member == members.end()) {
+                return std::nullopt;
+            }
+            offset += member->lsb_offset;
+            type = member->type;
+            path = separator == std::string_view::npos
+                ? std::string_view { }
+                : path.substr(separator + 1U);
+        }
+        std::unordered_set<std::uint32_t> visiting;
+        const auto width = resolved_type_width(
+            type, &specialization_, visiting);
+        if (!width || *width == 0U) {
+            return std::nullopt;
+        }
+        return std::pair { offset, *width };
+    }
+
+    /// The frame-local packed aggregate a dotted name `s.m` selects into,
+    /// with the member's bit slice.
+    struct FrameMember {
+        Value* root { };
+        std::uint64_t root_width { };
+        std::uint64_t offset { };
+        std::uint64_t width { };
+    };
+    [[nodiscard]] std::optional<FrameMember> frame_member(
+        const semantic::sv::Expression& record)
+    {
+        const auto separator = record.text.find('.');
+        if (record.kind != ExpressionKind::name || frames_.empty()
+            || separator == std::string::npos || separator == 0U) {
+            return std::nullopt;
+        }
+        const auto root_name
+            = std::string_view { record.text }.substr(0U, separator);
+        const auto root = semantic::CompiledDesignResolver { specialization_ }
+                              .resolve_systemverilog(root_name, record.scope,
+                                  { }, false)
+                              .unique();
+        if (!root) {
+            return std::nullopt;
+        }
+        const auto declaration = specialization_.find_declaration(*root);
+        if (!declaration || declaration->systemverilog == nullptr
+            || !declaration->systemverilog->type) {
+            return std::nullopt;
+        }
+        for (auto frame = frames_.rbegin(); frame != frames_.rend();
+            ++frame) {
+            const auto found = frame->values.find(*root);
+            if (found == frame->values.end()) {
+                continue;
+            }
+            const auto& type = *declaration->systemverilog->type;
+            const auto slice = packed_member_slice(type,
+                std::string_view { record.text }.substr(separator + 1U));
+            std::unordered_set<std::uint32_t> visiting;
+            const auto root_width = resolved_type_width(
+                type, &specialization_, visiting);
+            if (!slice || !root_width
+                || slice->first + slice->second > *root_width) {
+                return std::nullopt;
+            }
+            return FrameMember { &found->second, *root_width,
+                slice->first, slice->second };
+        }
+        return std::nullopt;
+    }
+
     [[nodiscard]] bool assign_target(
         const semantic::ExpressionId target,
         Value value)
@@ -2681,6 +2871,37 @@ private:
             return false;
         }
         const auto& record = *view->systemverilog;
+        // A member of a packed structure local: `s.m = v` (IEEE 1800-2017
+        // 7.2.1, 13.4.4).
+        if (const auto member = frame_member(record)) {
+            auto& root = *member->root;
+            if (root.packed.width() != member->root_width) {
+                // Widen the whole value first; an unsized fill literal
+                // (`'0`, `'1`) fills every bit.
+                const auto fill = root.unsized && root.packed.width() == 1U
+                    ? root.packed.get(0U)
+                    : Logic4::zero;
+                runtime::PackedLogic4 widened {
+                    static_cast<std::size_t>(member->root_width), fill };
+                for (std::size_t bit = 0U; bit < root.packed.width()
+                    && bit < widened.width() && !(root.unsized
+                        && root.packed.width() == 1U); ++bit) {
+                    widened.set(bit, root.packed.get(bit));
+                }
+                root.packed = std::move(widened);
+                root.width = static_cast<std::uint32_t>(member->root_width);
+                root.unsized = false;
+            }
+            for (std::uint64_t bit = 0U; bit < member->width; ++bit) {
+                const auto state = bit < value.packed.width()
+                    ? value.packed.get(bit)
+                    : value.signed_value && value.packed.width() != 0U
+                    ? value.packed.get(value.packed.width() - 1U)
+                    : Logic4::zero;
+                root.packed.set(member->offset + bit, state);
+            }
+            return true;
+        }
         if (record.kind == ExpressionKind::index
             && record.operands.size() == 2U) {
             const auto base_view = specialization_.find_expression(

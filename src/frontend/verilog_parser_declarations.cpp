@@ -126,9 +126,37 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
           }
         }
         const auto port_name = expect_identifier("interface port name");
+        Type port_type{ValueDomain::Unknown, "interface", std::nullopt, false};
+        // An interface port array (IEEE 1800-2017 25.5): `[N]` is
+        // `[0:N-1]`.
+        while (match(TokenKind::LeftBracket)) {
+          const auto dimension_start = previous();
+          auto left = parse_expression();
+          Expression right;
+          if (at(TokenKind::RightBracket)) {
+            const auto size_span = left.span;
+            right = Expression{ExpressionKind::Binary, "-",
+                {std::move(left),
+                 Expression{ExpressionKind::IntegerLiteral, "1", {},
+                     size_span}},
+                size_span};
+            left = Expression{ExpressionKind::IntegerLiteral, "0", {},
+                size_span};
+          } else {
+            expect(TokenKind::Colon, "':' in an interface port array range",
+                "FSIM-SV-PARSE-221");
+            right = parse_expression();
+          }
+          expect(TokenKind::RightBracket,
+              "']' after an interface port array range", "FSIM-SV-PARSE-222");
+          port_type.systemverilog_interface_array_dimensions.push_back(
+              PackedRangeExpression{std::move(left), std::move(right),
+                  cover(dimension_start.span, previous().span),
+                  std::nullopt});
+        }
         SignalDeclaration declaration{
             port_name.text,
-            Type{ValueDomain::Unknown, "interface", std::nullopt, false},
+            std::move(port_type),
             PortDirection::Unknown,
             true,
             cover(interface_start.span, port_name.span),
@@ -905,6 +933,30 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
       const auto net_kind = spec.type.spelling;
       spec.type = parse_parameter_type();
       spec.type.systemverilog_net_type = net_kind;
+    } else if (language_ == Language::SystemVerilog2017
+        && contains_word(
+            {"wire", "tri", "tri0", "tri1", "wand", "triand", "wor",
+                "trior", "trireg", "uwire", "supply0", "supply1"},
+            spec.type.spelling)
+        && is_named_type_reference_start()) {
+      // A net of a user-defined data type: `wire byte_t [1:0] w;`.
+      const auto net_kind = spec.type.spelling;
+      if (auto named_array = parse_named_packed_array_type()) {
+        spec.type = std::move(*named_array);
+      } else {
+        spec.type = parse_named_type();
+      }
+      spec.type.systemverilog_net_type = net_kind;
+      // A net's data type is integral or an aggregate of integral types;
+      // a class handle is not (IEEE 1800-2017 6.7.1).
+      if (std::ranges::any_of(unit.systemverilog_classes,
+              [&](const SystemVerilogClassDeclaration& declared) {
+                return declared.name == spec.type.named_type;
+              })) {
+        error(start, "FSIM-SV-SEM-407",
+            "a net cannot have the class type '" + spec.type.named_type
+                + "'");
+      }
     }
   }
   auto drive_strength = parse_verilog_drive_strength("net declaration");
@@ -1982,13 +2034,13 @@ Process VerilogParser::parse_always() {
           "always_comb/always_latch assignments must be blocking in this "
           "executable slice");
     }
-    if (sequential_always
-        && (process.sensitivities.size() != 1
-            || process.sensitivities.front().edge == EdgeKind::Any)) {
+    // always_ff begins with one event control (IEEE 1800-2017 9.2.2.4),
+    // which may list several events (`@(posedge clk or negedge rst)`).
+    if (sequential_always && process.sensitivities.empty()) {
       error(
           start,
           "FSIM-SV-SEM-101",
-          "bounded always_ff requires exactly one edge-qualified event");
+          "always_ff requires an event control");
     }
     if (sequential_always && has_timing) {
       error(

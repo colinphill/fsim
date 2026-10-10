@@ -1365,9 +1365,9 @@ end architecture;
   require(
       !invalid_local_region.ok()
           && has_code(invalid_local_region, "FSIM-VHDL-SEM-082")
-          && has_code(
+          && !has_code(
               invalid_local_region, "FSIM-VHDL-UNSUPPORTED-054"),
-      "local collisions and unsupported items are targeted");
+      "local collisions are targeted; an alias may omit its subtype");
 
   const auto unsupported_generated_declaration = parse_text(
       "unsupported_generated_declaration.vhd",

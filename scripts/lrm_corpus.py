@@ -416,7 +416,10 @@ def verilator_cases(root: Path) -> list[Case]:
                 flags += [t for t in value.split()
                           if t.startswith(("+define+", "-D", "+incdir+", "-I"))]
         compile_args = ["compile", "-q"] + standard_args("systemverilog", "2017")
-        compile_args += ["-I", str(tdir), "-D", "SIMULATOR", "-D", "TEST_OBJ_DIR=obj_dir"]
+        # driver.py also names the trace file a test may open with
+        # $dumpfile(`STRINGIFY(`TEST_DUMPFILE)).
+        compile_args += ["-I", str(tdir), "-D", "SIMULATOR", "-D", "TEST_OBJ_DIR=obj_dir",
+                         "-D", "TEST_DUMPFILE=obj_dir/simx.vcd"]
         plusargs: list[str] = []
         for flag in flags:
             for token in flag.split():
@@ -460,10 +463,19 @@ def verilator_cases(root: Path) -> list[Case]:
         commands.append(Command("elaborate", elab))
         if not compile_fails:
             if executes:
-                commands.append(Command("simulate", ["simulate", "--engine", "{engine}"] + plusargs))
+                # driver.py runs from test_regress: data files are named
+                # relative to it (`t/x.mem`) and outputs go to obj_dir/.
+                commands.append(Command("simulate", ["simulate", "--engine", "{engine}",
+                                                     "--file-root", "."] + plusargs))
+        copies: list[tuple[str, str]] = []
+        for literal in sorted(set(re.findall(r'"(t/[\w./-]+)"', top_text))):
+            candidate = tdir.parent / literal
+            if candidate.is_file():
+                copies.append((str(candidate), literal))
         cases.append(Case(
             suite="verilator",
             id=name,
+            copies=copies,
             group=verilator_group(name),
             commands=commands,
             expect="fail" if (compile_fails or execute_fails) else "pass",
@@ -478,7 +490,8 @@ def verilator_cases(root: Path) -> list[Case]:
                           and bool(re.search(
                               r"test\.execute\([^)]*check_finished\s*=\s*True",
                               source, re.S))},
-            writes=[("verilator_shell.sv", shell)] if shell else [],
+            writes=([("verilator_shell.sv", shell)] if shell else [])
+            + [("obj_dir/.keep", "")],
             skip=skip,
         ))
     return cases
@@ -527,9 +540,13 @@ def ivtest_cases(root: Path) -> list[Case]:
         language, standard = "verilog", "2005"
         compile_args = ["compile", "-q"]
         plusargs = []
+        delay_mode: list[str] = []
         skip = None
         for arg in args:
-            if arg in ("-g2005-sv", "-g2009", "-g2012"):
+            if arg in ("-Tmin", "-Ttyp", "-Tmax"):
+                # iverilog's min/typ/max delay selection.
+                delay_mode = ["--delay-mode", arg[2:]]
+            elif arg in ("-g2005-sv", "-g2009", "-g2012"):
                 language = "systemverilog"
                 standard = {"-g2005-sv": "2005", "-g2009": "2009", "-g2012": "2012"}[arg]
             elif arg == "-g2001":
@@ -555,7 +572,7 @@ def ivtest_cases(root: Path) -> list[Case]:
         commands = [Command("compile", compile_args)]
         if source.exists():
             tops = [module] if module else sv_root_modules([read_text(source)])
-            elab = ["elaborate", "-q", "--no-aot"]
+            elab = ["elaborate", "-q", "--no-aot"] + delay_mode
             for top in tops:
                 elab += ["--top", top]
             # iverilog's compile step includes elaboration, so a CE test

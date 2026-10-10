@@ -324,27 +324,77 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start)
         }
         (void)parse_parameter_type();
     }
-    const auto variable = expect_identifier("procedural loop variable");
-    statement.loop_variable = variable.text;
-    statement.loop_variable_declared = inline_variable;
-    statement.target = Expression {
-        ExpressionKind::Identifier,
-        variable.text,
-        { },
-        variable.span
-    };
-    expect(
-        TokenKind::Assign,
-        "'=' after procedural loop variable",
-        "FSIM-SV-PARSE-096");
-    statement.loop_initial = parse_expression();
+    // Each of the three for-loop clauses may be empty (IEEE 1800-2017
+    // 12.7.1). Without an initializer, the loop counts the variable its
+    // step updates from its current value; without a step either, it is a
+    // while loop.
+    if (!inline_variable && at(TokenKind::Semicolon)) {
+        const auto empty_start = index_;
+        advance();
+        if (!at(TokenKind::Semicolon)) {
+            (void)parse_expression();
+        }
+        const bool has_step = match(TokenKind::Semicolon)
+            && !at(TokenKind::RightParen);
+        std::optional<Token> step_variable;
+        if (has_step) {
+            const auto offset = at(TokenKind::PlusPlus)
+                    || at(TokenKind::MinusMinus)
+                ? 1U
+                : 0U;
+            if (at(TokenKind::Identifier, offset)) {
+                step_variable = current(offset);
+            }
+        }
+        index_ = empty_start;
+        if (!has_step) {
+            advance();
+            statement.loop_runtime = true;
+            statement.condition = at(TokenKind::Semicolon)
+                ? Expression { ExpressionKind::IntegerLiteral, "1", { },
+                      current().span }
+                : parse_expression();
+            expect(TokenKind::Semicolon,
+                "';' after procedural loop condition", "FSIM-SV-PARSE-098");
+            expect(TokenKind::RightParen,
+                "')' after procedural loop header", "FSIM-SV-PARSE-099");
+            parse_procedural_loop_body(start, statement);
+            statement.span = span_from(start, previous());
+            return statement;
+        }
+        if (step_variable) {
+            statement.loop_variable = step_variable->text;
+            statement.target = Expression { ExpressionKind::Identifier,
+                step_variable->text, { }, step_variable->span };
+            statement.loop_initial = statement.target;
+        }
+    }
+    if (statement.loop_variable.empty()) {
+        const auto variable = expect_identifier("procedural loop variable");
+        statement.loop_variable = variable.text;
+        statement.loop_variable_declared = inline_variable;
+        statement.target = Expression {
+            ExpressionKind::Identifier,
+            variable.text,
+            { },
+            variable.span
+        };
+        expect(
+            TokenKind::Assign,
+            "'=' after procedural loop variable",
+            "FSIM-SV-PARSE-096");
+        statement.loop_initial = parse_expression();
+    }
     ++current_loop_names_[statement.loop_variable];
     expect(
         TokenKind::Semicolon,
         "';' after procedural loop initializer",
         "FSIM-SV-PARSE-097");
 
-    auto condition = parse_expression();
+    auto condition = at(TokenKind::Semicolon)
+        ? Expression { ExpressionKind::IntegerLiteral, "1", { },
+              current().span }
+        : parse_expression();
     statement.condition = condition;
     expect(
         TokenKind::Semicolon,
@@ -369,6 +419,22 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start)
         statement.loop_runtime = true;
     }
 
+    if (at(TokenKind::RightParen)) {
+        // An empty step leaves the variable to the body.
+        advance();
+        statement.loop_update_target = statement.target;
+        statement.value = statement.target;
+        statement.loop_runtime = true;
+        parse_procedural_loop_body(start, statement);
+        const auto loop_name = current_loop_names_.find(
+            statement.loop_variable);
+        if (loop_name != current_loop_names_.end()
+            && --loop_name->second == 0) {
+            current_loop_names_.erase(loop_name);
+        }
+        statement.span = span_from(start, previous());
+        return statement;
+    }
     std::optional<Token> prefix_update;
     if (match(TokenKind::PlusPlus)
         || match(TokenKind::MinusMinus)) {

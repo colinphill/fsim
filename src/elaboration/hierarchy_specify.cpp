@@ -1433,6 +1433,25 @@ void HierarchyBuilder::attach_verilog_specify_drivers(
                 specify_path.drivers.push_back(process_id);
             }
         }
+        // A path-delayed output reads X until its first delayed value
+        // matures, as a delayed continuous assignment does.
+        if (!specify_path.drivers.empty()) {
+            for (const auto& terminal : specify_path.destinations) {
+                if (terminal.signal >= design_.signals_.size()) {
+                    continue;
+                }
+                auto& initial = design_.signals_[terminal.signal].initial_value;
+                for (auto bit = static_cast<std::size_t>(terminal.offset);
+                    bit < static_cast<std::size_t>(terminal.offset)
+                            + terminal.width
+                    && bit < initial.width();
+                    ++bit) {
+                    if (initial.get(bit) == runtime::Logic4::z) {
+                        initial.set(bit, runtime::Logic4::x);
+                    }
+                }
+            }
+        }
     }
 }
 

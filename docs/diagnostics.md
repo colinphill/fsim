@@ -525,7 +525,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-PARSE-002` | error | Expected `is` after an entity name. |
 | `FSIM-VHDL-PARSE-003` | error | Expected `(` after `port`. |
 | `FSIM-VHDL-PARSE-004` | error | Expected `:` after a port name. |
-| `FSIM-VHDL-PARSE-005` | error | Expected a VHDL port mode. |
+| `FSIM-VHDL-PARSE-005` | error | Expected a VHDL port mode; an omitted mode is `in`, and `linkage` is not supported. |
 | `FSIM-VHDL-PARSE-006` | error | Expected `;` between port declarations. |
 | `FSIM-VHDL-PARSE-007` | error | Expected `)` after port declarations. |
 | `FSIM-VHDL-PARSE-008` | error | Expected `;` after a port clause. |
@@ -542,7 +542,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-PARSE-020` | error | Expected `)` after a process sensitivity list. |
 | `FSIM-VHDL-PARSE-021` | error | Expected `begin` before process statements. |
 | `FSIM-VHDL-PARSE-022` | error | Expected `end` after process statements. |
-| `FSIM-VHDL-PARSE-023` | error | Expected `;` after a process statement. |
+| `FSIM-VHDL-PARSE-023` | error | Expected `process` after `end`, or `;` after a process statement. |
 | `FSIM-VHDL-PARSE-024` | error | Expected `end` after an `if` statement. |
 | `FSIM-VHDL-PARSE-025` | error | Expected `if` after `end`. |
 | `FSIM-VHDL-PARSE-026` | error | Expected `;` after an `if` statement. |
@@ -945,6 +945,8 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-SEM-113` | error | A VHDL-2019 predefined attribute is used with an illegal result context or argument count. |
 | `FSIM-VHDL-SEM-114` | error | A VHDL declarative region repeats a converse mode-view alias name. |
 | `FSIM-VHDL-SEM-115` | error | An entity statement part contains a signal assignment, instance or generate statement; entity statements must be passive (IEEE 1076-2008 3.2.4). |
+| `FSIM-VHDL-SEM-117` | error | An entity's generic clause follows its port clause (IEEE 1076-2008 6.5.6.1). |
+| `FSIM-VHDL-SEM-118` | error | An attribute specification for an entity, architecture, package or configuration appears outside that design unit's own declarative part (IEEE 1076-2008 7.2). |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -981,7 +983,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-UNSUPPORTED-050` | error | A configuration declaration contains an item outside the bounded architecture/component configuration subset. |
 | `FSIM-VHDL-UNSUPPORTED-052` | error | A component declaration contains an unsupported declarative item. |
 | `FSIM-VHDL-UNSUPPORTED-053` | error | A generated VHDL declarative region contains an item outside the bounded constant, signal, alias, type, subtype, callable, component, and local-package subset. |
-| `FSIM-VHDL-UNSUPPORTED-054` | error | A bounded VHDL object alias omits its explicit subtype indication. |
+| `FSIM-VHDL-UNSUPPORTED-054` | retired | Formerly: a VHDL object alias omitted its subtype indication. Such an alias now takes the subtype of the object it names (IEEE 1076-2008 6.6.2). |
 | `FSIM-VHDL-UNSUPPORTED-055` | error | A protected type contains a declarative item outside the bounded private-variable, function, and procedure subset. |
 | `FSIM-VHDL-UNSUPPORTED-056` | error | A VHDL-2019 sequential block contains an item outside the supported process-declarative surface. |
 
@@ -1706,6 +1708,7 @@ scheduler.
 | `FSIM-SV-CLASS-SPEC-010` | error | A class instance layout exceeds host-addressable storage. |
 | `FSIM-SV-CLASS-SPEC-011` | error | The stable virtual-method slot domain is exhausted. |
 | `FSIM-SV-CLASS-SPEC-012` | error | One class inherits distinct specializations of the same interface class. |
+| `FSIM-ELAB-SDF-001` | error | A procedural `$sdf_annotate` call does not name its SDF file with a string literal (IEEE 1364-2005 / 1800-2017 SDF annotation). |
 | `FSIM-ELAB-SVCLASS-001` | error | `null` has no executable contextual class-handle type. |
 | `FSIM-ELAB-SVCLASS-002` | error | A class allocation result is incompatible with its destination handle type. |
 | `FSIM-ELAB-SVCLASS-003` | error | A constructor actual has no executable packed width. |
@@ -1768,7 +1771,7 @@ scheduler.
 | `FSIM-SV-SEM-047` | error | A compilation-unit or module time declaration appears after another item. |
 | `FSIM-SV-SEM-048` | error | An effective SystemVerilog timeprecision is coarser than its timeunit or overflows. |
 | `FSIM-SV-SEM-049` | error | A decimal delay literal cannot be represented by the exact bounded rational HIR form. |
-| `FSIM-SV-SEM-050` | error | A fractional delay has neither an explicit unit nor an active timeunit/timescale. |
+| `FSIM-SV-SEM-050` | error | Retired catalog identity: a fractional delay without a time unit counts project-resolution ticks and rounds to the nearest tick. |
 | `FSIM-SV-SEM-051` | error | A Verilog-2005 delay uses a SystemVerilog explicit physical-unit suffix. |
 | `FSIM-SV-SEM-052` | error | A Verilog/SystemVerilog `min:typ:max` delay triple is not parenthesized. |
 | `FSIM-SV-SEM-053` | error | A Verilog/SystemVerilog delay list supplies more transition values than the containing assignment or gate form permits. |
@@ -1798,6 +1801,8 @@ scheduler.
 | `FSIM-SV-SEM-403` | error | A `randsequence` names a production that it does not declare (IEEE 1800-2017 18.17). |
 | `FSIM-SV-SEM-404` | error | A `for` loop variable declared with `var` has no data type, as in `for (var [7:0] i = 0; ...)` (IEEE 1800-2017 12.7.1). |
 | `FSIM-SV-SEM-405` | error | A type named through an interface instance or interface port (`ifc.data_t`, `ifc.sub.t`) does not name an interface instance or a typedef declared in the interface (IEEE 1800-2017 25.10). |
+| `FSIM-SV-SEM-406` | error | A `posedge`, `negedge` or `edge` event control of an `always` procedure names a `real`, `shortreal` or `realtime` variable (IEEE 1800-2017 9.4.2). |
+| `FSIM-SV-SEM-407` | error | A net declaration names a class type, as in `wire C x;` (IEEE 1800-2017 6.7.1). |
 | `FSIM-SV-SEM-073` | error | A module or package declares the same bounded task name more than once. |
 | `FSIM-SV-SEM-075` | error | A bounded text-file system function has the wrong argument count. |
 | `FSIM-SV-SEM-076` | error | `$fdisplay` or `$fwrite` has a nonliteral, malformed, unsupported, or multi-value format. |
@@ -1821,7 +1826,7 @@ scheduler.
 | `FSIM-SV-SEM-097` | error | A default task actual is attached to a writable or reference formal instead of an input value formal. |
 | `FSIM-SV-SEM-098` | error | A `ref` task formal is declared in a static or implicit-lifetime task. |
 | `FSIM-SV-SEM-100` | error | A streaming concatenation is used outside SystemVerilog-2017. |
-| `FSIM-SV-SEM-101` | error | A bounded `always_ff` process does not have exactly one edge-qualified event. |
+| `FSIM-SV-SEM-101` | error | An `always_ff` process does not begin with an event control (IEEE 1800-2017 9.2.2.4). |
 | `FSIM-SV-SEM-102` | error | A bounded `always_ff` body contains a nested timing control. |
 | `FSIM-SV-SEM-386` | error | An implicit generate-block name collides with a declaration or an explicit generate label in the same scope. |
 | `FSIM-SV-SEM-388` | error | An additional `buf` or `not` output terminal is not a net lvalue. |

@@ -46,12 +46,38 @@ std::vector<Sensitivity> VerilogParser::parse_sensitivity() {
   }
   while (!at_end() && !at(TokenKind::RightParen)) {
     EdgeKind edge = EdgeKind::Any;
+    // `edge e` is `posedge e or negedge e` (IEEE 1800-2017 9.4.2).
+    bool both_edges = false;
     if (match_keyword("posedge")) {
       edge = EdgeKind::Positive;
     } else if (match_keyword("negedge")) {
       edge = EdgeKind::Negative;
+    } else if (language_ == Language::SystemVerilog2017
+        && match_keyword("edge")) {
+      edge = EdgeKind::Positive;
+      both_edges = true;
     }
     auto expression = parse_expression();
+    if (both_edges) {
+      Sensitivity rising;
+      rising.edge = EdgeKind::Positive;
+      rising.span = expression.span;
+      Sensitivity falling = rising;
+      falling.edge = EdgeKind::Negative;
+      if (expression.kind == ExpressionKind::Identifier) {
+        rising.signal = expression.text;
+        falling.signal = expression.text;
+      } else {
+        rising.expression = expression;
+        falling.expression = std::move(expression);
+      }
+      sensitivities.push_back(std::move(rising));
+      sensitivities.push_back(std::move(falling));
+      if (match(TokenKind::Comma) || match_keyword("or")) {
+        continue;
+      }
+      break;
+    }
     Sensitivity sensitivity;
     sensitivity.edge = edge;
     sensitivity.span = expression.span;
@@ -111,6 +137,31 @@ SystemVerilogClockingSkew VerilogParser::parse_clocking_skew() {
 void VerilogParser::parse_default_clocking(
     DesignUnit& unit,
     const Token& start) {
+  // `default clocking [name] @(event); ... endclocking` declares the
+  // default clocking block in place (IEEE 1800-2017 14.12).
+  if (at(TokenKind::At)
+      || (at(TokenKind::Identifier) && at(TokenKind::At, 1))) {
+    const bool unnamed = at(TokenKind::At);
+    const auto blocks = unit.systemverilog_clocking_blocks.size();
+    parse_clocking_block(unit, start, unnamed);
+    if (unit.systemverilog_clocking_blocks.size() == blocks) {
+      return;
+    }
+    auto& block = unit.systemverilog_clocking_blocks.back();
+    if (unnamed) {
+      block.name = "$default_clock";
+    }
+    if (unit.systemverilog_default_clocking_block) {
+      error(
+          start,
+          "FSIM-SV-SEM-185",
+          "a design unit can declare only one default clocking block");
+      return;
+    }
+    unit.systemverilog_default_clocking_block = block.name;
+    unit.systemverilog_default_clocking_span = span_from(start, previous());
+    return;
+  }
   const auto name =
       expect_identifier("default clocking block name");
   expect(

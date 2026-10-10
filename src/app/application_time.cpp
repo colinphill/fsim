@@ -863,12 +863,14 @@ bool normalize_delays(
         return;
       }
       if (delay.unit.empty()) {
-        if (delay.divisor != 1) {
-          diagnostics.error(
-              "FSIM-TIME-0003",
-              "a unitless HDL delay cannot retain a fractional tick",
-              span(delay.span));
-          valid = false;
+        // A delay without a time unit counts project-resolution ticks; a
+        // fraction rounds to the nearest tick (IEEE 1800-2017 3.14.2.3).
+        if (delay.divisor > 1) {
+          delay.magnitude = delay.magnitude / delay.divisor
+              + (delay.magnitude % delay.divisor >= (delay.divisor + 1) / 2
+                      ? 1U
+                      : 0U);
+          delay.divisor = 1;
         }
         return;
       }
@@ -1555,12 +1557,12 @@ private:
             value.expression.reset();
         }
         if (unit.empty()) {
-            if (divisor != 1U) {
-                error(value.source,
-                    "a unitless HDL delay cannot retain a fractional tick");
-                return;
-            }
-            value.magnitude = magnitude;
+            // A fraction of a project-resolution tick rounds to the
+            // nearest tick.
+            value.magnitude = divisor > 1U
+                ? magnitude / divisor
+                    + (magnitude % divisor >= (divisor + 1U) / 2U ? 1U : 0U)
+                : magnitude;
             return;
         }
         const auto unit_factor = unit_femtoseconds(unit);

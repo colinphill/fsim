@@ -851,11 +851,38 @@ Statement VhdlParser::parse_if_branch(const Token& start) {
 
 std::optional<Statement> VhdlParser::parse_assignment(bool concurrent) {
   const auto start_position = position();
-  if (!at(TokenKind::Identifier)) {
+  // An aggregate of names as an assignment target, `(a, b) := v;`
+  // (IEEE 1076-2008 10.5.2.1, 10.6.2.1, 11.6).
+  std::vector<Expression> aggregate_targets;
+  if (at(TokenKind::LeftParen)) {
+    std::size_t lookahead = 1U;
+    std::size_t names = 0U;
+    while (at(TokenKind::Identifier, lookahead)) {
+      ++names;
+      ++lookahead;
+      if (!at(TokenKind::Comma, lookahead)) {
+        break;
+      }
+      ++lookahead;
+    }
+    if (names >= 2U && at(TokenKind::RightParen, lookahead)
+        && (at(TokenKind::LessEqual, lookahead + 1U)
+            || at(TokenKind::ColonEqual, lookahead + 1U))) {
+      advance();
+      do {
+        aggregate_targets.push_back(parse_lvalue());
+      } while (match(TokenKind::Comma));
+      expect(TokenKind::RightParen, "')' after aggregate target",
+          "FSIM-VHDL-PARSE-029");
+    }
+  }
+  if (aggregate_targets.empty() && !at(TokenKind::Identifier)) {
     return std::nullopt;
   }
-  const auto start = current();
-  Expression target = parse_lvalue();
+  const auto start = aggregate_targets.empty() ? current() : previous();
+  Expression target = aggregate_targets.empty()
+      ? parse_lvalue()
+      : aggregate_targets.front();
   AssignmentKind kind = AssignmentKind::VhdlSignal;
   if (match(TokenKind::LessEqual)) {
     kind = concurrent ? AssignmentKind::Continuous
@@ -931,7 +958,104 @@ std::optional<Statement> VhdlParser::parse_assignment(bool concurrent) {
   expect(TokenKind::Semicolon, "';' after assignment",
          "FSIM-VHDL-PARSE-029");
   statement.span = span_from(start, previous());
+  if (!aggregate_targets.empty()) {
+    if (auto split = split_vhdl_aggregate_assignment(
+            statement, aggregate_targets)) {
+      return split;
+    }
+    error(start, "FSIM-VHDL-UNSUPPORTED-008",
+        "an aggregate assignment target requires a qualified aggregate or string, or an "
+        "array-object value");
+  }
   return statement;
+}
+
+std::optional<Statement> VhdlParser::split_vhdl_aggregate_assignment(
+    const Statement& statement,
+    const std::vector<Expression>& targets) const {
+  const auto count = targets.size();
+  // Element `k` of the value, counted from the left (IEEE 1076-2008
+  // 9.3.3.2: positional elements match the index range from the left).
+  const auto element = [&](const Expression& value, const std::size_t k)
+      -> std::optional<Expression> {
+    // The value's type must be known without the target's (IEEE 1076-2008
+    // 10.5.2.1): an aggregate or string value is qualified.
+    const Expression* source = &value;
+    if (source->kind == ExpressionKind::Aggregate
+        || source->kind == ExpressionKind::StringLiteral) {
+      return std::nullopt;
+    }
+    if (source->kind == ExpressionKind::Call
+        && source->text.starts_with("@vhdl-qualified:")
+        && source->operands.size() == 1U) {
+      source = &source->operands.front();
+    }
+    if (source->kind == ExpressionKind::Aggregate
+        && source->operands.size() == count
+        && std::ranges::all_of(source->aggregate_choices,
+            [](const std::string& choice) { return choice.empty(); })) {
+      return source->operands[k];
+    }
+    if (source->kind == ExpressionKind::StringLiteral
+        && source->text.size() == count + 2U
+        && source->text.front() == '"') {
+      return Expression { ExpressionKind::LogicLiteral,
+          std::string { '\'', source->text[k + 1U], '\'' }, { },
+          source->span };
+    }
+    if (value.kind == ExpressionKind::Identifier) {
+      // v(v'left + k * ((v'right - v'left) / abs(v'right - v'left))).
+      const auto& span = value.span;
+      const auto attribute = [&](const std::string_view name) {
+        return Expression { ExpressionKind::Call, std::string { name },
+            { value }, span };
+      };
+      auto distance = Expression { ExpressionKind::Binary, "-",
+          { attribute("'right"), attribute("'left") }, span };
+      auto magnitude = Expression { ExpressionKind::Unary, "abs",
+          { distance }, span };
+      auto step = Expression { ExpressionKind::Binary, "/",
+          { std::move(distance), std::move(magnitude) }, span };
+      auto offset = Expression { ExpressionKind::Binary, "*",
+          { Expression { ExpressionKind::IntegerLiteral,
+                std::to_string(k), { }, span },
+            std::move(step) },
+          span };
+      auto index = Expression { ExpressionKind::Binary, "+",
+          { attribute("'left"), std::move(offset) }, span };
+      return Expression { ExpressionKind::Call, value.text,
+          { std::move(index) }, span };
+    }
+    return std::nullopt;
+  };
+  if (statement.kind != StatementKind::Assignment
+      || !statement.value.valid()) {
+    return std::nullopt;
+  }
+  Statement block;
+  block.kind = StatementKind::Block;
+  block.span = statement.span;
+  for (std::size_t k = 0U; k < count; ++k) {
+    Statement part = statement;
+    part.target = targets[k];
+    auto value = element(statement.value, k);
+    if (!value) {
+      return std::nullopt;
+    }
+    part.value = std::move(*value);
+    for (auto& wave : part.vhdl_waveform) {
+      if (!wave.value.valid()) {
+        continue;
+      }
+      auto wave_value = element(wave.value, k);
+      if (!wave_value) {
+        return std::nullopt;
+      }
+      wave.value = std::move(*wave_value);
+    }
+    block.statements.push_back(std::move(part));
+  }
+  return block;
 }
 
 Statement VhdlParser::parse_vhdl_selected_assignment(

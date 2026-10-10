@@ -2029,6 +2029,7 @@ void HierarchyBuilder::finish()
                   << '\n';
     }
     validate_process_drivers();
+    initialize_constant_driven_nets();
     design_.finalize_process_rows();
     std::stable_sort(
         design_.systemc_objects_.begin(),

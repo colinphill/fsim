@@ -473,6 +473,7 @@ DesignUnit VhdlParser::parse_entity(const Token& start)
         && name.text.front() == '\\' && name.text.back() == '\\';
     expect_keyword("is", true, "FSIM-VHDL-PARSE-002");
 
+    bool entity_ports_seen = false;
     while (!at_end() && !keyword("begin", 0, true)
         && !keyword("end", 0, true)) {
         if (parse_vhdl_psl_declaration(unit)) {
@@ -483,7 +484,14 @@ DesignUnit VhdlParser::parse_entity(const Token& start)
             parse_vhdl_generic_subprogram(unit, generic_start, true);
         } else if (match_keyword("port", true)) {
             parse_vhdl_ports(unit);
+            entity_ports_seen = true;
         } else if (match_keyword("generic", true)) {
+            if (entity_ports_seen) {
+                // The generic clause precedes the port clause (IEEE
+                // 1076-2008 6.5.6.1).
+                error(previous(), "FSIM-VHDL-SEM-117",
+                    "a generic clause must precede the port clause");
+            }
             parse_vhdl_generics(unit, previous());
         } else if ((keyword("pure", 0, true) || keyword("impure", 0, true)) && keyword("function", 1, true)) {
             const bool pure = match_keyword("pure", true);
@@ -580,6 +588,10 @@ DesignUnit VhdlParser::parse_entity(const Token& start)
     }
 
     parse_vhdl_end("entity");
+    for (auto& item : deferred_context_items_) {
+        unit.vhdl_context.push_back(std::move(item));
+    }
+    deferred_context_items_.clear();
     unit.span = span_from(start, previous());
     return unit;
 }
@@ -821,6 +833,10 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit)
             auto parsed = parse_vhdl_mode_view_indication(previous());
             type = std::move(parsed.type);
             mode_view = std::move(parsed.indication);
+        } else if (at(TokenKind::Identifier)
+            && !keyword("linkage", 0, true)) {
+            // An omitted mode is `in` (IEEE 1076-2008 6.5.2).
+            direction = PortDirection::Input;
         } else {
             error(current(), "FSIM-VHDL-PARSE-005", "expected VHDL port mode");
         }
@@ -1232,7 +1248,11 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
         type.packed_range = PackedRange { 1, 0, true };
         type.enumeration_literals = { "open_ok", "status_error", "name_error",
             "mode_error" };
-    } else if (simple_name == "time") {
+    } else if (simple_name == "time"
+        || (simple_name == "delay_length"
+            && vhdl_standard_ >= VhdlStandard::Vhdl1993)) {
+        // DELAY_LENGTH is TIME range 0 fs to TIME'HIGH (IEEE 1076-2008
+        // 16.3).
         type.domain = ValueDomain::Integer;
         type.is_signed = true;
         type.packed_range = PackedRange { 63, 0, true };
@@ -1518,6 +1538,10 @@ DesignUnit VhdlParser::parse_architecture(const Token& start)
         unit.vhdl_disconnections,
         unit.concurrent_statements);
     parse_vhdl_end("architecture");
+    for (auto& item : deferred_context_items_) {
+        unit.vhdl_context.push_back(std::move(item));
+    }
+    deferred_context_items_.clear();
     unit.span = span_from(start, previous());
     return unit;
 }

@@ -231,6 +231,8 @@ class VerilogParser final : private detail::ParserBase {
     SourceSpan span;
     std::vector<std::string> expansion_stack;
   };
+  // Names of every class declared so far; a class name is never a net.
+  std::unordered_set<std::string> known_class_names_;
 
   void note_implicit_net_reference(const Token& name);
 

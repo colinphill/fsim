@@ -1189,6 +1189,7 @@ void VhdlParser::parse_vhdl_attribute_declaration(DesignUnit &unit,
                                  {},
                                  {},
                                  span_from(start, previous())});
+    vhdl_declared_attributes_.insert(name);
     return;
   }
   if (!match_keyword("of", true)) {
@@ -1226,13 +1227,41 @@ void VhdlParser::parse_vhdl_attribute_declaration(DesignUnit &unit,
   expect(TokenKind::Colon, "':' before attribute entity class",
          "FSIM-VHDL-PARSE-266");
   const auto entity_class = expect_identifier("attribute entity class");
+  // An attribute of a design unit is specified immediately within that
+  // unit's declarative part (IEEE 1076-2008 7.2).
+  {
+    const auto entity_class_name = vhdl_name(entity_class.text);
+    const auto required = entity_class_name == "entity"
+        ? std::optional { UnitKind::VhdlEntity }
+        : entity_class_name == "architecture"
+        ? std::optional { UnitKind::VhdlArchitecture }
+        : entity_class_name == "package"
+        ? std::optional { UnitKind::VhdlPackage }
+        : entity_class_name == "configuration"
+        ? std::optional { UnitKind::VhdlConfiguration }
+        : std::nullopt;
+    if (required
+        && (unit.kind != *required
+            || std::ranges::any_of(entity_names,
+                [&](const std::string& entity_name) {
+                  return entity_name != "all" && entity_name != "others"
+                      && entity_name != unit.name;
+                }))) {
+      error(entity_class, "FSIM-VHDL-SEM-118",
+            "an attribute of a design unit must be specified in that "
+            "unit's own declarative part");
+    }
+  }
   expect_keyword("is", true, "FSIM-VHDL-PARSE-267");
   auto value = parse_expression();
   expect(TokenKind::Semicolon, "';' after attribute specification",
          "FSIM-VHDL-PARSE-265");
+  // The attribute may be declared in the unit, its entity, or a package
+  // analyzed earlier (IEEE 1076-2008 7.2).
   if (!std::ranges::any_of(unit.vhdl_attributes, [&](const auto &attribute) {
         return !attribute.specification && attribute.name == name;
-      })) {
+      })
+      && !vhdl_declared_attributes_.contains(name)) {
     error(name_token, "FSIM-VHDL-SEM-099",
           "VHDL attribute specification references undeclared attribute '" +
               name + "'");
@@ -1556,7 +1585,30 @@ void VhdlParser::parse_signal_declaration(
     names.push_back(expect_identifier("signal name"));
   }
   expect(TokenKind::Colon, "':' after signal name", "FSIM-VHDL-PARSE-017");
-  const Type type = parse_vhdl_type(true, true);
+  // A resolved subtype indication names its resolution function before the
+  // type mark (IEEE 1076-2008 6.3).
+  std::string resolution_function;
+  if (at(TokenKind::Identifier)) {
+    std::size_t lookahead = 1;
+    while (at(TokenKind::Dot, lookahead) &&
+           at(TokenKind::Identifier, lookahead + 1)) {
+      lookahead += 2;
+    }
+    if (at(TokenKind::Identifier, lookahead) &&
+        !keyword("range", lookahead, true) &&
+        !keyword("bus", lookahead, true) &&
+        !keyword("register", lookahead, true)) {
+      resolution_function =
+          parse_vhdl_selected_name("resolution function name");
+    }
+  }
+  Type type = parse_vhdl_type(true, true);
+  if (!resolution_function.empty()) {
+    type.vhdl_resolution_function = std::move(resolution_function);
+  }
+  // A guarded signal's kind (6.4.2.3); it matters only when every driver is
+  // disconnected.
+  (void)(match_keyword("bus", true) || match_keyword("register", true));
   std::optional<Expression> default_value;
   if (match(TokenKind::ColonEqual)) {
     default_value = parse_expression();
@@ -1650,13 +1702,12 @@ void VhdlParser::parse_vhdl_object_alias(
     type_aliases.push_back(std::move(alias));
     return;
   }
-  if (!match(TokenKind::Colon)) {
-    error(name, "FSIM-VHDL-UNSUPPORTED-054",
-          "bounded object aliases require an explicit subtype indication");
-    skip_to_semicolon();
-    return;
+  // Without a subtype indication, an object alias takes the subtype of
+  // the object it names (IEEE 1076-2008 6.6.2).
+  Type type;
+  if (match(TokenKind::Colon)) {
+    type = parse_vhdl_type(true, true);
   }
-  auto type = parse_vhdl_type(true, true);
   expect_keyword("is", true, "FSIM-VHDL-PARSE-236");
   const auto actual = parse_vhdl_selected_name("alias target");
   if (match(TokenKind::LeftBracket)) {
@@ -1952,6 +2003,13 @@ void VhdlParser::parse_concurrent_statement(DesignUnit &unit) {
 
   const auto before = position();
   auto statement = parse_assignment(true);
+  if (statement && statement->kind == StatementKind::Block) {
+    // An aggregate target assigns each of its names separately.
+    for (auto& part : statement->statements) {
+      unit.concurrent_statements.push_back(std::move(part));
+    }
+    return;
+  }
   if (statement) {
     unit.concurrent_statements.push_back(std::move(*statement));
     return;

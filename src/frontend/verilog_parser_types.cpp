@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
 
+#include <utility>
 #include <bit>
 
 namespace fsim::frontend {

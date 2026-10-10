@@ -1930,6 +1930,91 @@ bool Lowerer::lower_hir_statement(
             return true;
         }
 
+        // `@(vif.member)`: wait on the member of every instance the handle
+        // may name, until the selected member has the event (25.9).
+        if (sensitivities.size() == 1U
+            && !sensitivities.front().expression
+            && sensitivities.front().signal.find('.') != std::string::npos
+            && !hir_named_signal(
+                sensitivities.front().signal, hir_process_scope_)) {
+            if (const auto member = hir_virtual_interface_member(
+                    sensitivities.front().signal, hir_process_scope_)) {
+                const auto edge = sensitivities.front().edge;
+                if (edge != semantic::sv::EdgeKind::any && member->width != 1U) {
+                    return false;
+                }
+                const auto baseline = lower_hir_virtual_interface_read(*member);
+                if (!baseline) {
+                    return false;
+                }
+                const auto loop = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                std::vector<SignalId> candidates;
+                for (const auto& [identity, signal] : member->candidates) {
+                    (void)identity;
+                    candidates.push_back(signal);
+                }
+                process_.operations.emplace_back(WaitOn {
+                    candidates,
+                    std::vector<runtime::simir::EdgeKind>(
+                        candidates.size(), runtime::simir::EdgeKind::any),
+                });
+                const auto current = lower_hir_virtual_interface_read(*member);
+                if (!current) {
+                    return false;
+                }
+                const auto happened = allocate_register(
+                    1U, frontend::ValueDomain::Bit2);
+                if (edge == semantic::sv::EdgeKind::any) {
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::case_equal, happened, *current,
+                        *baseline });
+                    process_.operations.emplace_back(UnaryNot {
+                        happened, happened });
+                } else {
+                    // A posedge leaves 0 or arrives at 1; a negedge leaves 1
+                    // or arrives at 0 (IEEE 1800-2017 table 9-2).
+                    const bool rising
+                        = edge == semantic::sv::EdgeKind::positive;
+                    const auto target = allocate_register(
+                        1U, frontend::ValueDomain::Logic4);
+                    const auto start = allocate_register(
+                        1U, frontend::ValueDomain::Logic4);
+                    process_.operations.emplace_back(LoadConstant {
+                        target, PackedLogic4 { 1U,
+                            rising ? Logic4::one : Logic4::zero } });
+                    process_.operations.emplace_back(LoadConstant {
+                        start, PackedLogic4 { 1U,
+                            rising ? Logic4::zero : Logic4::one } });
+                    const auto same = allocate_register(
+                        1U, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::case_equal, same, *current,
+                        *baseline });
+                    process_.operations.emplace_back(UnaryNot { same, same });
+                    const auto arrived = allocate_register(
+                        1U, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::case_equal, arrived, *current, target });
+                    const auto left = allocate_register(
+                        1U, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::case_equal, left, *baseline, start });
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::bit_or, arrived, arrived, left });
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::bit_and, happened, same, arrived });
+                }
+                process_.operations.emplace_back(CopyRegister {
+                    *baseline, *current });
+                const auto branch = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations.emplace_back(Branch {
+                    happened, branch + 1U, loop,
+                    UnknownBranchPolicy::when_false });
+                return true;
+            }
+        }
         std::vector<SignalId> named_events;
         named_events.reserve(sensitivities.size());
         const bool all_named_events = std::ranges::all_of(
@@ -3798,6 +3883,107 @@ bool Lowerer::lower_hir_statement(
             }
             return true;
         }
+        // A constant bit- or part-select of a packed member of an unpacked
+        // structure, `s.m[1] = v` or `s.m[3:2] = v`: read, insert, and
+        // write the member back (IEEE 1800-2017 7.2, 11.5.1).
+        if (target_expression->systemverilog != nullptr
+            && statement->systemverilog != nullptr
+            && ((target_expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::index
+                    && target_expression->systemverilog->operands.size()
+                        == 2U)
+                || (target_expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::slice
+                    && target_expression->systemverilog->operands.size()
+                        == 3U))) {
+            const auto member_base
+                = target_expression->systemverilog->operands.front();
+            const auto member = hir_container_aggregate_selection(
+                member_base);
+            const auto selection = member
+                ? hir_constant_selection(*target, hir_process_scope_)
+                : std::nullopt;
+            const auto& input = *statement->systemverilog;
+            if (member && selection
+                && member->leaf.element_kind == ContainerElementKind::Packed
+                && !signal_assignment && !nonblocking
+                && input.assignment_control
+                    == semantic::sv::AssignmentControl::none
+                && !input.delay
+                && input.update_kind == semantic::sv::UpdateKind::none
+                && selection->width != 0U
+                && selection->offset <= member->leaf.element_width
+                && selection->width
+                    <= member->leaf.element_width - selection->offset) {
+                if (member->element.read_only) {
+                    report(
+                        "FSIM-ELAB-SVPORT-009",
+                        "an input container port is read-only",
+                        span);
+                    return true;
+                }
+                const auto leaf_width = member->leaf.element_width;
+                const auto domain = member->leaf.two_state
+                    ? frontend::ValueDomain::Bit2
+                    : frontend::ValueDomain::Logic4;
+                const auto element_index = lower_hir_container_element_index(
+                    member->element);
+                auto current = lower_hir_expression(member_base, leaf_width);
+                auto lowered = lower_hir_expression(
+                    *value, selection->width);
+                if (!element_index || !current || !lowered) {
+                    return false;
+                }
+                if (register_width(*current) != leaf_width) {
+                    current = resize_register(*current, leaf_width, false);
+                }
+                if (register_width(*lowered) != selection->width) {
+                    lowered = resize_register(*lowered, selection->width,
+                        hir_expression_signed(*value));
+                }
+                const auto updated = allocate_register(leaf_width, domain);
+                process_.operations.emplace_back(CopyRegister {
+                    updated, *current });
+                auto inserted = *lowered;
+                if (register_domain(inserted) != domain) {
+                    inserted = allocate_register(selection->width, domain);
+                    process_.operations.emplace_back(CopyRegister {
+                        inserted, *lowered });
+                }
+                process_.operations.emplace_back(Insert {
+                    updated,
+                    updated,
+                    inserted,
+                    static_cast<std::uint32_t>(selection->offset),
+                });
+                const auto aggregate_container = member->element.local
+                    ? *member->element.local
+                    : allocate_container_register(*member->element.type);
+                if (!member->element.local) {
+                    process_.operations.emplace_back(ReadContainerObject {
+                        aggregate_container,
+                        member->element.object,
+                    });
+                }
+                process_.operations.emplace_back(ContainerAggregateWrite {
+                    aggregate_container,
+                    *element_index,
+                    updated,
+                    member->members,
+                    member->element.indices.size() > 1U
+                        || member->element.type->signed_indices,
+                    member->element.indices.size() > 1U,
+                });
+                if (!member->element.local) {
+                    process_.operations.emplace_back(WriteContainerObject {
+                        member->element.object,
+                        aggregate_container,
+                        std::nullopt,
+                    });
+                }
+                return true;
+            }
+        }
         if (const auto aggregate_member
             = hir_container_aggregate_selection(*target)) {
             const auto& input = *statement->systemverilog;
@@ -4860,6 +5046,58 @@ bool Lowerer::lower_hir_statement(
             }
             std::cerr << '\n';
         }
+        if (!direct_binding && statement->systemverilog != nullptr
+            && !statement->systemverilog->delay
+            && statement->systemverilog->assignment_kind
+                != semantic::sv::AssignmentKind::continuous) {
+            if (const auto member = hir_virtual_interface_member(*target)) {
+                // A write through a virtual interface handle reaches the
+                // member of the instance it names (IEEE 1800-2017 25.9).
+                auto lowered = lower_hir_expression(*value, member->width);
+                const auto handle = lowered
+                    ? lower_hir_virtual_interface_handle(member->receiver)
+                    : std::nullopt;
+                if (!lowered || !handle
+                    || !lower_intra_assignment_control()) {
+                    return false;
+                }
+                if (register_width(*lowered) != member->width) {
+                    lowered = resize_register(*lowered, member->width,
+                        hir_expression_signed(*value));
+                }
+                for (const auto& [identity, signal] : member->candidates) {
+                    const auto constant = allocate_register(
+                        64U, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(LoadConstant {
+                        constant, unsigned_value(identity, 64U) });
+                    const auto selected = allocate_register(
+                        1U, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::case_equal, selected, *handle,
+                        constant });
+                    const auto branch = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations.emplace_back(Branch {
+                        selected, branch + 1U, 0U,
+                        UnknownBranchPolicy::when_false });
+                    if (nonblocking) {
+                        process_.operations.emplace_back(WriteUpdate {
+                            signal, *lowered, update_domain });
+                    } else {
+                        process_.operations.emplace_back(WriteBlocking {
+                            signal, *lowered });
+                    }
+                    process_.operations[branch] = Branch {
+                        selected,
+                        branch + 1U,
+                        static_cast<InstructionIndex>(
+                            process_.operations.size()),
+                        UnknownBranchPolicy::when_false,
+                    };
+                }
+                return true;
+            }
+        }
         if (!declaration && !direct_binding) {
             trace_generated("target-binding");
             trace_assignment_failure("target-binding");
@@ -5321,8 +5559,12 @@ bool Lowerer::lower_hir_statement(
                 = *target_expression->systemverilog;
             target_operands = selection_expression.operands;
             selection_operation = selection_expression.text;
+            // A member of an interface array element (`bus[2].data`)
+            // resolved to its signal is a whole-signal target.
             index = selection_expression.kind
-                == semantic::sv::ExpressionKind::index;
+                    == semantic::sv::ExpressionKind::index
+                && !(direct_binding
+                    && selection_expression.text.starts_with("index."));
             slice = selection_expression.kind
                 == semantic::sv::ExpressionKind::slice;
         } else {
@@ -9606,11 +9848,33 @@ bool Lowerer::lower_hir_statement(
                         restore_scope();
                         return false;
                     }
-                    auto limit = lower_hir_expression(
-                        *loop_statement.loop_limit, 32U);
+                    // A real count rounds to an integer (IEEE 1800-2017
+                    // 12.7.2, 6.12.2).
+                    const auto limit_kind = hir_systemverilog_scalar_kind(
+                        *loop_statement.loop_limit);
+                    const bool real_limit = limit_kind
+                            == frontend::SystemVerilogScalarKind::Real
+                        || limit_kind
+                            == frontend::SystemVerilogScalarKind::ShortReal
+                        || limit_kind
+                            == frontend::SystemVerilogScalarKind::Realtime;
+                    auto limit = real_limit
+                        ? lower_hir_expression(*loop_statement.loop_limit,
+                              limit_kind
+                                      == frontend::SystemVerilogScalarKind::
+                                          ShortReal
+                                  ? 32U
+                                  : 64U,
+                              limit_kind)
+                        : lower_hir_expression(
+                              *loop_statement.loop_limit, 32U);
                     if (!limit) {
                         restore_scope();
                         return false;
+                    }
+                    if (real_limit) {
+                        limit = convert_hir_real_to_integral(
+                            *limit, limit_kind);
                     }
                     if (register_width(*limit) != 32U) {
                         limit = resize_register(
@@ -11023,6 +11287,59 @@ bool Lowerer::lower_hir_statement(
             return true;
         }
         case semantic::sv::StatementKind::task_call: {
+            if (input.task.spelling == "$sdf_annotate") {
+                // The annotation is applied at elaboration; the call itself
+                // has no run-time effect.
+                std::string file;
+                std::string scope = hierarchy_;
+                const auto argument = [&](const std::size_t position)
+                    -> const semantic::sv::Expression* {
+                    if (position >= input.task_arguments.size()
+                        || !input.task_arguments[position].actual) {
+                        return nullptr;
+                    }
+                    const auto found = specialized_hir_unit_->find_expression(
+                        *input.task_arguments[position].actual);
+                    return found ? found->systemverilog : nullptr;
+                };
+                if (const auto* path = argument(0U);
+                    path != nullptr && path->decoded_string) {
+                    file = *path->decoded_string;
+                }
+                if (const auto* instance = argument(1U);
+                    instance != nullptr
+                    && instance->kind == semantic::sv::ExpressionKind::name) {
+                    // A scope naming this instance or an enclosing one (as
+                    // a top module naming itself) is that instance;
+                    // otherwise it is a child of this instance.
+                    std::string enclosing = scope;
+                    while (!enclosing.empty()) {
+                        const auto separator = enclosing.rfind('.');
+                        const auto last = separator == std::string::npos
+                            ? std::string_view { enclosing }
+                            : std::string_view { enclosing }.substr(
+                                  separator + 1U);
+                        if (last == instance->text) {
+                            break;
+                        }
+                        enclosing.resize(separator == std::string::npos
+                                ? 0U
+                                : separator);
+                    }
+                    scope = !enclosing.empty() ? enclosing
+                        : scope.empty()        ? instance->text
+                                               : scope + "." + instance->text;
+                }
+                if (file.empty()) {
+                    report("FSIM-ELAB-SDF-001",
+                        "$sdf_annotate requires an SDF file name literal",
+                        span);
+                    return true;
+                }
+                design_.sdf_annotation_requests_.push_back(
+                    { std::move(file), std::move(scope) });
+                return true;
+            }
             constexpr auto container_push_prefix
                 = std::string_view { "@sv-container-push-back:" };
             constexpr std::array assertion_control_tasks {
@@ -12945,6 +13262,25 @@ bool Lowerer::lower_hir_statement(
                     discarding_call_result_ = discarded == *input.value;
                     return lower_hir_function_call_value(
                                discarded, width.value_or(0U))
+                        .has_value();
+                }
+                // A system function whose value is discarded, as
+                // `void'($fgets(s, fd))` (IEEE 1800-2017 13.4.1).
+                if (discarded_expression
+                    && discarded_expression->systemverilog != nullptr
+                    && discarded_expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::call
+                    && discarded_expression->systemverilog->text
+                        .starts_with('$')) {
+                    if (hir_expression_is_string(
+                            discarded, hir_process_scope_)) {
+                        return lower_hir_string_expression(discarded)
+                            .has_value();
+                    }
+                    const auto width = hir_expression_width(
+                        discarded, hir_process_scope_);
+                    return lower_hir_expression(
+                               discarded, width.value_or(32U))
                         .has_value();
                 }
             }

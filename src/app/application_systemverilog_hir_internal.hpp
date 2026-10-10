@@ -3,6 +3,7 @@
 
 #include "application_internal.hpp"
 
+#include <algorithm>
 #include <functional>
 #include <map>
 #include <unordered_map>
@@ -29,6 +30,75 @@ namespace sv = semantic::sv;
     const sv::Hir& hir,
     semantic::ScopeId scope,
     std::string_view spelling) noexcept;
+
+/// An omitted call argument, positional `f(, 1)` or named `f(.s())`,
+/// takes the formal's default (IEEE 1800-2017 13.5.3). The returned flags
+/// mark the operands to drop; `names` is replaced by the names of the kept
+/// operands, with positional actuals after an omitted one named by their
+/// formals. Nothing changes when the callee's formals are unknown.
+inline std::vector<bool> omit_systemverilog_call_arguments(
+    const frontend::Expression& input,
+    const std::optional<semantic::sv::Name>& referenced_name,
+    const semantic::sv::Hir& hir,
+    std::vector<std::string>& names)
+{
+    std::vector<bool> omitted(input.operands.size());
+    if (input.kind != frontend::ExpressionKind::Call
+        || input.text.starts_with('$') || !referenced_name
+        || referenced_name->overloads.size() != 1U
+        || std::ranges::none_of(input.operands,
+            [](const frontend::Expression& operand) {
+                return operand.kind == frontend::ExpressionKind::Invalid;
+            })) {
+        return omitted;
+    }
+    const auto callable = std::ranges::find(hir.declarations(),
+        referenced_name->overloads.front(),
+        &semantic::sv::Declaration::id);
+    if (callable == hir.declarations().end() || !callable->callable) {
+        return omitted;
+    }
+    std::vector<std::string> formal_names;
+    for (const auto formal : callable->callable->formals) {
+        const auto record = std::ranges::find(
+            hir.declarations(), formal, &semantic::sv::Declaration::id);
+        if (record == hir.declarations().end()) {
+            return omitted;
+        }
+        formal_names.push_back(record->name);
+    }
+    // More actuals than formals, even empty ones, stay an error (13.5).
+    if (input.operands.size() > formal_names.size()) {
+        return omitted;
+    }
+    std::vector<std::string> spelled(input.operands.size());
+    for (std::size_t index = 0U;
+        index < spelled.size() && index < input.call_argument_names.size();
+        ++index) {
+        spelled[index] = input.call_argument_names[index];
+    }
+    std::vector<std::string> kept;
+    bool shifted = false;
+    std::size_t position = 0U;
+    for (std::size_t index = 0U; index < spelled.size(); ++index) {
+        const bool empty = input.operands[index].kind
+            == frontend::ExpressionKind::Invalid;
+        if (spelled[index].empty()) {
+            if (empty) {
+                shifted = true;
+            } else if (shifted && position < formal_names.size()) {
+                spelled[index] = formal_names[position];
+            }
+            ++position;
+        }
+        omitted[index] = empty;
+        if (!empty) {
+            kept.push_back(spelled[index]);
+        }
+    }
+    names = std::move(kept);
+    return omitted;
+}
 
 class SystemVerilogHirBuilder final {
 public:
