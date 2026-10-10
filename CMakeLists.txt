@@ -608,6 +608,7 @@ set(
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_assertion_resolution_support.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_assertion_engine.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_randsequence.cpp"
+  "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_interface_types.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_checker_resolution.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_coverage.cpp"
   "${PROJECT_SOURCE_DIR}/src/frontend/verilog_parser_coverage_bins.cpp"

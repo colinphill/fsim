@@ -473,6 +473,12 @@ void VerilogParser::parse_typedef(
         Token>>
         enum_parameters;
     std::vector<EnumLiteralDeclaration> enum_literals;
+    // `typedef interface class name;` forward-declares an interface class.
+    if (keyword("interface") && keyword("class", 1)
+        && at(TokenKind::Identifier, 2) && at(TokenKind::Semicolon, 3)) {
+        index_ += 4U;
+        return;
+    }
     // A forward type declaration (IEEE 1800-2017 6.18) names a type that a
     // later typedef completes: `typedef struct name;`, `typedef name;`.
     if (((keyword("struct") || keyword("union") || keyword("enum"))
@@ -735,6 +741,22 @@ void VerilogParser::parse_typedef(
         type = std::move(*expanded);
     } else if (is_named_type_reference_start()) {
         type = parse_named_type();
+        // A typedef of a structure or union typedef of this unit takes the
+        // aggregate's own description (IEEE 1800-2017 6.18).
+        if (type.named_type.find("::") == std::string::npos) {
+            const auto aliased = std::ranges::find(unit.type_aliases,
+                type.named_type, &TypeAliasDeclaration::name);
+            if (aliased != unit.type_aliases.end()
+                && !aliased->type.packed_members.empty()) {
+                type = aliased->type;
+            }
+        }
+    } else if (keyword("virtual")) {
+        // A virtual interface type (IEEE 1800-2017 25.9).
+        const auto virtual_start = advance();
+        type = parse_virtual_interface_type(virtual_start);
+    } else if (auto imported = import_interface_type(unit)) {
+        type = std::move(*imported);
     } else {
         error(
             current(),

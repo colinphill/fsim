@@ -1044,6 +1044,9 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-PP-051` | error | A special macro string contains a backtick that does not introduce an identifier. |
 | `FSIM-SV-PP-052` | error | A compiler directive, macro form, lexical token, or keyword region requires a later Verilog/SystemVerilog revision, or the selected revision belongs to the wrong language family. |
 | `FSIM-SV-PP-053` | error | A SystemVerilog-2023 conditional-compilation expression has malformed grouping or contains an unsupported operand or operator. |
+| `FSIM-SV-PP-054` | error | `` `resetall`` appears inside a design element (IEEE 1800-2017 22.3). |
+| `FSIM-SV-PP-055` | error | `` `define`` names a compiler directive, which is a predefined macro name that cannot be redefined (IEEE 1800-2017 22.5.1). |
+| `FSIM-SV-PP-056` | error | `` `pragma`` has no pragma name (IEEE 1800-2017 22.11). |
 
 ### Verilog/SystemVerilog syntax
 
@@ -1662,6 +1665,11 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-CLASS-025` | error | A class handle is assigned a handle of a class that is neither the same class nor derived from it (IEEE 1800-2017 8.15). |
 | `FSIM-SV-CLASS-026` | error | The class scope of a typed constructor `C::new` does not name exactly one class (IEEE 1800-2017 8.8). |
 | `FSIM-SV-CLASS-027` | error | The operand of a shallow copy `new h` is not a class handle (IEEE 1800-2017 8.12). |
+| `FSIM-SV-CLASS-028` | error | A `local` class member is referenced outside its class, or a `protected` member outside its class and the classes derived from it (IEEE 1800-2017 8.18). |
+| `FSIM-SV-CLASS-029` | error | A class declares a method named `randomize`, `rand_mode`, `constraint_mode`, `srandom`, `get_randstate`, or `set_randstate`; these built-in methods cannot be overridden (IEEE 1800-2017 18.6.3, 18.8, 18.9, 18.13). |
+| `FSIM-SV-CLASS-030` | error | A `randc` variable appears in a distribution, soft, or solve-before constraint (IEEE 1800-2017 18.5.4, 18.5.10, 18.5.14.1). |
+| `FSIM-SV-CLASS-031` | error | An out-of-block constraint `constraint C::c { ... }` names no constraint prototype of class `C` (IEEE 1800-2017 18.5.1). |
+| `FSIM-SV-CLASS-032` | error | An explicit `extern constraint` prototype has no out-of-block definition (IEEE 1800-2017 18.5.1). |
 
 The standardized `$dist_*` callables use source-located simulation warnings
 rather than compile diagnostics for runtime-domain failures. Nonpositive
@@ -1789,6 +1797,7 @@ scheduler.
 | `FSIM-SV-SEM-402` | error | In Verilog, a declaration appears in an unnamed `begin` or `fork` block (IEEE 1364-2005 9.8.3); SystemVerilog allows it. |
 | `FSIM-SV-SEM-403` | error | A `randsequence` names a production that it does not declare (IEEE 1800-2017 18.17). |
 | `FSIM-SV-SEM-404` | error | A `for` loop variable declared with `var` has no data type, as in `for (var [7:0] i = 0; ...)` (IEEE 1800-2017 12.7.1). |
+| `FSIM-SV-SEM-405` | error | A type named through an interface instance or interface port (`ifc.data_t`, `ifc.sub.t`) does not name an interface instance or a typedef declared in the interface (IEEE 1800-2017 25.10). |
 | `FSIM-SV-SEM-073` | error | A module or package declares the same bounded task name more than once. |
 | `FSIM-SV-SEM-075` | error | A bounded text-file system function has the wrong argument count. |
 | `FSIM-SV-SEM-076` | error | `$fdisplay` or `$fwrite` has a nonliteral, malformed, unsupported, or multi-value format. |
@@ -2433,6 +2442,8 @@ scheduler.
 | `FSIM-ELAB-SVEXPR-006` | error | A runtime-base packed part-select target is used with an unsupported assignment kind. |
 | `FSIM-ELAB-SVEXPR-007` | error | Update-expression HIR is not a supported SystemVerilog prefix or postfix increment/decrement of one writable operand. |
 | `FSIM-ELAB-SVEXPR-008` | error | A runtime-selected packed procedural target has a following selection. |
+| `FSIM-ELAB-SVEXPR-009` | error | A bit-select or part-select index is a real value (IEEE 1800-2017 11.5.1). |
+| `FSIM-ELAB-SVEXPR-010` | error | A streaming concatenation is wider than the target it is assigned to (IEEE 1800-2017 11.4.14.1). |
 | `FSIM-ELAB-SVFORCE-001` | error | A procedural force or release target is not a supported signal, static bit-select, static part-select, or packed member. |
 | `FSIM-ELAB-SVFORCE-002` | error | A procedural force or release target is not a visible packed signal with an executable layout. |
 | `FSIM-ELAB-SVFORCE-003` | error | Retired: a four-state value forced onto a two-state target now converts as an assignment does (IEEE 1800-2017 10.6.2). |

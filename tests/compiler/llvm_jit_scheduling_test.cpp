@@ -79,7 +79,9 @@ void run_at_level(const JitOptimizationLevel optimization,
   assert((runtime.signals[4] == EncodedSignal{0x3b, 0x01}));
   assert((runtime.signals[5] == EncodedSignal{0xff, 0xff}));
   assert((runtime.signals[6] == EncodedSignal{0xcb, 0x01}));
-  assert((runtime.signals[7] == EncodedSignal{1, 1}));
+  // 0x35 == 0x0f differs in known bits despite the X (IEEE 1800-2017
+  // 11.4.5).
+  assert((runtime.signals[7] == EncodedSignal{0, 0}));
 
   auto wrong_abi = descriptor;
   wrong_abi.abi_version = 99;

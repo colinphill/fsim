@@ -807,16 +807,25 @@ void store_register(llvm::IRBuilder<>& builder,
             lhs.width
         };
     }
-    case BinaryOperator::equal: {
+    case BinaryOperator::equal:
+    case BinaryOperator::not_equal: {
+        // A known differing bit decides the relation; unknown bits make it
+        // ambiguous only otherwise (IEEE 1800-2017 11.4.5).
         auto* unknown_bits = builder.CreateAnd(builder.CreateOr(lhs.bval, rhs.bval), mask);
         auto* unknown = builder.CreateICmpNE(unknown_bits,
             zero);
-        auto* equal = builder.CreateICmpEQ(
-            builder.CreateAnd(lhs.aval, mask),
-            builder.CreateAnd(rhs.aval, mask));
-        auto* aval = builder.CreateZExt(
-            builder.CreateOr(unknown, equal), llvm::Type::getInt64Ty(context));
-        auto* bval = builder.CreateZExt(unknown, llvm::Type::getInt64Ty(context));
+        auto* differ_bits = builder.CreateAnd(
+            builder.CreateAnd(
+                builder.CreateXor(lhs.aval, rhs.aval),
+                builder.CreateNot(unknown_bits)),
+            mask);
+        auto* differ = builder.CreateICmpNE(differ_bits, zero);
+        auto* ambiguous = builder.CreateAnd(unknown, builder.CreateNot(differ));
+        auto* set = operation == BinaryOperator::equal
+            ? builder.CreateNot(differ)
+            : builder.CreateOr(differ, ambiguous);
+        auto* aval = builder.CreateZExt(set, llvm::Type::getInt64Ty(context));
+        auto* bval = builder.CreateZExt(ambiguous, llvm::Type::getInt64Ty(context));
         return { aval, bval, 1 };
     }
     case BinaryOperator::case_equal: {
@@ -864,12 +873,20 @@ void store_register(llvm::IRBuilder<>& builder,
             builder.CreateXor(lhs.aval, rhs.aval), compared_mask);
         auto* equal = builder.CreateICmpEQ(
             mismatch_bits, zero);
+        // A known differing bit decides the relation (IEEE 1800-2017
+        // 11.4.6).
+        auto* known_differ = builder.CreateICmpNE(
+            builder.CreateAnd(mismatch_bits, builder.CreateNot(lhs.bval)),
+            zero);
+        auto* ambiguous = builder.CreateAnd(
+            unknown, builder.CreateNot(known_differ));
         return {
             builder.CreateZExt(
-                builder.CreateOr(unknown, equal),
+                builder.CreateAnd(builder.CreateOr(unknown, equal),
+                    builder.CreateNot(known_differ)),
                 llvm::Type::getInt64Ty(context)),
             builder.CreateZExt(
-                unknown, llvm::Type::getInt64Ty(context)),
+                ambiguous, llvm::Type::getInt64Ty(context)),
             1
         };
     }
@@ -926,7 +943,6 @@ void store_register(llvm::IRBuilder<>& builder,
             1
         };
     }
-    case BinaryOperator::not_equal:
     case BinaryOperator::less_unsigned:
     case BinaryOperator::less_equal_unsigned:
     case BinaryOperator::greater_unsigned:

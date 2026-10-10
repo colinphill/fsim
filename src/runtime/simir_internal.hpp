@@ -3819,6 +3819,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
         PendingInertialWrite,
         InertialDriverKeyHash>
         pending_inertial_writes;
+    // Initial values of nets with X bits from delayed continuous
+    // assignments (Interpreter::add_signal).
+    std::unordered_map<SignalId, PackedLogic4> delayed_net_initial_values;
     std::unordered_map<
         InertialDriverKey,
         PendingModulePathWrite,
@@ -4950,7 +4953,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const SignalId signal_id,
         std::span<const Process::DriverRegion> regions,
         DriveStrength strength,
-        std::shared_ptr<const std::vector<Process::DriverRegion>> scalar_regions);
+        std::shared_ptr<const std::vector<Process::DriverRegion>> scalar_regions,
+        bool delayed_writer = false);
 
     void set_driver(
         const ProcessId process,

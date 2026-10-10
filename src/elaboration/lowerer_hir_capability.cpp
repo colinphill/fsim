@@ -3350,6 +3350,72 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
     }
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
+    constexpr std::string_view indexed_member_prefix { "index." };
+    if (expression && expression->systemverilog != nullptr
+        && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::index
+        && expression->systemverilog->text.starts_with(indexed_member_prefix)
+        && expression->systemverilog->operands.size() == 2U) {
+        // A member of an element of an interface instance array,
+        // `bus[2].data`, is that element instance's signal; the member
+        // path follows `index.` in the selection's text.
+        const auto array = specialized_hir_unit_->find_expression(
+            expression->systemverilog->operands.front());
+        if (!array || array->systemverilog == nullptr
+            || array->systemverilog->kind
+                != semantic::sv::ExpressionKind::name
+            || systemverilog_interface_handles_ == nullptr) {
+            return std::nullopt;
+        }
+        const auto element = specialized_hir_unit_
+                                 ->evaluate_integral_expression(
+                                     expression->systemverilog->operands.back());
+        if (!element) {
+            return std::nullopt;
+        }
+        const auto occurrence = array->systemverilog->text + "["
+            + std::to_string(*element) + "]";
+        // The element must be an interface instance.
+        std::optional<std::string> element_path;
+        for (auto lexical = hierarchy_;;) {
+            const auto candidate = lexical.empty()
+                ? occurrence
+                : lexical + "." + occurrence;
+            if (systemverilog_interface_handles_->contains(candidate)) {
+                element_path = candidate;
+                break;
+            }
+            const auto separator = lexical.rfind('.');
+            if (separator == std::string::npos) {
+                if (!lexical.empty()) {
+                    lexical.clear();
+                    continue;
+                }
+                break;
+            }
+            lexical.resize(separator);
+        }
+        if (!element_path) {
+            return std::nullopt;
+        }
+        const auto member = expression->systemverilog->text.substr(
+            indexed_member_prefix.size());
+        if (const auto found = signals_.find(occurrence + "." + member);
+            found != signals_.end()
+            && found->second < design_.signal_info_.size()) {
+            return found->second;
+        }
+        if (const auto found = design_.signal_by_name_.find(
+                *element_path + "." + member);
+            found != design_.signal_by_name_.end()
+            && found->second < design_.signal_info_.size()) {
+            hierarchical_reference_used_ = true;
+            return found->second;
+        }
+        // The element instance may not be elaborated yet.
+        hierarchical_reference_missed_ = true;
+        return std::nullopt;
+    }
     if (!expression || expression->systemverilog == nullptr
         || expression->systemverilog->kind
             != semantic::sv::ExpressionKind::name) {
@@ -3529,7 +3595,11 @@ Lowerer::hir_systemverilog_interface_handle(
     if (source.kind == semantic::sv::ExpressionKind::name) {
         occurrence = source.text;
     } else if (source.kind == semantic::sv::ExpressionKind::index
-        && source.operands.size() == 2U) {
+        && source.operands.size() == 2U
+        // `index.member` selects a member of the element, not the element.
+        && (source.text.find('.') == std::string::npos
+            || (!hierarchical_reference_retry_
+                && !hir_direct_signal(expression_id)))) {
         const auto base = specialized_hir_unit_->find_expression(
             source.operands.front());
         const auto index = specialized_hir_unit_
@@ -9311,8 +9381,19 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
             if (source.text == "==" || source.text == "!="
                 || source.text == "===" || source.text == "!=="
                 || source.text == "==?" || source.text == "!=?"
-                || source.text == "&&" || source.text == "||") {
+                || source.text == "&&" || source.text == "||"
+                || source.text == "<" || source.text == "<="
+                || source.text == ">" || source.text == ">="
+                || source.text == "->" || source.text == "<->") {
                 return 1U;
+            }
+            // A shift or power has the width of its left operand
+            // (IEEE 1800-2017 11.6.1, Table 11-21).
+            if (source.text == "<<" || source.text == ">>"
+                || source.text == "<<<" || source.text == ">>>"
+                || source.text == "**") {
+                return hir_expression_width(
+                    source.operands.front(), process_scope);
             }
             const auto left = hir_expression_width(
                 source.operands.front(), process_scope);

@@ -783,8 +783,15 @@ namespace {
                     return;
                 }
                 if (arguments >= end
-                    || tokens[arguments].kind != TokenKind::Identifier
-                    || tokens[arguments].text != "protect") {
+                    || tokens[arguments].kind != TokenKind::Identifier) {
+                    // IEEE 1800-2017 22.11: a pragma names its pragma.
+                    diagnose(
+                        "FSIM-SV-PP-056",
+                        "`pragma requires a pragma name",
+                        name_token.span);
+                    return;
+                }
+                if (tokens[arguments].text != "protect") {
                     return;
                 }
                 if (arguments + 1 >= end
@@ -1084,6 +1091,16 @@ namespace {
                 return;
             }
             const auto& name = tokens[begin];
+            // Compiler directive names are predefined macro names and
+            // cannot be redefined (IEEE 1800-2017 22.5.1).
+            if (is_directive(name.text)) {
+                diagnose(
+                    "FSIM-SV-PP-055",
+                    "`define cannot redefine the compiler directive `"
+                        + name.text,
+                    name.span);
+                return;
+            }
             std::size_t replacement_begin = begin + 1;
             std::optional<std::vector<MacroParameter>> parameters;
             if (replacement_begin < end
@@ -1513,7 +1530,8 @@ namespace {
         [[nodiscard]] std::vector<Token> select_replacement_conditionals(
             const Macro& macro,
             const SourceSpan& invocation,
-            const std::vector<std::string>& expansion_stack)
+            const std::vector<std::string>& expansion_stack,
+            const std::vector<std::vector<Token>>& arguments)
         {
             struct ReplacementConditional {
                 bool parent_active { };
@@ -1535,9 +1553,42 @@ namespace {
                     return { std::nullopt, begin };
                 }
                 if (macro.replacement[begin].kind == TokenKind::Identifier) {
-                    return {
-                        macros_.contains(macro.replacement[begin].text), begin + 1
+                    // The name may join macro arguments with ``
+                    // (`ifdef STOP_``a1).
+                    const auto piece = [&](const Token& token) {
+                        if (macro.parameters
+                            && token.kind == TokenKind::Identifier) {
+                            const auto found = std::ranges::find(
+                                *macro.parameters, token.text,
+                                &MacroParameter::name);
+                            if (found != macro.parameters->end()) {
+                                const auto position = static_cast<std::size_t>(
+                                    std::distance(
+                                        macro.parameters->begin(), found));
+                                std::string text;
+                                if (position < arguments.size()) {
+                                    for (const auto& part : arguments[position]) {
+                                        text += part.text;
+                                    }
+                                }
+                                return text;
+                            }
+                        }
+                        return token.text;
                     };
+                    auto name = piece(macro.replacement[begin]);
+                    auto end = begin + 1;
+                    while (end + 2 < macro.replacement.size()
+                        && macro.replacement[end].kind == TokenKind::Backtick
+                        && macro.replacement[end + 1].kind == TokenKind::Backtick
+                        && macro.replacement[end + 2].span.begin.line == line
+                        && (macro.replacement[end + 2].kind == TokenKind::Identifier
+                            || macro.replacement[end + 2].kind
+                                == TokenKind::Number)) {
+                        name += piece(macro.replacement[end + 2]);
+                        end += 3;
+                    }
+                    return { macros_.contains(name), end };
                 }
                 if (macro.replacement[begin].kind != TokenKind::LeftParen) {
                     return { std::nullopt, begin };
@@ -1917,7 +1968,7 @@ namespace {
                 argument = expand_sequence(argument, depth + 1, expansion_stack);
             }
             const auto replacement_tokens = select_replacement_conditionals(
-                macro, invocation_span, expansion_stack);
+                macro, invocation_span, expansion_stack, arguments);
             std::vector<Token> substituted;
             for (std::size_t replacement_index = 0;
                 replacement_index < replacement_tokens.size();

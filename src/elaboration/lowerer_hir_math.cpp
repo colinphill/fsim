@@ -66,7 +66,7 @@ namespace {
             return Function::Acosh;
         if (name == "$atanh")
             return Function::Atanh;
-        if (name == "$time")
+        if (name == "$time" || name == "$simtime")
             return Function::Time;
         if (name == "$stime")
             return Function::Stime;
@@ -192,7 +192,9 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_math_call(
         const auto* const context = unit && unit->systemverilog != nullptr
             ? &unit->systemverilog->compilation
             : nullptr;
-        const auto time_unit = context == nullptr
+        // $simtime counts simulation-precision ticks: the runtime's zero
+        // unit is the project resolution.
+        const auto time_unit = context == nullptr || call.text == "$simtime"
             ? std::optional<std::uint64_t> { }
             : systemverilog_time_scale_femtoseconds(context->time_unit);
         const auto time_precision = context == nullptr

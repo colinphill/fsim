@@ -443,7 +443,7 @@ module bad_case_qualifiers;
   initial unique priority case (selector)
     1'b0: result = 1'b0;
   endcase
-  initial unique if (selector) result = 1'b1;
+  initial unique result = 1'b1;
 endmodule
 )",
         Language::SystemVerilog2017);
@@ -610,13 +610,12 @@ endmodule
                 == ExpressionKind::Call
             && foreach_statements.front().condition.text == "@sv-foreach"
             && foreach_statements.front().condition.operands.size() == 2
-            && foreach_statements.back().loop_variable == "row"
-            && foreach_statements.back().condition.operands.size() == 3
-            && foreach_statements.back().condition.operands[1].text == "row"
-            && foreach_statements.back().condition.operands[2].text == "column"
             && foreach_statements.front().statements.size() == 1
-            && foreach_statements.back().statements.size() == 2,
-        "foreach collection, index, and bodies remain explicit runtime-loop HIR");
+            // An array foreach is rewritten into nested loops over each
+            // dimension (IEEE 1800-2017 12.7.3).
+            && foreach_statements.back().kind == StatementKind::Block,
+        "foreach over a string stays a runtime loop; an array foreach is "
+        "rewritten into nested loops");
 
     const auto selected_foreach = parse_verilog(
         SourceText { "selected_foreach.sv",

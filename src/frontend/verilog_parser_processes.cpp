@@ -281,6 +281,12 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             return parse_case_statement(
                 qualifier_start, CaseMatchKind::WildcardXZ, qualifier);
         }
+        if (keyword("if")) {
+            // unique, unique0 and priority if select the same branch as a
+            // plain if; their violation reports are not issued (IEEE
+            // 1800-2017 12.4.2).
+            return parse_statement();
+        }
         error(qualifier_start, "FSIM-SV-UNSUPPORTED-017",
             "bounded unique and priority qualifiers require a case statement");
         return parse_statement();
@@ -510,6 +516,42 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         || (at(TokenKind::Identifier)
             && current().text == "assert" && (advance(), true))) {
         return parse_immediate_assertion(previous());
+    }
+    // Immediate assume behaves as assert in simulation; immediate cover
+    // runs its pass statement when the expression holds (IEEE 1800-2017
+    // 16.3).
+    const auto immediate_directive = [&](const std::string_view word) {
+        return language_ == Language::SystemVerilog2017 && keyword(word)
+            && (at(TokenKind::LeftParen, 1) || keyword("final", 1)
+                || at(TokenKind::Hash, 1));
+    };
+    if (immediate_directive("assume")) {
+        return parse_immediate_assertion(advance());
+    }
+    if (immediate_directive("cover")) {
+        const auto start = advance();
+        if (match(TokenKind::Hash)) {
+            if (at(TokenKind::Number) && current().text == "0") {
+                advance();
+            } else {
+                error(current(), "FSIM-SV-PARSE-371",
+                    "an observed deferred immediate cover requires '#0'");
+            }
+        } else {
+            (void)match_keyword("final");
+        }
+        Statement statement;
+        statement.kind = StatementKind::If;
+        expect(TokenKind::LeftParen, "'(' after cover",
+            "FSIM-SV-PARSE-137");
+        statement.condition = parse_expression();
+        expect(TokenKind::RightParen, "')' after cover expression",
+            "FSIM-SV-PARSE-138");
+        if (auto action = parse_statement()) {
+            statement.statements.push_back(std::move(*action));
+        }
+        statement.span = span_from(start, previous());
+        return statement;
     }
     if (keyword("$fatal") || keyword("$error")
         || keyword("$warning") || keyword("$info")) {

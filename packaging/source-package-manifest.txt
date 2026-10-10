@@ -1097,6 +1097,7 @@ src/frontend/verilog_parser_fork.cpp
 src/frontend/verilog_parser_functions.cpp
 src/frontend/verilog_parser_generate_names.cpp
 src/frontend/verilog_parser_hierarchy.cpp
+src/frontend/verilog_parser_interface_types.cpp
 src/frontend/verilog_parser_internal.hpp
 src/frontend/verilog_parser_process_helpers.cpp
 src/frontend/verilog_parser_processes.cpp
@@ -1971,6 +1972,7 @@ tests/feature_matrix/vhdl_standard_mode_inventory.tsv
 tests/feature_matrix/vhdl_synopsys_package_corpus.tsv
 tests/feature_matrix/vhdl_synopsys_package_inventory.tsv
 tests/fixtures/compliance/run_compliance.cmake
+tests/fixtures/compliance/sv_class_construction_in_methods.sv
 tests/fixtures/compliance/sv_class_statements.sv
 tests/fixtures/compliance/sv_compilation_unit_declarations.sv
 tests/fixtures/compliance/sv_copies_and_constructors.sv
@@ -1994,6 +1996,7 @@ tests/fixtures/compliance/sv_streaming_unpack.sv
 tests/fixtures/compliance/sv_string_containers.sv
 tests/fixtures/compliance/sv_time_without_timescale.sv
 tests/fixtures/compliance/sv_type_and_class_forms.sv
+tests/fixtures/compliance/sv_values_and_assertion_items.sv
 tests/fixtures/compliance/verilog_2005_begin_keywords.v
 tests/fixtures/compliance/vhdl_character_type.vhd
 tests/fixtures/compliance/vhdl_composite_constants.vhd

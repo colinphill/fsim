@@ -100,6 +100,7 @@ public:
         }
         for (const auto& type : hir_.types()) {
             types_.emplace(type.id, &type);
+            types_by_name_[type.name].push_back(&type);
         }
         for (const auto& expression : hir_.expressions()) {
             expressions_.emplace(expression.id, &expression);
@@ -109,6 +110,17 @@ public:
         }
         for (const auto& unit : hir_.units()) {
             units_.emplace(unit.id, &unit);
+        }
+        // A class type parameter's type is bound per specialization.
+        for (const auto& declaration : hir_.classes()) {
+            for (const auto& parameter : declaration.parameters) {
+                const auto* member = record_for(
+                    declarations_, parameter.declaration);
+                if (parameter.type_parameter && member != nullptr
+                    && member->declared_type) {
+                    type_parameter_types_.insert(*member->declared_type);
+                }
+            }
         }
     }
 
@@ -518,6 +530,50 @@ private:
         return range.left && range.right;
     }
 
+    std::optional<TypeId> typedef_by_spelling(
+        const std::string_view spelling, const std::string_view owner) const
+    {
+        const auto separator = spelling.rfind("::");
+        const auto name = separator == std::string_view::npos
+            ? spelling
+            : spelling.substr(separator + 2U);
+        std::vector<const TypeDefinition*> candidates;
+        const auto named = types_by_name_.find(name);
+        if (named == types_by_name_.end()) {
+            return std::nullopt;
+        }
+        for (const auto* definition : named->second) {
+            if (separator != std::string_view::npos
+                && !declaration_identity(definition->declaration)
+                        .ends_with("::" + std::string { spelling })) {
+                continue;
+            }
+            candidates.push_back(definition);
+        }
+        if (candidates.size() == 1U) {
+            return candidates.front()->id;
+        }
+        // The nearest enclosing scope of the owning class declares it.
+        auto prefix = std::string { owner };
+        while (!candidates.empty()) {
+            const auto cut = prefix.rfind("::");
+            if (cut == std::string::npos) {
+                break;
+            }
+            prefix.resize(cut);
+            const auto wanted = prefix + "::" + std::string { name };
+            const auto found = std::ranges::find_if(candidates,
+                [&](const TypeDefinition* definition) {
+                    return declaration_identity(definition->declaration)
+                        == wanted;
+                });
+            if (found != candidates.end()) {
+                return (*found)->id;
+            }
+        }
+        return std::nullopt;
+    }
+
     std::optional<TypeBinding> type(TypeReference input,
         const Environment& environment, const std::string_view owner,
         const SourceSpanId source)
@@ -527,6 +583,18 @@ private:
                 input.target.target);
             if (replacement != environment.types.end()) {
                 return replacement->second;
+            }
+        }
+        if (!input.target.target.valid() && !input.target.spelling.empty()
+            && !input.executable_width && !input.packed_range
+            && input.class_identity.empty() && !input.container_form
+            && input.value_form != TypeForm::class_handle
+            && input.value_form != TypeForm::string) {
+            // A typedef from another unit (`$unit`, a package, or the
+            // enclosing module) keeps only its spelling.
+            if (const auto linked = typedef_by_spelling(
+                    input.target.spelling, owner)) {
+                input.target.target = *linked;
             }
         }
         if (input.value_form == TypeForm::class_handle
@@ -539,7 +607,18 @@ private:
                         + "' does not resolve to compiled HIR");
                 return std::nullopt;
             }
-            if (!target->parameters.empty()) {
+            // A parameterized class named without actuals is its default
+            // specialization (IEEE 1800-2017 8.25) when every parameter
+            // has a default.
+            const bool defaults
+                = input.target.spelling.find('#') == std::string::npos
+                && std::ranges::all_of(target->parameters,
+                [](const ClassParameter& parameter) {
+                    return parameter.type_parameter
+                        ? parameter.default_type.has_value()
+                        : parameter.default_value.has_value();
+                });
+            if (!target->parameters.empty() && !defaults) {
                 report(ClassSpecializationErrorKind::
                         unsupported_parameterized_class_handle,
                     std::string { owner }, source,
@@ -906,6 +985,12 @@ private:
             && !expression->class_member_identity.starts_with('@')) {
             valid = valid && std::ranges::any_of(
                 hir_.classes(), [&](const ClassDeclaration& declaration) {
+                    // A construction (`new`) names its class.
+                    if (expression->text.starts_with("@sv-new:")
+                        && class_declaration_identity(declaration)
+                            == expression->class_member_identity) {
+                        return true;
+                    }
                     return std::ranges::any_of(
                                declaration.properties,
                                [&](const ClassProperty& property) {
@@ -946,7 +1031,8 @@ private:
                     && expression(range.right_expression);
             };
             return (!type.target.target.valid()
-                    || record_for(types_, type.target.target) != nullptr)
+                    || record_for(types_, type.target.target) != nullptr
+                    || type_parameter_types_.contains(type.target.target))
                 && (!type.packed_range
                     || range_resolves(*type.packed_range))
                 && std::ranges::all_of(
@@ -1595,6 +1681,9 @@ private:
     std::map<std::string, const ClassDeclaration*, std::less<>> classes_;
     std::map<DeclarationId, const Declaration*> declarations_;
     std::map<TypeId, const TypeDefinition*> types_;
+    std::set<TypeId> type_parameter_types_;
+    std::map<std::string, std::vector<const TypeDefinition*>, std::less<>>
+        types_by_name_;
     std::map<ExpressionId, const Expression*> expressions_;
     std::map<StatementId, const Statement*> statements_;
     std::map<UnitId, const Unit*> units_;

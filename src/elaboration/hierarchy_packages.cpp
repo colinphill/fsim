@@ -13194,6 +13194,86 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_instance_worklist(
             return false;
         }
         auto child_actuals = std::move(parameter_result.actuals);
+        // A type named through an interface port depends on the connected
+        // interface's parameters; the frontend retains them as hidden
+        // parameters `__fsim_ifp_<port>__<name>` bound here.
+        constexpr std::string_view interface_parameter_prefix {
+            "__fsim_ifp_"
+        };
+        std::optional<semantic::SpecializedHirAssociationResult>
+            interface_port_bindings;
+        for (const auto declaration_id :
+            child->systemverilog->declarations) {
+            const auto declaration
+                = compiled_->find_declaration(declaration_id);
+            if (!declaration || declaration->systemverilog == nullptr
+                || declaration->systemverilog->form
+                    != semantic::sv::DeclarationForm::parameter
+                || !declaration->systemverilog->name.starts_with(
+                    interface_parameter_prefix)
+                || std::ranges::any_of(child_actuals,
+                    [&](const semantic::SpecializedHirActualIdentity& actual) {
+                        return actual.declaration == declaration_id;
+                    })) {
+                continue;
+            }
+            const auto rest = std::string_view {
+                declaration->systemverilog->name }
+                                  .substr(interface_parameter_prefix.size());
+            const auto separator = rest.rfind("__");
+            if (separator == std::string_view::npos) {
+                continue;
+            }
+            const auto port_name = rest.substr(0U, separator);
+            const auto parameter_name = rest.substr(separator + 2U);
+            if (!interface_port_bindings) {
+                interface_port_bindings
+                    = semantic::resolve_specialized_hir_associations(
+                        *compiled_, child->identity->id, instance,
+                        semantic::SpecializedHirAssociationSurface::ports,
+                        &working_specialization);
+            }
+            for (const auto& binding : interface_port_bindings->bindings) {
+                const auto formal = compiled_->find_declaration(binding.formal);
+                if (!formal || formal->systemverilog == nullptr
+                    || formal->systemverilog->name != port_name
+                    || !binding.expression) {
+                    continue;
+                }
+                const auto actual_expression
+                    = working_specialization.find_expression(
+                        *binding.expression);
+                if (!actual_expression
+                    || actual_expression->systemverilog == nullptr
+                    || actual_expression->systemverilog->kind
+                        != semantic::sv::ExpressionKind::name) {
+                    break;
+                }
+                const auto identities
+                    = systemverilog_interface_parameter_identities_.find(
+                        std::string { working_path } + "."
+                        + actual_expression->systemverilog->text);
+                if (identities
+                    == systemverilog_interface_parameter_identities_.end()) {
+                    break;
+                }
+                const auto identity = std::ranges::find_if(
+                    identities->second, [&](const auto& entry) {
+                        return entry.first == parameter_name;
+                    });
+                if (identity != identities->second.end()) {
+                    child_actuals.push_back({
+                        declaration_id,
+                        identity->second,
+                        std::nullopt,
+                        std::nullopt,
+                        std::nullopt,
+                        std::nullopt,
+                    });
+                }
+                break;
+            }
+        }
 
         std::vector<CompiledSpecializationFailure>
             child_specialization_failures;

@@ -2,6 +2,7 @@
 #include "verilog_parser_internal.hpp"
 
 #include <functional>
+#include <set>
 
 #include <algorithm>
 #include <iterator>
@@ -652,7 +653,8 @@ SystemVerilogClassConstraint VerilogParser::parse_class_constraint(
         constraint.canonical_identity += "::";
     }
     constraint.canonical_identity += constraint.name;
-    if (is_extern || is_pure) {
+    // `constraint c;` is an implicit external prototype (18.5.1).
+    if (is_extern || is_pure || at(TokenKind::Semicolon)) {
         expect(
             TokenKind::Semicolon,
             "';' after class constraint prototype",
@@ -1115,7 +1117,141 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
     }
   }
   declaration.span = span_from(start, previous());
+  check_class_randomization_rules(declaration);
   return declaration;
+}
+
+// IEEE 1800-2017 18.6.3, 18.8, 18.9 and 18.13: the randomization methods
+// are built in and cannot be overridden; 18.5.4, 18.5.10 and 18.5.14.1: a
+// randc variable takes no distribution, solve-order, or soft constraint.
+void VerilogParser::check_class_randomization_rules(
+    const SystemVerilogClassDeclaration& declaration) {
+  const auto report = [&](const SourceSpan& span, std::string code,
+                          std::string message) {
+    Token anchor;
+    anchor.span = span;
+    error(anchor, std::move(code), std::move(message));
+  };
+  for (const auto& method : declaration.methods) {
+    const auto separator = method.name.rfind("::");
+    const auto name = separator == std::string::npos
+        ? std::string_view{method.name}
+        : std::string_view{method.name}.substr(separator + 2U);
+    if (name == "randomize" || name == "rand_mode"
+        || name == "constraint_mode" || name == "srandom"
+        || name == "get_randstate" || name == "set_randstate") {
+      report(method.span, "FSIM-SV-CLASS-029",
+          "the built-in method '" + std::string{name}
+              + "' cannot be overridden");
+    }
+  }
+  std::set<std::string, std::less<>> cyclic;
+  for (const auto& property : declaration.properties) {
+    if (property.is_randc) {
+      cyclic.insert(property.declaration.name);
+    }
+  }
+  if (cyclic.empty()) {
+    return;
+  }
+  const std::function<bool(const Expression&)> names_cyclic =
+      [&](const Expression& expression) {
+        if (expression.kind == ExpressionKind::Identifier
+            && cyclic.contains(expression.text)) {
+          return true;
+        }
+        return std::ranges::any_of(expression.operands, names_cyclic);
+      };
+  const std::function<void(const Expression&)> check =
+      [&](const Expression& expression) {
+        if (expression.kind == ExpressionKind::Call) {
+          const auto form = expression.text == "dist"
+                  && !expression.operands.empty()
+                  && names_cyclic(expression.operands.front())
+              ? "a distribution constraint"
+              : expression.text == "soft" && names_cyclic(expression)
+              ? "a soft constraint"
+              : expression.text == "@solve-before" && names_cyclic(expression)
+              ? "a solve-before constraint"
+              : nullptr;
+          if (form != nullptr) {
+            report(expression.span, "FSIM-SV-CLASS-030",
+                std::string{"a randc variable cannot appear in "} + form);
+            return;
+          }
+        }
+        for (const auto& operand : expression.operands) {
+          check(operand);
+        }
+      };
+  for (const auto& constraint : declaration.constraints) {
+    for (const auto& expression : constraint.expressions) {
+      check(expression);
+    }
+  }
+}
+
+
+// Out-of-block constraint definitions (IEEE 1800-2017 18.5.1) complete the
+// prototype of the named class; an explicit `extern constraint` requires one.
+void VerilogParser::link_out_of_block_constraints(ParsedDesign& design) {
+  const auto report = [&](const SourceSpan& span, std::string code,
+                          std::string message) {
+    Token anchor;
+    anchor.span = span;
+    error(anchor, std::move(code), std::move(message));
+  };
+  std::vector<SystemVerilogClassDeclaration*> classes;
+  const std::function<void(std::vector<SystemVerilogClassDeclaration>&)>
+      collect = [&](std::vector<SystemVerilogClassDeclaration>& list) {
+        for (auto& declaration : list) {
+          classes.push_back(&declaration);
+          collect(declaration.nested_classes);
+        }
+      };
+  collect(design.systemverilog_classes);
+  for (auto& unit : design.units) {
+    collect(unit.systemverilog_classes);
+  }
+  if (compilation_unit_package_) {
+    collect(compilation_unit_package_->systemverilog_classes);
+  }
+  for (auto& [owner, definition] : out_of_block_constraints_) {
+    // A class may be recorded in more than one container (its unit and the
+    // compilation-unit scope); each copy receives the definition.
+    std::vector<SystemVerilogClassConstraint*> prototypes;
+    for (auto* declaration : classes) {
+      if (declaration->name != owner) {
+        continue;
+      }
+      for (auto& constraint : declaration->constraints) {
+        if (constraint.name == definition.name && !constraint.defined) {
+          prototypes.push_back(&constraint);
+        }
+      }
+    }
+    if (prototypes.empty()) {
+      report(definition.span, "FSIM-SV-CLASS-031",
+          "out-of-block constraint '" + owner + "::" + definition.name
+              + "' has no matching constraint prototype");
+      continue;
+    }
+    for (auto* prototype : prototypes) {
+      prototype->expressions = definition.expressions;
+      prototype->defined = true;
+      prototype->is_extern = false;
+    }
+  }
+  out_of_block_constraints_.clear();
+  for (const auto* declaration : classes) {
+    for (const auto& constraint : declaration->constraints) {
+      if (constraint.is_extern && !constraint.defined) {
+        report(constraint.span, "FSIM-SV-CLASS-032",
+            "extern constraint '" + declaration->name + "::"
+                + constraint.name + "' has no definition");
+      }
+    }
+  }
 }
 
 }  // namespace fsim::frontend

@@ -93,7 +93,7 @@ STAGE_ORDER = {"compile": 0, "elaborate": 1, "simulate": 2}
 
 SV_MODULE_RE = re.compile(
     r"^\s*(?:extern\s+)?(?:module|macromodule|program)\s+(?:automatic\s+|static\s+)?"
-    r"([A-Za-z_][A-Za-z0-9_$]*)", re.M)
+    r"([A-Za-z_][A-Za-z0-9_$]*|\\\S+)", re.M)
 SV_COMMENT_RE = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
 SV_STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"')
 
@@ -343,6 +343,37 @@ def python_literal_list(source: str, keyword: str) -> list[str] | None:
     return [str(v) for v in value]
 
 
+def verilator_library_files(top_file: Path, tdir: Path) -> list[Path]:
+    """Files driver.py's `-y t/` would load: a module or interface used but
+    not declared is read from t/<name>.v."""
+    unit_re = re.compile(r"^\s*(?:module|macromodule|interface|program)\s+"
+                         r"(?:automatic\s+|static\s+)?([A-Za-z_]\w*)", re.M)
+    loaded: list[Path] = []
+    pending = [top_file]
+    declared: set[str] = set()
+    texts: list[str] = []
+    while pending:
+        path = pending.pop()
+        text = SV_COMMENT_RE.sub(" ", read_text(path))
+        texts.append(text)
+        declared.update(unit_re.findall(text))
+        for name in sorted(set(re.findall(r"\b([A-Za-z_]\w*)\b", text))):
+            if name in declared or len(name) > 100:
+                continue
+            for extension in (".v", ".sv"):
+                candidate = tdir / f"{name}{extension}"
+                if candidate == top_file or candidate in loaded \
+                        or not candidate.is_file():
+                    continue
+                units = unit_re.findall(SV_COMMENT_RE.sub(" ", read_text(candidate)))
+                if name in units and "t" not in units:
+                    loaded.append(candidate)
+                    pending.append(candidate)
+                    declared.update(units)
+                break
+    return loaded
+
+
 def verilator_cases(root: Path) -> list[Case]:
     tdir = root / "sources" / "verilator" / "test_regress" / "t"
     cases = []
@@ -410,6 +441,7 @@ def verilator_cases(root: Path) -> list[Case]:
         use_shell = "t" in declared and "top" not in declared \
             and not re.search(r"make_top_shell\s*=\s*False", source)
         compile_args.append(str(top_file))
+        compile_args += [str(f) for f in verilator_library_files(top_file, tdir)]
         if use_shell:
             compile_args.append("verilator_shell.sv")
             tops = ["top"]
@@ -521,15 +553,16 @@ def ivtest_cases(root: Path) -> list[Case]:
         compile_args += standard_args(language, standard)
         compile_args += ["-I", str(base / directory), str(source)]
         commands = [Command("compile", compile_args)]
-        if test_type != "CO":
+        if source.exists():
             tops = [module] if module else sv_root_modules([read_text(source)])
             elab = ["elaborate", "-q", "--no-aot"]
             for top in tops:
                 elab += ["--top", top]
             # iverilog's compile step includes elaboration, so a CE test
-            # may be rejected by fsim's elaborate as well.
+            # may be rejected by fsim's elaborate as well, and a CO
+            # (compile-only) test passes once it elaborates.
             commands.append(Command("elaborate", elab))
-            if test_type != "CE":
+            if test_type not in ("CE", "CO"):
                 # ivtest runs from its root: relative file names resolve
                 # against the work directory.
                 commands.append(Command("simulate", ["simulate", "--engine", "{engine}",
@@ -980,6 +1013,8 @@ def check_outcome(case: Case, steps: list[StepResult], workdir: Path) -> tuple[s
             return "pass", ""
         if any(re.fullmatch(r"\s*passed\s*", line, re.I) for line in lines):
             return "pass", ""
+        if case.checker_data.get("type") == "CO":
+            return "pass", "compiled"
         return "fail", "no PASSED line"
     if case.checker == "vhdl_clean":
         if hdl_errors:

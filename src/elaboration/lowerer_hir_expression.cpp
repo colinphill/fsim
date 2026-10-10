@@ -953,24 +953,78 @@ std::optional<DynamicIndex> Lowerer::lower_hir_dynamic_index(
     const std::size_t source_width,
     const std::uint32_t base_offset)
 {
+    // A select index is integral (IEEE 1800-2017 11.5.1, 6.12).
+    if (const auto kind = hir_systemverilog_scalar_kind(index_id);
+        kind == frontend::SystemVerilogScalarKind::Real
+        || kind == frontend::SystemVerilogScalarKind::Realtime
+        || kind == frontend::SystemVerilogScalarKind::ShortReal) {
+        if (const auto index = specialized_hir_unit_->find_expression(
+                index_id);
+            index && index->systemverilog != nullptr) {
+            report("FSIM-ELAB-SVEXPR-009",
+                "a bit-select or part-select index cannot be real",
+                hir_source_span(index->systemverilog->source));
+        }
+        return std::nullopt;
+    }
     if (const auto shape = hir_systemverilog_packed_shape(source_id);
         shape.size() > 1U) {
         // An element of a multidimensional packed array: the index becomes
         // the element's bit offset within the flattened value, whose range
-        // is then [W-1:0], so writes place the whole element.
-        const auto count = index_distance(
-            shape.front().left, shape.front().right) + 1U;
-        if (source_width == 0U || count == 0U || source_width % count != 0U
+        // is then [W-1:0], so writes place the whole element. The indices
+        // of an enclosing selection (`a[i][j]`) add their elements' offsets.
+        std::vector<std::pair<semantic::ExpressionId, semantic::ExpressionId>>
+            chain { { source_id, index_id } };
+        for (auto current = source_id; chain.size() < 64U;) {
+            const auto expression
+                = specialized_hir_unit_->find_expression(current);
+            if (!expression || expression->systemverilog == nullptr
+                || expression->systemverilog->kind
+                    != semantic::sv::ExpressionKind::index
+                || expression->systemverilog->operands.size() != 2U
+                || hir_systemverilog_packed_shape(
+                       expression->systemverilog->operands.front())
+                        .size()
+                    < 2U) {
+                break;
+            }
+            current = expression->systemverilog->operands.front();
+            chain.emplace_back(current, expression->systemverilog->operands[1]);
+        }
+        if (source_width == 0U
             || source_width - 1U
                 > static_cast<std::size_t>(
                     std::numeric_limits<std::int32_t>::max())) {
             return std::nullopt;
         }
-        const auto offset = lower_hir_systemverilog_element_offset(
-            index_id, shape.front(),
-            static_cast<std::size_t>(source_width / count));
-        if (!offset) {
-            return std::nullopt;
+        auto element_width = source_width;
+        std::optional<RegisterId> offset;
+        for (auto level = chain.rbegin(); level != chain.rend(); ++level) {
+            const auto level_shape
+                = hir_systemverilog_packed_shape(level->first);
+            if (level_shape.empty()) {
+                return std::nullopt;
+            }
+            const auto count = index_distance(
+                level_shape.front().left, level_shape.front().right) + 1U;
+            if (count == 0U || element_width % count != 0U) {
+                return std::nullopt;
+            }
+            element_width /= count;
+            const auto level_offset = lower_hir_systemverilog_element_offset(
+                level->second, level_shape.front(), element_width);
+            if (!level_offset) {
+                return std::nullopt;
+            }
+            if (offset) {
+                const auto sum = allocate_register(
+                    32U, frontend::ValueDomain::Logic4);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::add_signed, sum, *offset, *level_offset });
+                offset = sum;
+            } else {
+                offset = level_offset;
+            }
         }
         return DynamicIndex {
             *offset,
@@ -7124,6 +7178,16 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             expression_id, hir_process_scope_);
         if (!domain || width == 0U
             || width > std::numeric_limits<std::uint32_t>::max()) {
+            return std::nullopt;
+        }
+        // A stream wider than its target is an error (IEEE 1800-2017
+        // 11.4.14.1).
+        if (expected_width != 0U && width > expected_width) {
+            report("FSIM-ELAB-SVEXPR-010",
+                "streaming concatenation of " + std::to_string(width)
+                    + " bits is wider than its " + std::to_string(expected_width)
+                    + "-bit target",
+                hir_source_span(expression->systemverilog->source));
             return std::nullopt;
         }
         auto packed = allocate_register(width, *domain);

@@ -830,8 +830,21 @@ private:
                          m),
                 unknown };
         case BinaryOperator::equal:
-            return select(has_unknown, x_value(1U),
-                scalar_bool(builder_.CreateICmpEQ(l.a, r.a)));
+        case BinaryOperator::not_equal: {
+            // A known differing bit decides the relation (IEEE 1800-2017
+            // 11.4.5).
+            auto* differ = nonzero(builder_.CreateAnd(
+                builder_.CreateAnd(builder_.CreateXor(l.a, r.a), bit_not(unknown)),
+                m));
+            return select(differ,
+                scalar_bool(operation == BinaryOperator::not_equal
+                        ? builder_.getTrue()
+                        : builder_.getFalse()),
+                select(has_unknown, x_value(1U),
+                    scalar_bool(operation == BinaryOperator::not_equal
+                            ? builder_.getFalse()
+                            : builder_.getTrue())));
+        }
         case BinaryOperator::case_equal:
             return scalar_bool(builder_.CreateAnd(builder_.CreateICmpEQ(l.a, r.a),
                 builder_.CreateICmpEQ(l.b, r.b)));
@@ -858,14 +871,15 @@ private:
         case BinaryOperator::wildcard_equal: {
             auto* care = builder_.CreateAnd(bit_not(r.b), m);
             auto* left_unknown = nonzero(builder_.CreateAnd(l.b, care));
+            auto* known_differ = nonzero(builder_.CreateAnd(
+                builder_.CreateXor(l.a, r.a),
+                builder_.CreateAnd(care, bit_not(l.b))));
             auto* equal = builder_.CreateICmpEQ(
                 builder_.CreateAnd(builder_.CreateXor(l.a, r.a), care),
                 constant(0U));
-            return select(left_unknown, x_value(1U), scalar_bool(equal));
+            return select(known_differ, scalar_bool(builder_.getFalse()),
+                select(left_unknown, x_value(1U), scalar_bool(equal)));
         }
-        case BinaryOperator::not_equal:
-            return select(has_unknown, x_value(1U),
-                scalar_bool(builder_.CreateICmpNE(l.a, r.a)));
         case BinaryOperator::less_unsigned:
             return select(has_unknown, x_value(1U),
                 scalar_bool(builder_.CreateICmpULT(l.a, r.a)));

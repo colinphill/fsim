@@ -234,10 +234,9 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
         std::vector<Token> substituted_sequence_tokens;
         std::vector<Token> substituted_sequence_clock_tokens;
         std::vector<Token> substituted_sequence_disable_tokens;
-        if ((property
-                || directive.form
-                    == SystemVerilogConcurrentAssertionForm::Sequence)
-            && !predicate_tokens.empty()
+        // A property, a sequence directive, or a property that is one
+        // named sequence instance (IEEE 1800-2017 16.12.2).
+        if (!predicate_tokens.empty()
             && predicate_tokens.front().kind == TokenKind::Identifier) {
             const auto found = std::ranges::find_if(
                 unit.systemverilog_assertion_declarations,
@@ -1152,9 +1151,32 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             || (!whole_instance
                 && names_declaration(
                     SystemVerilogAssertionDeclarationKind::Sequence));
-        if ((!condition || names_sequence) && assertion_clock
+        // A property that is one named sequence runs on that sequence's
+        // expression.
+        std::vector<Token> named_sequence_tokens;
+        if (whole_instance && sequence != nullptr
+            && sequence != (directive.inline_sequence
+                    ? &*directive.inline_sequence
+                    : nullptr)
+            && sequence->local_variables.empty()) {
+            named_sequence_tokens = substituted_sequence_tokens.empty()
+                ? sequence->expression_tokens
+                : substituted_sequence_tokens;
+            while (!named_sequence_tokens.empty()
+                && named_sequence_tokens.back().kind == TokenKind::Semicolon) {
+                named_sequence_tokens.pop_back();
+            }
+        }
+        const std::span<const Token> general_tokens
+            = named_sequence_tokens.empty()
+            ? predicate_tokens
+            : std::span<const Token> { named_sequence_tokens };
+        // A whole named sequence that a specialized slice evaluates stays
+        // there; the general automaton takes the others.
+        if ((!condition || names_sequence)
+            && assertion_clock
             && !property_abort
-            && general_property_evaluation(predicate_tokens, unit,
+            && general_property_evaluation(general_tokens, unit,
                 GeneralPropertyActions { })) {
             general_property = true;
             condition = Expression {
@@ -1503,7 +1525,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 actions.abort.push_back(coverage_marker("abort"));
             }
             auto evaluation = general_property_evaluation(
-                predicate_tokens, unit, actions);
+                general_tokens, unit, actions);
             if (!evaluation) {
                 error(
                     directive.property_tokens.front(),

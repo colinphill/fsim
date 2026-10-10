@@ -473,9 +473,11 @@ void test_wildcard_equality(
     assert(reference.result.time == compiled.result.time);
     assert(reference.result.delta == compiled.result.delta);
     assert(reference.values == compiled.values);
+    // `2'bx0 == 2'bx1` is decided by its known differing bit (IEEE
+    // 1800-2017 11.4.5).
     assert((
         compiled.values
-        == std::vector<std::string> { "1", "X", "0", "0", "X" }));
+        == std::vector<std::string> { "1", "X", "0", "0", "0" }));
     assert(reference.compiled_processes == 0);
     assert(reference.compiled_modules == 0);
 #if defined(FSIM_HAS_LLVM)

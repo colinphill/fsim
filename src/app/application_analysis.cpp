@@ -1193,14 +1193,20 @@ std::vector<project::ProjectSection::TopLevel> selected_tops(
           "every selected design top requires a non-empty target and alias");
       continue;
     }
-    const bool valid_alias =
-        (std::isalpha(static_cast<unsigned char>(top.alias.front())) != 0
-         || top.alias.front() == '_')
-        && std::ranges::all_of(
-            top.alias,
-            [](const unsigned char character) {
-              return std::isalnum(character) != 0 || character == '_';
-            });
+    // An escaped Verilog identifier (`\$top`) is accepted as written.
+    const bool escaped_alias = top.alias.size() > 1U
+        && top.alias.front() == '\\'
+        && std::ranges::all_of(top.alias, [](const unsigned char character) {
+             return std::isgraph(character) != 0;
+           });
+    const bool valid_alias = escaped_alias
+        || ((std::isalpha(static_cast<unsigned char>(top.alias.front())) != 0
+             || top.alias.front() == '_')
+            && std::ranges::all_of(
+                top.alias,
+                [](const unsigned char character) {
+                  return std::isalnum(character) != 0 || character == '_';
+                }));
     if (!valid_alias) {
       diagnostics.error(
           "FSIM-ELAB-0002",

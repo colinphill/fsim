@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_class_hir_execution.hpp"
 
+#include "fsim/runtime/output_format.hpp"
+
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -366,6 +368,43 @@ SystemVerilogClassHirExecution::evaluate_string(
     return std::nullopt;
 }
 
+std::optional<std::string>
+SystemVerilogClassHirExecution::evaluate_string(
+    const semantic::ExpressionId id,
+    const StringEnvironment& environment,
+    const runtime::SystemVerilogClassHandle handle) const
+{
+    if (auto value = evaluate_string(id, environment)) {
+        return value;
+    }
+    const auto* value = expression(id);
+    constexpr std::string_view property_prefix { "@sv-property:" };
+    if (value != nullptr && read_string_property_
+        && (value->kind == semantic::sv::ExpressionKind::class_property
+            || value->text.starts_with(property_prefix))
+        && value->operands.size() <= 1U) {
+        auto owner = handle;
+        if (value->operands.size() == 1U) {
+            // Only `this` is evaluated here; other receivers need the
+            // packed evaluator's environment.
+            const auto* receiver = expression(value->operands.front());
+            if (receiver == nullptr
+                || receiver->kind != semantic::sv::ExpressionKind::name
+                || receiver->text != "this") {
+                return std::nullopt;
+            }
+        }
+        return read_string_property_(
+            owner, marker_payload(*value, property_prefix));
+    }
+    if (value != nullptr && read_string_property_
+        && value->kind == semantic::sv::ExpressionKind::name) {
+        // An unqualified property of this object.
+        return read_string_property_(handle, value->text);
+    }
+    return std::nullopt;
+}
+
 std::optional<runtime::PackedLogic4>
 SystemVerilogClassHirExecution::evaluate_packed(
     const semantic::ExpressionId id,
@@ -403,6 +442,38 @@ SystemVerilogClassHirExecution::evaluate_packed(
             --constant_depth_;
             return result;
         }
+        // An enumeration literal of a type declared in another unit may
+        // not resolve to its declaration; a unique literal of that name gives
+        // its value (6.19: an unvalued literal follows its predecessor).
+        if (constant_depth_ < 64U) {
+            std::optional<runtime::PackedLogic4> literal_value;
+            std::size_t matches { };
+            for (const auto& definition : hir_.types()) {
+                std::optional<runtime::PackedLogic4> previous;
+                for (const auto& literal : definition.enumeration_literals) {
+                    std::optional<runtime::PackedLogic4> current;
+                    if (literal.value) {
+                        ++constant_depth_;
+                        PackedEnvironment none;
+                        current = evaluate_packed(*literal.value, handle, none);
+                        --constant_depth_;
+                    } else if (!previous) {
+                        current = runtime::PackedLogic4::from_aval_bval(
+                            64U, 0U, 0U);
+                    } else if (previous->low_word().bval == 0U) {
+                        current = runtime::PackedLogic4::from_aval_bval(
+                            64U, previous->low_word().aval + 1U, 0U);
+                    }
+                    previous = current;
+                    if (literal.name == value->text) {
+                        ++matches;
+                        literal_value = current;
+                    }
+                }
+            }
+            if (matches == 1U)
+                return literal_value;
+        }
         return std::nullopt;
     }
     if (value->kind == ExpressionKind::integer_literal) {
@@ -433,8 +504,16 @@ SystemVerilogClassHirExecution::evaluate_packed(
     constexpr std::string_view property_prefix { "@sv-property:" };
     if (value->kind == ExpressionKind::class_property
         || value->text.starts_with(property_prefix)) {
+        auto owner = handle;
+        if (!value->operands.empty()) {
+            const auto receiver = evaluate_packed(
+                value->operands.front(), handle, environment);
+            if (!receiver || receiver->low_word().bval != 0U)
+                return std::nullopt;
+            owner = receiver->low_word().aval;
+        }
         return read_property_(
-            handle, marker_payload(*value, property_prefix));
+            owner, marker_payload(*value, property_prefix));
     }
     constexpr std::string_view static_property_prefix {
         "@sv-static-property:"
@@ -475,6 +554,40 @@ SystemVerilogClassHirExecution::evaluate_packed(
         auto result = invoke_function_(receiver->low_word().aval, identity,
             actuals, string_actuals, names, directions, virtual_dispatch);
         return result;
+    }
+    if ((value->kind == ExpressionKind::class_allocation
+            || value->text.starts_with("@sv-new:"))
+        && construct_ && !value->class_identity.empty()) {
+        std::vector<runtime::PackedLogic4> actuals;
+        std::vector<std::string> string_actuals;
+        for (const auto operand : value->operands) {
+            const auto* actual = expression(operand);
+            const bool string_actual = actual != nullptr
+                && (actual->kind == ExpressionKind::string_literal
+                    || (actual->kind == ExpressionKind::name
+                        && strings_ != nullptr
+                        && strings_->contains(actual->text)));
+            if (string_actual) {
+                auto text = evaluate_string(operand,
+                    strings_ != nullptr ? *strings_ : StringEnvironment { },
+                    handle);
+                if (!text)
+                    return std::nullopt;
+                actuals.emplace_back(64U);
+                string_actuals.push_back(std::move(*text));
+                continue;
+            }
+            const auto packed = evaluate_packed(operand, handle, environment);
+            if (!packed)
+                return std::nullopt;
+            actuals.push_back(*packed);
+            string_actuals.emplace_back();
+        }
+        auto names = value->argument_names;
+        names.resize(actuals.size());
+        const auto object = construct_(
+            value->class_identity, actuals, string_actuals, names);
+        return runtime::PackedLogic4::from_aval_bval(64U, object, 0U);
     }
     constexpr std::string_view static_method_prefix {
         "@sv-static-method:"
@@ -736,6 +849,12 @@ SystemVerilogClassHirExecution::execute(
     const bool constructor)
 {
     constexpr std::string_view base_prefix { "@sv-base-constructor:" };
+    struct StringScope {
+        const StringEnvironment*& slot;
+        const StringEnvironment* saved;
+        ~StringScope() { slot = saved; }
+    } string_scope { strings_, strings_ };
+    strings_ = &string_environment;
     for (const auto statement_id : statements) {
         const auto* item = statement(statement_id);
         if (item == nullptr) {
@@ -765,6 +884,27 @@ SystemVerilogClassHirExecution::execute(
                     continue;
                 }
             }
+            constexpr std::string_view property_prefix { "@sv-property:" };
+            if (write_string_property_
+                && (target->kind == semantic::sv::ExpressionKind::class_property
+                    || target->text.starts_with(property_prefix))
+                && target->operands.size() <= 1U) {
+                auto owner = handle;
+                if (target->operands.size() == 1U) {
+                    const auto receiver = evaluate_packed(
+                        target->operands.front(), handle, environment);
+                    owner = receiver && receiver->low_word().bval == 0U
+                        ? receiver->low_word().aval
+                        : 0U;
+                }
+                if (const auto text = evaluate_string(
+                        *item->value, string_environment, handle);
+                    owner != 0U && text
+                    && write_string_property_(owner,
+                        marker_payload(*target, property_prefix), *text)) {
+                    continue;
+                }
+            }
             const auto value = evaluate_packed(
                 *item->value, handle, environment);
             if (!value) {
@@ -772,10 +912,20 @@ SystemVerilogClassHirExecution::execute(
                     "class HIR assignment expression is not executable"
                 };
             }
-            constexpr std::string_view property_prefix { "@sv-property:" };
             if (target->kind == semantic::sv::ExpressionKind::class_property
                 || target->text.starts_with(property_prefix)) {
-                write_property_(handle,
+                auto owner = handle;
+                if (!target->operands.empty()) {
+                    const auto receiver = evaluate_packed(
+                        target->operands.front(), handle, environment);
+                    if (!receiver || receiver->low_word().bval != 0U) {
+                        throw std::invalid_argument {
+                            "class HIR property receiver is not a handle"
+                        };
+                    }
+                    owner = receiver->low_word().aval;
+                }
+                write_property_(owner,
                     marker_payload(*target, property_prefix), *value);
                 continue;
             }
@@ -839,7 +989,7 @@ SystemVerilogClassHirExecution::execute(
             }
             auto result = execute(item->statements, handle, environment,
                 string_environment, constructor);
-            if (result.returned)
+            if (result.returned || result.broke || result.continued)
                 return result;
             continue;
         }
@@ -858,17 +1008,316 @@ SystemVerilogClassHirExecution::execute(
                     ? std::span<const semantic::StatementId> { item->statements }
                     : std::span<const semantic::StatementId> { item->else_statements },
                 handle, environment, string_environment, constructor);
-            if (result.returned)
+            if (result.returned || result.broke || result.continued)
                 return result;
+            continue;
+        }
+        if (item->kind == semantic::sv::StatementKind::task_call) {
+            const auto& spelling = item->task.spelling;
+            if (spelling == "$stop" || spelling == "$finish"
+                || spelling == "$fatal") {
+                // A class method interpreted on the host cannot suspend the
+                // simulation; reaching one ends it with an error.
+                throw std::invalid_argument {
+                    "class method executed " + spelling
+                };
+            }
+            constexpr std::string_view task_prefix { "@sv-task:" };
+            if (spelling.starts_with(task_prefix)
+                && !item->task_arguments.empty()
+                && item->task_arguments.front().actual) {
+                const auto* receiver_expression
+                    = expression(*item->task_arguments.front().actual);
+                const auto receiver = evaluate_packed(
+                    *item->task_arguments.front().actual, handle, environment);
+                if (!receiver || receiver->low_word().bval != 0U) {
+                    throw std::invalid_argument {
+                        "class HIR method receiver is not a handle"
+                    };
+                }
+                std::vector<runtime::PackedLogic4> actuals;
+                std::vector<std::string> names;
+                for (const auto& association :
+                    item->task_arguments | std::views::drop(1)) {
+                    if (!association.actual) {
+                        throw std::invalid_argument {
+                            "class HIR method argument is open"
+                        };
+                    }
+                    const auto actual = evaluate_packed(
+                        *association.actual, handle, environment);
+                    if (!actual) {
+                        throw std::invalid_argument {
+                            "class HIR method argument is not executable"
+                        };
+                    }
+                    actuals.push_back(*actual);
+                    names.push_back(association.formal.value_or(std::string { }));
+                }
+                std::vector<std::string> string_actuals(actuals.size());
+                std::vector<std::uint8_t> directions;
+                const bool virtual_dispatch = receiver_expression == nullptr
+                    || receiver_expression->text != "super";
+                (void)invoke_function_(receiver->low_word().aval,
+                    std::string_view { spelling }.substr(task_prefix.size()),
+                    actuals, string_actuals, names, directions,
+                    virtual_dispatch);
+                continue;
+            }
+        }
+        if (item->kind == semantic::sv::StatementKind::container_method
+            && item->value) {
+            if (!evaluate_packed(*item->value, handle, environment)) {
+                throw std::invalid_argument {
+                    "class HIR call statement is not executable"
+                };
+            }
+            continue;
+        }
+        if (item->kind == semantic::sv::StatementKind::break_loop) {
+            ExecutionResult result;
+            result.broke = true;
+            return result;
+        }
+        if (item->kind == semantic::sv::StatementKind::continue_loop) {
+            ExecutionResult result;
+            result.continued = true;
+            return result;
+        }
+        if (item->kind == semantic::sv::StatementKind::loop) {
+            const auto known = [&](const semantic::ExpressionId id) {
+                const auto value = evaluate_packed(id, handle, environment);
+                if (!value || value->low_word().bval != 0U) {
+                    throw std::invalid_argument {
+                        "class HIR loop control is not a known packed value"
+                    };
+                }
+                return *value;
+            };
+            const auto run_body = [&]() {
+                return execute(item->statements, handle, environment,
+                    string_environment, constructor);
+            };
+            constexpr std::uint64_t iteration_limit = 100'000'000U;
+            if (item->loop_repeat) {
+                if (!item->loop_limit) {
+                    throw std::invalid_argument { "class HIR repeat has no count" };
+                }
+                const auto count = known(*item->loop_limit);
+                const auto total = count.low_word().aval;
+                bool stop = false;
+                for (std::uint64_t index = 0; index < total && !stop; ++index) {
+                    auto result = run_body();
+                    if (result.returned)
+                        return result;
+                    stop = result.broke;
+                }
+                continue;
+            }
+            if (!item->loop_variable.empty() && item->loop_initial) {
+                auto initial = known(*item->loop_initial);
+                auto variable = environment.find(item->loop_variable);
+                if (variable == environment.end()) {
+                    variable = environment.emplace(item->loop_variable,
+                        runtime::PackedLogic4 { 32U }).first;
+                }
+                variable->second = resize_packed(initial, variable->second.width());
+            }
+            const auto holds = [&]() {
+                return !item->condition
+                    || known(*item->condition).low_word().aval != 0U;
+            };
+            std::uint64_t iterations {};
+            bool returned = false;
+            ExecutionResult returned_result;
+            while (item->loop_post_test || holds()) {
+                if (++iterations > iteration_limit) {
+                    throw std::invalid_argument { "class HIR loop does not terminate" };
+                }
+                auto result = run_body();
+                if (result.returned) {
+                    returned = true;
+                    returned_result = std::move(result);
+                    break;
+                }
+                if (result.broke)
+                    break;
+                if (item->loop_update_target && item->value) {
+                    const auto* update_target = expression(*item->loop_update_target);
+                    if (update_target != nullptr) {
+                        auto variable = environment.find(update_target->text);
+                        if (variable != environment.end()) {
+                            variable->second = resize_packed(
+                                known(*item->value), variable->second.width());
+                        }
+                    }
+                }
+                if (!item->loop_updates.empty()) {
+                    auto update = execute(item->loop_updates, handle,
+                        environment, string_environment, constructor);
+                    if (update.returned)
+                        return update;
+                }
+                if (item->loop_post_test && !holds())
+                    break;
+            }
+            if (returned)
+                return returned_result;
+            continue;
+        }
+        if (item->kind == semantic::sv::StatementKind::selection
+            && item->case_match == semantic::sv::CaseMatchKind::exact
+            && item->condition) {
+            // A case statement compares with === (IEEE 1800-2017 12.5).
+            const auto selector = evaluate_packed(
+                *item->condition, handle, environment);
+            if (!selector) {
+                throw std::invalid_argument {
+                    "class HIR case expression is not executable"
+                };
+            }
+            const auto matches = [&](const runtime::PackedLogic4& choice) {
+                const auto width = std::max(selector->width(), choice.width());
+                const auto left = resize_packed(*selector, width);
+                const auto right = resize_packed(choice, width);
+                for (std::size_t bit = 0; bit < width; ++bit) {
+                    if (left.get(bit) != right.get(bit))
+                        return false;
+                }
+                return true;
+            };
+            const semantic::sv::CaseAlternative* selected = nullptr;
+            const semantic::sv::CaseAlternative* fallback = nullptr;
+            for (const auto& alternative : item->case_alternatives) {
+                if (alternative.is_default) {
+                    fallback = &alternative;
+                    continue;
+                }
+                for (const auto choice_id : alternative.choices) {
+                    const auto choice = evaluate_packed(
+                        choice_id, handle, environment);
+                    if (!choice) {
+                        throw std::invalid_argument {
+                            "class HIR case item is not executable"
+                        };
+                    }
+                    if (matches(*choice)) {
+                        selected = &alternative;
+                        break;
+                    }
+                }
+                if (selected != nullptr)
+                    break;
+            }
+            if (selected == nullptr)
+                selected = fallback;
+            if (selected != nullptr) {
+                auto result = execute(selected->statements, handle,
+                    environment, string_environment, constructor);
+                if (result.returned || result.broke || result.continued)
+                    return result;
+            }
+            continue;
+        }
+        if (item->kind == semantic::sv::StatementKind::display && output_) {
+            write_display(*item, handle, environment, string_environment);
             continue;
         }
         if (item->kind != semantic::sv::StatementKind::null_statement) {
             throw std::invalid_argument {
-                "class HIR body contains an unsupported executable statement"
+                "class HIR body contains an unsupported executable statement "
+                "(kind "
+                + std::to_string(static_cast<unsigned>(item->kind)) + ")"
             };
         }
     }
     return { false, runtime::PackedLogic4 { } };
+}
+
+void SystemVerilogClassHirExecution::write_display(
+    const semantic::sv::Statement& statement,
+    const runtime::SystemVerilogClassHandle handle,
+    PackedEnvironment& environment,
+    const StringEnvironment& strings)
+{
+    using Format = semantic::sv::OutputFormat;
+    const auto format_one = [&](const std::optional<semantic::ExpressionId> value,
+                                const Format format,
+                                const bool suppress_leading_zero,
+                                const std::uint32_t minimum_width,
+                                const bool left_justify, const bool zero_pad,
+                                const std::uint32_t precision) -> std::string {
+        if (format == Format::hierarchy) {
+            return { };
+        }
+        if (format == Format::time && !value) {
+            const auto now = runtime::PackedLogic4::from_aval_bval(
+                64U, now_ ? now_() : 0U, 0U);
+            return runtime::simir::make_formatted_output({ }, { },
+                runtime::simir::OutputFormat::decimal, now, false,
+                suppress_leading_zero, minimum_width == 0U && !suppress_leading_zero
+                    ? 20U : minimum_width,
+                left_justify, zero_pad);
+        }
+        if (!value) {
+            throw std::invalid_argument { "class HIR display value is absent" };
+        }
+        const auto* source = expression(*value);
+        if (format == Format::string
+            || (source != nullptr
+                && source->kind == semantic::sv::ExpressionKind::string_literal)) {
+            if (const auto text = evaluate_string(*value, strings, handle)) {
+                if (minimum_width <= text->size()) {
+                    return *text;
+                }
+                const auto padding = std::string(minimum_width - text->size(), ' ');
+                return left_justify ? *text + padding : padding + *text;
+            }
+        }
+        const auto packed = evaluate_packed(*value, handle, environment);
+        if (!packed) {
+            throw std::invalid_argument {
+                "class HIR display value is not executable"
+            };
+        }
+        auto runtime_format = runtime::simir::OutputFormat::decimal;
+        switch (format) {
+        case Format::binary: runtime_format = runtime::simir::OutputFormat::binary; break;
+        case Format::hexadecimal: runtime_format = runtime::simir::OutputFormat::hexadecimal; break;
+        case Format::octal: runtime_format = runtime::simir::OutputFormat::octal; break;
+        case Format::character: runtime_format = runtime::simir::OutputFormat::character; break;
+        case Format::string: runtime_format = runtime::simir::OutputFormat::string; break;
+        case Format::real_scientific: runtime_format = runtime::simir::OutputFormat::real_scientific; break;
+        case Format::real_fixed: runtime_format = runtime::simir::OutputFormat::real_fixed; break;
+        case Format::real_general: runtime_format = runtime::simir::OutputFormat::real_general; break;
+        case Format::time: runtime_format = runtime::simir::OutputFormat::time; break;
+        default: break;
+        }
+        return runtime::simir::make_formatted_output({ }, { }, runtime_format,
+            *packed, source != nullptr && source->signed_value,
+            suppress_leading_zero, minimum_width, left_justify, zero_pad,
+            frontend::SystemVerilogScalarKind::None, precision);
+    };
+    std::string text;
+    if (!statement.output_values.empty()) {
+        for (const auto& output : statement.output_values) {
+            text += output.prefix;
+            text += format_one(output.value, output.format,
+                output.suppress_leading_zero, output.minimum_width,
+                output.left_justify, output.zero_pad, output.precision);
+        }
+        text += statement.output_trailing_text;
+    } else if (statement.output_format) {
+        text = statement.output_prefix
+            + format_one(statement.value, *statement.output_format,
+                statement.output_suppress_leading_zero,
+                statement.output_minimum_width, statement.output_left_justify,
+                statement.output_zero_pad, statement.output_precision)
+            + statement.output_suffix;
+    } else {
+        text = statement.output_text;
+    }
+    output_(text, statement.output_newline);
 }
 
 runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function(
@@ -905,10 +1354,23 @@ runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function(
         method, handle, actuals, actual_names, &actual_formals);
     StringEnvironment strings;
     initialize_strings(method, actual_formals, string_actuals, strings);
-    const auto result = execute(
-        method.statements, handle, environment, strings, false);
     const auto void_result = method.return_type
         && method.return_type->target.spelling == "void";
+    // A function's name is a variable holding its result when the body
+    // ends without `return` (IEEE 1800-2017 13.4.1).
+    const auto result_variable = !void_result && method.return_type
+        && !environment.contains(method.name)
+        && !is_string(*method.return_type);
+    if (result_variable) {
+        environment.emplace(method.name,
+            runtime::PackedLogic4 { width(*method.return_type, 32U) });
+    }
+    auto result = execute(
+        method.statements, handle, environment, strings, false);
+    if (!result.returned && result_variable) {
+        result.returned = true;
+        result.value = environment.at(method.name);
+    }
     if (!result.returned && !void_result) {
         throw std::invalid_argument {
             "class HIR function completed without returning a value"
@@ -1037,6 +1499,37 @@ void SystemVerilogClassHirExecution::invoke_constructor_impl(
         if (base == nullptr)
             throw std::invalid_argument { "base HIR class specialization is unavailable" };
         invoke_constructor_impl(*base, handle, base_actuals, base_names);
+    }
+    // Property initializers other than literals (which the object's
+    // descriptor already holds) run after the base class's constructor
+    // and before this class's constructor body (IEEE 1800-2017 8.7).
+    for (const auto& property : selected.properties) {
+        if (property.static_storage || !property.initializer
+            || property.owner_identity != selected.declaration_identity
+            || property.type.container_form) {
+            continue;
+        }
+        const auto* initializer = expression(*property.initializer);
+        using semantic::sv::ExpressionKind;
+        if (initializer == nullptr
+            || initializer->kind == ExpressionKind::integer_literal
+            || initializer->kind == ExpressionKind::boolean_literal
+            || initializer->kind == ExpressionKind::string_literal) {
+            continue;
+        }
+        const auto identity = property.owner_identity + "::" + property.name;
+        if (is_string(property.type)) {
+            const auto text = evaluate_string(
+                *property.initializer, StringEnvironment { }, handle);
+            if (text && write_string_property_)
+                (void)write_string_property_(handle, identity, *text);
+            continue;
+        }
+        PackedEnvironment initializer_environment;
+        if (const auto value = evaluate_packed(
+                *property.initializer, handle, initializer_environment)) {
+            write_property_(handle, identity, *value);
+        }
     }
     if (constructor != selected.methods.end()) {
         StringEnvironment strings;

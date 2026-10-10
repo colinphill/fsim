@@ -573,7 +573,7 @@ void test_display(
     assert(reference.output[9].text == "s=  -1");
     assert(reference.output[9].newline);
     assert(reference.output[9].time == 0);
-    assert(reference.output[10].text == "u= x");
+    assert(reference.output[10].text == "u= X");
     assert(reference.output[10].newline);
     assert(reference.output[10].time == 0);
     assert(reference.output[11].text == "c=A");
@@ -1061,7 +1061,7 @@ end architecture;
             output.str().find(
                 std::string { "first\t+line\nembedded \"quote\" \\ A\n"
                               " 42\n  -1\nq=%:10xz!\n[10xz]h=x\no=245\n"
-                              "d=165\ns=  -1\nu= x\nc=A\ntext=test\n"
+                              "d=165\ns=  -1\nu= X\nc=A\ntext=test\n"
                               "compact=a5\n"
                               "upper=a5\nwidth=    a5\nleft=a5    !\n"
                               "zero=-00001\nmulti=0011/a5 tail=  -1\n"

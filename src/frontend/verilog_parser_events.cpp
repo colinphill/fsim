@@ -143,8 +143,14 @@ void VerilogParser::parse_default_clocking(
 
 void VerilogParser::parse_clocking_block(
     DesignUnit& unit,
-    const Token& start) {
-  const auto name = expect_identifier("clocking block name");
+    const Token& start,
+    const bool global) {
+  // A global clocking block may be unnamed (IEEE 1800-2017 14.14).
+  const bool unnamed = global && at(TokenKind::At);
+  auto name = unnamed ? start : expect_identifier("clocking block name");
+  if (unnamed) {
+    name.text = "$global_clock";
+  }
   SystemVerilogClockingBlock block;
   block.name = name.text;
   expect(

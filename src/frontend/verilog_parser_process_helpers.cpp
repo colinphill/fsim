@@ -535,6 +535,7 @@ Statement VerilogParser::parse_procedural_foreach_statement(
         TokenKind::LeftParen,
         "'(' after procedural foreach",
         "FSIM-SV-PARSE-330");
+    const auto collection_begin = index_;
     const auto collection = keyword("this") || keyword("super")
         ? advance()
         : expect_identifier("foreach collection");
@@ -587,18 +588,22 @@ Statement VerilogParser::parse_procedural_foreach_statement(
         };
     }
     statement.target = std::move(collection_expression);
+    const auto collection_end = index_;
     expect(
         TokenKind::LeftBracket,
         "'[' after foreach collection",
         "FSIM-SV-PARSE-331");
     std::vector<Expression> indices;
     std::vector<std::string> index_names;
+    std::vector<std::string> dimension_names;
     do {
         if (at(TokenKind::Comma) || at(TokenKind::RightBracket)) {
             indices.emplace_back();
+            dimension_names.emplace_back();
             continue;
         }
         const auto variable = expect_identifier("foreach index variable");
+        dimension_names.push_back(variable.text);
         if (statement.loop_variable.empty()) {
             statement.loop_variable = variable.text;
         }
@@ -627,7 +632,10 @@ Statement VerilogParser::parse_procedural_foreach_statement(
     for (const auto& index_name : index_names) {
         ++current_loop_names_[index_name];
     }
+    const auto body_begin = index_;
+    const auto saved_diagnostics = diagnostics_.size();
     parse_procedural_loop_body(start, statement);
+    const auto body_end = index_;
     for (const auto& index_name : index_names) {
         const auto loop_name = current_loop_names_.find(index_name);
         if (loop_name != current_loop_names_.end()
@@ -636,7 +644,169 @@ Statement VerilogParser::parse_procedural_foreach_statement(
         }
     }
     statement.span = span_from(start, previous());
-    return statement;
+    // An array foreach runs as nested loops over each dimension's bounds
+    // ($left to $right, IEEE 1800-2017 12.7.3 and 20.7); an associative
+    // array iterates with first() and next(). A string collection keeps
+    // the dedicated SystemVerilog-2023 form.
+    const auto collection_type = [&]() -> std::optional<Type> {
+        if (statement.target.kind != ExpressionKind::Identifier) {
+            return std::nullopt;
+        }
+        if (const auto local = current_procedural_types_.find(
+                statement.target.text);
+            local != current_procedural_types_.end()) {
+            return local->second;
+        }
+        return std::nullopt;
+    }();
+    const bool string_collection = collection_type
+        && !collection_type->systemverilog_container
+        && (collection_type->domain == ValueDomain::String
+            || collection_type->spelling == "string");
+    const bool known_container = collection_type
+        ? collection_type->systemverilog_container.has_value()
+        : statement.target.kind == ExpressionKind::Identifier
+            && unit_container_names_.contains(statement.target.text);
+    if (language_ != Language::SystemVerilog2017 || string_collection
+        || (standard_revision_ == StandardRevision::SystemVerilog2023
+            && !known_container)
+        || dimension_names.empty() || diagnostics_.size() != saved_diagnostics) {
+        return statement;
+    }
+    std::optional<Type> associative_index;
+    if (statement.target.kind == ExpressionKind::Identifier) {
+        if (collection_type && collection_type->systemverilog_container
+            && collection_type->systemverilog_container->associative_index_type) {
+            associative_index
+                = *collection_type->systemverilog_container->associative_index_type;
+        } else if (!collection_type) {
+            if (const auto found = unit_associative_index_types_.find(
+                    statement.target.text);
+                found != unit_associative_index_types_.end()) {
+                associative_index = found->second;
+            }
+        }
+    }
+    std::string associative_spelling;
+    if (associative_index) {
+        const auto& spelling = associative_index->spelling;
+        if (associative_index->domain == ValueDomain::String
+            || spelling == "string") {
+            associative_spelling = "string";
+        } else if (spelling == "int" || spelling == "integer"
+            || spelling == "byte" || spelling == "shortint"
+            || spelling == "longint" || spelling == "*") {
+            associative_spelling = spelling == "*" ? "int" : spelling;
+        } else if (const auto width = associative_index->width();
+                   width && *width != 0U && *width <= 64U) {
+            associative_spelling = std::string { associative_index->is_signed
+                    ? "bit signed [" : "bit [" }
+                + std::to_string(*width - 1U) + ":0]";
+        } else {
+            return statement;
+        }
+    }
+    // A collection whose dimensions all have fixed bounds is queried by
+    // dimension number (unpacked dimensions first, then packed); others are
+    // queried through the element selected by the outer indices.
+    const auto container_type = [&]() -> std::optional<Type> {
+        if (collection_type) {
+            return collection_type;
+        }
+        if (statement.target.kind == ExpressionKind::Identifier) {
+            if (const auto found = unit_container_types_.find(
+                    statement.target.text);
+                found != unit_container_types_.end()) {
+                return found->second;
+            }
+        }
+        return std::nullopt;
+    }();
+    const auto fixed_bounds = [](const auto& self, const Type& type) -> bool {
+        if (!type.systemverilog_container) {
+            return true;
+        }
+        const auto& container = *type.systemverilog_container;
+        return container.kind == SystemVerilogContainerKind::StaticArray
+            && std::ranges::all_of(container.element_types,
+                [&](const Type& element) { return self(self, element); });
+    };
+    const bool numbered_dimensions = container_type && !associative_index
+        && fixed_bounds(fixed_bounds, *container_type);
+    const std::vector<Token> collection_tokens(
+        tokens_.begin() + static_cast<std::ptrdiff_t>(collection_begin),
+        tokens_.begin() + static_cast<std::ptrdiff_t>(collection_end));
+    const std::vector<Token> body_tokens(
+        tokens_.begin() + static_cast<std::ptrdiff_t>(body_begin),
+        tokens_.begin() + static_cast<std::ptrdiff_t>(body_end));
+    const auto suffix = std::to_string(generated_statement_counter_++);
+    std::vector<Token> out;
+    const auto emit = [&](const std::string_view text) {
+        auto tokens = synthetic_tokens(text, start.span);
+        out.insert(out.end(), tokens.begin(), tokens.end());
+    };
+    const auto append = [&](const std::vector<Token>& tokens) {
+        out.insert(out.end(), tokens.begin(), tokens.end());
+    };
+    std::vector<std::string> names;
+    std::size_t closers {};
+    emit("begin");
+    for (std::size_t dimension = 0; dimension < dimension_names.size();
+         ++dimension) {
+        const auto name = dimension_names[dimension].empty()
+            ? "__fsim_fe" + suffix + "_" + std::to_string(dimension)
+            : dimension_names[dimension];
+        const auto element = [&] {
+            append(collection_tokens);
+            for (const auto& previous_name : names) {
+                emit("[" + previous_name + "]");
+            }
+        };
+        if (dimension == 0U && associative_index) {
+            emit("begin " + associative_spelling + " " + name + "; if (");
+            element();
+            emit(".first(" + name + ")) do begin");
+            names.push_back(name);
+            ++closers;
+            continue;
+        }
+        const auto query = [&](const std::string_view function) {
+            emit(std::string { function } + "(");
+            if (numbered_dimensions) {
+                append(collection_tokens);
+                emit(", " + std::to_string(dimension + 1U) + ")");
+                return;
+            }
+            element();
+            emit(", 1)");
+        };
+        emit("if (");
+        query("$size");
+        emit(" > 0) for (int " + name + " = ");
+        query("$left");
+        emit("; ((");
+        query("$increment");
+        emit(" == 1) && (" + name + " >= ");
+        query("$right");
+        emit(")) || ((");
+        query("$increment");
+        emit(" != 1) && (" + name + " <= ");
+        query("$right");
+        emit(")); " + name + " = " + name + " - ");
+        query("$increment");
+        emit(")");
+        names.push_back(name);
+    }
+    append(body_tokens);
+    if (associative_index) {
+        emit("end while (");
+        append(collection_tokens);
+        emit(".next(" + names.front() + ")); end");
+    }
+    (void)closers;
+    emit("end");
+    auto desugared = parse_generated_statement(std::move(out), statement.span);
+    return desugared ? std::move(*desugared) : statement;
 }
 
 Statement VerilogParser::parse_repeat_statement(const Token& start)

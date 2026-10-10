@@ -245,10 +245,12 @@ namespace fsim::runtime::simir {
         mismatch = true;
       }
     }
+    // A known differing bit decides the relation; unknown bits make it
+    // ambiguous only otherwise (IEEE 1800-2017 11.4.5, 11.4.6).
     return PackedLogic4(
         1,
-        unknown ? Logic4::x
-                : mismatch ? Logic4::zero : Logic4::one);
+        mismatch ? Logic4::zero
+                 : unknown ? Logic4::x : Logic4::one);
   }
   if (operation == BinaryOperator::case_equal
       || operation == BinaryOperator::casez_equal
@@ -294,10 +296,12 @@ namespace fsim::runtime::simir {
         mismatch = true;
       }
     }
+    // A known differing bit decides the relation; unknown bits make it
+    // ambiguous only otherwise (IEEE 1800-2017 11.4.5, 11.4.6).
     return PackedLogic4(
         1,
-        unknown ? Logic4::x
-                : mismatch ? Logic4::zero : Logic4::one);
+        mismatch ? Logic4::zero
+                 : unknown ? Logic4::x : Logic4::one);
   }
   if (operation == BinaryOperator::vhdl_match_equal) {
     const auto match_class = [](const Logic9 value) {
@@ -322,8 +326,14 @@ namespace fsim::runtime::simir {
     }
     return PackedLogic4(1, Logic4::one);
   }
-  if (operation == BinaryOperator::not_equal
-      || operation == BinaryOperator::less_unsigned
+  if (operation == BinaryOperator::not_equal) {
+    const auto state
+        = binary_value(BinaryOperator::equal, lhs, rhs).get(0);
+    return PackedLogic4(1,
+        state == Logic4::one ? Logic4::zero
+            : state == Logic4::zero ? Logic4::one : Logic4::x);
+  }
+  if (operation == BinaryOperator::less_unsigned
       || operation == BinaryOperator::less_equal_unsigned
       || operation == BinaryOperator::greater_unsigned
       || operation == BinaryOperator::greater_equal_unsigned

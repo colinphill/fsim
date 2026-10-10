@@ -21,6 +21,8 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
   explicit_port_types_.clear();
   body_port_declarations_.clear();
     unit_container_names_.clear();
+    unit_associative_index_types_.clear();
+    unit_container_types_.clear();
   port_type_refinements_.clear();
   implicit_net_references_.clear();
   container_iterator_names_.clear();
@@ -1615,7 +1617,25 @@ void VerilogParser::parse_parameter_group(
     std::optional<Type> default_type;
     if (match(TokenKind::Assign)) {
       if (type_parameter) {
-        default_type = parse_type_parameter_actual();
+        auto imported = import_interface_type(unit);
+        if (imported && local) {
+          // A local type parameter naming an interface type is a typedef of
+          // it (IEEE 1800-2017 6.20.3).
+          TypeAliasDeclaration alias;
+          alias.name = name.text;
+          alias.type = std::move(*imported);
+          alias.span = cover(start.span, previous().span);
+          alias.declaration_kind = TypeDeclarationKind::SystemVerilogTypedef;
+          unit.type_aliases.push_back(std::move(alias));
+          packed_typedef_types_.insert_or_assign(
+              name.text, unit.type_aliases.back().type);
+          if (!match(TokenKind::Comma)) {
+            break;
+          }
+          continue;
+        }
+        default_type = imported ? std::move(*imported)
+                                : parse_type_parameter_actual();
       } else {
         value = parse_expression();
       }

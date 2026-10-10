@@ -572,6 +572,8 @@ DesignUnit VerilogParser::parse_module(
     explicit_port_types_.clear();
     body_port_declarations_.clear();
     unit_container_names_.clear();
+    unit_associative_index_types_.clear();
+    unit_container_types_.clear();
     port_type_refinements_.clear();
     implicit_net_references_.clear();
     container_iterator_names_.clear();
@@ -847,6 +849,27 @@ DesignUnit VerilogParser::parse_module(
             } else {
                 parse_modport(unit, previous());
             }
+        } else if (language_ == Language::SystemVerilog2017
+            && keyword("constraint") && at(TokenKind::Identifier, 1)
+            && at(TokenKind::Scope, 2)) {
+            // An out-of-block constraint of a class declared in this
+            // module (IEEE 1800-2017 18.5.1).
+            module_has_non_time_item_ = true;
+            const auto constraint_start = advance();
+            const auto owner = advance();
+            advance();
+            auto definition = parse_class_constraint(
+                constraint_start, owner.text,
+                SystemVerilogClassVisibility::Public, false, false, false);
+            out_of_block_constraints_.emplace_back(
+                owner.text, std::move(definition));
+        } else if (language_ == Language::SystemVerilog2017
+            && at(TokenKind::Identifier) && current().text == "global"
+            && keyword("clocking", 1)) {
+            module_has_non_time_item_ = true;
+            advance();
+            const auto clocking_start = advance();
+            parse_clocking_block(unit, clocking_start, true);
         } else if (match_keyword("clocking")) {
             module_has_non_time_item_ = true;
             (void)require_standard(
@@ -927,6 +950,22 @@ DesignUnit VerilogParser::parse_module(
                     { "assert", "assume", "cover", "restrict" },
                     current(2).text))) {
             module_has_non_time_item_ = true;
+            const auto directive_offset = at(TokenKind::Colon, 1) ? 3U : 1U;
+            if (language_ == Language::SystemVerilog2017
+                && (keyword("final", directive_offset)
+                    || (at(TokenKind::Hash, directive_offset)
+                        && at(TokenKind::Number, directive_offset + 1U)
+                        && current(directive_offset + 1U).text == "0"))) {
+                // A deferred immediate assertion as a module item behaves
+                // as one in an always_comb procedure (IEEE 1800-2017
+                // 16.4.3).
+                auto procedure = current();
+                procedure.text = "always_comb";
+                tokens_.insert(
+                    tokens_.begin() + static_cast<std::ptrdiff_t>(index_),
+                    std::move(procedure));
+                continue;
+            }
             std::optional<Token> label;
             if (at(TokenKind::Colon, 1)) {
                 label = advance();
@@ -951,7 +990,15 @@ DesignUnit VerilogParser::parse_module(
                 parsed_assertion, unit.systemverilog_assertion_declarations);
             unit.systemverilog_concurrent_assertions.push_back(
                 std::move(parsed_assertion));
-        } else if (match_keyword("function")) {
+        } else if (match_keyword("function")
+            && compilation_unit_class_method_definition_start()) {
+            // An out-of-block definition of a class declared in this unit
+            // (IEEE 1800-2017 8.24).
+            module_has_non_time_item_ = true;
+            unit.systemverilog_class_method_definitions.push_back(
+                parse_class_out_of_block_method(
+                    previous(), SystemVerilogClassMethodKind::Function));
+        } else if (previous().text == "function" || match_keyword("function")) {
             module_has_non_time_item_ = true;
             auto function = parse_function(previous());
             const bool duplicate = std::ranges::any_of(
@@ -972,7 +1019,13 @@ DesignUnit VerilogParser::parse_module(
             } else {
                 unit.functions.push_back(std::move(function));
             }
-        } else if (match_keyword("task")) {
+        } else if (match_keyword("task")
+            && compilation_unit_class_method_definition_start()) {
+            module_has_non_time_item_ = true;
+            unit.systemverilog_class_method_definitions.push_back(
+                parse_class_out_of_block_method(
+                    previous(), SystemVerilogClassMethodKind::Task));
+        } else if (previous().text == "task" || match_keyword("task")) {
             module_has_non_time_item_ = true;
             auto task = parse_task(previous());
             const bool duplicate = std::ranges::any_of(
@@ -1195,7 +1248,7 @@ DesignUnit VerilogParser::parse_module(
                 std::make_move_iterator(instances.begin()),
                 std::make_move_iterator(instances.end()));
         } else if (at(TokenKind::Backtick)) {
-            parse_directive();
+            parse_directive(true);
         } else if (language_ == Language::SystemVerilog2017
             && match(TokenKind::Semicolon)) {
             // An empty module item (IEEE 1800-2017 A.1.10).

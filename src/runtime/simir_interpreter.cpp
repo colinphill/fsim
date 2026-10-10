@@ -224,6 +224,20 @@ SignalId Interpreter::add_signal(Signal signal)
     }
     signal.initial_value = Interpreter::Impl::coerce_value_kind(
         std::move(signal.initial_value), signal.value_kind);
+    // A net's X bits come from delayed continuous assignments, whose
+    // drivers read X until their first value matures.
+    if ((signal.resolution == ResolutionKind::sv_wire
+            || signal.resolution == ResolutionKind::sv_wand
+            || signal.resolution == ResolutionKind::sv_wor)
+        && !signal.initial_value.is_logic9()) {
+        for (std::size_t bit = 0; bit < signal.initial_value.width(); ++bit) {
+            if (signal.initial_value.get(bit) == Logic4::x) {
+                impl_->delayed_net_initial_values.emplace(
+                    id, signal.initial_value);
+                break;
+            }
+        }
+    }
     impl_->driven_values.push_back(signal.initial_value);
     impl_->driver_values.emplace_back();
     impl_->direct_single_driver_routes.emplace_back();
@@ -1556,6 +1570,16 @@ ProcessId Interpreter::Impl::add_process_program_impl(
     if (!common_program) {
         common_program = process_program_templates.intern(process);
     }
+    // A delayed continuous assignment or gate drives X until its first
+    // delayed value matures (see register_driver).
+    bool delayed_writer = false;
+    for (std::size_t instruction = 0;
+         instruction < process.operations().size() && !delayed_writer;
+         ++instruction) {
+        const auto& operation = process.operations()[instruction];
+        delayed_writer = operation_holds<WriteInertial>(operation)
+            || operation_holds<WriteInertialSlice>(operation);
+    }
     for (const auto& [signal, regions] : outputs) {
         if (!switch_connection) {
             auto& writer_count = signal_writer_counts[signal];
@@ -1577,7 +1601,8 @@ ProcessId Interpreter::Impl::add_process_program_impl(
             const auto scalar_regions = scalar_driver_regions.find(signal);
             register_driver(id, signal, regions, process.drive_strength(),
                 scalar_regions == scalar_driver_regions.end()
-                    ? ScalarDriverRegions { } : scalar_regions->second);
+                    ? ScalarDriverRegions { } : scalar_regions->second,
+                delayed_writer);
         }
     }
 

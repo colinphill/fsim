@@ -92,6 +92,10 @@ class Resolver final {
       std::string_view from, std::string_view to) const;
   [[nodiscard]] const SystemVerilogClassDeclaration* find_base_class(
       const SystemVerilogClassDeclaration& declaration) const;
+  // Reports a local or protected member used where it is not visible
+  // (IEEE 1800-2017 8.18); returns whether it is visible.
+  bool check_member_visibility(const PropertyMatch& match, const Scope& scope,
+      std::string_view member, const SourceSpan& span);
   [[nodiscard]] bool has_specialization_dependent_base(
       std::string_view identity) const;
   [[nodiscard]] Type resolve_alias_type(

@@ -339,6 +339,10 @@ void Resolver::retain_task_profile(
       return receiver_type;
     }
     const auto match = find_property(*identity, member);
+    if (match.property
+        && !check_member_visibility(match, scope, member, expression.span)) {
+      return std::nullopt;
+    }
     if (!match.property) {
       const auto methods = find_methods(
           *identity,
@@ -352,9 +356,17 @@ void Resolver::retain_task_profile(
             0U,
             expression.span);
         if (!method || !method->method) return std::nullopt;
-        expression.text = "@sv-method:"
-            + method->method->canonical_identity;
-        retain_call_profile(expression, *method->method, true);
+        if (method->method->is_static) {
+          expression.text = "@sv-static-method:"
+              + method->method->canonical_identity;
+          expression.operands.clear();
+          expression.call_argument_names.clear();
+          retain_call_profile(expression, *method->method, false);
+        } else {
+          expression.text = "@sv-method:"
+              + method->method->canonical_identity;
+          retain_call_profile(expression, *method->method, true);
+        }
         if (const auto result_identity = class_identity(
                 method->method->return_type)) {
           expression.nominal_type = *result_identity;
@@ -643,6 +655,17 @@ void Resolver::retain_task_profile(
         resolve_expression(expression.operands[index], scope);
       }
     }
+    // A static method called through a handle runs without the handle
+    // (IEEE 1800-2017 8.10).
+    if (match->method->is_static && expression.operands.front().text != "super") {
+      expression.text = "@sv-static-method:" + match->method->canonical_identity;
+      expression.operands.erase(expression.operands.begin());
+      if (!expression.call_argument_names.empty()) {
+        expression.call_argument_names.erase(
+            expression.call_argument_names.begin());
+      }
+      retain_call_profile(expression, *match->method, false);
+    }
     if (const auto identity = class_identity(match->method->return_type)) {
       expression.nominal_type = *identity;
     }
@@ -774,6 +797,16 @@ std::optional<Type> Resolver::resolve_expression(
     if (container->systemverilog_container->element_types.empty()) {
       element.systemverilog_container.reset();
     }
+    // An index selects one dimension of a multidimensional static array;
+    // the element keeps the remaining dimensions.
+    if (const auto& source = *container->systemverilog_container;
+        source.kind == SystemVerilogContainerKind::StaticArray
+        && source.static_range_expressions.size() > 1U) {
+      element = *container;
+      auto& remaining = *element.systemverilog_container;
+      remaining.static_range_expressions.erase(
+          remaining.static_range_expressions.begin());
+    }
     constexpr std::string_view property_prefix{
         "@sv-container-property:"};
     if (expression.operands[0].kind != ExpressionKind::Call
@@ -885,9 +918,7 @@ std::optional<Type> Resolver::resolve_typed_expression(
       expected.systemverilog_container
           ? SystemVerilogScalarKind::None
           : expected.systemverilog_scalar);
-  const bool expected_chandle =
-      !expected.systemverilog_container
-      && expected.systemverilog_scalar == SystemVerilogScalarKind::Chandle;
+  const bool expected_chandle = chandle(expected);
   if ((expected_chandle && resolved && !chandle(resolved))
       || (!expected_chandle && chandle(resolved))) {
     diagnose(
@@ -1273,10 +1304,12 @@ void Resolver::resolve_statement(
       : resolve_expression(
             statement.value, scope, expected_class, expected_scalar);
   // A class handle receives only a handle of its own class or of a class
-  // derived from it, or one implementing it (IEEE 1800-2017 8.15). Only a
-  // plain variable value has a class known independently of specialization.
+  // derived from it, or one implementing it (IEEE 1800-2017 8.15). Only
+  // plain variables have classes known independently of specialization.
   if (statement.kind == StatementKind::Assignment && target_type && value_type
       && statement.value.kind == ExpressionKind::Identifier
+      && statement.target.kind == ExpressionKind::Identifier
+      && statement.target.text.find('.') == std::string::npos
       && !target_type->systemverilog_container
       && !value_type->systemverilog_container) {
     const auto target_class = class_identity(*target_type);
@@ -1296,7 +1329,11 @@ void Resolver::resolve_statement(
       expected_scalar == SystemVerilogScalarKind::Chandle;
   const bool destination_type_known =
       statement.kind == StatementKind::Return || target_type.has_value();
+  const bool virtual_interface =
+      (value_type && value_type->systemverilog_virtual_interface)
+      || (target_type && target_type->systemverilog_virtual_interface);
   if (typed_assignment && destination_type_known && statement.value.valid()
+      && !virtual_interface
       && ((expected_chandle && value_type && !chandle(value_type))
           || (!expected_chandle && chandle(value_type)))) {
     diagnose(

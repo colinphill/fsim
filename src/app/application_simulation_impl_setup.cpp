@@ -381,6 +381,49 @@ Simulation::Impl::Impl(
           class_heap)
     , interpreter(create_simulation_interpreter(built, max_deltas))
 {
+    class_hir_execution.set_construct_service(
+        [this](const std::string_view class_identity,
+            const std::span<const runtime::PackedLogic4> actuals,
+            const std::span<const std::string> string_actuals,
+            const std::span<const std::string> actual_names) {
+            return construct_class(class_identity, class_identity, actuals,
+                string_actuals, actual_names, "$class");
+        });
+    class_hir_execution.set_output_services(
+        [this](const std::string_view text, const bool newline) {
+            if (output_hook) {
+                output_hook(0U, text, newline,
+                    interpreter->scheduler().now(),
+                    interpreter->scheduler().delta());
+            }
+        },
+        [this] {
+            return static_cast<std::uint64_t>(interpreter->scheduler().now());
+        });
+    class_hir_execution.set_string_property_services(
+        [this](const runtime::SystemVerilogClassHandle handle,
+            const std::string_view property) -> std::optional<std::string> {
+            try {
+                const auto& value = class_heap.property(handle, property);
+                if (value.kind == runtime::SystemVerilogClassPropertyKind::String) {
+                    return value.string;
+                }
+            } catch (const std::exception&) {
+            }
+            return std::nullopt;
+        },
+        [this](const runtime::SystemVerilogClassHandle handle,
+            const std::string_view property, const std::string_view text) {
+            try {
+                auto& value = class_heap.property(handle, property);
+                if (value.kind == runtime::SystemVerilogClassPropertyKind::String) {
+                    value.string = std::string { text };
+                    return true;
+                }
+            } catch (const std::exception&) {
+            }
+            return false;
+        });
     class_hir_execution.set_runtime_services(
         [this](const auto handle, const auto identity, auto& actuals,
             auto& string_actuals, const auto names, const auto directions,
@@ -921,6 +964,33 @@ Simulation::Impl::Impl(
         class_static_store.register_specialization(std::move(descriptor));
     }
     class_static_store.initialize_all();
+    // A static class-handle property initialized by `new` constructs its
+    // object before any process runs (IEEE 1800-2017 8.9).
+    for (const auto& specialization :
+        built.compiled_systemverilog_class_specializations) {
+        for (const auto& property : specialization.properties) {
+            if (!property.static_storage || !property.initializer
+                || property.type.class_identity.empty()
+                || property.type.container_form) {
+                continue;
+            }
+            const auto initializer = std::ranges::find(
+                built.systemverilog_hir.expressions(), *property.initializer,
+                &semantic::sv::Expression::id);
+            if (initializer == built.systemverilog_hir.expressions().end()
+                || initializer->kind
+                    != semantic::sv::ExpressionKind::class_allocation) {
+                continue;
+            }
+            if (const auto value = class_hir_execution.evaluate_initializer(
+                    *property.initializer)) {
+                assign_property_value(
+                    class_static_store.property(
+                        specialization.specialization_identity, property.name),
+                    property.canonical_identity, *value);
+            }
+        }
+    }
     interpreter->set_file_root(built.file_root);
     if (vpi_runtime_updates
         == SystemVerilogVpiRuntimeUpdates::omitted) {

@@ -204,6 +204,25 @@ RegisterId Lowerer::convert_to_two_state(const RegisterId source)
     return destination;
 }
 
+void Lowerer::initialize_delayed_net_driver(const SignalId signal,
+    const std::size_t offset, const std::size_t width,
+    const bool continuous_assignment)
+{
+    // A net driven by a delayed continuous assignment reads X until the
+    // first delayed value matures (IEEE 1800-2017 10.3.3): its undriven
+    // (Z) bits start unknown, without a value change at time zero.
+    if (!continuous_assignment || signal >= design_.signals_.size()) {
+        return;
+    }
+    auto& initial = design_.signals_[signal].initial_value;
+    for (auto bit = offset; bit < offset + width && bit < initial.width();
+        ++bit) {
+        if (initial.get(bit) == runtime::Logic4::z) {
+            initial.set(bit, runtime::Logic4::x);
+        }
+    }
+}
+
 void Lowerer::report(
     std::string code,
     std::string message,
@@ -2542,14 +2561,30 @@ std::optional<Process> Lowerer::lower_hir_process_body(
                   actual,
                   signal.width,
                   &*description.input_actual_vhdl_context)
-            : lower_hir_expression(actual, signal.width);
+            : std::optional<RegisterId> { };
+        // A port connection extends a narrower actual by the actual's own
+        // signedness, as a continuous assignment does (IEEE 1800-2017
+        // 23.3.3.7 and 10.7).
+        bool extend_signed = signal.is_signed;
+        if (!value && actual_expression
+            && actual_expression->systemverilog != nullptr) {
+            const auto natural = hir_expression_width(
+                actual, hir_process_scope_);
+            if (natural && *natural != 0U && *natural < signal.width) {
+                value = lower_hir_expression(actual, *natural);
+                extend_signed = hir_expression_signed(actual);
+            }
+        }
+        if (!value) {
+            value = lower_hir_expression(actual, signal.width);
+        }
         if (!value) {
             process_ = { };
             return std::nullopt;
         }
         if (register_width(*value) != signal.width) {
             value = resize_register(
-                *value, signal.width, signal.is_signed);
+                *value, signal.width, extend_signed);
         }
         if (register_domain(*value) != signal.source_domain) {
             const auto converted = allocate_register(

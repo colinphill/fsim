@@ -1919,7 +1919,8 @@ void Interpreter::Impl::register_driver(
     const SignalId signal_id,
     const std::span<const Process::DriverRegion> regions,
     const DriveStrength strength,
-    std::shared_ptr<const std::vector<Process::DriverRegion>> scalar_regions)
+    std::shared_ptr<const std::vector<Process::DriverRegion>> scalar_regions,
+    const bool delayed_writer)
 {
     require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     demote_owned_driver(signal_id);
@@ -1956,6 +1957,21 @@ void Interpreter::Impl::register_driver(
                 region.offset);
         }
         initial = std::move(selected);
+    }
+    if (const auto delayed = delayed_net_initial_values.find(signal_id);
+        delayed != delayed_net_initial_values.end() && delayed_writer) {
+        // The unknown bits this driver covers start X (see add_signal).
+        for (const auto& region : regions) {
+            const auto first = region.whole ? std::size_t { } : region.offset;
+            const auto last = region.whole ? initial.width()
+                                           : region.offset + region.width;
+            for (auto bit = first; bit < last && bit < initial.width();
+                ++bit) {
+                if (delayed->second.get(bit) == Logic4::x) {
+                    initial.set(bit, Logic4::x);
+                }
+            }
+        }
     }
     const std::array changed_signals { signal_id };
     auto container_reference_refresh

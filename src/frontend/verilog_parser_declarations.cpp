@@ -1004,6 +1004,11 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     (void)parse_optional_container_dimension(declaration_type);
     if (declaration_type.systemverilog_container) {
       unit_container_names_.insert(name.text);
+      unit_container_types_.insert_or_assign(name.text, declaration_type);
+      if (declaration_type.systemverilog_container->associative_index_type) {
+        unit_associative_index_types_.insert_or_assign(name.text,
+            *declaration_type.systemverilog_container->associative_index_type);
+      }
     }
     std::optional<Expression> initializer;
     if (match(TokenKind::Assign)) {
@@ -1299,7 +1304,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
 void VerilogParser::parse_procedural_declaration(Statement& block) {
   const auto start = current();
   (void)match_keyword("static");
-  (void)match_keyword("automatic");
+  const bool automatic = match_keyword("automatic");
   Type type = default_verilog_type();
   if (keyword("string") || keyword("chandle") || keyword("event")
       || keyword("process")
@@ -1334,6 +1339,18 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
     std::optional<Expression> initializer;
     if (match(TokenKind::Assign)) {
       initializer = parse_expression();
+    }
+    // An automatic variable is initialized each time its scope is entered,
+    // also inside a static callable or block (IEEE 1800-2017 6.21).
+    if (automatic && initializer && !automatic_callable_) {
+      Statement initialization;
+      initialization.kind = StatementKind::Assignment;
+      initialization.assignment_kind = AssignmentKind::Blocking;
+      initialization.target = Expression{
+          ExpressionKind::Identifier, name.text, {}, name.span};
+      initialization.value = *initializer;
+      initialization.span = span_from(name, previous());
+      block.statements.push_back(std::move(initialization));
     }
     block.declarations.push_back(VariableDeclaration{
         name.text,

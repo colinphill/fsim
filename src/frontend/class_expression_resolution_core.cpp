@@ -37,8 +37,10 @@ namespace fsim::frontend::class_resolution_detail {
 }
 
 [[nodiscard]] bool chandle(const std::optional<Type>& type) {
+  // A virtual interface shares the chandle representation but is not one.
   return type
       && !type->systemverilog_container
+      && !type->systemverilog_virtual_interface
       && type->systemverilog_scalar == SystemVerilogScalarKind::Chandle;
 }
 
@@ -447,6 +449,57 @@ void Resolver::resolve_generate_body(GenerateBody& body, const Scope& inherited)
   }
   return nullptr;
 }
+bool Resolver::check_member_visibility(
+    const PropertyMatch& match, const Scope& scope,
+    const std::string_view member, const SourceSpan& span) {
+  if (match.property == nullptr || match.owner == nullptr
+      || match.property->visibility == SystemVerilogClassVisibility::Public) {
+    return true;
+  }
+  const auto* current = scope.class_owner;
+  bool visible = false;
+  if (current != nullptr) {
+    if (match.property->visibility == SystemVerilogClassVisibility::Local) {
+      visible = current->canonical_identity == match.owner->canonical_identity;
+    } else {
+      std::set<std::string> visited;
+      for (const auto* candidate = current; candidate != nullptr
+           && visited.insert(candidate->canonical_identity).second;
+           candidate = find_base_class(*candidate)) {
+        if (candidate->canonical_identity == match.owner->canonical_identity) {
+          visible = true;
+          break;
+        }
+      }
+      // A nested class sees its enclosing class's members.
+      if (!visible
+          && current->canonical_identity.starts_with(
+              match.owner->canonical_identity + "::")) {
+        visible = true;
+      }
+    }
+    if (!visible
+        && match.property->visibility == SystemVerilogClassVisibility::Local
+        && current->canonical_identity.starts_with(
+            match.owner->canonical_identity + "::")) {
+      visible = true;
+    }
+  }
+  if (!visible) {
+    diagnose(
+        diagnostics_,
+        "FSIM-SV-CLASS-028",
+        std::string{match.property->visibility
+                == SystemVerilogClassVisibility::Local
+            ? "local"
+            : "protected"}
+            + " member '" + std::string{member} + "' of class '"
+            + match.owner->canonical_identity + "' is not visible here",
+        span);
+  }
+  return visible;
+}
+
 bool Resolver::class_assignable(
     const std::string_view from, const std::string_view to) const {
   std::set<std::string> visited;
@@ -1111,6 +1164,10 @@ void Resolver::retain_result_type(
     if (!receiver_type || !class_identity(*receiver_type)) return std::nullopt;
     const auto member = expression.text.substr(dot + 1U);
     const auto match = find_property(*class_identity(*receiver_type), member);
+    if (match.property
+        && !check_member_visibility(match, scope, member, expression.span)) {
+      return std::nullopt;
+    }
     if (!match.property) {
       const auto method = select_method(
           *class_identity(*receiver_type),
@@ -1120,10 +1177,18 @@ void Resolver::retain_result_type(
           expression.span);
       if (method && method->method) {
         expression.kind = ExpressionKind::Call;
-        expression.text = "@sv-method:"
-            + method->method->canonical_identity;
-        expression.operands = {std::move(receiver)};
-        retain_call_profile(expression, *method->method, true);
+        if (method->method->is_static) {
+          // A static method called through a handle (8.10).
+          expression.text = "@sv-static-method:"
+              + method->method->canonical_identity;
+          expression.operands.clear();
+          retain_call_profile(expression, *method->method, false);
+        } else {
+          expression.text = "@sv-method:"
+              + method->method->canonical_identity;
+          expression.operands = {std::move(receiver)};
+          retain_call_profile(expression, *method->method, true);
+        }
         const auto type = resolve_alias_type(
             method->method->return_type,
             method->owner->canonical_identity);
@@ -1218,6 +1283,11 @@ void Resolver::retain_result_type(
   if (scope.class_owner != nullptr) {
     const auto match = find_property(
         scope.class_owner->canonical_identity, expression.text);
+    if (match.property
+        && !check_member_visibility(
+            match, scope, expression.text, expression.span)) {
+      return std::nullopt;
+    }
     if (match.property) {
       const auto type = resolve_alias_type(
           match.property->declaration.type,

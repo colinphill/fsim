@@ -67,6 +67,15 @@ bool safe_name(const std::string_view value) {
           });
 }
 
+// A root alias is a safe name or a Verilog escaped identifier (`\$top`).
+bool safe_root_alias(const std::string_view value) {
+  return safe_name(value)
+      || (value.size() > 1U && value.front() == '\\'
+          && std::ranges::all_of(value, [](const unsigned char character) {
+               return std::isgraph(character) != 0;
+             }));
+}
+
 class Writer {
  public:
   void raw(const std::span<const char> value) {
@@ -486,7 +495,7 @@ bool validate(
   }
   std::set<std::string> aliases;
   for (const auto& root : metadata.roots) {
-    if (!safe_name(root.alias) || root.target.empty()
+    if (!safe_root_alias(root.alias) || root.target.empty()
         || root.selected_identity.empty()
         || !aliases.insert(root.alias).second) {
       report(

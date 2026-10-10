@@ -1372,7 +1372,7 @@ VerilogParser::parse_assertion_declaration(
                 declaration.checker_assertions.push_back(
                     std::move(parsed_assertion));
             } else if (at(TokenKind::Backtick)) {
-                parse_directive();
+                parse_directive(true);
             } else {
                 if (keyword("always")) {
                     diagnose_systemverilog_2023_annex(

@@ -3363,6 +3363,10 @@ void test_wildcard_case_matching_at_level(
            std::tuple{
                std::string_view{"X0"},
                std::string_view{"01"},
+               Logic4::zero},
+           std::tuple{
+               std::string_view{"X1"},
+               std::string_view{"01"},
                Logic4::x}}) {
     TestRuntime runtime;
     runtime.signals[0] = encode(PackedLogic4::from_msb_string(lhs));
@@ -3371,7 +3375,9 @@ void test_wildcard_case_matching_at_level(
     assert(
         jit.execute(vector_handle, descriptor)
         == JitExecutionStatus::completed);
-    assert(runtime.signals[2] == encode(Logic4::x));
+    // A known differing bit decides == and ==? (IEEE 1800-2017 11.4.5,
+    // 11.4.6); otherwise an unknown bit makes them X.
+    assert(runtime.signals[2] == encode(wildcard_expected));
     assert(runtime.signals[3] == encode(wildcard_expected));
   }
 }
@@ -3467,15 +3473,17 @@ void test_comparisons_at_level(
           "0000",
           {Logic4::zero, Logic4::zero, Logic4::one,
            Logic4::zero, Logic4::one, Logic4::one}},
+      // != is decided by a known differing bit (IEEE 1800-2017 11.4.5);
+      // the relational operators stay X.
       TestCase{
           "00X0",
           "0011",
-          {Logic4::x, Logic4::x, Logic4::x,
+          {Logic4::one, Logic4::x, Logic4::x,
            Logic4::x, Logic4::x, Logic4::x}},
       TestCase{
           "01Z0",
           "0011",
-          {Logic4::x, Logic4::x, Logic4::x,
+          {Logic4::one, Logic4::x, Logic4::x,
            Logic4::x, Logic4::x, Logic4::zero}},
   };
   for (const auto& test : cases) {

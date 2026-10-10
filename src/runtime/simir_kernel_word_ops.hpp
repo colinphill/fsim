@@ -302,10 +302,15 @@ struct Logic9Planes {
     case BinaryOperator::bit_xor:
         return bit_xor(l, r, width);
     case BinaryOperator::equal:
+        // A known differing bit decides the relation (IEEE 1800-2017
+        // 11.4.5).
+        if (((l.a ^ r.a) & ~unknown & m) != 0U) {
+            return scalar(Logic4::zero);
+        }
         if (unknown != 0U) {
             return scalar(Logic4::x);
         }
-        return scalar(l.a == r.a ? Logic4::one : Logic4::zero);
+        return scalar(Logic4::one);
     case BinaryOperator::case_equal:
         return scalar(l.a == r.a && l.b == r.b ? Logic4::one : Logic4::zero);
     case BinaryOperator::casez_equal: {
@@ -319,6 +324,9 @@ struct Logic9Planes {
     }
     case BinaryOperator::wildcard_equal: {
         const auto care = ~r.b & m;
+        if (((l.a ^ r.a) & care & ~l.b) != 0U) {
+            return scalar(Logic4::zero);
+        }
         if ((l.b & care) != 0U) {
             return scalar(Logic4::x);
         }
@@ -326,6 +334,13 @@ struct Logic9Planes {
                                                  : Logic4::zero);
     }
     case BinaryOperator::not_equal:
+        if (((l.a ^ r.a) & ~unknown & m) != 0U) {
+            return scalar(Logic4::one);
+        }
+        if (unknown != 0U) {
+            return scalar(Logic4::x);
+        }
+        return scalar(Logic4::zero);
     case BinaryOperator::less_unsigned:
     case BinaryOperator::less_equal_unsigned:
     case BinaryOperator::greater_unsigned:

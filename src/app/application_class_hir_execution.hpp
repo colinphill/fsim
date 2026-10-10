@@ -42,6 +42,40 @@ public:
         const semantic::sv::Hir& hir,
         const runtime::SystemVerilogClassHeap& heap);
 
+    // Text written by $display and $write in a class method, and the
+    // current simulation time for %t.
+    using OutputWriter = std::function<void(std::string_view, bool)>;
+    using TimeSource = std::function<std::uint64_t()>;
+    void set_output_services(OutputWriter writer, TimeSource now)
+    {
+        output_ = std::move(writer);
+        now_ = std::move(now);
+    }
+    // String-typed class properties; the read yields nothing and the write
+    // returns false when the property is not a string.
+    using StringPropertyRead = std::function<std::optional<std::string>(
+        runtime::SystemVerilogClassHandle, std::string_view)>;
+    using StringPropertyWrite = std::function<bool(
+        runtime::SystemVerilogClassHandle, std::string_view, std::string_view)>;
+    void set_string_property_services(
+        StringPropertyRead read, StringPropertyWrite write)
+    {
+        read_string_property_ = std::move(read);
+        write_string_property_ = std::move(write);
+    }
+
+    // `new` in a class method: allocates and constructs an object of the
+    // named class with packed and string actuals in parallel.
+    using ObjectConstructor = std::function<runtime::SystemVerilogClassHandle(
+        std::string_view,
+        std::span<const runtime::PackedLogic4>,
+        std::span<const std::string>,
+        std::span<const std::string>)>;
+    void set_construct_service(ObjectConstructor construct)
+    {
+        construct_ = std::move(construct);
+    }
+
     void set_runtime_services(FunctionInvoker function,
         StaticFunctionInvoker static_function,
         PropertyRead property_read,
@@ -75,6 +109,14 @@ public:
         std::span<const runtime::PackedLogic4> actuals,
         std::span<const std::string> actual_names);
 
+    // A static property initializer, evaluated outside any object.
+    [[nodiscard]] std::optional<runtime::PackedLogic4> evaluate_initializer(
+        semantic::ExpressionId id)
+    {
+        PackedEnvironment environment;
+        return evaluate_packed(id, 0U, environment);
+    }
+
     [[nodiscard]] SystemVerilogClassExecutionStatistics
     statistics() const noexcept;
 
@@ -82,6 +124,9 @@ private:
     struct ExecutionResult {
         bool returned { };
         runtime::PackedLogic4 value;
+        // A `break` or `continue` leaving the statement list.
+        bool broke { };
+        bool continued { };
     };
 
     [[nodiscard]] const semantic::sv::ClassSpecialization* specialization(
@@ -107,9 +152,17 @@ private:
         semantic::ExpressionId id,
         runtime::SystemVerilogClassHandle handle,
         PackedEnvironment& environment);
+    void write_display(const semantic::sv::Statement& statement,
+        runtime::SystemVerilogClassHandle handle,
+        PackedEnvironment& environment,
+        const StringEnvironment& strings);
     [[nodiscard]] std::optional<std::string> evaluate_string(
         semantic::ExpressionId id,
         const StringEnvironment& environment) const;
+    [[nodiscard]] std::optional<std::string> evaluate_string(
+        semantic::ExpressionId id,
+        const StringEnvironment& environment,
+        runtime::SystemVerilogClassHandle handle) const;
     [[nodiscard]] PackedEnvironment bind_actuals(
         const semantic::sv::SpecializedClassMethod& method,
         runtime::SystemVerilogClassHandle handle,
@@ -142,6 +195,13 @@ private:
     PropertyWrite write_property_;
     StaticPropertyRead read_static_property_;
     StaticPropertyWrite write_static_property_;
+    OutputWriter output_;
+    StringPropertyRead read_string_property_;
+    StringPropertyWrite write_string_property_;
+    TimeSource now_;
+    ObjectConstructor construct_;
+    // The string locals of the statements being executed.
+    const StringEnvironment* strings_ { };
     SystemVerilogClassExecutionStatistics statistics_;
     std::size_t depth_ { };
     std::size_t constant_depth_ { };

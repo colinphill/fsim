@@ -179,11 +179,26 @@ namespace fsim::runtime::simir {
         return maybe_suppress_leading_zero(std::move(text));
     }
     case OutputFormat::decimal: {
+        // Unknown bits print as x when all bits are x, z when all are z,
+        // and otherwise X if any bit is x, else Z (IEEE 1800-2017 21.2.1.4).
+        std::size_t unknown { };
+        std::size_t high_impedance { };
         for (std::size_t bit = 0; bit < value.width(); ++bit) {
             const auto state = value.get(bit);
-            if (state == Logic4::x || state == Logic4::z) {
+            if (state == Logic4::x) {
+                ++unknown;
+            } else if (state == Logic4::z) {
+                ++high_impedance;
+            }
+        }
+        if (unknown != 0U || high_impedance != 0U) {
+            if (unknown == value.width()) {
                 return "x";
             }
+            if (high_impedance == value.width()) {
+                return "z";
+            }
+            return unknown != 0U ? "X" : "Z";
         }
         auto magnitude = value;
         bool negative = signed_decimal

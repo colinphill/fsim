@@ -3,6 +3,7 @@
 #include "fsim/frontend/systemverilog_standard_package.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <limits>
 
 namespace fsim::frontend {
@@ -624,6 +625,34 @@ Expression VerilogParser::parse_primary()
                 pattern.operands.push_back(parse_pattern_value());
             } else {
                 auto first = parse_expression();
+                // A replication pattern `'{n{a, b}}` (IEEE 1800-2017
+                // 10.10.1) repeats its items n times.
+                std::uint64_t count { };
+                if (pattern.operands.empty() && at(TokenKind::LeftBrace)
+                    && first.kind == ExpressionKind::IntegerLiteral
+                    && std::from_chars(first.text.data(),
+                           first.text.data() + first.text.size(), count)
+                               .ec
+                        == std::errc { }
+                    && count > 0U && count <= 65536U) {
+                    advance();
+                    std::vector<Expression> items;
+                    do {
+                        items.push_back(parse_expression());
+                    } while (match(TokenKind::Comma));
+                    expect(
+                        TokenKind::RightBrace,
+                        "'}' after replicated assignment-pattern items",
+                        "FSIM-SV-PARSE-164");
+                    for (std::uint64_t copy = 0; copy < count; ++copy) {
+                        for (const auto& item : items) {
+                            pattern.aggregate_choices.emplace_back();
+                            pattern.aggregate_choice_expressions.emplace_back();
+                            pattern.operands.push_back(item);
+                        }
+                    }
+                    break;
+                }
                 if (match(TokenKind::Colon)) {
                     pattern.aggregate_choices.push_back("@key");
                     pattern.aggregate_choice_expressions.push_back(
@@ -1221,6 +1250,13 @@ Expression VerilogParser::parse_primary()
                 expression.call_result_width = 32;
                 expression.call_result_domain = ValueDomain::Integer;
                 expression.call_result_signed = true;
+            } else if (canonical == "$simtime") {
+                // The current time in simulation-precision units, an
+                // extension that ivtest uses.
+                require_file_call(0, "no arguments");
+                expression.call_result_width = 64;
+                expression.call_result_domain = ValueDomain::Bit2;
+                expression.call_result_signed = false;
             } else if (canonical == "$time"
                 || canonical == "$stime"
                 || canonical == "$realtime") {
@@ -1337,9 +1373,13 @@ Expression VerilogParser::parse_primary()
         }
         if (canonical == "$urandom" || canonical == "$random"
             || canonical == "$time" || canonical == "$stime"
-            || canonical == "$realtime") {
+            || canonical == "$realtime" || canonical == "$simtime") {
             expression.kind = ExpressionKind::Call;
-            if (canonical == "$random" || canonical == "$urandom") {
+            if (canonical == "$simtime") {
+                expression.call_result_width = 64;
+                expression.call_result_domain = ValueDomain::Bit2;
+                expression.call_result_signed = false;
+            } else if (canonical == "$random" || canonical == "$urandom") {
                 expression.call_result_width = 32;
                 expression.call_result_domain = ValueDomain::Integer;
                 expression.call_result_signed = canonical == "$random";

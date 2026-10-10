@@ -293,9 +293,12 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
         const auto order = concurrent_order++;
         const auto diagnostics_before = diagnostics_.size();
         lowerer.reset_hierarchical_reference_state();
+        lowerer.set_hierarchical_reference_retry(
+            deferred_statements != nullptr);
         auto lowered = lower_cached_systemverilog_concurrent_statement(
             unit, specialized, lowerer, statement_id, source_language,
             unit.declarations, path, order, program_owner);
+        lowerer.set_hierarchical_reference_retry(false);
         if (!lowered && deferred_statements != nullptr
             && lowerer.hierarchical_reference_missed()) {
             // `assign intf.member = ...` names a member of an instance
@@ -398,10 +401,13 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             invocation_before
                 = lowerer.next_hir_callable_invocation_identity();
             lowerer.reset_hierarchical_reference_state();
+            lowerer.set_hierarchical_reference_retry(
+                deferred_processes != nullptr);
             lowered = lowerer.lower_hir_process(
                 process_id,
                 source_language,
                 path);
+            lowerer.set_hierarchical_reference_retry(false);
             lowerer.set_hir_code_coverage_active(false);
             lowered_here = lowered.has_value();
         }

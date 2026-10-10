@@ -3661,8 +3661,8 @@ void ApplicationTestFixture::test_simulation_semantics()
     assert((
         comparison_hybrid.final_values
         == std::vector<std::string> {
-            "01Z0", "0011", "X", "X", "X", "X", "X", "0",
-            "0", "1", "1", "X" }));
+            "01Z0", "0011", "1", "X", "X", "X", "X", "0",
+            "0", "1", "1", "1" }));
 
     auto logical_config = config;
     logical_config.project.name = "logical-expression-test";

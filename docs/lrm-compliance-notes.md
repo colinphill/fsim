@@ -244,3 +244,59 @@ gives fsim's result in each case checked.
   the wildcard-imported package event `e`; 26.3 makes that illegal, but fsim
   does not yet track earlier wildcard references. It used to fail only
   because package events did not parse.
+
+## Rewrites, class execution and corpus disagreements (batch 22)
+
+- `foreach` is rewritten into nested `for` loops before elaboration. Each
+  loop runs from `$left` towards `$right` of its dimension using
+  `$increment`, so descending and ascending ranges both iterate in
+  declaration order. An associative array iterates with `first`/`next`.
+- A type named through an interface (`typedef ifc.data_t t;`,
+  `localparam type t = ifc.sub.t`) is copied into the referencing unit.
+  The interface parameters it depends on become hidden parameters
+  `__fsim_ifp_<instance>__<name>`. A local instance supplies its overrides.
+  An interface port's parameters are bound at elaboration from the
+  connected instance. A typedef of an interface declared inside a generate
+  block is not found.
+- Class methods run in the host class interpreter. It now handles loops,
+  `case`, `break`/`continue`, task calls, `$display`/`$write`, string
+  properties, the implicit function result variable, and `new`. `$stop`,
+  `$finish` and `$fatal` inside a class method end the method with an
+  error instead of pausing the simulation.
+- Property initializers that are not literals run in the constructor, after
+  the base class's constructor (8.7). A static class-handle property
+  initialized by `new` is constructed before any process runs.
+- An enumeration literal of a typedef declared in another compilation
+  scope is not always linked to its declaration in the compiled HIR. The
+  class interpreter takes the value of the unique literal with that name.
+- `local` and `protected` member visibility (8.18) is checked
+  (`SV-CLASS-028`). The sv-tests encapsulation negatives depend on it, now
+  that class bodies execute.
+- `unique`, `unique0` and `priority if` take the same branch as a plain
+  `if`. Their violation reports (12.4.2) are not issued.
+- Immediate `assume` behaves as `assert`. Immediate `cover` runs its pass
+  statement when the expression holds; it records no coverage. A deferred
+  assertion written as a module item runs in an implicit `always_comb`
+  (16.4.3).
+- A `global clocking` block is recorded as a clocking block named
+  `$global_clock` (or its own name). The `_gclk` sampled functions are not
+  yet tied to it; the sv-tests that use them never clock their assertions.
+- `==` and `!=` (and wildcard `==?`/`!=?`) are decided by a known differing
+  bit even when other bits are X or Z (11.4.5); before, any unknown bit
+  gave X. xsim agrees. This applies to the interpreter, the static kernel
+  and the LLVM engines.
+- A net driven by a delayed continuous assignment starts as X instead of Z
+  (iverilog, xsim). The X is the net's initial value, so no value change
+  happens at time zero.
+- `%d` of a partly unknown value prints `x`/`z` when all bits are X/Z, and
+  otherwise `X` if any bit is X, else `Z` (21.2.1.4).
+- Runner: ivtest `CO` (compile-only) cases now elaborate and pass without a
+  PASSED line, as iverilog's harness treats them. A module with an escaped
+  name (`\$I178`) is a valid top and root alias.
+- ivtest `pv_wr_vec*_nb_ec` check a nonblocking event-controlled write in
+  the same time step as the `-> e` that releases it, expecting the update
+  to be visible before the NBA region. That is iverilog scheduling, not the
+  LRM's; they still fail.
+- `%t` of a value other than `$time` (a `time` variable, a plain vector)
+  ignores `$timeformat` and the default width of 20, and fails for a
+  vector without time metadata (ivtest `automatic_events3`).

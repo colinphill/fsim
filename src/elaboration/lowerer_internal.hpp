@@ -146,6 +146,12 @@ public:
     {
         return hierarchical_reference_missed_;
     }
+    // Whether the caller retries a process that misses a hierarchical
+    // reference once the unit's instances exist.
+    void set_hierarchical_reference_retry(const bool retry) noexcept
+    {
+        hierarchical_reference_retry_ = retry;
+    }
     [[nodiscard]] std::uint32_t next_hir_callable_invocation_identity()
         const noexcept;
     [[nodiscard]] bool advance_hir_callable_invocation_identity(
@@ -1678,6 +1684,8 @@ private:
         std::size_t width,
         bool sign_extend);
     [[nodiscard]] RegisterId convert_to_two_state(RegisterId source);
+    void initialize_delayed_net_driver(SignalId signal, std::size_t offset,
+        std::size_t width, bool continuous_assignment);
     [[nodiscard]] RegisterId widen_enumeration_ordinal(RegisterId source);
     void report(
         std::string code,
@@ -1900,6 +1908,7 @@ private:
     std::string hierarchy_;
     mutable bool hierarchical_reference_used_ { };
     mutable bool hierarchical_reference_missed_ { };
+    bool hierarchical_reference_retry_ { };
     [[nodiscard]] std::optional<SignalId> hir_hierarchical_signal(
         std::string_view name) const;
 };

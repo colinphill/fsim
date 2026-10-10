@@ -150,9 +150,23 @@ VerilogParser::VerilogParser(
 
 ParseResult VerilogParser::run() {
     ParsedDesign design;
+    parsed_design_ = &design;
     while (!at_end()) {
         if (verilog_attribute_instance_start()) {
             parse_verilog_attribute_instances();
+        } else if (language_ == Language::SystemVerilog2017
+            && keyword("constraint") && at(TokenKind::Identifier, 1)
+            && at(TokenKind::Scope, 2)) {
+            // An out-of-block constraint `constraint C::c { ... }`
+            // (IEEE 1800-2017 18.5.1).
+            const auto start = advance();
+            const auto owner = advance();
+            advance();
+            auto definition = parse_class_constraint(
+                start, owner.text, SystemVerilogClassVisibility::Public,
+                false, false, false);
+            out_of_block_constraints_.emplace_back(
+                owner.text, std::move(definition));
         } else if (match_keyword("checker")) {
             compilation_unit_has_design_item_ = true;
             const auto checker_start = previous();
@@ -512,6 +526,7 @@ ParseResult VerilogParser::run() {
             skip_to_semicolon();
         }
     }
+    link_out_of_block_constraints(design);
     if (compilation_unit_package_) {
         compilation_unit_package_->span = cover(
             compilation_unit_package_->span, previous().span);
@@ -986,7 +1001,7 @@ void VerilogParser::reset_compiler_directives() {
   current_unconnected_drive_ = VerilogUnconnectedDrive::None;
 }
 
-void VerilogParser::parse_directive() {
+void VerilogParser::parse_directive(const bool design_element) {
   const auto tick = advance();
   const auto directive = at(TokenKind::Identifier) ? advance() : current();
   if (directive.text == "timescale") {
@@ -994,6 +1009,11 @@ void VerilogParser::parse_directive() {
   } else if (directive.text == "default_nettype") {
     parse_default_nettype(tick, directive);
   } else if (directive.text == "resetall") {
+    // IEEE 1800-2017 22.3: `resetall is illegal inside a design element.
+    if (design_element) {
+      error(directive, "FSIM-SV-PP-054",
+          "`resetall cannot appear inside a design element");
+    }
     reset_compiler_directives();
     reject_directive_arguments(tick, directive);
   } else if (directive.text == "celldefine") {

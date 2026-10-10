@@ -429,12 +429,14 @@ endmodule
     run_comparison(
         "0000", "0000",
         { "0", "0", "1", "0", "1", "1", "1", "0", "1", "0" });
+    // A known differing bit decides ==, !=, ==? and !=? (IEEE 1800-2017
+    // 11.4.5, 11.4.6).
     run_comparison(
         "00X0", "0011",
-        { "X", "X", "X", "X", "X", "X", "0", "1", "X", "X" });
+        { "1", "X", "X", "X", "X", "X", "0", "1", "0", "1" });
     run_comparison(
         "01X0", "0011",
-        { "X", "X", "X", "X", "X", "0", "0", "1", "X", "X" });
+        { "1", "X", "X", "X", "X", "0", "0", "1", "0", "1" });
     run_comparison(
         "00X0", "00X0",
         { "X", "X", "X", "X", "X", "X", "1", "0", "1", "0" });
@@ -446,7 +448,7 @@ endmodule
         { "X", "X", "X", "X", "X", "X", "0", "1", "1", "0" });
     run_comparison(
         "X101", "0001",
-        { "X", "X", "X", "X", "X", "0", "0", "1", "X", "X" });
+        { "1", "X", "X", "X", "X", "0", "0", "1", "0", "1" });
 
     const auto signed_comparison = fsim::frontend::parse_text(
         "signed_comparison.sv",

@@ -2038,7 +2038,9 @@ class HirObject #(parameter int MAX = 3) extends HirBase;
   int payload;
   static int count;
   local static const int limit = 3;
-  randc logic [1:0] choice;
+  // rand, not randc: a randc variable takes no soft, dist, or
+  // solve-before constraint (IEEE 1800-2017 18.5.4, 18.5.10, 18.5.14.1).
+  rand logic [1:0] choice;
   rand int samples[0:2];
   constraint nonnegative {
     base_value >= 1;
@@ -2180,7 +2182,7 @@ endmodule
     assert(hir_object->properties[2].static_storage
         && hir_object->properties[2].constant);
     assert(hir_object->properties[3].random_kind
-        == fsim::semantic::sv::ClassRandomKind::randc);
+        == fsim::semantic::sv::ClassRandomKind::rand);
     assert(hir_object->constraints.size() == 6);
     const auto valid_choice_position = std::ranges::find(
         hir_object->constraints,

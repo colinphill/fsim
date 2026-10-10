@@ -6964,6 +6964,9 @@ bool Lowerer::lower_hir_statement(
                 span);
             return true;
         } else if (constant_selection && transition_delays) {
+            initialize_delayed_net_driver(*binding->signal,
+                constant_selection->offset, register_width(*lowered),
+                continuous_assignment && *transition_delays != TransitionDelays { });
             process_.operations.emplace_back(WriteInertialSlice {
                 *binding->signal,
                 *lowered,
@@ -7008,6 +7011,9 @@ bool Lowerer::lower_hir_statement(
                     update_domain,
                 });
         } else if (transition_delays) {
+            initialize_delayed_net_driver(*binding->signal, 0U,
+                register_width(*lowered),
+                continuous_assignment && *transition_delays != TransitionDelays { });
             process_.operations.emplace_back(WriteInertial {
                 *binding->signal, *lowered, *transition_delays,
                 update_domain });
@@ -10514,10 +10520,7 @@ bool Lowerer::lower_hir_statement(
             && background_revision
             && process_kind_ == frontend::ProcessKind::Initial
             && input.fork_join == semantic::sv::ForkJoinKind::none;
-        if ((function && !legal_function_background)
-            || (active_hir_callable_ && !function
-                && input.fork_join
-                    != semantic::sv::ForkJoinKind::all)) {
+        if (function && !legal_function_background) {
             report(
                 "FSIM-ELAB-107",
                 function

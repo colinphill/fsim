@@ -170,7 +170,12 @@ class VerilogParser final : private detail::ParserBase {
 
   void reset_compiler_directives();
 
-  void parse_directive();
+  void parse_directive(bool design_element = false);
+  void check_class_randomization_rules(
+      const SystemVerilogClassDeclaration& declaration);
+  void link_out_of_block_constraints(ParsedDesign& design);
+  std::vector<std::pair<std::string, SystemVerilogClassConstraint>>
+      out_of_block_constraints_;
 
   void parse_default_nettype(
       const Token& tick,
@@ -253,7 +258,8 @@ class VerilogParser final : private detail::ParserBase {
 
   void parse_modport(DesignUnit& unit, const Token& start);
 
-  void parse_clocking_block(DesignUnit& unit, const Token& start);
+  void parse_clocking_block(
+      DesignUnit& unit, const Token& start, bool global = false);
 
   void parse_default_clocking(
       DesignUnit& unit,
@@ -696,6 +702,9 @@ class VerilogParser final : private detail::ParserBase {
 
   std::optional<Statement> parse_statement();
   std::optional<Statement> parse_statement_unhoisted();
+  std::optional<Type> import_interface_type(DesignUnit& unit);
+  // The design being parsed; earlier units are visible to later ones.
+  ParsedDesign* parsed_design_{};
   [[gnu::noinline]] void prepend_hoisted_statements(
       std::optional<Statement>& statement, std::size_t mark);
   std::optional<Statement> parse_randcase(const Token& start);
@@ -779,12 +788,29 @@ class VerilogParser final : private detail::ParserBase {
   // Design-unit-level dynamic arrays, queues and associative arrays, whose
   // built-in methods may omit empty parentheses (IEEE 1800-2017 13.4.5).
   std::unordered_set<std::string> unit_container_names_;
+  // Index types of the unit's associative arrays, for foreach.
+  std::unordered_map<std::string, Type> unit_associative_index_types_;
+  // Types of the unit's unpacked container variables, for foreach.
+  std::unordered_map<std::string, Type> unit_container_types_;
   // Nonzero while parsing a constraint block or a delay value, where `->`
   // is not the logical implication operator.
   std::size_t constraint_parse_depth_ { };
   std::unordered_set<std::string> current_function_arguments_;
   std::string current_function_name_;
   bool in_function_{};
+  // Whether the callable being parsed has automatic lifetime.
+  bool automatic_callable_{};
+  struct LifetimeScope {
+    bool& flag;
+    bool saved;
+    LifetimeScope(bool& target, const bool automatic)
+        : flag(target), saved(target) {
+      flag = automatic;
+    }
+    LifetimeScope(const LifetimeScope&) = delete;
+    LifetimeScope& operator=(const LifetimeScope&) = delete;
+    ~LifetimeScope() { flag = saved; }
+  };
   bool current_function_returns_void_{};
   bool in_task_{};
   std::unordered_map<std::string, std::size_t>

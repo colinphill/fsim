@@ -3140,6 +3140,10 @@ bool Lowerer::lower_hir_class_task_call(
                 hir_actual_extension_signed(
                     actual.expression, actual.signed_value));
         }
+        if (is_two_state_domain(actual.domain)) {
+            lowered_actuals[index]
+                = convert_to_two_state(*lowered_actuals[index]);
+        }
     }
 
     const auto statement = specialized_hir_unit_->find_statement(
@@ -6022,6 +6026,12 @@ Lowerer::lower_hir_function_call_value(
                 hir_actual_extension_signed(
                 (*actuals)[index], formal->signed_value));
         }
+        if (is_two_state_domain(formal->domain)) {
+            // A 2-state formal receives X and Z bits as 0 (IEEE 1800-2017
+            // 6.24.1 by way of 13.3).
+            lowered_actuals[index]
+                = convert_to_two_state(*lowered_actuals[index]);
+        }
     }
 
     const auto call_expression = specialized_hir_unit_->find_expression(
@@ -6572,6 +6582,12 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
                 *lowered_actuals[index], formal->width,
                 hir_actual_extension_signed(
                 (*actuals)[index], formal->signed_value));
+        }
+        if (is_two_state_domain(formal->domain)) {
+            // A 2-state formal receives X and Z bits as 0 (IEEE 1800-2017
+            // 6.24.1 by way of 13.3).
+            lowered_actuals[index]
+                = convert_to_two_state(*lowered_actuals[index]);
         }
     }
 
@@ -7212,6 +7228,10 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
                     *lowered_actuals[index], formal->width,
                     hir_actual_extension_signed(
                 (*actuals)[index], formal->signed_value));
+            }
+            if (is_two_state_domain(formal->domain)) {
+                lowered_actuals[index]
+                    = convert_to_two_state(*lowered_actuals[index]);
             }
         }
     }

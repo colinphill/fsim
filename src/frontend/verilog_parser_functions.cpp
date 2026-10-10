@@ -31,6 +31,7 @@ FunctionDeclaration VerilogParser::parse_function(
     function.automatic = default_automatic || unit_default_automatic_;
     function.lifetime_explicit = false;
   }
+  const LifetimeScope lifetime_scope { automatic_callable_, function.automatic };
 
   // A user-defined return type is followed by the function name and then
   // '('. The general declaration lookahead deliberately treats that shape
@@ -639,6 +640,7 @@ TaskDeclaration VerilogParser::parse_task(
     task.automatic = default_automatic || unit_default_automatic_;
     task.lifetime_explicit = false;
   }
+  const LifetimeScope lifetime_scope { automatic_callable_, task.automatic };
 
   const auto name = expect_identifier("task name");
   task.name = name.text;

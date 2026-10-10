@@ -249,6 +249,86 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 22: class execution, interface typedefs, foreach, equality, constraints
+
+Fixtures: `sv_class_construction_in_methods.sv` (passes on xsim) and
+`sv_values_and_assertion_items.sv` (passes on xsim except its immediate
+`cover`, which xsim 2025.2 ignores).
+
+Classes (8.7, 8.9, 8.18, 8.25, 18.5.1, 18.6.3):
+- Class methods run in the class interpreter. It gained loops, `case`,
+  `break`/`continue`, task calls, `$display`/`$write`, string properties,
+  container methods, the implicit function result variable, and `new`. A
+  class whose methods construct objects (`static function C get();
+  if (single == null) single = new; ...`) used to be dropped from the
+  simulation ("specialization is not available").
+- Static class-handle properties initialized by `new` are constructed
+  before any process runs. Property initializers that are not literals
+  (expressions, enumeration literals, `new`) run after the base
+  constructor.
+- Class specialization links typedefs that were spelled only by name
+  (`$unit` enums used as property types). It treats a parameterized class
+  named without actuals as its default specialization, and accepts type
+  parameters as the types of method locals and formals.
+- `local` and `protected` visibility is enforced (`SV-CLASS-028`).
+  User methods named `randomize`, `rand_mode`, `constraint_mode`,
+  `srandom`, `get_randstate` or `set_randstate` are rejected
+  (`SV-CLASS-029`). `randc` variables in `dist`, `soft` or `solve-before`
+  constraints are rejected (`SV-CLASS-030`).
+- Out-of-block constraints (`constraint C::c { ... }`) at compilation-unit
+  or module scope complete the class's prototype. A bare `constraint c;`
+  is an implicit prototype. An undefined `extern constraint` is rejected
+  (`SV-CLASS-031`, `-032`).
+- Static methods called through a handle and multidimensional static-array
+  properties in class expressions.
+
+Interfaces and hierarchy (25.10, 6.18):
+- `typedef ifc.data_t t;` and `localparam type t = ifc.sub.t;` through an
+  interface instance or interface port (`SV-SEM-405`).
+- Members of interface array elements (`ifcs[i].x`) in module statements.
+- Input port actuals are lowered at their own width and then extended.
+
+Statements and expressions:
+- `foreach` over multidimensional, ascending, dynamic and associative
+  arrays.
+- `fork ... join_none`/`join_any` inside tasks.
+- `unique`, `unique0` and `priority if`.
+- Immediate `assume` and `cover`, and deferred assertions as module
+  items. `global clocking` blocks.
+- `==`, `!=`, `==?` and `!=?` are decided by a known differing bit even
+  when other bits are unknown (11.4.5). This applies to the interpreter,
+  the static kernel and the LLVM engines.
+- A variable index under a constant one in a multidimensional packed
+  array (`a[1][i] = v`) wrote the wrong bits.
+- 2-state function and task formals receive X/Z bits as 0.
+- Replication in assignment patterns (`'{2{'{3{4, 5}}}}`).
+- A real bit-select index (`SVEXPR-009`) and a stream wider than its
+  target (`SVEXPR-010`) are rejected.
+- Expression widths of relational, `->` and `<->` results (1 bit) and of
+  shifts and `**` (the left operand's width).
+
+Simulation:
+- A net driven by a delayed continuous assignment reads X, not Z, until
+  the first delayed value matures, with no value change at time zero.
+- `%d` of a partly unknown value prints `X` or `Z` (21.2.1.4).
+- `$simtime` (ivtest) returns the time in simulation-precision units.
+
+Preprocessor (22.3, 22.5.1, 22.11):
+- A conditional directive inside a macro whose name pastes an argument
+  (`` `ifdef STOP_``a1``).
+- `` `resetall`` inside a design element, `` `define`` of a directive
+  name, and `` `pragma`` without a name are rejected (`SV-PP-054` to
+  `056`).
+
+Runner: ivtest compile-only (`CO`) cases elaborate and pass without a
+PASSED line. Modules with escaped names (`\$I178`) are valid tops and
+root aliases. Verilator cases load undeclared modules from `t/` as the
+driver's `-y t/` does.
+
+Corpus effect (interpreter, against Batch 21): ivtest +64 (2001/2826),
+Verilator +76 (905/2415), sv-tests +64 (1269/1497); nvc, VESTs and VHDL
+Compliance-Tests unchanged. 204 cases closed, none newly failing.
+
 ### Batch 21: sequence properties, randsequence, class construction, UVM compile time
 
 Fixtures: `sv_copies_and_constructors.sv` (passes on xsim),
@@ -906,6 +986,9 @@ error, and each exposes an existing gap:
 
 | Gap | Evidence |
 |---|---|
+| SV: interface array ports (`a_if.mp p [N]`) and their element bindings | 35 Verilator cases (`FSIM-SV-PARSE-002`) |
+| SV: UVM `run_test` from source: the phase, objection and report services exist but are only driven through the C++ API | 100 UVM sv-tests |
+| SV: interface parameters read through a port (`a.PARAM`) | Verilator interface cases |
 | SV hierarchical references (`s.a`) in expressions | ~361 Verilator cases (`FSIM-ELAB-HIR-001` kind 3) |
 | Verilator: parameter defaults, typedefs, class out-of-block methods, `$sformatf` formats | top Verilator causes |
 | sv-tests: SV class/randomization constraint syntax | `FSIM-SV-UNSUPPORTED-001` (73) |
@@ -923,7 +1006,6 @@ error, and each exposes an existing gap:
 | SV: an X/Z or out-of-range dynamic index in a signal write must skip the write instead of failing (interpreter and LLVM paths) | Verilator, ivtest (`FSIM-RUN-0001`) |
 | SV: `void'($fgets(...))` and other discarded system-function calls | sv-tests chapter 21 |
 | SV: packed arrays of a named type (`T [3:0] v;`, `typedef T1 [7:0] T2;`) | ~80 ivtest/Verilator cases (`FSIM-SV-UNSUPPORTED-004`/`-024`) |
-| SV: typedefs of interface-port member types (`typedef ifc.t t;`) | ~20 Verilator cases |
 | VHDL: conversion functions on port association formals (`to_x(formal) => actual`) and on actuals | 36+ VESTs cases (`FSIM-ELAB-VHCOMP-009`) |
 | VHDL: individual association of output-port subelements | VESTs, nvc |
 | SV legality: an enum base that names a non-integral typedef; unpacked array assignment between enum and integer element types | ivtest negative cases |

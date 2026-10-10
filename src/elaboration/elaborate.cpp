@@ -201,16 +201,26 @@ ElaborationResult elaborate_impl(
                 return result;
             }
         }
-        if (root.alias.empty()
-            || (std::isalpha(
-                    static_cast<unsigned char>(root.alias.front())) == 0
-                && root.alias.front() != '_')
-            || !std::ranges::all_of(
+        // A Verilog escaped identifier names its unit, so an escaped
+        // module (`\$top`) is its own root alias (IEEE 1800-2017 5.6.1).
+        const bool escaped_alias = root.alias.size() > 1U
+            && root.alias.front() == '\\'
+            && std::ranges::all_of(
                 root.alias,
                 [](const unsigned char character) {
-                    return std::isalnum(character) != 0
-                        || character == '_';
-                })) {
+                    return std::isgraph(character) != 0;
+                });
+        if (!escaped_alias
+            && (root.alias.empty()
+                || (std::isalpha(
+                        static_cast<unsigned char>(root.alias.front())) == 0
+                    && root.alias.front() != '_')
+                || !std::ranges::all_of(
+                    root.alias,
+                    [](const unsigned char character) {
+                        return std::isalnum(character) != 0
+                            || character == '_';
+                    }))) {
             result.diagnostics.push_back({
                 "FSIM-ELAB-ROOT-002",
                 "top-level root alias '" + root.alias
