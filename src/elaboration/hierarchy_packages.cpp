@@ -1671,6 +1671,19 @@ namespace {
 
         resolve_subtype = [&](const semantic::vhdl::SubtypeIndication& subtype)
             -> Layout {
+            if (!subtype.element_constraints.empty()) {
+                // Element constraints (IEEE 1076-2008 5.3.2.1, 5.3.3.1)
+                // complete nested layouts that the element type alone
+                // leaves unbounded.
+                const auto effective = compiled_vhdl_link_subtype(
+                    specialization, subtype, owner_scope);
+                if (effective.executable_width) {
+                    return CompiledVhdlSignalLayout {
+                        static_cast<std::size_t>(*effective.executable_width),
+                        compiled_value_domain(effective.domain),
+                    };
+                }
+            }
             const auto* generic_actual = subtype.type_mark.target.valid()
                 ? actual_for_type(subtype.type_mark.target)
                 : nullptr;
@@ -1841,7 +1854,12 @@ namespace {
                     base.constraints = { *definition.scalar_range };
                     base.unconstrained = false;
                 }
-                if (subtype.executable_width) {
+                base.element_constraints.insert(
+                    base.element_constraints.end(),
+                    subtype.element_constraints.begin(),
+                    subtype.element_constraints.end());
+                if (subtype.executable_width
+                    && base.element_constraints.empty()) {
                     base.executable_width = subtype.executable_width;
                 }
                 result = resolve_subtype(base);
@@ -3022,7 +3040,12 @@ namespace {
                     base.constraints = { *definition.scalar_range };
                     base.unconstrained = false;
                 }
-                if (subtype.executable_width) {
+                base.element_constraints.insert(
+                    base.element_constraints.end(),
+                    subtype.element_constraints.begin(),
+                    subtype.element_constraints.end());
+                if (subtype.executable_width
+                    && base.element_constraints.empty()) {
                     base.executable_width = subtype.executable_width;
                 }
                 if (auto resolved = self(self, base)) {
@@ -3118,10 +3141,13 @@ namespace {
                 }
                 std::uint64_t remaining = layout ? layout->width : 0U;
                 for (const auto& element : definition.record_elements) {
-                    auto nested = self(self, element.subtype);
+                    const auto element_subtype
+                        = semantic::vhdl::constrained_element_subtype(
+                            subtype, element.name, element.subtype);
+                    auto nested = self(self, element_subtype);
                     const auto nested_layout
                         = compiled_vhdl_named_signal_layout(
-                            specialization, element.subtype, owner_scope);
+                            specialization, element_subtype, owner_scope);
                     if (!nested || !nested_layout
                         || nested_layout->width > remaining) {
                         continue;
@@ -3143,7 +3169,9 @@ namespace {
                 }
             } else if (definition.form == TypeForm::array
                 && definition.element_subtype) {
-                auto element_subtype = *definition.element_subtype;
+                auto element_subtype
+                    = semantic::vhdl::constrained_element_subtype(
+                        subtype, "", *definition.element_subtype);
                 auto element = self(self, element_subtype);
                 if (element_subtype.type_mark.target.valid()) {
                     const auto element_definition
@@ -4178,6 +4206,40 @@ namespace {
                 insert_compiled_default(result, *value, offset);
             }
             return result;
+        }
+        if (definition == nullptr) {
+            // STD.STANDARD vectors of INTEGER, TIME and REAL elements
+            // (IEEE 1076-2008 16.3) start at their element's leftmost value.
+            auto name = std::string_view { subtype.type_mark.spelling };
+            if (const auto separator = name.find_last_of(".:");
+                separator != std::string_view::npos) {
+                name.remove_prefix(separator + 1U);
+            }
+            std::optional<PackedLogic4> element;
+            std::size_t element_width { };
+            if (compiled_vhdl_name_equal(name, "integer_vector")) {
+                element_width = 32U;
+                element = compiled_vhdl_integral_value(
+                    std::numeric_limits<std::int32_t>::min(),
+                    frontend::ValueDomain::Integer, element_width);
+            } else if (compiled_vhdl_name_equal(name, "time_vector")) {
+                element_width = 64U;
+                element = compiled_vhdl_integral_value(
+                    std::numeric_limits<std::int64_t>::min(),
+                    frontend::ValueDomain::Integer, element_width);
+            } else if (compiled_vhdl_name_equal(name, "real_vector")) {
+                element_width = 64U;
+                element = unsigned_value(std::bit_cast<std::uint64_t>(
+                    -std::numeric_limits<double>::max()), 64U);
+            }
+            if (element && width % element_width == 0U) {
+                PackedLogic4 result { width, Logic4::zero };
+                for (std::size_t offset { }; offset < width;
+                    offset += element_width) {
+                    insert_compiled_default(result, *element, offset);
+                }
+                return result;
+            }
         }
         if (!scalar) {
             return std::nullopt;
@@ -16586,7 +16648,32 @@ bool HierarchyBuilder::validate_compiled_vhdl_context_visibility(
                 const auto spelling = selected.canonical.empty()
                     ? std::string_view { selected.spelling }
                     : std::string_view { selected.canonical };
-                const auto parts = compiled_vhdl_name_parts(spelling);
+                auto parts = compiled_vhdl_name_parts(spelling);
+                if (item.kind
+                        == semantic::vhdl::ContextKind::use_clause
+                    && parts.size() == 2U) {
+                    // `use lib.all` and `use lib.unit` name library
+                    // contents (IEEE 1076-1993 10.4); `use pkg.all` and
+                    // `use pkg.item` select from a package made visible
+                    // by an earlier `use lib.pkg` or `use lib.all`.
+                    const auto* named_package = find_unit(
+                        semantic::vhdl::UnitKind::package,
+                        owner_library, parts[0]);
+                    if (named_package == nullptr) {
+                        if (!compiled_vhdl_name_equal(parts[1], "all")) {
+                            const auto* package = find_unit(
+                                semantic::vhdl::UnitKind::package,
+                                compiled_vhdl_effective_library(
+                                    parts[0], owner_library),
+                                parts[1]);
+                            if (package != nullptr) {
+                                validate_package(*package, item.source);
+                            }
+                        }
+                        continue;
+                    }
+                    parts.insert(parts.begin(), owner_library);
+                }
                 if (item.kind
                     == semantic::vhdl::ContextKind::use_clause) {
                     if (parts.size() != 3U) {
@@ -17006,6 +17093,11 @@ bool HierarchyBuilder::validate_compiled_vhdl_object_composite_types(
             || compiled_vhdl_name_equal(name, "std_ulogic")
             || compiled_vhdl_name_equal(name, "bit_vector")
             || compiled_vhdl_name_equal(name, "boolean_vector")
+            || compiled_vhdl_name_equal(name, "integer_vector")
+            || compiled_vhdl_name_equal(name, "real_vector")
+            || compiled_vhdl_name_equal(name, "time_vector")
+            || compiled_vhdl_name_equal(name, "real")
+            || compiled_vhdl_name_equal(name, "time")
             || compiled_vhdl_name_equal(name, "string")
             || compiled_vhdl_name_equal(name, "std_logic_vector")
             || compiled_vhdl_name_equal(name, "std_ulogic_vector")
@@ -17079,7 +17171,10 @@ bool HierarchyBuilder::validate_compiled_vhdl_object_composite_types(
                 issues |= unresolved_composite_type;
             }
             for (const auto& element : definition.record_elements) {
-                issues |= inspect(element.subtype, visiting, false);
+                issues |= inspect(
+                    semantic::vhdl::constrained_element_subtype(
+                        subtype, element.name, element.subtype),
+                    visiting, false);
             }
         } else if (definition.form
             == semantic::vhdl::TypeForm::array) {
@@ -17096,7 +17191,9 @@ bool HierarchyBuilder::validate_compiled_vhdl_object_composite_types(
             }
             if (definition.element_subtype) {
                 issues |= inspect(
-                    *definition.element_subtype, visiting, false);
+                    semantic::vhdl::constrained_element_subtype(
+                        subtype, "", *definition.element_subtype),
+                    visiting, false);
             } else {
                 issues |= unresolved_composite_type;
             }
@@ -17107,6 +17204,10 @@ bool HierarchyBuilder::validate_compiled_vhdl_object_composite_types(
             if (!subtype.constraints.empty()) {
                 base.constraints = subtype.constraints;
             }
+            base.element_constraints.insert(
+                base.element_constraints.end(),
+                subtype.element_constraints.begin(),
+                subtype.element_constraints.end());
             issues |= inspect(base, visiting, object_type);
         } else if (definition.form
             == semantic::vhdl::TypeForm::unresolved) {

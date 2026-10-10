@@ -815,6 +815,13 @@ bool InterpreterProgramAccess::data_only_startup_write(
     return compact != nullptr && compact->startup_write_bank != nullptr;
 }
 
+bool InterpreterProgramAccess::vhdl_resolver_program(
+    const Interpreter& interpreter, const ProcessId process) noexcept
+{
+    return std::ranges::any_of(interpreter.impl_->vhdl_resolvers,
+        [&](const auto& entry) { return entry.second.process == process; });
+}
+
 std::size_t InterpreterProgramAccess::operation_count(
     const Interpreter& interpreter, const ProcessId process)
 {

@@ -174,6 +174,11 @@ private:
   // or `T range ...` (IEEE 1076-2008 5.2.1, 5.3.2.1).
   std::optional<DiscreteRangeExpression>
   parse_vhdl_discrete_range(bool allow_subtype_name);
+  bool vhdl_record_constraint_ahead();
+  void parse_vhdl_record_constraint(Type &type,
+                                    const std::vector<std::string> &path);
+  void parse_vhdl_element_constraints(Type &type,
+                                      std::vector<std::string> path);
 
   Type parse_vhdl_unspecified_type(const Token &start);
 

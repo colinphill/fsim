@@ -559,8 +559,11 @@ bool Lowerer::is_hir_vhdl_access_assignment(
     }
     const auto subtype = hir_vhdl_expression_subtype(
         *statement->vhdl->target);
+    // An access-typed record element (`h.p := q`) is an ordinary element
+    // write of the record's handle bits.
     return target->vhdl->kind
             == semantic::vhdl::ExpressionKind::name
+        && !member
         && subtype
         && hir_vhdl_named_type(
             *specialized_hir_unit_, *subtype,

@@ -2465,6 +2465,16 @@ void Simulation::Impl::setup_execution(
                     // feeds observation-time materialization.
                     continue;
                 }
+                if (runtime::simir::InterpreterProgramAccess::
+                        vhdl_resolver_program(*interpreter, runtime_id)) {
+                    // The interpreter runs a resolution program directly with
+                    // the driving values in its input register.
+                    ++retained_process_count;
+                    retained_operation_count
+                        += runtime::simir::InterpreterProgramAccess::
+                            operation_count(*interpreter, runtime_id);
+                    continue;
+                }
                 if (data_only_startup_write && !explicitly_selected) {
                     ++retained_process_count;
                     retained_operation_count

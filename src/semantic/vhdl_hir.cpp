@@ -8,6 +8,44 @@
 
 namespace fsim::semantic::vhdl {
 
+SubtypeIndication constrained_element_subtype(
+    const SubtypeIndication& owner,
+    const std::string_view step,
+    SubtypeIndication element)
+{
+    const auto same_step = [&](const std::string& candidate) {
+        return std::ranges::equal(candidate, step,
+            [](const char left, const char right) {
+                return std::tolower(static_cast<unsigned char>(left))
+                    == std::tolower(static_cast<unsigned char>(right));
+            });
+    };
+    for (const auto& constraint : owner.element_constraints) {
+        if (constraint.path.empty() || !same_step(constraint.path.front())) {
+            continue;
+        }
+        if (constraint.path.size() == 1U) {
+            std::erase_if(element.constraints,
+                [](const RangeConstraint& range) {
+                    return range.kind == RangeKind::array_index;
+                });
+            element.constraints.insert(element.constraints.begin(),
+                constraint.constraints.begin(),
+                constraint.constraints.end());
+            element.unconstrained = false;
+            element.executable_width.reset();
+            continue;
+        }
+        ElementConstraint nested;
+        nested.path.assign(
+            std::next(constraint.path.begin()), constraint.path.end());
+        nested.constraints = constraint.constraints;
+        element.element_constraints.push_back(std::move(nested));
+        element.executable_width.reset();
+    }
+    return element;
+}
+
 void Hir::note_mutation() noexcept { ++revision_; }
 
 const std::vector<Unit>& Hir::units() const noexcept { return units_; }

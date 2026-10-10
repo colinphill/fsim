@@ -915,6 +915,17 @@ void VhdlHirBuilder::add_disconnection_specifications(
         result.constraints.push_back(expression_range(
             constraint, vh::RangeKind::array_index, scope, parent));
     }
+    for (const auto& element : type.vhdl_element_constraints) {
+        vh::ElementConstraint projected;
+        projected.path = element.path;
+        for (const auto& range : element.ranges) {
+            projected.constraints.push_back(expression_range(
+                range, vh::RangeKind::array_index, scope, parent));
+        }
+        result.element_constraints.push_back(std::move(projected));
+        // The frontend's flat width counts only the outer index range.
+        result.executable_width.reset();
+    }
     if (!result.unconstrained && result.constraints.empty()) {
         auto mark = canonical_vhdl_name(result.type_mark.spelling);
         if (const auto separator = mark.find_last_of(".:");

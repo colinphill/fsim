@@ -459,6 +459,15 @@ struct Process {
     std::vector<StatementId> statements;
 };
 
+// An element constraint (IEEE 1076-2008 5.3.2.1, 5.3.3.1): the path walks
+// array elements ("") and record elements (simple names) from the subtype.
+struct ElementConstraint {
+    std::vector<std::string> path;
+    std::vector<RangeConstraint> constraints;
+
+    bool operator==(const ElementConstraint&) const = default;
+};
+
 struct SubtypeIndication {
     TypeReference type_mark;
     ValueDomain domain { ValueDomain::unknown };
@@ -478,9 +487,18 @@ struct SubtypeIndication {
     std::size_t unspecified_array_index_count { };
     std::string unspecified_inference_identity;
     BuiltinTypeIdentity builtin_type { BuiltinTypeIdentity::none };
+    std::vector<ElementConstraint> element_constraints;
 
     bool operator==(const SubtypeIndication&) const = default;
 };
+
+// Applies `owner`'s element constraints addressed to `step` ("" for its
+// array element, a record element's simple name otherwise) to `element`, the
+// element's declared subtype.  Deeper constraints move onto the element.
+[[nodiscard]] SubtypeIndication constrained_element_subtype(
+    const SubtypeIndication& owner,
+    std::string_view step,
+    SubtypeIndication element);
 
 struct RecordElement {
     std::string name;

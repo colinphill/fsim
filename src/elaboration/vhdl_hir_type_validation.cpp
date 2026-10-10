@@ -247,6 +247,33 @@ private:
         return named_type(subtype.type_mark.spelling);
     }
 
+    // The subtype of record element `element` of an object of subtype
+    // `owner`, refined by the element constraints that `owner` and the
+    // named subtypes it denotes impose (IEEE 1076-2008 5.3.3.1).
+    SubtypeIndication record_member_subtype(
+        const SubtypeIndication& owner,
+        const semantic::vhdl::RecordElement& element) const
+    {
+        auto collected = owner;
+        auto target = owner.type_mark.target;
+        std::unordered_set<std::uint32_t> visited;
+        while (target.valid() && visited.insert(target.value()).second) {
+            const auto* definition = type_definition(target);
+            if (definition == nullptr
+                || (definition->form != TypeForm::subtype
+                    && definition->form != TypeForm::alias)) {
+                break;
+            }
+            collected.element_constraints.insert(
+                collected.element_constraints.begin(),
+                definition->base.element_constraints.begin(),
+                definition->base.element_constraints.end());
+            target = definition->base.type_mark.target;
+        }
+        return specialized_subtype(semantic::vhdl::constrained_element_subtype(
+            collected, element.name, element.subtype));
+    }
+
     SubtypeIndication specialized_subtype(SubtypeIndication subtype) const
     {
         return semantic::CompiledDesignResolver { specialization_ }
@@ -1232,9 +1259,13 @@ private:
         }
         std::unordered_set<std::uint32_t> visiting;
         const auto element = profile(*type.element_subtype, visiting);
+        // VHDL-2008 permits an unbounded element subtype that object
+        // declarations constrain (IEEE 1076-2008 5.3.2.1).
+        const bool unbounded_elements
+            = architecture_.standard >= std::string_view { "2008" };
         if (element.kind == ProfileKind::unknown
-            || element.kind == ProfileKind::string
-            || (element.kind == ProfileKind::array
+            || (element.kind == ProfileKind::string && !unbounded_elements)
+            || (element.kind == ProfileKind::array && !unbounded_elements
                 && std::ranges::any_of(
                     element.dimensions,
                     [](const auto& dimension) {
@@ -1485,7 +1516,7 @@ private:
                     if (member == record->record_elements.end()) {
                         return std::nullopt;
                     }
-                    subtype = specialized_subtype(member->subtype);
+                    subtype = record_member_subtype(subtype, *member);
                     if (member_separator == std::string_view::npos) {
                         return subtype;
                     }
@@ -2995,7 +3026,7 @@ private:
                     expression.source);
                 return;
             }
-            subtype = specialized_subtype(element->subtype);
+            subtype = record_member_subtype(subtype, *element);
             if (next == std::string_view::npos) {
                 return;
             }
@@ -4438,7 +4469,12 @@ private:
         }
         const auto& value = *expression->vhdl;
         if (value.kind == semantic::vhdl::ExpressionKind::logic_literal) {
-            return 1U;
+            // A character literal takes its type, and so its width, from the
+            // context: one bit for BIT, eight for CHARACTER (IEEE 1076-2008
+            // 9.3.2).
+            return value.text.starts_with('\'')
+                ? std::nullopt
+                : std::optional<std::size_t> { 1U };
         }
         if (value.kind == semantic::vhdl::ExpressionKind::string_literal) {
             if (value.decoded_string) {

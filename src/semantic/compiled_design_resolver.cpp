@@ -2511,6 +2511,8 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 ? static_cast<std::uint8_t>(*result.executable_width)
                 : result.integer_storage_width != 0U
                 ? result.integer_storage_width
+                : same_vhdl_identifier(name, "time")
+                ? std::uint8_t { 64U }
                 : standard_width();
             result.domain = vhdl::ValueDomain::integer;
             result.executable_width = width;
@@ -2575,9 +2577,11 @@ CompiledDesignResolver::effective_vhdl_subtype(
             } else if (same_vhdl_identifier(name, "string")) {
                 element_width = 8U;
                 element_domain = vhdl::ValueDomain::string;
-            } else if (same_vhdl_identifier(name, "integer_vector")
-                || same_vhdl_identifier(name, "time_vector")) {
+            } else if (same_vhdl_identifier(name, "integer_vector")) {
                 element_width = standard_width();
+                element_domain = vhdl::ValueDomain::integer;
+            } else if (same_vhdl_identifier(name, "time_vector")) {
+                element_width = 64U;
                 element_domain = vhdl::ValueDomain::integer;
             } else if (same_vhdl_identifier(name, "std_logic_vector")
                 || same_vhdl_identifier(name, "std_ulogic_vector")
@@ -2727,6 +2731,9 @@ CompiledDesignResolver::effective_vhdl_subtype(
         }
         if (result.builtin_type == vhdl::BuiltinTypeIdentity::none) {
             result.builtin_type = inherited.builtin_type;
+        }
+        if (!inherited.element_constraints.empty()) {
+            result.element_constraints = inherited.element_constraints;
         }
         result.signed_value = result.signed_value || inherited.signed_value;
         // `unconstrained` is part of the effective array shape, not a
@@ -2986,6 +2993,15 @@ CompiledDesignResolver::effective_vhdl_subtype(
             || definition.form == vhdl::TypeForm::alias
             || definition.form == vhdl::TypeForm::scalar) {
             auto inherited = definition.base;
+            if (!result.element_constraints.empty()) {
+                // The indication's element constraints refine those of
+                // the named subtype (IEEE 1076-2008 6.3).
+                inherited.element_constraints.insert(
+                    inherited.element_constraints.end(),
+                    result.element_constraints.begin(),
+                    result.element_constraints.end());
+                result.executable_width.reset();
+            }
             if (!result.constraints.empty()) {
                 inherited.constraints = result.constraints;
                 inherited.unconstrained = false;
@@ -3031,13 +3047,20 @@ CompiledDesignResolver::effective_vhdl_subtype(
             result.executable_width = width;
             result.integer_storage_width = width;
             result.signed_value = true;
+        } else if (definition.form == vhdl::TypeForm::access
+            && (!result.executable_width || *result.executable_width == 0U)) {
+            // An access value is a 32-bit handle, as in signal layouts.
+            result.domain = vhdl::ValueDomain::bit2;
+            result.executable_width = 32U;
         } else if (definition.form == vhdl::TypeForm::record) {
             std::uint64_t width { };
             auto domain = vhdl::ValueDomain::unknown;
             bool concrete = !definition.record_elements.empty();
             for (const auto& element : definition.record_elements) {
                 const auto effective = resolve(
-                    element.subtype, definition_scope, active_frames);
+                    vhdl::constrained_element_subtype(
+                        result, element.name, element.subtype),
+                    definition_scope, active_frames);
                 if (!effective || !effective->executable_width
                     || *effective->executable_width == 0U
                     || width > std::numeric_limits<std::uint64_t>::max()
@@ -3074,8 +3097,9 @@ CompiledDesignResolver::effective_vhdl_subtype(
         } else if (definition.form == vhdl::TypeForm::array
             && definition.element_subtype) {
             const auto element = resolve(
-                *definition.element_subtype, definition_scope,
-                active_frames);
+                vhdl::constrained_element_subtype(
+                    result, "", *definition.element_subtype),
+                definition_scope, active_frames);
             if (definition.array_dimensions.size() == 1U
                 && definition_declaration
                 && definition_declaration->vhdl != nullptr

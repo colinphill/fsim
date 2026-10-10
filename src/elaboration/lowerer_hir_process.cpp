@@ -1081,7 +1081,16 @@ bool Lowerer::initialize_hir_declarations(
                 [](const semantic::vhdl::RangeConstraint& range) {
                     return range.left_expression
                         || range.right_expression;
-                })) {
+                })
+            && [&] {
+                   // A statically sized declared subtype owns the layout;
+                   // the initializer's width only sizes dynamic ranges.
+                   const auto declared = hir_effective_vhdl_subtype(
+                       *declaration->vhdl->subtype);
+                   return !binding || !declared || declared->unconstrained
+                       || !declared->executable_width
+                       || *declared->executable_width != binding->width;
+               }()) {
             const auto contextual_width = hir_expression_width(
                 *declaration->vhdl->initializer, hir_process_scope_);
             const auto contextual_domain = hir_expression_domain(

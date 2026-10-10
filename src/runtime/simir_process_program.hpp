@@ -312,6 +312,10 @@ public:
         const std::vector<ProcessId>& dormant);
     [[nodiscard]] static bool fusion_dormant(
         const Interpreter& interpreter, ProcessId process) noexcept;
+    /// Whether `process` is a VHDL resolution program, which the interpreter
+    /// runs directly over each update's driving values.
+    [[nodiscard]] static bool vhdl_resolver_program(
+        const Interpreter& interpreter, ProcessId process) noexcept;
     /// Install the engine v4 static kernel before start. The host must
     /// already run its stub program; every other member must be dormant.
     static void install_static_kernel(Interpreter& interpreter,

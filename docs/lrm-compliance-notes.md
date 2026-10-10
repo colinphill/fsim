@@ -635,3 +635,45 @@ gives fsim's result in each case checked.
 - Port bindings treat BOOLEAN and BIT element domains alike.
 - Decimal literals require decimal digits around an underline, and the
   digits of a based literal must be below the base (`FSIM-VHDL-LEX-005`).
+
+## Aggregates, imports, standard vectors and element constraints (batch 33)
+
+- TIME values are 64 bits wherever an array element is TIME, including a
+  user array type named `time_vector`. A local variable whose index range
+  has literal bounds keeps its declared layout; only a range given by
+  nonstatic expressions takes its width from the initializer.
+- A character literal element of an array of CHARACTER is its character
+  code, not a logic value, and a logic literal has no width of its own.
+- The package import check accepts `use lib.all`, `use lib.unit` (a
+  package or another design unit) and, after either of those, `use
+  pkg.all` or `use pkg.item`.
+- A qualified aggregate whose type is declared in a process or subprogram
+  finds that type by its simple name: the unique type of that name, or the
+  one declared in the aggregate's scope.
+- Ordering operators on discrete arrays accept operands of different
+  lengths (a proper prefix is less) and aggregate operands, which take the
+  array base type of the other operand.
+- INTEGER_VECTOR, BOOLEAN_VECTOR, TIME_VECTOR and REAL_VECTOR support
+  aggregates, indexed reads and writes, and element defaults (`'LEFT`) for
+  signals and variables.
+- An access value is a 32-bit handle in a record. Assigning to an
+  access-typed record element writes that element only; before, the
+  access-assignment path replaced the whole record.
+- Element constraints (VHDL-2008): `T(r)(r2)`, `T(open)(r2)`, `R(e(r))`,
+  nested forms, and element constraints carried through a named subtype.
+  The HIR subtype keeps a list of constraints, each addressed by a path of
+  array steps (`""`) and record element names. They are applied in subtype
+  widths, signal layouts, object checks, array element and record member
+  selections, aggregates, default values and attribute prefixes. From
+  VHDL-2008, an array type definition may have an unbounded element
+  subtype.
+- Not yet: element constraints that a subprogram formal takes from its
+  actual (`r(i)'range`, `'element` inside the subprogram), ports whose
+  element constraints come from the actual, and element-constrained
+  constants inside protected types.
+- VHDL resolution programs always run in the interpreter. The compiled
+  engine no longer JIT-compiles them; it rejected the externally filled
+  input register.
+- nvc issue616 now elaborates. It expects a run-time length error for a
+  17-bit `to_signed` value in a 16-bit record element of an unused
+  constant, and fsim does not check this.

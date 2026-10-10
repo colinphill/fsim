@@ -276,6 +276,14 @@ struct DiscreteRangeExpression {
     bool direction_from_bounds { };
 };
 
+// A VHDL-2008 element constraint (IEEE 1076-2008 5.3.2.1, 5.3.3.1).  The
+// path walks from the constrained subtype through array elements ("") and
+// record elements (their simple names) to the constrained element.
+struct VhdlElementConstraint {
+    std::vector<std::string> path;
+    std::vector<DiscreteRangeExpression> ranges;
+};
+
 struct Type;
 struct VhdlProtectedInfo;
 
@@ -601,6 +609,8 @@ struct Type {
     // One-dimensional executable views also mirror their sole entry through
     // packed_range_expression for compatibility with the existing packed path.
     std::vector<DiscreteRangeExpression> vhdl_array_constraints;
+    // Element constraints of a named composite subtype indication.
+    std::vector<VhdlElementConstraint> vhdl_element_constraints;
     // Present only for a SystemVerilog dynamic array, queue, or associative
     // array. All scalar fields above describe one element, not the container.
     support::RareOptional<SystemVerilogContainerInfo> systemverilog_container;

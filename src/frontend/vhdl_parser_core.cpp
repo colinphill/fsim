@@ -1287,6 +1287,7 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
         type.domain = ValueDomain::Integer;
         type.is_signed = true;
         type.packed_range = PackedRange { 63, 0, true };
+        type.vhdl_integer_storage_width = 64U;
         type.integer_range = IntegerRange {
             simple_name == "time" ? std::numeric_limits<std::int64_t>::min() : 0,
             std::numeric_limits<std::int64_t>::max(), false };
@@ -1340,6 +1341,10 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
                 parsed_range->direction_from_bounds
             };
         }
+    } else if (at(TokenKind::LeftParen) && vhdl_record_constraint_ahead()) {
+        // A record constraint (IEEE 1076-2008 5.3.3.1).
+        advance();
+        parse_vhdl_record_constraint(type, { });
     } else if (match(TokenKind::LeftParen)) {
         const auto range_start = previous();
         if (type.domain == ValueDomain::Integer) {
@@ -1348,6 +1353,11 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
                 "parenthesized range");
         }
         do {
+            // An `open` index leaves that dimension unconstrained
+            // (IEEE 1076-2008 5.3.2.1).
+            if (match_keyword("open", true)) {
+                continue;
+            }
             auto constraint = parse_vhdl_discrete_range(true);
             if (!constraint) {
                 error(current(), "FSIM-VHDL-PARSE-009",
@@ -1375,8 +1385,92 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
                 cover(range_start.span, previous().span), constraint.descending
             };
         }
+        if (at(TokenKind::LeftParen)) {
+            // An array element constraint follows the index constraint.
+            parse_vhdl_element_constraints(type, { std::string { } });
+        }
     }
     return type;
+}
+
+bool VhdlParser::vhdl_record_constraint_ahead()
+{
+    // `(name(...)` or `(name(...)(...)` followed by ',' or ')': a record
+    // element constraint rather than an index range such as `f(x) to 3`.
+    if (!at(TokenKind::LeftParen) || !at(TokenKind::Identifier, 1)
+        || !at(TokenKind::LeftParen, 2)) {
+        return false;
+    }
+    std::size_t lookahead = 2;
+    while (at(TokenKind::LeftParen, lookahead)) {
+        std::size_t depth = 0;
+        do {
+            if (at(TokenKind::LeftParen, lookahead)) {
+                ++depth;
+            } else if (at(TokenKind::RightParen, lookahead)) {
+                --depth;
+            } else if (at(TokenKind::EndOfFile, lookahead)) {
+                return false;
+            }
+            ++lookahead;
+        } while (depth != 0);
+    }
+    return at(TokenKind::Comma, lookahead)
+        || at(TokenKind::RightParen, lookahead);
+}
+
+void VhdlParser::parse_vhdl_record_constraint(
+    Type& type, const std::vector<std::string>& path)
+{
+    // The opening parenthesis has been consumed.
+    do {
+        auto element_path = path;
+        element_path.push_back(vhdl_name(
+            expect_identifier("record element name").text));
+        if (!at(TokenKind::LeftParen)) {
+            error(current(), "FSIM-VHDL-PARSE-009",
+                "a record element constraint requires a parenthesized "
+                "constraint");
+            break;
+        }
+        parse_vhdl_element_constraints(type, std::move(element_path));
+    } while (match(TokenKind::Comma));
+    expect(TokenKind::RightParen, "')' after record constraint",
+        "FSIM-VHDL-PARSE-010");
+}
+
+void VhdlParser::parse_vhdl_element_constraints(
+    Type& type, std::vector<std::string> path)
+{
+    while (at(TokenKind::LeftParen)) {
+        if (vhdl_record_constraint_ahead()) {
+            advance();
+            parse_vhdl_record_constraint(type, path);
+            return;
+        }
+        advance();
+        VhdlElementConstraint constraint;
+        constraint.path = path;
+        do {
+            if (match_keyword("open", true)) {
+                continue;
+            }
+            auto range = parse_vhdl_discrete_range(true);
+            if (!range) {
+                error(current(), "FSIM-VHDL-PARSE-009",
+                    "an index constraint requires a discrete range, a "
+                    "range attribute or a discrete subtype name");
+                range.emplace();
+            }
+            constraint.ranges.push_back(std::move(*range));
+        } while (match(TokenKind::Comma));
+        expect(TokenKind::RightParen, "')' after range",
+            "FSIM-VHDL-PARSE-010");
+        if (!constraint.ranges.empty()) {
+            type.vhdl_element_constraints.push_back(std::move(constraint));
+        }
+        path.push_back(std::string { });
+    }
 }
 
 bool VhdlParser::vhdl_source_declares_type(const std::string& name)
