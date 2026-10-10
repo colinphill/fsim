@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/compiled_design_specialization.hpp"
+#include "fsim/semantic/compiled_design_normalization.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 #include "../diagnostic/thread_cpu_clock.hpp"
 #include "integral_identity_memo.hpp"
@@ -3413,6 +3414,10 @@ private:
             if (const auto declaration = cached->second) {
                 return evaluate_vhdl_declaration(*declaration);
             }
+            return std::nullopt;
+        }
+        if ((source.kind == Kind::unary || source.kind == Kind::binary)
+            && vhdl_operator_overloaded_by_design(unit_.design(), source.text)) {
             return std::nullopt;
         }
         if (source.kind == Kind::unary && source.operands.size() == 1U) {
@@ -7503,6 +7508,12 @@ private:
                     return hierarchy->second;
             }
             return parse_integral_identity(expression.text);
+        }
+        // A VHDL operator the design overloads is a function call.
+        if (!systemverilog
+            && (expression.kind == Kind::unary || expression.kind == Kind::binary)
+            && vhdl_operator_overloaded_by_design(unit_.design(), expression.text)) {
+            return std::nullopt;
         }
         if (expression.kind == Kind::unary
             || expression.kind == Kind::update) {

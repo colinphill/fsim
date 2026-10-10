@@ -1931,6 +1931,9 @@ private:
     mutable bool hierarchical_reference_used_ { };
     mutable bool hierarchical_reference_missed_ { };
     bool hierarchical_reference_retry_ { };
+    // `g[1].h[2].x` as a hierarchical name when every index is constant.
+    [[nodiscard]] std::optional<std::string> hir_systemverilog_constant_path(
+        semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<SignalId> hir_hierarchical_signal(
         std::string_view name) const;
 };

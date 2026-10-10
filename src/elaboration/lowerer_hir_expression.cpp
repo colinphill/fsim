@@ -5392,29 +5392,35 @@ Lowerer::hir_hierarchical_parameter(
             == semantic::sv::ExpressionKind::call
         && expression->systemverilog->text.starts_with(selected_prefix)
         && expression->systemverilog->operands.size() == 1U
+        && systemverilog_interface_handles_ == nullptr) {
+        // `Loop[1].m.P`: a parameter of an instance in a loop generate block.
+        const auto path = hir_systemverilog_constant_path(expression_id);
+        if (!path || path->find('[') == std::string::npos) {
+            return std::nullopt;
+        }
+        selected_name = *path;
+    } else if (expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::call
+        && expression->systemverilog->text.starts_with(selected_prefix)
+        && expression->systemverilog->operands.size() == 1U
         && systemverilog_interface_handles_ != nullptr) {
         const auto element = specialized_hir_unit_->find_expression(
             expression->systemverilog->operands.front());
-        if (!element || element->systemverilog == nullptr
-            || element->systemverilog->kind
-                != semantic::sv::ExpressionKind::index
-            || element->systemverilog->operands.size() != 2U) {
+        const auto path = hir_systemverilog_constant_path(expression_id);
+        if (!element || element->systemverilog == nullptr || !path
+            || path->find('[') == std::string::npos) {
             return std::nullopt;
         }
-        const auto base = specialized_hir_unit_->find_expression(
-            element->systemverilog->operands.front());
-        const auto index = specialized_hir_unit_
-                               ->evaluate_integral_expression(
-                                   element->systemverilog->operands.back());
-        if (!base || base->systemverilog == nullptr
-            || base->systemverilog->kind
-                != semantic::sv::ExpressionKind::name
-            || !index) {
+        selected_name = *path;
+    } else if (expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::index
+        && expression->systemverilog->text.starts_with("index.")) {
+        // `inst[0].m.P` written as a member of an indexed element.
+        const auto path = hir_systemverilog_constant_path(expression_id);
+        if (!path) {
             return std::nullopt;
         }
-        selected_name = base->systemverilog->text + "["
-            + std::to_string(*index) + "]."
-            + expression->systemverilog->text.substr(selected_prefix.size());
+        selected_name = *path;
     } else if (expression->systemverilog->kind
         != semantic::sv::ExpressionKind::name) {
         return std::nullopt;

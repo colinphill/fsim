@@ -1971,8 +1971,12 @@ tests/feature_matrix/vhdl_revision_corpus.tsv
 tests/feature_matrix/vhdl_standard_mode_inventory.tsv
 tests/feature_matrix/vhdl_synopsys_package_corpus.tsv
 tests/feature_matrix/vhdl_synopsys_package_inventory.tsv
+tests/fixtures/compliance/analysis_errors/allocator_to_scalar.vhd
+tests/fixtures/compliance/analysis_errors/call_arity.vhd
 tests/fixtures/compliance/analysis_errors/integer_condition.vhd
 tests/fixtures/compliance/analysis_errors/integer_report.vhd
+tests/fixtures/compliance/analysis_errors/label_as_value.vhd
+tests/fixtures/compliance/analysis_errors/missing_body.vhd
 tests/fixtures/compliance/analysis_errors/mixed_range_bounds.vhd
 tests/fixtures/compliance/analysis_errors/record_addition.vhd
 tests/fixtures/compliance/analysis_errors/run_analysis_error.cmake
@@ -1988,6 +1992,7 @@ tests/fixtures/compliance/sv_display_arguments.sv
 tests/fixtures/compliance/sv_enum_methods.sv
 tests/fixtures/compliance/sv_expression_widths.sv
 tests/fixtures/compliance/sv_function_statements.sv
+tests/fixtures/compliance/sv_generate_references.sv
 tests/fixtures/compliance/sv_hierarchical_references.sv
 tests/fixtures/compliance/sv_interface_ports_and_waits.sv
 tests/fixtures/compliance/sv_module_items.sv
@@ -2006,6 +2011,7 @@ tests/fixtures/compliance/sv_time_without_timescale.sv
 tests/fixtures/compliance/sv_type_and_class_forms.sv
 tests/fixtures/compliance/sv_values_and_assertion_items.sv
 tests/fixtures/compliance/verilog_2005_begin_keywords.v
+tests/fixtures/compliance/vhdl_attributes_and_conversions.vhd
 tests/fixtures/compliance/vhdl_character_type.vhd
 tests/fixtures/compliance/vhdl_composite_constants.vhd
 tests/fixtures/compliance/vhdl_enum_index_arrays.vhd

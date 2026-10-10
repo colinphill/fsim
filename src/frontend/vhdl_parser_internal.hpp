@@ -48,6 +48,10 @@ private:
   std::vector<VhdlContextItem> deferred_context_items_;
   // Attribute names declared by any unit analyzed so far.
   std::unordered_set<std::string> vhdl_declared_attributes_;
+  // Attribute specification values by attribute and entity name, read in
+  // place of `name'attribute`.
+  std::unordered_map<std::string, std::unordered_map<std::string, Expression>>
+      vhdl_attribute_values_;
 
   Token expect_identifier(std::string_view description);
 
@@ -196,6 +200,10 @@ private:
   void parse_vhdl_disconnection_specification(
       std::vector<VhdlDisconnectionSpecification> &specifications,
       const Token &start);
+  // `conv(formal) => actual` on an output or inout port of a declared
+  // component, rewritten through an implicit signal (IEEE 1076-2008
+  // 6.5.7.1).
+  void rewrite_vhdl_formal_conversions(DesignUnit& unit);
   void apply_vhdl_disconnection_specifications(
       const std::vector<SignalDeclaration> &signals,
       const std::vector<VhdlDisconnectionSpecification> &specifications,

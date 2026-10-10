@@ -2,6 +2,7 @@
 #include "fsim/semantic/compiled_design_normalization.hpp"
 
 #include <algorithm>
+#include <map>
 #include <charconv>
 #include <cctype>
 #include <cstdint>
@@ -433,6 +434,48 @@ std::optional<std::int64_t> checked_modulus(
     return checked_add(*remainder, right);
 }
 
+// Operator designators that a VHDL design overloads outside the STD and
+// IEEE libraries. Such an operator is not folded as predefined: `abs 10`
+// may call a user `"abs"` returning an enumeration.
+const std::set<std::string>& vhdl_user_operator_overloads(
+    const CompiledDesign& design)
+{
+    thread_local const CompiledDesign* cached_design { };
+    thread_local std::uint64_t cached_revision { };
+    thread_local std::set<std::string> cached;
+    if (cached_design == &design && cached_revision == design.vhdl_hir.revision()) {
+        return cached;
+    }
+    cached_design = &design;
+    cached_revision = design.vhdl_hir.revision();
+    cached.clear();
+    std::map<std::uint32_t, const vhdl::Unit*> units;
+    for (const auto& unit : design.vhdl_hir.units()) {
+        units.emplace(unit.id.value(), &unit);
+    }
+    const auto& scopes = design.semantics.scopes();
+    for (const auto& declaration : design.vhdl_hir.declarations()) {
+        if (!declaration.callable || !declaration.callable->function
+            || !declaration.scope.valid()
+            || declaration.scope.value() >= scopes.size()) {
+            continue;
+        }
+        const auto unit = units.find(scopes[declaration.scope.value()].unit.value());
+        if (unit == units.end()
+            || !unit->second->standard_package_revision.empty()
+            || lowercase(unit->second->library) == "ieee"
+            || lowercase(unit->second->library) == "std") {
+            continue;
+        }
+        auto name = lowercase(declaration.name);
+        if (name.size() >= 2U && name.front() == '"' && name.back() == '"') {
+            name = name.substr(1U, name.size() - 2U);
+        }
+        cached.insert(std::move(name));
+    }
+    return cached;
+}
+
 std::optional<ConstantValue> fold_unary(
     const std::string_view operation, const ConstantValue operand)
 {
@@ -715,6 +758,12 @@ std::optional<ConstantValue> evaluate_vhdl_constant(
         active_declarations.erase(declaration_id);
         return value;
     }
+    if ((expression.kind == vhdl::ExpressionKind::unary
+            || expression.kind == vhdl::ExpressionKind::binary)
+        && vhdl_user_operator_overloads(design).contains(
+            lowercase(expression.text))) {
+        return std::nullopt;
+    }
     if (expression.kind == vhdl::ExpressionKind::unary
         && expression.operands.size() == 1U) {
         const auto operand = evaluate_vhdl_expression(design,
@@ -843,6 +892,12 @@ bool fold_expression(const CompiledDesign& design,
         return false;
     }
     const auto operation = lowercase(expression.text);
+    if constexpr (std::is_same_v<Expression, vhdl::Expression>) {
+        if ((expression.kind == Kind::unary || expression.kind == Kind::binary)
+            && vhdl_user_operator_overloads(design).contains(operation)) {
+            return false;
+        }
+    }
     auto value = constant_name_value(design, expressions, expression);
     if (!value && expression.kind == Kind::unary
         && expression.operands.size() == 1) {
@@ -1849,6 +1904,12 @@ bool normalize_compiled_design(CompiledDesign& design) noexcept
         return false;
     }
     return true;
+}
+
+bool vhdl_operator_overloaded_by_design(
+    const CompiledDesign& design, const std::string_view operation)
+{
+    return vhdl_user_operator_overloads(design).contains(lowercase(operation));
 }
 
 } // namespace fsim::semantic

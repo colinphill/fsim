@@ -850,6 +850,35 @@ Expression VhdlParser::parse_primary()
                 "index", "designated_subtype", "reflect", "converse"
             };
             if (std::ranges::find(supported_attributes, designator) == supported_attributes.end()) {
+                // A user-defined attribute names the value of its
+                // specification, a static expression (IEEE 1076-2008 6.7,
+                // 7.2).
+                if (const auto values = vhdl_attribute_values_.find(designator);
+                    values != vhdl_attribute_values_.end()) {
+                    const auto separator = canonical.find_last_of('.');
+                    const auto entity = separator == std::string::npos
+                        ? canonical
+                        : canonical.substr(separator + 1U);
+                    auto found = values->second.find(entity);
+                    if (found == values->second.end()) {
+                        found = values->second.find("others");
+                    }
+                    if (found == values->second.end()) {
+                        found = values->second.find("all");
+                    }
+                    if (found != values->second.end()) {
+                        auto value = found->second;
+                        value.span = cover(name.span, attribute.span);
+                        while (match(TokenKind::Dot)) {
+                            const auto member = expect_identifier("selected attribute element");
+                            value = Expression { ExpressionKind::Call,
+                                "@vhdl-member:" + vhdl_name(member.text),
+                                { std::move(value) },
+                                cover(name.span, member.span) };
+                        }
+                        return value;
+                    }
+                }
                 error(attribute, "FSIM-VHDL-SEM-030",
                     "unsupported bounded VHDL attribute '" + attribute.text + "'");
             }

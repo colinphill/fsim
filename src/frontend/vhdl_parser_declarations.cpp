@@ -510,8 +510,46 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
     if (!keyword("units", 0, true)) {
       // IEEE 1076-2008 5.2.3 and 5.2.5: a range constraint without units
       // declares an integer type, or a floating type when a bound is real.
-      const bool floating = vhdl_expression_has_real_literal(left_expression) ||
-                            vhdl_expression_has_real_literal(right_expression);
+      // A bound may also be an attribute of a floating type (`REAL'HIGH`)
+      // or a constant of one (5.2.5.1).
+      const auto floating_type = [&](const std::string_view name) {
+        return name == "real" || name == "std.standard.real"
+            || std::ranges::any_of(unit.type_aliases,
+                   [&](const TypeAliasDeclaration& alias) {
+                     return alias.name == name
+                         && alias.type.systemverilog_scalar
+                             == SystemVerilogScalarKind::Real;
+                   });
+      };
+      const auto floating_name = [&](const std::string_view name) {
+        return floating_type(name)
+            || std::ranges::any_of(unit.parameters,
+                   [&](const ParameterDeclaration& constant) {
+                     return constant.name == name
+                         && (constant.type.systemverilog_scalar
+                                 == SystemVerilogScalarKind::Real
+                             || floating_type(constant.type.named_type)
+                             || floating_type(constant.type.spelling));
+                   });
+      };
+      const auto floating_bound = [&](const auto& self,
+                                      const Expression& bound) -> bool {
+        if (vhdl_expression_has_real_literal(bound)) {
+          return true;
+        }
+        if (bound.kind == ExpressionKind::Identifier) {
+          return floating_name(bound.text);
+        }
+        if (bound.kind == ExpressionKind::Call && bound.text.starts_with('\'')
+            && !bound.operands.empty()
+            && bound.operands.front().kind == ExpressionKind::Identifier) {
+          return floating_name(bound.operands.front().text);
+        }
+        return std::ranges::any_of(bound.operands,
+            [&](const Expression& operand) { return self(self, operand); });
+      };
+      const bool floating = floating_bound(floating_bound, left_expression)
+          || floating_bound(floating_bound, right_expression);
       Type type;
       if (floating) {
         type.domain = ValueDomain::Bit2;
@@ -1265,6 +1303,9 @@ void VhdlParser::parse_vhdl_attribute_declaration(DesignUnit &unit,
     error(name_token, "FSIM-VHDL-SEM-099",
           "VHDL attribute specification references undeclared attribute '" +
               name + "'");
+  }
+  for (const auto& specified : entity_names) {
+    vhdl_attribute_values_[name].insert_or_assign(specified, value);
   }
   unit.vhdl_attributes.push_back(
       VhdlAttributeDeclaration{name,

@@ -487,7 +487,23 @@ void HierarchyBuilder::activate_compiled_systemverilog_defparams(
                 compiled_source_span(*compiled_, defparam.source));
             continue;
         }
+        // The first name of a hierarchical path is searched upward (IEEE
+        // 1800-2017 23.8): `defparam Loop[i].m.p` inside `Loop[i]` names
+        // that generate instance, not a child of it.
         auto target_path = std::string { hierarchy_prefix };
+        for (auto end = target_path.size(); end != 0U;) {
+            const auto separator = target_path.rfind('.', end - 1U);
+            const auto begin = separator == std::string::npos ? 0U : separator + 1U;
+            if (std::string_view { target_path }.substr(begin, end - begin)
+                == segments.front()) {
+                target_path.resize(begin == 0U ? 0U : begin - 1U);
+                break;
+            }
+            if (separator == std::string::npos) {
+                break;
+            }
+            end = separator;
+        }
         for (std::size_t index = 0U;
             index + 1U < segments.size(); ++index) {
             if (!target_path.empty()) {

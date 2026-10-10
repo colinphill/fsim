@@ -1537,6 +1537,7 @@ DesignUnit VhdlParser::parse_architecture(const Token& start)
         unit.signals,
         unit.vhdl_disconnections,
         unit.concurrent_statements);
+    rewrite_vhdl_formal_conversions(unit);
     parse_vhdl_end("architecture");
     for (auto& item : deferred_context_items_) {
         unit.vhdl_context.push_back(std::move(item));

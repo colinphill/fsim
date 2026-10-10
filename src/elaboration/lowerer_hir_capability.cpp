@@ -3492,8 +3492,21 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
             indexed.operands.front());
         if (!array || array->systemverilog == nullptr
             || array->systemverilog->kind
-                != semantic::sv::ExpressionKind::name
-            || systemverilog_interface_handles_ == nullptr) {
+                != semantic::sv::ExpressionKind::name) {
+            // A nested generate instance, `g[1].h[2].x`.
+            const auto path = hir_systemverilog_constant_path(expression_id);
+            if (!path) {
+                return std::nullopt;
+            }
+            if (const auto found = signals_.find(*path);
+                found != signals_.end()
+                && found->second < design_.signal_info_.size()) {
+                return found->second;
+            }
+            if (const auto signal = hir_hierarchical_signal(*path)) {
+                hierarchical_reference_used_ = true;
+                return signal;
+            }
             return std::nullopt;
         }
         const auto element = specialized_hir_unit_
@@ -3504,7 +3517,31 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
         }
         const auto occurrence = array->systemverilog->text + "["
             + std::to_string(*element) + "]";
-        // The element must be an interface instance.
+        const auto member = selected_index != nullptr
+            ? expression->systemverilog->text.substr(
+                  selected_member_prefix.size())
+            : expression->systemverilog->text.substr(
+                  indexed_member_prefix.size());
+        // `loop[0].r`: a variable of one instance of a loop generate block
+        // (27.4) is a hierarchical name.
+        const auto generate_member = [&]() -> std::optional<SignalId> {
+            const auto built = hir_systemverilog_constant_path(expression_id);
+            const auto path = built ? *built : occurrence + "." + member;
+            if (const auto found = signals_.find(path);
+                found != signals_.end()
+                && found->second < design_.signal_info_.size()) {
+                return found->second;
+            }
+            if (const auto signal = hir_hierarchical_signal(path)) {
+                hierarchical_reference_used_ = true;
+                return signal;
+            }
+            return std::nullopt;
+        };
+        if (systemverilog_interface_handles_ == nullptr) {
+            return generate_member();
+        }
+        // Otherwise the element must be an interface instance.
         std::optional<std::string> element_path;
         for (auto lexical = hierarchy_;;) {
             const auto candidate = lexical.empty()
@@ -3525,13 +3562,8 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
             lexical.resize(separator);
         }
         if (!element_path) {
-            return std::nullopt;
+            return generate_member();
         }
-        const auto member = selected_index != nullptr
-            ? expression->systemverilog->text.substr(
-                  selected_member_prefix.size())
-            : expression->systemverilog->text.substr(
-                  indexed_member_prefix.size());
         if (const auto found = signals_.find(occurrence + "." + member);
             found != signals_.end()
             && found->second < design_.signal_info_.size()) {
@@ -3546,6 +3578,27 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
         }
         // The element instance may not be elaborated yet.
         hierarchical_reference_missed_ = true;
+        return std::nullopt;
+    }
+    if (expression && expression->systemverilog != nullptr
+        && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::call
+        && expression->systemverilog->text.starts_with(
+            selected_member_prefix)) {
+        // `g[1].h[2].x` written as a selection of a nested element.
+        const auto path = hir_systemverilog_constant_path(expression_id);
+        if (!path || path->find('[') == std::string::npos) {
+            return std::nullopt;
+        }
+        if (const auto found = signals_.find(*path);
+            found != signals_.end()
+            && found->second < design_.signal_info_.size()) {
+            return found->second;
+        }
+        if (const auto signal = hir_hierarchical_signal(*path)) {
+            hierarchical_reference_used_ = true;
+            return signal;
+        }
         return std::nullopt;
     }
     if (!expression || expression->systemverilog == nullptr
@@ -3592,6 +3645,48 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
             && global->second < design_.signal_info_.size()
         ? std::optional { global->second }
         : std::nullopt;
+}
+
+std::optional<std::string> Lowerer::hir_systemverilog_constant_path(
+    const semantic::ExpressionId expression_id) const
+{
+    const auto expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (!expression || expression->systemverilog == nullptr) {
+        return std::nullopt;
+    }
+    const auto& source = *expression->systemverilog;
+    constexpr std::string_view selected_prefix { "@sv-select:" };
+    constexpr std::string_view indexed_prefix { "index." };
+    using Kind = semantic::sv::ExpressionKind;
+    if (source.kind == Kind::name) {
+        return source.text;
+    }
+    if (source.kind == Kind::call && source.text.starts_with(selected_prefix)
+        && source.operands.size() == 1U) {
+        const auto base = hir_systemverilog_constant_path(source.operands.front());
+        return base
+            ? std::optional { *base + "."
+                  + source.text.substr(selected_prefix.size()) }
+            : std::nullopt;
+    }
+    if (source.kind == Kind::index && source.operands.size() == 2U) {
+        const auto base = hir_systemverilog_constant_path(source.operands.front());
+        const auto index = specialized_hir_unit_->evaluate_integral_expression(
+            source.operands.back());
+        if (!base || !index) {
+            return std::nullopt;
+        }
+        auto path = *base + "[" + std::to_string(*index) + "]";
+        if (source.text.starts_with(indexed_prefix)) {
+            path += "." + source.text.substr(indexed_prefix.size());
+        } else if (!source.text.empty() && source.text != "index") {
+            return std::nullopt;
+        }
+        return path;
+    }
+    return std::nullopt;
 }
 
 std::optional<SignalId> Lowerer::hir_hierarchical_signal(

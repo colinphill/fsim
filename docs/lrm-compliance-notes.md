@@ -381,3 +381,44 @@ gives fsim's result in each case checked.
   designator. Only homographs hide (12.3): an imported overload stays visible
   unless a local declaration has the same parameter and result base types.
   When a local profile cannot be determined, the old rule still applies.
+
+## Names, conversions and folding (batch 25)
+
+- The unresolved-name check (`FSIM-ELAB-VHNAME-002`) looks only at simple
+  names in value positions: operator operands, assignment values,
+  conditions and the initial values of signals, variables and constants
+  (interface defaults are checked only where used). Other name expressions
+  in the HIR are not values: `others`, named-association formals, record
+  aggregate element names and type marks. A name declared anywhere in the
+  design is exempt, because the resolver does not model every form of
+  visibility; so are generate parameters, enumeration literals (visible
+  through an alias of their type), physical unit names, the STD.STANDARD
+  and STD.ENV literals and the CHARACTER control literals. A design that
+  includes the IEEE VITAL packages, whose declarations are compiler-supplied,
+  is not checked. What remains detected are statement labels, design-unit
+  names, record element names used alone, and names declared nowhere.
+- A subprogram declared without a body (`FSIM-ELAB-VHBODY-001`) is looked
+  up in the same design unit; methods of protected types are exempt, since
+  their bodies are in the protected type body.
+- A loop parameter is retained as an INTEGER constant without a value,
+  whatever the type of its range, so the assignment type check treats such
+  constants as untyped.
+- Integer and floating type definitions are kept as subtypes of INTEGER and
+  REAL, so two floating types declared with `range` are one type to the
+  checks; converting between them is not checked.
+- `conv(formal) => actual` on an output port is parsed like an individual
+  subelement association of a port named `conv`. When `conv` is not a port
+  of the declared component and the selector names an output or inout port,
+  the association is rewritten through an implicit signal: the formal is
+  associated with the signal, and concurrent assignments apply the
+  conversions in each direction. Directly instantiated entities are not
+  rewritten, because their ports are not known when the architecture is
+  parsed.
+- A user attribute's value is substituted at its use by the parser. The
+  value of an attribute specification is a static expression evaluated where
+  the specification is, so the substitution is exact for the corpora's
+  forms; a specification in another design file is not seen.
+- Constant folding treated every unary and binary VHDL operator as
+  predefined. An operator that the design itself overloads (outside the STD
+  and IEEE libraries) is now left as a call; `numeric_std` operators are
+  still evaluated natively.

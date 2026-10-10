@@ -1073,6 +1073,103 @@ void VhdlParser::parse_vhdl_generic_map(
   (void)start;
 }
 
+void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit) {
+  // The value of an output formal reaches its actual through the
+  // conversion function; an inout formal also receives the actual's value,
+  // converted by the actual part's function when there is one. The parser
+  // grouped `f(a) => x, f(b) => y` as subelements of a port `f`.
+  std::size_t counter{};
+  for (auto& instance : unit.instances) {
+    if (!instance.vhdl_component_instance) {
+      continue;
+    }
+    const auto component = std::ranges::find_if(
+        unit.vhdl_component_declarations,
+        [&](const VhdlComponentDeclaration& declaration) {
+          return declaration.name == instance.unit_name;
+        });
+    if (component == unit.vhdl_component_declarations.end()) {
+      continue;
+    }
+    const auto port_named = [&](const std::string_view name) {
+      return std::ranges::find_if(component->ports,
+          [&](const VhdlComponentPort& port) { return port.name == name; });
+    };
+    std::vector<PortConnection> rewritten;
+    for (auto& connection : instance.connections) {
+      const auto& group = connection.value;
+      const auto convertible = connection.port
+          && port_named(*connection.port) == component->ports.end()
+          && group.kind == ExpressionKind::Aggregate
+          && group.text == "@vhdl-formal-subelements"
+          && !group.operands.empty()
+          && group.aggregate_choice_expressions.size() == group.operands.size()
+          && std::ranges::all_of(group.aggregate_choice_expressions,
+              [&](const std::vector<Expression>& choices) {
+                if (choices.size() != 1U
+                    || choices.front().kind != ExpressionKind::Identifier) {
+                  return false;
+                }
+                const auto port = port_named(choices.front().text);
+                return port != component->ports.end()
+                    && (port->direction == PortDirection::Output
+                        || port->direction == PortDirection::Inout
+                        || port->direction == PortDirection::Buffer);
+              });
+      if (!convertible) {
+        rewritten.push_back(std::move(connection));
+        continue;
+      }
+      const auto conversion = *connection.port;
+      for (std::size_t index{}; index < group.operands.size(); ++index) {
+        const auto port = port_named(group.aggregate_choice_expressions[index].front().text);
+        const auto& actual = group.operands[index];
+        const auto span = actual.span;
+        Expression actual_name = actual;
+        std::optional<std::string> actual_conversion;
+        if (actual.kind == ExpressionKind::Call && actual.operands.size() == 1U
+            && actual.operands.front().kind == ExpressionKind::Identifier
+            && !actual.text.starts_with('@')) {
+          actual_conversion = actual.text;
+          actual_name = actual.operands.front();
+        }
+        const auto implicit = "fsim__formal_conversion_" + instance.name + "_"
+            + std::to_string(counter++);
+        SignalDeclaration signal;
+        signal.name = implicit;
+        signal.type = port->type;
+        signal.span = span;
+        unit.signals.push_back(std::move(signal));
+        const Expression implicit_name { ExpressionKind::Identifier, implicit, { }, span };
+        PortConnection formal;
+        formal.port = port->name;
+        formal.value = implicit_name;
+        formal.span = connection.span;
+        rewritten.push_back(std::move(formal));
+        Statement out;
+        out.kind = StatementKind::Assignment;
+        out.assignment_kind = AssignmentKind::Continuous;
+        out.target = actual_name;
+        out.value = Expression { ExpressionKind::Call, conversion, { implicit_name }, span };
+        out.span = span;
+        unit.concurrent_statements.push_back(std::move(out));
+        if (port->direction == PortDirection::Inout) {
+          Statement in;
+          in.kind = StatementKind::Assignment;
+          in.assignment_kind = AssignmentKind::Continuous;
+          in.target = implicit_name;
+          in.value = actual_conversion
+              ? Expression { ExpressionKind::Call, *actual_conversion, { actual_name }, span }
+              : actual_name;
+          in.span = span;
+          unit.concurrent_statements.push_back(std::move(in));
+        }
+      }
+    }
+    instance.connections = std::move(rewritten);
+  }
+}
+
 PortConnection VhdlParser::parse_vhdl_port_connection() {
   const auto start = current();
   PortConnection connection;

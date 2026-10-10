@@ -3961,6 +3961,91 @@ namespace {
         };
     }
 
+    // A static REAL value: a literal, a sign, arithmetic of static values, or
+    // a constant whose initial value is one (IEEE 1076-2008 9.4.1).
+    std::optional<double> compiled_vhdl_static_real(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::ExpressionId id,
+        const std::size_t depth = 0U)
+    {
+        const auto expression = specialization.find_expression(id);
+        if (!expression || expression->vhdl == nullptr || depth > 32U) {
+            return std::nullopt;
+        }
+        const auto& source = *expression->vhdl;
+        using Kind = semantic::vhdl::ExpressionKind;
+        if (source.kind == Kind::real_literal
+            || source.kind == Kind::integer_literal) {
+            if (const auto real = systemverilog_real_literal(source.text)) {
+                return real;
+            }
+            const auto integral = specialization.evaluate_integral_expression(id);
+            return integral
+                ? std::optional { static_cast<double>(*integral) }
+                : std::nullopt;
+        }
+        if (source.kind == Kind::unary && source.operands.size() == 1U
+            && (source.text == "-" || source.text == "+")) {
+            const auto operand = compiled_vhdl_static_real(
+                specialization, source.operands.front(), depth + 1U);
+            return operand && source.text == "-" ? std::optional { -*operand }
+                                                 : operand;
+        }
+        if (source.kind == Kind::binary && source.operands.size() == 2U
+            && (source.text == "+" || source.text == "-" || source.text == "*"
+                || source.text == "/")) {
+            const auto left = compiled_vhdl_static_real(
+                specialization, source.operands[0], depth + 1U);
+            const auto right = compiled_vhdl_static_real(
+                specialization, source.operands[1], depth + 1U);
+            if (!left || !right) {
+                return std::nullopt;
+            }
+            if (source.text == "+") {
+                return *left + *right;
+            }
+            if (source.text == "-") {
+                return *left - *right;
+            }
+            if (source.text == "*") {
+                return *left * *right;
+            }
+            return *right == 0.0 ? std::nullopt
+                                 : std::optional { *left / *right };
+        }
+        if (source.kind == Kind::call
+            && source.text.starts_with("@vhdl-qualified:")
+            && source.operands.size() == 1U) {
+            return compiled_vhdl_static_real(
+                specialization, source.operands.front(), depth + 1U);
+        }
+        if (source.kind != Kind::name || !source.referenced_name) {
+            return std::nullopt;
+        }
+        auto selected = source.referenced_name->selected;
+        if (!selected) {
+            selected = semantic::CompiledDesignResolver { specialization }
+                           .resolve_vhdl(*source.referenced_name, source.scope,
+                               [](const semantic::CompiledDeclarationView& candidate) {
+                                   return candidate.vhdl != nullptr
+                                       && candidate.vhdl->form
+                                           == semantic::vhdl::DeclarationForm::constant;
+                               })
+                           .unique();
+        }
+        const auto declaration = selected
+            ? specialization.find_declaration(*selected)
+            : std::nullopt;
+        if (!declaration || declaration->vhdl == nullptr
+            || declaration->vhdl->form != semantic::vhdl::DeclarationForm::constant
+            || !declaration->vhdl->initializer
+            || *declaration->vhdl->initializer == id) {
+            return std::nullopt;
+        }
+        return compiled_vhdl_static_real(
+            specialization, *declaration->vhdl->initializer, depth + 1U);
+    }
+
     std::optional<PackedLogic4> compiled_vhdl_static_port_value(
         const semantic::SpecializedHirUnit& specialization,
         semantic::ExpressionId expression_id,
@@ -4749,9 +4834,31 @@ namespace {
             return std::nullopt;
         }
         const auto& array = *target_type.vhdl_array;
-        const auto element_width = array.element_types.front().width();
+        auto element_width = array.element_types.front().width();
         if (!element_width || *element_width == 0U) {
             return std::nullopt;
+        }
+        // A REAL element's retained metadata may not carry its 64-bit
+        // layout; the array's width and element count determine it.
+        {
+            std::uint64_t count = 1U;
+            for (const auto& metadata : array.dimensions) {
+                if (!metadata.range || metadata.null) {
+                    count = 0U;
+                    break;
+                }
+                const auto distance = index_distance(
+                    metadata.range->left, metadata.range->right);
+                if (distance >= maximum_bits || count > maximum_bits / (distance + 1U)) {
+                    count = 0U;
+                    break;
+                }
+                count *= distance + 1U;
+            }
+            if (count != 0U && *element_width * count != width
+                && width % count == 0U) {
+                element_width = width / count;
+            }
         }
 
         // The element subtype and its scope come from the array type
@@ -4960,7 +5067,33 @@ namespace {
             -> std::optional<std::string> {
             const auto& element = array.element_types.front();
             std::optional<PackedLogic4> value;
-            if (element.vhdl_array) {
+            const auto real_element = element.systemverilog_scalar
+                    == frontend::SystemVerilogScalarKind::Real
+                || compiled_vhdl_name_equal(
+                    compiled_vhdl_simple_name(element_subtype->type_mark.spelling),
+                    "real");
+            if (real_element && *element_width == 64U) {
+                if (const auto real = compiled_vhdl_static_real(specialization, id)) {
+                    value = PackedLogic4::from_aval_bval(
+                        64U, std::bit_cast<std::uint64_t>(*real), 0U);
+                }
+            }
+            if (!value && *element_width == 8U
+                && compiled_vhdl_name_equal(
+                    compiled_vhdl_simple_name(element_subtype->type_mark.spelling),
+                    "character")) {
+                // A CHARACTER element holds its literal's position.
+                const auto literal = specialization.find_expression(strip_qualified(id));
+                if (literal && literal->vhdl != nullptr
+                    && literal->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::logic_literal
+                    && literal->vhdl->text.size() == 3U
+                    && literal->vhdl->text.front() == '\'') {
+                    value = PackedLogic4::from_aval_bval(8U,
+                        static_cast<unsigned char>(literal->vhdl->text[1]), 0U);
+                }
+            }
+            if (!value && element.vhdl_array) {
                 value = compiled_vhdl_static_composite_initializer(
                     specialization, id, *element_subtype, element_scope,
                     element, static_cast<std::size_t>(*element_width));
@@ -15384,42 +15517,8 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                     "real");
         }();
         if (!static_value && real_subtype && width == 64U) {
-            // A static REAL initializer: a real literal, optionally negated.
-            const auto static_real = [&](const auto& self,
-                                         const semantic::ExpressionId id)
-                -> std::optional<double> {
-                const auto expression
-                    = working_specialization.find_expression(id);
-                if (!expression || expression->vhdl == nullptr) {
-                    return std::nullopt;
-                }
-                const auto& source = *expression->vhdl;
-                if (source.kind
-                        == semantic::vhdl::ExpressionKind::real_literal
-                    || source.kind
-                        == semantic::vhdl::ExpressionKind::integer_literal) {
-                    if (const auto real
-                        = systemverilog_real_literal(source.text)) {
-                        return real;
-                    }
-                    const auto integral = working_specialization
-                        .evaluate_integral_expression(id);
-                    return integral
-                        ? std::optional { static_cast<double>(*integral) }
-                        : std::nullopt;
-                }
-                if (source.kind == semantic::vhdl::ExpressionKind::unary
-                    && source.operands.size() == 1U
-                    && (source.text == "-" || source.text == "+")) {
-                    const auto operand = self(self, source.operands.front());
-                    return operand && source.text == "-"
-                        ? std::optional { -*operand }
-                        : operand;
-                }
-                return std::nullopt;
-            };
-            if (const auto real = static_real(
-                    static_real, *declaration.initializer)) {
+            if (const auto real = compiled_vhdl_static_real(
+                    working_specialization, *declaration.initializer)) {
                 static_value = PackedLogic4::from_aval_bval(
                     64U, std::bit_cast<std::uint64_t>(*real), 0U);
             }
@@ -16993,13 +17092,29 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                 false,
             };
         }
-        const bool scalar
+        // Predefined enumeration types (IEEE 1076-2008 16.3, 16.7).
+        const auto enumeration_right
             = compiled_vhdl_name_equal(name, "bit")
-            || compiled_vhdl_name_equal(name, "boolean")
-            || compiled_vhdl_name_equal(name, "character")
-            || compiled_vhdl_name_equal(name, "std_logic")
-            || compiled_vhdl_name_equal(name, "std_ulogic")
-            || compiled_vhdl_name_equal(name, "real")
+                || compiled_vhdl_name_equal(name, "boolean")
+            ? std::optional<std::int64_t> { 1 }
+            : compiled_vhdl_name_equal(name, "character")
+            ? std::optional<std::int64_t> { 255 }
+            : compiled_vhdl_name_equal(name, "std_logic")
+                || compiled_vhdl_name_equal(name, "std_ulogic")
+            ? std::optional<std::int64_t> { 8 }
+            : std::nullopt;
+        if (enumeration_right) {
+            return SubtypeProfile {
+                SubtypeClass::enumeration,
+                frontend::IntegerRange { 0, *enumeration_right, false },
+                false,
+                false,
+                std::nullopt,
+                false,
+            };
+        }
+        const bool scalar
+            = compiled_vhdl_name_equal(name, "real")
             || compiled_vhdl_name_equal(name, "line");
         if (compiled_vhdl_name_equal(name, "severity_level")
             || compiled_vhdl_name_equal(name, "file_open_kind")
@@ -17418,6 +17533,26 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                 }
                 continue;
             }
+            // Integer literals are not values of an enumeration type.
+            const auto integer_bound
+                = [&](const std::optional<semantic::ExpressionId> id) {
+                      const auto bound = id ? specialized->find_expression(*id)
+                                            : std::nullopt;
+                      return bound && bound->vhdl != nullptr
+                          && bound->vhdl->kind
+                              == semantic::vhdl::ExpressionKind::integer_literal;
+                  };
+            if (profile.type_class == SubtypeClass::enumeration
+                && (integer_bound(constraint.left_expression)
+                    || integer_bound(constraint.right_expression))) {
+                report(
+                    "FSIM-ELAB-VHSUBTYPE-001",
+                    "a derived VHDL range constraint requires an "
+                    "integer-family or enumeration base subtype",
+                    compiled_source_span(*compiled_, source));
+                valid = false;
+                continue;
+            }
             if (profile.type_class == SubtypeClass::enumeration) {
                 auto left = constraint.left
                     ? constraint.left
@@ -17431,6 +17566,41 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                     ? specialized->evaluate_integral_expression(
                           *constraint.right_expression)
                     : std::nullopt;
+                // A character literal of a predefined enumeration type
+                // without a retained definition: its position.
+                const auto predefined_literal
+                    = [&](const std::optional<semantic::ExpressionId> id)
+                    -> std::optional<std::int64_t> {
+                    const auto bound = id ? specialized->find_expression(*id)
+                                          : std::nullopt;
+                    if (profile.enumeration_type || !profile.scalar_range
+                        || !bound || bound->vhdl == nullptr
+                        || bound->vhdl->kind
+                            != semantic::vhdl::ExpressionKind::logic_literal
+                        || bound->vhdl->text.size() != 3U
+                        || bound->vhdl->text.front() != '\'') {
+                        return std::nullopt;
+                    }
+                    const auto character = bound->vhdl->text[1];
+                    const auto last = profile.scalar_range->right;
+                    if (last == 255) {
+                        return static_cast<std::int64_t>(
+                            static_cast<unsigned char>(character));
+                    }
+                    const auto literals = last == 8
+                        ? std::string_view { "UX01ZWLH-" }
+                        : std::string_view { "01" };
+                    const auto position = literals.find(character);
+                    return position == std::string_view::npos
+                        ? std::nullopt
+                        : std::optional { static_cast<std::int64_t>(position) };
+                };
+                if (!left) {
+                    left = predefined_literal(constraint.left_expression);
+                }
+                if (!right) {
+                    right = predefined_literal(constraint.right_expression);
+                }
                 if (!left && profile.enumeration_type
                     && constraint.left_expression) {
                     left = subtype_resolver
