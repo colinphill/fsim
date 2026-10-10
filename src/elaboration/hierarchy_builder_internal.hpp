@@ -61,6 +61,17 @@ namespace hierarchy_vhdl_associations_detail {
 
 }
 
+// A generate-block concurrent statement or process whose hierarchical
+// reference named an instance not yet elaborated (a member of an interface
+// instance inside the block); it is lowered again after the unit's children.
+struct DeferredGeneratedSystemVerilogItem {
+    std::size_t occurrence { };
+    std::optional<semantic::StatementId> statement;
+    std::optional<semantic::ProcessId> process;
+    std::size_t order { };
+    std::vector<semantic::DeclarationId> declarations;
+};
+
 class HierarchyBuilder final {
 public:
     HierarchyBuilder(
@@ -1352,7 +1363,22 @@ private:
         std::size_t& concurrent_order,
         std::vector<semantic::ProcessId>* deferred_processes = nullptr,
         std::vector<std::pair<semantic::StatementId, std::size_t>>*
-            deferred_statements = nullptr);
+            deferred_statements = nullptr,
+        std::vector<DeferredGeneratedSystemVerilogItem>*
+            deferred_generated = nullptr);
+    // Lower the generate-block statements and processes deferred by
+    // lower_compiled_systemverilog_processes once the unit's children,
+    // including interface instances inside generate blocks, exist.
+    bool lower_deferred_generated_systemverilog(
+        const semantic::sv::Unit& unit,
+        frontend::Language source_language,
+        const std::vector<hierarchy_sv_generate_detail::Occurrence>&
+            generate_occurrences,
+        std::vector<SystemVerilogHirMaterialization>&
+            generated_materializations,
+        const std::vector<DeferredGeneratedSystemVerilogItem>& deferred,
+        std::size_t specialization_index,
+        std::optional<std::uint32_t> program_owner);
     // Lower processes and concurrent statements whose hierarchical
     // references named instances that did not exist yet (an interface
     // instance's members); called once the unit's children are

@@ -1629,6 +1629,10 @@ private:
         semantic::ExpressionId element, SignalId signal,
         RegisterId signal_event, const frontend::SourceSpan& span,
         bool report_failure = true);
+    // Whether a VHDL expression is a CHARACTER value (a character literal or
+    // an object of type CHARACTER).
+    [[nodiscard]] bool hir_vhdl_character_expression(
+        semantic::ExpressionId value) const;
     // Whether a VHDL expression is of type TIME (or DELAY_LENGTH), including
     // folded time literals and NOW.
     [[nodiscard]] bool hir_vhdl_time_expression(

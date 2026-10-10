@@ -293,6 +293,9 @@ void validate_vhdl_rejection_limits(
 
 namespace {
 
+[[nodiscard]] std::optional<std::uint64_t> unsigned_literal(
+    std::string_view text);
+
 [[nodiscard]] diagnostic::SourceSpan compiled_source_span(
     const semantic::Model& model,
     const semantic::SourceSpanId source) {
@@ -575,6 +578,58 @@ std::string effective_resolution(
       };
   visit_vhdl_hir_delays(
       compiled.vhdl_hir, config.run.delay_mode, consider_vhdl_delay);
+  // Without a delay to set it, the resolution stays at least as fine as the
+  // 1 ns default; a literal only refines it.
+  const bool delay_selected = found;
+  // Every nonzero TIME literal of the design must be exactly representable
+  // (IEEE 1076-2008 5.2.4.3 leaves the resolution limit to the
+  // implementation): select the coarsest of 1 ns, 1 ps and 1 fs that
+  // divides each one, wherever the literal appears.
+  constexpr std::string_view physical_prefix { "@vhdl-physical:" };
+  for (const auto& expression : compiled.vhdl_hir.expressions()) {
+    if (!expression.text.starts_with(physical_prefix)
+        || expression.operands.size() != 1U) {
+      continue;
+    }
+    const auto factor = unit_femtoseconds(
+        std::string_view { expression.text }.substr(physical_prefix.size()));
+    const auto operand = expression.operands.front();
+    const auto* magnitude_expression = operand.valid()
+            && operand.value() < vhdl_expression_index.size()
+        ? vhdl_expression_index[operand.value()]
+        : nullptr;
+    if (!factor || magnitude_expression == nullptr
+        || magnitude_expression->kind
+            != semantic::vhdl::ExpressionKind::integer_literal) {
+      continue;
+    }
+    const auto magnitude = unsigned_literal(magnitude_expression->text);
+    if (!magnitude || *magnitude == 0U
+        || *magnitude > std::numeric_limits<std::uint64_t>::max() / *factor) {
+      continue;
+    }
+    const auto femtoseconds = *magnitude * *factor;
+    // The coarsest decimal unit (a power of ten of a second, as the
+    // resolution must be) that divides the value exactly.
+    constexpr std::array<std::pair<std::string_view, std::uint64_t>, 6U>
+        units { {
+            { "1sec", 1'000'000'000'000'000U },
+            { "1ms", 1'000'000'000'000U },
+            { "1us", 1'000'000'000U },
+            { "1ns", 1'000'000U },
+            { "1ps", 1'000U },
+            { "1fs", 1U },
+        } };
+    for (const auto& [spelling, unit_femtoseconds_value] : units) {
+      if (femtoseconds % unit_femtoseconds_value == 0U) {
+        consider_resolution(!delay_selected
+                && unit_femtoseconds_value > 1'000'000U
+            ? std::string_view { "1ns" }
+            : spelling);
+        break;
+      }
+    }
+  }
   return finest_spelling;
 }
 
@@ -601,7 +656,39 @@ bool normalize_delays(
       resolution == "auto" ? std::string_view{"1ns"} : resolution;
   const auto tick_femtoseconds = femtoseconds(effective_resolution);
   bool valid = true;
+  // Unit names of physical types declared in a design unit, by unit name:
+  // within that unit, and for an architecture within its entity's unit, such
+  // a name denotes the user unit rather than the TIME unit (IEEE 1076-2008
+  // 12.3).
+  const auto lowercase = [](std::string_view text) {
+    std::string result { text };
+    std::ranges::transform(result, result.begin(),
+        [](const unsigned char character) {
+          return static_cast<char>(std::tolower(character));
+        });
+    return result;
+  };
+  std::map<std::string, std::set<std::string>> declared_units;
+  for (const auto& unit : parsed.units) {
+    for (const auto& alias : unit.type_aliases) {
+      if (!alias.type.vhdl_physical) {
+        continue;
+      }
+      for (const auto& physical : alias.type.vhdl_physical->units) {
+        declared_units[lowercase(unit.library) + "." + lowercase(unit.name)]
+            .insert(lowercase(physical.name));
+      }
+    }
+  }
   for (auto& unit : parsed.units) {
+    std::set<std::string> shadowed;
+    for (const auto& name : { unit.name, unit.primary_name }) {
+      if (const auto found = declared_units.find(
+              lowercase(unit.library) + "." + lowercase(name));
+          !name.empty() && found != declared_units.end()) {
+        shadowed.insert(found->second.begin(), found->second.end());
+      }
+    }
     std::function<bool(frontend::Expression&)> normalize_time_literals;
     normalize_time_literals = [&](frontend::Expression& expression) {
       for (auto& operand : expression.operands) {
@@ -624,7 +711,7 @@ bool normalize_delays(
       }
       const auto unit_name = expression.text.substr(prefix.size());
       const auto factor = unit_femtoseconds(unit_name);
-      if (!factor) {
+      if (!factor || shadowed.contains(lowercase(unit_name))) {
         return true;
       }
       if (expression.operands.size() != 1
@@ -1325,6 +1412,9 @@ public:
     {
     }
 
+    bool user_units_built_ { };
+    std::multimap<std::string, std::uint32_t> user_units_;
+
     [[nodiscard]] bool normalize()
     {
         normalize_vhdl_expressions();
@@ -1356,6 +1446,87 @@ private:
             return std::nullopt;
         }
         return parsed->magnitude * *factor;
+    }
+
+    // Whether a physical type declared in the design (not TIME) declares a
+    // unit of this name in a scope enclosing `scope`: there the name denotes
+    // that unit, not the TIME unit (IEEE 1076-2008 12.3).
+    [[nodiscard]] bool user_physical_unit(
+        const std::string_view unit, semantic::ScopeId scope)
+    {
+        const auto lowercase = [](std::string_view text) {
+            std::string result { text };
+            std::ranges::transform(result, result.begin(),
+                [](const unsigned char character) {
+                    return static_cast<char>(std::tolower(character));
+                });
+            return result;
+        };
+        if (!user_units_built_) {
+            user_units_built_ = true;
+            for (const auto& type : compiled_.vhdl_hir.types()) {
+                if (type.form != semantic::vhdl::TypeForm::physical
+                    || lowercase(type.name) == "time"
+                    || lowercase(type.name) == "delay_length") {
+                    continue;
+                }
+                const auto declaration
+                    = compiled_.find_declaration(type.declaration);
+                if (!declaration || declaration->vhdl == nullptr) {
+                    continue;
+                }
+                for (const auto& physical : type.physical_units) {
+                    user_units_.emplace(lowercase(physical.name),
+                        declaration->vhdl->scope.value());
+                }
+            }
+        }
+        const auto lower = lowercase(unit);
+        const auto [first, last] = user_units_.equal_range(lower);
+        if (first == last) {
+            return false;
+        }
+        const auto& scopes = compiled_.semantics.scopes();
+        for (std::size_t depth { };
+             scope.valid() && scope.value() < scopes.size()
+             && depth <= scopes.size();
+             ++depth) {
+            for (auto entry = first; entry != last; ++entry) {
+                if (entry->second == scope.value()) {
+                    return true;
+                }
+            }
+            if (!scopes[scope.value()].parent) {
+                // An architecture also sees its entity's declarations
+                // (IEEE 1076-2008 12.1): check the root scopes of the units
+                // of the same library named like this one.
+                const auto& units = compiled_.semantics.units();
+                const auto owner = scopes[scope.value()].unit;
+                if (!owner.valid() || owner.value() >= units.size()) {
+                    break;
+                }
+                const auto& unit_record = units[owner.value()];
+                for (const auto& candidate : units) {
+                    if (candidate.id == unit_record.id
+                        || lowercase(candidate.library)
+                            != lowercase(unit_record.library)
+                        || (lowercase(candidate.name)
+                                != lowercase(unit_record.name)
+                            && lowercase(candidate.name)
+                                != lowercase(unit_record.secondary_name))) {
+                        continue;
+                    }
+                    for (auto entry = first; entry != last; ++entry) {
+                        if (entry->second == candidate.scope.value()) {
+                            return true;
+                        }
+                    }
+                }
+                break;
+            }
+            scope = *scopes[scope.value()].parent;
+        }
+        return false;
     }
 
     [[nodiscard]] std::string declared_precision(
@@ -1460,7 +1631,7 @@ private:
         const auto unit = std::string_view { expression.text }.substr(
             prefix.size());
         const auto factor = unit_femtoseconds(unit);
-        if (!factor) {
+        if (!factor || user_physical_unit(unit, expression.scope)) {
             return;
         }
         if (expression.operands.size() != 1U) {

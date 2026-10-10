@@ -13215,6 +13215,32 @@ bool Lowerer::lower_hir_statement(
                     != semantic::sv::ExpressionKind::call) {
                 return false;
             }
+            // `a.u[0].f(...)` (or `void'(a.u[0].f(...))`) as a statement: a
+            // function of an element of a module instance array, its result
+            // discarded (23.8, 13.4.1).
+            {
+                auto instance_call = *input.value;
+                if (call->systemverilog->text == "@sv-cast:void"
+                    && call->systemverilog->operands.size() == 1U) {
+                    instance_call = call->systemverilog->operands.front();
+                }
+                const auto instance_expression
+                    = specialized_hir_unit_->find_expression(instance_call);
+                if (instance_expression
+                    && instance_expression->systemverilog != nullptr
+                    && instance_expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::call
+                    && !instance_expression->systemverilog->operands.empty()
+                    && instance_expression->systemverilog->text.starts_with('.')
+                    && hir_interface_function_profile(
+                        instance_call, hir_process_scope_)) {
+                    discarding_call_result_ = instance_call == *input.value;
+                    const auto width = hir_expression_width(
+                        instance_call, hir_process_scope_);
+                    return lower_hir_expression(instance_call, width.value_or(32U))
+                        .has_value();
+                }
+            }
             const auto synchronization
                 = lower_hir_synchronization_expression(*input.value, 0U);
             if (synchronization.handled) {

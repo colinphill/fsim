@@ -775,6 +775,8 @@ static std::optional<CompilationWorkspace> check_project_impl(
       imported, available_units);
   validate_vhdl_simulator_api(checked.parsed.units, diagnostics);
   validate_vhdl_mode_view_interfaces(checked.parsed.units, diagnostics);
+  validate_vhdl_port_association_modes(checked.parsed.units, diagnostics);
+  validate_vhdl_package_body_subprograms(checked.parsed.units, diagnostics);
   validate_vhdl_package_declarations(checked.parsed.units, diagnostics,
       allow_external_vhdl_architecture_primary);
   if (imported && !prepare_compiled_systemverilog_environment(

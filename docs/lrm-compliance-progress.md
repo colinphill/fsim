@@ -21,7 +21,11 @@ The corpora are kept outside the repository, under
 
 UVM-tagged sv-tests compile the Accellera UVM trees named in
 [uvm-source-provenance.md](uvm-source-provenance.md), under
-`.local-artifacts/lrm-corpora/uvm`.
+`.local-artifacts/lrm-corpora/uvm`. The runner compiles each release's
+`uvm_pkg.sv` once per run, into a library `uvm` under `OUT/shared/`. Each UVM
+case maps that library (`fsim library map uvm DIR`) and compiles and
+elaborates with `--search-library uvm`, instead of compiling `uvm_pkg.sv`
+with every test.
 
 Run the corpora with:
 
@@ -248,6 +252,79 @@ on other gaps:
 - package parameter defaults (`FSIM-ELAB-SVPKG-006`);
 - non-ANSI port forms;
 - randomization.
+
+### Batch 27: VHDL analysis checks, distinct scalar types, generate interfaces, UVM library
+
+Fixtures: `vhdl_time_literals_and_scalar_types.vhd` and
+`sv_generate_interfaces_and_upward_names.sv` (both pass on xsim).
+
+VHDL analysis-time checks (reported by `fsim compile`), most from the
+VESTs non-compliant tests:
+- Names: a type, subtype, component, package instance or block/generate
+  label used as a value (`FSIM-ELAB-VHNAME-004`), in more value positions
+  (index expressions, aggregates, qualified and converted operands, range
+  bounds of type definitions, variable assignment targets).
+- Integer and floating type definitions (`type T is range ...`) are distinct
+  types for the type checks, while still executing as INTEGER or REAL
+  subtypes.
+- Assignments: variable targets that are signals, constants, functions or
+  generate parameters (`FSIM-ELAB-VHASSIGN-003`); signal assignments to a
+  slice of a constant; waveform values and object initial values of another
+  scalar type.
+- Calls: procedure calls whose actuals no visible procedure accepts by
+  count, name or scalar type (`FSIM-ELAB-VHCALL-002`); function call
+  actuals of another scalar type.
+- Aggregates: mixed positional and named associations, repeated choices,
+  element values of another type, multidimensional element associations
+  that are not aggregates, OTHERS in a qualified unconstrained aggregate
+  (`FSIM-ELAB-VHAGG-012` to `-016`).
+- Case statements: a non-discrete selector, choices of another type, static
+  choices outside the selector's subtype, string choices of another length
+  (`FSIM-ELAB-VHDLCASE-007` to `-010`).
+- Declarations: unconstrained signals and variables, unconstrained composite
+  elements before VHDL-2008, access types designating files, files of
+  multidimensional arrays, generics and ports of file types, attributes of
+  access or file types, INTEGER ranges beyond 32 bits before VHDL-2019,
+  static initial values outside their range, string and bit-vector index
+  bounds outside POSITIVE and NATURAL, subprograms declared in a package body
+  without a body there.
+- Expressions: array conversions with unrelated index types, unconstrained
+  allocators, static division by zero, ordering operators on records,
+  arithmetic on STRING, delays and timeouts not of type TIME, array indices
+  of another type, `bit'('C')`.
+- Parse and lexical rules: chained relational or shift operators, mixed or
+  repeated NAND/NOR without parentheses, operator symbol calls and operator
+  function arities, empty port and sensitivity lists, a second generic
+  clause, architecture end names, package generics before VHDL-2008,
+  underlines and negative exponents in literals, duplicate aggregate
+  targets, actual port modes incompatible with formal ports (VHDL-93).
+
+VHDL:
+- The automatic time resolution also considers every TIME literal, not
+  only delays, at the coarsest decimal unit that represents each exactly.
+- A unit name of a user physical type (`fs` in `type t is range ... units
+  fs; ...`) is that type's unit, not the TIME unit.
+- Concatenation of CHARACTER values with strings (`'"' & s & '"'`).
+
+SystemVerilog:
+- Continuous and procedural assignments to members of interface instances
+  declared in generate blocks, by deferring those statements until the
+  block's instances exist.
+- Functions of module instance array elements called by hierarchical name
+  (`h.slots[0].put(5)`, also as `void'(...)`), and upward names that begin
+  with an enclosing module's name (`holder.marker`).
+- Classes declared at compilation-unit scope see packages imported there,
+  including packages of other (mapped) libraries.
+- The `.*` port check exempts interface ports.
+
+Runner: UVM is compiled once per run into a mapped library (see "Corpora
+and runner"); the UVM sv-tests subset took 45% less time with the same
+results.
+
+Corpus effect (interpreter, full VHDL suites and reruns of the Batch 26
+baseline's SV failures): VESTs +154 (2831/3648), Verilator +11, ivtest +2,
+nvc and VHDL Compliance-Tests unchanged, no regressions in the VHDL suites;
+167 closed.
 
 ### Batch 26: TextIO, operator-symbol calls, element names, hierarchical calls
 

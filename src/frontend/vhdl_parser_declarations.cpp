@@ -597,7 +597,8 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
                 { },
                 { },
                 { },
-                false });
+                false,
+                true });
       }
       return;
     }

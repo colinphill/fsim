@@ -177,7 +177,8 @@ private:
 
   Type parse_vhdl_unspecified_type(const Token &start);
 
-  void parse_vhdl_end(std::string_view expected_kind);
+  void parse_vhdl_end(std::string_view expected_kind,
+      std::string_view expected_name = {});
 
   DesignUnit parse_architecture(const Token &start);
 

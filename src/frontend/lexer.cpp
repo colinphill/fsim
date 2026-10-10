@@ -488,6 +488,37 @@ class Lexer {
       }
     }
     emit(TokenKind::Number, begin);
+    if (is_vhdl()) {
+      // IEEE 1076-2008 15.5: an underline in an abstract literal stands
+      // between two digits, and an integer literal has no negative exponent.
+      const auto& text = result_.tokens.back().text;
+      const auto digit = [](const char character) {
+        return std::isalnum(static_cast<unsigned char>(character)) != 0;
+      };
+      for (std::size_t index = 0U; index < text.size(); ++index) {
+        if (text[index] == '_'
+            && (index == 0U || index + 1U == text.size()
+                || !digit(text[index - 1U]) || !digit(text[index + 1U]))) {
+          diagnose("FSIM-VHDL-LEX-005",
+              "an underline in a VHDL abstract literal must stand between two "
+              "digits",
+              begin);
+          break;
+        }
+      }
+      const auto based = text.find('#');
+      const auto exponent = based == std::string::npos
+          ? text.find_first_of("eE")
+          : text.find_first_of("eE", text.rfind('#'));
+      const bool real = based == std::string::npos
+          ? text.find('.') != std::string::npos
+          : text.find('.') != std::string::npos;
+      if (!real && exponent != std::string::npos && exponent + 1U < text.size()
+          && text[exponent + 1U] == '-') {
+        diagnose("FSIM-VHDL-LEX-005",
+            "a VHDL integer literal cannot have a negative exponent", begin);
+      }
+    }
     if (sized_spaced) {
       auto& text = result_.tokens.back().text;
       std::erase_if(text, [](const char character) {

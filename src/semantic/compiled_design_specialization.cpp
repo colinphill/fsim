@@ -10553,7 +10553,13 @@ SpecializedHirAssociationResult resolve_specialized_hir_associations_impl(
                     if (formal && formal->systemverilog != nullptr
                         && formal->systemverilog->form
                             == sv::DeclarationForm::port
-                        && !formal->systemverilog->initializer) {
+                        && !formal->systemverilog->initializer
+                        // Interface ports bind to interface instances,
+                        // which are not objects of this lookup.
+                        && formal->systemverilog->interface_type.empty()
+                        && (!formal->systemverilog->type
+                            || formal->systemverilog->type->interface_type
+                                .empty())) {
                         AssociationActual wildcard;
                         wildcard.formal = "*";
                         wildcard.source = *systemverilog_wildcard_source;

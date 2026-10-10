@@ -759,6 +759,40 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
     function.name = vhdl_name(name.text);
   }
   function.arguments = parse_vhdl_function_parameters();
+  if (name.kind == TokenKind::StringLiteral) {
+    // IEEE 1076-2008 4.5.2: an operator symbol names an operator, and an
+    // operator function has one parameter for a unary and two for a binary
+    // operator.
+    const auto symbol = detail::ascii_lower(function.name);
+    static constexpr std::array<std::string_view, 25> binary_only {
+        "and", "or", "nand", "nor", "xor", "xnor", "=", "/=", "<", "<=",
+        ">", ">=", "sll", "srl", "sla", "sra", "rol", "ror", "&", "*",
+        "/", "mod", "rem", "**", "?="
+    };
+    static constexpr std::array<std::string_view, 2> unary_only {
+        "not", "abs"
+    };
+    const bool binary = std::ranges::find(binary_only, symbol) != binary_only.end();
+    const bool unary = std::ranges::find(unary_only, symbol) != unary_only.end();
+    const bool sign = symbol == "+" || symbol == "-";
+    const bool matching = symbol == "?/=" || symbol == "?<" || symbol == "?<="
+        || symbol == "?>" || symbol == "?>=" || symbol == "??";
+    const auto count = function.arguments.size();
+    if (!binary && !unary && !sign && !matching) {
+      error(name, "FSIM-VHDL-SEM-124",
+          "'" + function.name + "' is not a VHDL operator symbol");
+    } else if ((unary && count != 1U)
+        || ((binary || (matching && symbol != "??")) && count != 2U
+            && !(vhdl_standard_ >= VhdlStandard::Vhdl2008
+                && count == 1U
+                && (symbol == "and" || symbol == "or" || symbol == "nand"
+                    || symbol == "nor" || symbol == "xor" || symbol == "xnor")))
+        || (sign && count != 1U && count != 2U)) {
+      error(name, "FSIM-VHDL-SEM-124",
+          "operator function \"" + function.name
+              + "\" has the wrong number of parameters");
+    }
+  }
   expect_keyword(
       "return", true, "FSIM-VHDL-PARSE-155");
   std::optional<Token> result_identifier;

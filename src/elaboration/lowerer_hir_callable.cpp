@@ -3984,6 +3984,32 @@ Lowerer::hir_instance_callable(const std::string_view receiver,
                                                  : lexical.substr(0U, separator);
     }
     const auto& design = specialized_hir_unit_->design();
+    if (target == nullptr && receiver.find('.') == std::string_view::npos) {
+        // An upward name may begin with the module name of an enclosing
+        // instance (IEEE 1800-2017 23.8): `ma.f()` inside an instance below
+        // an instance of module `ma`.
+        for (std::string ancestor = hierarchy_; !ancestor.empty();) {
+            const auto found = std::ranges::find_if(design_.specializations_,
+                [&](const SpecializationInfo& specialization) {
+                    if (specialization.instance != ancestor
+                        || !specialization.source_unit) {
+                        return false;
+                    }
+                    const auto& units = design.systemverilog_hir.units();
+                    const auto unit = std::ranges::find(units,
+                        *specialization.source_unit, &semantic::sv::Unit::id);
+                    return unit != units.end() && unit->name == receiver;
+                });
+            if (found != design_.specializations_.end()) {
+                target = &*found;
+                break;
+            }
+            const auto separator = ancestor.rfind('.');
+            ancestor = separator == std::string::npos
+                ? std::string { }
+                : ancestor.substr(0U, separator);
+        }
+    }
     std::optional<semantic::UnitId> target_unit;
     std::string target_path;
     if (target != nullptr && target->source_unit) {
@@ -4382,9 +4408,24 @@ Lowerer::hir_interface_function_profile(
     }
     const auto receiver = specialized_hir_unit_->find_expression(
         call.operands.front());
+    if (receiver && receiver->systemverilog != nullptr
+        && receiver->systemverilog->kind
+            != semantic::sv::ExpressionKind::name) {
+        // `a.u[0].f(...)`: a function of an element of a module instance
+        // array, named by its constant path (23.8).
+        const auto path = hir_systemverilog_constant_path(
+            call.operands.front());
+        if (!path || path->find('[') == std::string::npos) {
+            return std::nullopt;
+        }
+        if (const auto instance = hir_instance_callable(
+                *path, std::string_view { call.text }.substr(1U), true)) {
+            return HirInterfaceFunctionProfile {
+                instance->first, instance->second };
+        }
+        return std::nullopt;
+    }
     if (!receiver || receiver->systemverilog == nullptr
-        || receiver->systemverilog->kind
-            != semantic::sv::ExpressionKind::name
         || receiver->systemverilog->text.empty()) {
         return std::nullopt;
     }

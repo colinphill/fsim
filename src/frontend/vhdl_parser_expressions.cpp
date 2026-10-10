@@ -329,10 +329,38 @@ Expression VhdlParser::parse_expression(
     int minimum_precedence, bool allow_conditional)
 {
     Expression left = parse_unary();
+    // IEEE 1076-2008 9.1: a relation has at most one relational operator and
+    // a shift expression one shift operator; a sequence of logical operators
+    // repeats one AND, OR, XOR or XNOR, and NAND or NOR takes two relations.
+    std::string previous_logical;
+    bool previous_relational { };
+    bool previous_shift { };
     for (;;) {
         const auto operation = binary_operation();
         if (!operation || operation->precedence < minimum_precedence) {
             break;
+        }
+        if (operation->precedence == 1) {
+            if (!previous_logical.empty()
+                && (operation->name != previous_logical
+                    || operation->name == "nand" || operation->name == "nor")) {
+                error(current(), "FSIM-VHDL-PARSE-301",
+                    "VHDL logical operators of different kinds, or a repeated NAND "
+                    "or NOR, require parentheses");
+            }
+            previous_logical = operation->name;
+        } else if (operation->precedence == 3) {
+            if (previous_relational) {
+                error(current(), "FSIM-VHDL-PARSE-301",
+                    "a VHDL relation has at most one relational operator");
+            }
+            previous_relational = true;
+        } else if (operation->precedence == 4) {
+            if (previous_shift) {
+                error(current(), "FSIM-VHDL-PARSE-301",
+                    "a VHDL shift expression has at most one shift operator");
+            }
+            previous_shift = true;
         }
         const auto operator_token = advance();
         for (std::size_t index = 1; index < operation->token_count; ++index) {
@@ -404,8 +432,10 @@ VhdlParser::binary_operation() const
     if (keyword("or", 0, true) || keyword("nor", 0, true) || keyword("xor", 0, true) || keyword("xnor", 0, true)) {
         return BinaryOperation { 1, detail::ascii_lower(current().text) };
     }
+    // VHDL gives every logical operator one precedence; an expression does
+    // not mix them without parentheses (IEEE 1076-2008 9.1).
     if (keyword("and", 0, true) || keyword("nand", 0, true)) {
-        return BinaryOperation { 2, detail::ascii_lower(current().text) };
+        return BinaryOperation { 1, detail::ascii_lower(current().text) };
     }
     if (at(TokenKind::Assign) || (at(TokenKind::NotEqual) && current().text == "/=") || at(TokenKind::Less) || at(TokenKind::LessEqual) || at(TokenKind::Greater) || at(TokenKind::GreaterEqual)) {
         return BinaryOperation { 3, current().text };
@@ -484,8 +514,11 @@ Expression VhdlParser::parse_unary()
     auto primary = parse_primary();
     // An attribute name's prefix may be any name: an indexed or selected
     // name, a dereference, or another attribute (IEEE 1076-2008 8.6).
+    // A qualified expression or an aggregate is not a name, so it cannot be
+    // an attribute prefix (8.6).
     while (at(TokenKind::Apostrophe) && at(TokenKind::Identifier, 1)
-        && (primary.kind == ExpressionKind::Call
+        && ((primary.kind == ExpressionKind::Call
+                && !primary.text.starts_with("@vhdl-qualified:"))
             || primary.kind == ExpressionKind::Index
             || primary.kind == ExpressionKind::Slice)) {
         advance();

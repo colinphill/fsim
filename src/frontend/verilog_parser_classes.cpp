@@ -30,6 +30,9 @@ void VerilogParser::add_class_declaration(
     SystemVerilogClassDeclaration declaration,
     const Token& location) {
   known_class_names_.insert(declaration.name);
+  if (declaration.enclosing_scope == "$unit") {
+    declaration.compilation_unit_imports = compilation_unit_imports_;
+  }
   const auto existing = std::ranges::find(
       declarations, declaration.name,
       &SystemVerilogClassDeclaration::name);

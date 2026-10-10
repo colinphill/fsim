@@ -45,6 +45,8 @@ struct ClassTypeView {
 
 struct SourceScope {
     const frontend::DesignUnit* unit { };
+    // The package imports of a compilation-unit ($unit) class.
+    const std::vector<frontend::SystemVerilogImport>* imports { };
     std::string library { "work" };
     std::string class_identity;
     std::map<std::string, ClassTypeView, std::less<>> objects;
@@ -113,6 +115,7 @@ public:
         for (auto& declaration : parsed.systemverilog_classes) {
             SourceScope scope;
             scope.library = effective_library(declaration.library);
+            scope.imports = &declaration.compilation_unit_imports;
             prepare_class(declaration, scope);
         }
         return !diagnostics_.has_error();
@@ -197,10 +200,13 @@ private:
             append(spelling.substr(0, separator), spelling.substr(separator + 2U));
             return result;
         }
-        if (scope.unit == nullptr)
+        const auto* imports = scope.unit != nullptr
+            ? &scope.unit->systemverilog_imports
+            : scope.imports;
+        if (imports == nullptr)
             return result;
         bool explicit_import { };
-        for (const auto& import : scope.unit->systemverilog_imports) {
+        for (const auto& import : *imports) {
             if (import.name == spelling) {
                 explicit_import = true;
                 append(import.package, spelling);
@@ -208,7 +214,7 @@ private:
         }
         if (explicit_import)
             return result;
-        for (const auto& import : scope.unit->systemverilog_imports) {
+        for (const auto& import : *imports) {
             if (import.name.empty())
                 append(import.package, spelling);
         }

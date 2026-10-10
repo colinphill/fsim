@@ -805,6 +805,10 @@ struct TypeAliasDeclaration {
     // Resolved parity of a possibly chained CONVERSE alias. Ordinary view
     // declarations are false; each converse alias toggles its source parity.
     bool vhdl_mode_view_converse_parity { };
+    // A VHDL integer or floating type definition (`type T is range ...`).
+    // It is kept as a subtype of INTEGER or REAL for execution but declares
+    // a distinct type (IEEE 1076-2008 5.2.3).
+    bool vhdl_scalar_type { };
 };
 
 struct VhdlAttributeDeclaration {

@@ -363,12 +363,17 @@ struct SystemVerilogCovergroupInstanceSyntax {
 /// are recursively owned by their lexical parent; semantic passes populate
 /// canonical_identity and the resolved base declaration without replacing
 /// source spellings.
+struct SystemVerilogImport;
+
 struct SystemVerilogClassDeclaration {
     std::string name;
     std::string canonical_identity;
     std::string enclosing_scope;
     std::string library;
     std::string compilation_unit_identity;
+    // Package imports in effect where a compilation-unit ($unit) class is
+    // declared (IEEE 1800-2017 26.3); empty for other classes.
+    std::vector<SystemVerilogImport> compilation_unit_imports;
     StandardRevision standard_revision {
         StandardRevision::SystemVerilog2017
     };

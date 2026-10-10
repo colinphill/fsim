@@ -3536,6 +3536,9 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
                 hierarchical_reference_used_ = true;
                 return signal;
             }
+            // An element of a module instance array may be elaborated
+            // after this process; the process is retried then.
+            hierarchical_reference_missed_ = true;
             return std::nullopt;
         };
         if (systemverilog_interface_handles_ == nullptr) {
@@ -3723,6 +3726,37 @@ std::optional<SignalId> Lowerer::hir_hierarchical_signal(
     }
     if (const auto signal = lookup(std::string { path })) {
         return signal;
+    }
+    // An upward name may begin with the module name of an enclosing
+    // instance (IEEE 1800-2017 23.8): `ma.v` below an instance of `ma`.
+    if (const auto dot = path.find('.');
+        dot != std::string_view::npos && specialized_hir_unit_ != nullptr) {
+        const auto module_name = path.substr(0U, dot);
+        const auto& units
+            = specialized_hir_unit_->design().systemverilog_hir.units();
+        for (std::string_view ancestor = hierarchy_; !ancestor.empty();) {
+            const auto found = std::ranges::find_if(design_.specializations_,
+                [&](const SpecializationInfo& specialization) {
+                    if (specialization.instance != ancestor
+                        || !specialization.source_unit) {
+                        return false;
+                    }
+                    const auto unit = std::ranges::find(units,
+                        *specialization.source_unit, &semantic::sv::Unit::id);
+                    return unit != units.end() && unit->name == module_name;
+                });
+            if (found != design_.specializations_.end()) {
+                if (const auto signal = lookup(std::string { ancestor }
+                        + std::string { path.substr(dot) })) {
+                    return signal;
+                }
+                break;
+            }
+            const auto separator = ancestor.find_last_of('.');
+            ancestor = separator == std::string_view::npos
+                ? std::string_view { }
+                : ancestor.substr(0U, separator);
+        }
     }
     // `ifc.mp.member` names a member through a modport of an interface
     // instance (IEEE 1800-2017 25.5): the member of the instance itself.
@@ -6337,13 +6371,40 @@ bool Lowerer::hir_expression_is_string(
                 == semantic::vhdl::ExpressionKind::concatenation
             || (source.kind == semantic::vhdl::ExpressionKind::binary
                 && source.text == "&")) {
-            return !source.operands.empty()
+            // A CHARACTER operand concatenated with a STRING is an element
+            // of the result (IEEE 1076-2008 9.2.5). Literals alone do not
+            // fix the type ('0' & "01" may be a BIT_VECTOR), so one operand
+            // must be a STRING or CHARACTER value of known type.
+            bool literal_character { };
+            bool typed { };
+            const auto literal = [&](const semantic::ExpressionId operand,
+                                     const semantic::vhdl::ExpressionKind kind) {
+                const auto found = specialized_hir_unit_->find_expression(operand);
+                return found && found->vhdl != nullptr
+                    && found->vhdl->kind == kind;
+            };
+            const bool all = !source.operands.empty()
                 && std::ranges::all_of(
                     source.operands,
                     [&](const semantic::ExpressionId operand) {
-                        return hir_expression_is_string(
-                            operand, process_scope);
+                        if (hir_expression_is_string(operand, process_scope)) {
+                            typed = typed
+                                || !literal(operand,
+                                    semantic::vhdl::ExpressionKind::string_literal);
+                            return true;
+                        }
+                        if (!hir_vhdl_character_expression(operand)) {
+                            return false;
+                        }
+                        if (literal(operand,
+                                semantic::vhdl::ExpressionKind::logic_literal)) {
+                            literal_character = true;
+                        } else {
+                            typed = true;
+                        }
+                        return true;
                     });
+            return all && (typed || !literal_character);
         }
         if (source.kind != semantic::vhdl::ExpressionKind::name) {
             return false;

@@ -83,6 +83,8 @@ class Case:
     chain: str | None = None
     skip: str | None = None
     timeout: float | None = None
+    # Governed UVM release whose precompiled library the case maps (sv-tests).
+    uvm_release: str | None = None
 
 
 STAGE_ORDER = {"compile": 0, "elaborate": 1, "simulate": 2}
@@ -237,17 +239,21 @@ def sv_tests_cases(root: Path) -> list[Case]:
         for define in defines:
             compile_args += ["-D", define]
         timeout = float(params.get("timeout", "30")) + 30
+        uvm_release = None
         if "uvm" in tags or "uvm-1.2" in tags:
-            # sv-tests compiles the UVM library sources with each UVM test; use the
-            # Accellera release trees governed by docs/uvm-source-provenance.md.
-            release = "1.2" if "uvm-1.2" in tags else "2020.3.1"
-            uvm_src = root / "uvm" / f"uvm-{release}" / "src"
-            compile_args += ["--compilation-unit", "source-set", "--uvm-release", release,
-                             "-I", str(uvm_src)]
-            source_files = [str(uvm_src / "uvm_pkg.sv")] + source_files
+            # sv-tests compiles the UVM library sources with each UVM test. The
+            # runner compiles each Accellera release tree (governed by
+            # docs/uvm-source-provenance.md) once per run into a library `uvm`
+            # that every UVM case maps and searches (see prepare_uvm_libraries).
+            uvm_release = "1.2" if "uvm-1.2" in tags else "2020.3.1"
+            uvm_src = root / "uvm" / f"uvm-{uvm_release}" / "src"
+            compile_args += ["--search-library", "uvm", "-I", str(uvm_src)]
             timeout = max(timeout, 300.0)
         compile_args += source_files
         commands = [Command("compile", compile_args)]
+        if uvm_release:
+            commands.insert(0, Command("compile", [
+                "library", "map", "uvm", "{uvm_library:" + uvm_release + "}"]))
         skip = None
         if params.get("compatible-runners", "all") not in ("all",) and \
                 "all" not in params.get("compatible-runners", "").split():
@@ -260,6 +266,8 @@ def sv_tests_cases(root: Path) -> list[Case]:
             mode = "compile"
         if mode in ("elaborate", "simulate"):
             elab = ["elaborate", "-q", "--no-aot"]
+            if uvm_release:
+                elab += ["--search-library", "uvm"]
             for top_name in tops:
                 elab += ["--top", top_name]
             commands.append(Command("elaborate", elab))
@@ -277,6 +285,7 @@ def sv_tests_cases(root: Path) -> list[Case]:
             checker="sv_tests",
             skip=skip,
             timeout=timeout,
+            uvm_release=uvm_release,
         ))
     return cases
 
@@ -899,9 +908,45 @@ def safe_name(identifier: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", identifier)[-150:]
 
 
+# Run-wide placeholder values such as "{uvm_library:2020.3.1}", set by
+# command_run before any case starts.
+PLACEHOLDERS: dict[str, str] = {}
+
+
+def substitute(argument: str, engine: str) -> str:
+    argument = argument.replace("{engine}", engine)
+    for placeholder, value in PLACEHOLDERS.items():
+        argument = argument.replace(placeholder, value)
+    return argument
+
+
+def prepare_uvm_libraries(cases: list[Case], fsim: Path, root: Path, out: Path,
+                          quiet: bool) -> None:
+    """Compile each UVM release that the selected cases use once, into a
+    library `uvm` that the cases map, instead of compiling uvm_pkg.sv with
+    every test."""
+    releases = sorted({c.uvm_release for c in cases if c.uvm_release and not c.skip})
+    for release in releases:
+        workspace = out / "shared" / f"uvm-{release}"
+        remove_tree(workspace)
+        workspace.mkdir(parents=True, exist_ok=True)
+        uvm_src = root / "uvm" / f"uvm-{release}" / "src"
+        args = [str(fsim), "compile", "-q", "--standard", "2017", "--library", "uvm",
+                "--uvm-release", release, "-I", str(uvm_src), str(uvm_src / "uvm_pkg.sv")]
+        started = time.monotonic()
+        completed = subprocess.run(args, cwd=workspace, stdout=subprocess.PIPE,
+                                   stderr=subprocess.STDOUT)
+        (workspace / "compile.log").write_bytes(completed.stdout)
+        if not quiet or completed.returncode != 0:
+            print(f"UVM {release} library: exit {completed.returncode} in "
+                  f"{time.monotonic() - started:.0f}s", flush=True)
+        PLACEHOLDERS["{uvm_library:" + release + "}"] = str(
+            workspace / ".fsim" / "libraries" / "uvm")
+
+
 def run_command(fsim: Path, command: Command, workdir: Path, env: dict,
                 timeout: float, engine: str) -> StepResult:
-    args = [str(fsim)] + [a.replace("{engine}", engine) for a in command.args]
+    args = [str(fsim)] + [substitute(a, engine) for a in command.args]
     started = time.monotonic()
     process = subprocess.Popen(
         args, cwd=workdir, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
@@ -1270,6 +1315,7 @@ def command_run(args) -> int:
         else:
             units.append([case])
     units = list(chains.values()) + units
+    prepare_uvm_libraries(cases, fsim, args.root, out, args.quiet)
     results_path = out / "results.jsonl"
     records: list[dict] = []
     started = time.monotonic()

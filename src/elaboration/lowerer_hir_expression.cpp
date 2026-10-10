@@ -13451,6 +13451,31 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_element_event(
     return result;
 }
 
+bool Lowerer::hir_vhdl_character_expression(
+    const semantic::ExpressionId value) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return false;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(value);
+    if (!expression || expression->vhdl == nullptr) {
+        return false;
+    }
+    if (expression->vhdl->kind
+        == semantic::vhdl::ExpressionKind::logic_literal) {
+        const auto& text = expression->vhdl->text;
+        return text.size() == 3U && text.front() == '\''
+            && text.back() == '\'';
+    }
+    const auto subtype = hir_vhdl_expression_subtype(value);
+    if (!subtype) {
+        return false;
+    }
+    auto name = std::string_view { subtype->type_mark.spelling };
+    name.remove_prefix(name.find_last_of(".:") + 1U);
+    return name == "character";
+}
+
 bool Lowerer::hir_vhdl_time_expression(
     const semantic::ExpressionId value) const
 {
@@ -14238,10 +14263,28 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
         }
         if (source.kind == semantic::vhdl::ExpressionKind::binary
             && source.text == "&" && source.operands.size() == 2U) {
-            const auto left = lower_hir_string_expression(
-                source.operands.front());
-            const auto right = lower_hir_string_expression(
-                source.operands.back());
+            const auto operand_text = [&](const semantic::ExpressionId operand)
+                -> std::optional<StringRegisterId> {
+                if (hir_expression_is_string(operand, hir_process_scope_)
+                    || !hir_vhdl_character_expression(operand)) {
+                    return lower_hir_string_expression(operand);
+                }
+                const auto literal = specialized_hir_unit_->find_expression(
+                    operand);
+                if (literal && literal->vhdl != nullptr
+                    && literal->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::logic_literal
+                    && literal->vhdl->text.size() == 3U) {
+                    const auto destination = allocate_string_register();
+                    process_.operations.emplace_back(LoadStringConstant {
+                        destination, literal->vhdl->text.substr(1U, 1U) });
+                    return destination;
+                }
+                return lower_hir_vhdl_runtime_image(operand, std::nullopt,
+                    runtime::simir::OutputFormat::binary, false);
+            };
+            const auto left = operand_text(source.operands.front());
+            const auto right = operand_text(source.operands.back());
             if (!left || !right) {
                 return std::nullopt;
             }

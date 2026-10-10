@@ -1768,6 +1768,18 @@ void validate_vhdl_package_declarations(
     diagnostic::Engine& diagnostics,
     bool allow_missing_package_bodies = false);
 
+// IEEE 1076-1993 1.1.1.2: a port of the enclosing entity associated as the
+// actual of a component or entity port must have a compatible mode.
+void validate_vhdl_port_association_modes(
+    std::span<const frontend::DesignUnit> units,
+    diagnostic::Engine& diagnostics);
+
+// IEEE 1076-2008 4.2.1: a subprogram declared in a package body has its
+// body in that package body.
+void validate_vhdl_package_body_subprograms(
+    std::span<const frontend::DesignUnit> units,
+    diagnostic::Engine& diagnostics);
+
 [[nodiscard]] bool validate_vhdl_profile_compatibility(
     const frontend::ParsedDesign& parsed,
     diagnostic::Engine& diagnostics);

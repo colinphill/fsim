@@ -334,6 +334,10 @@ DesignUnit VhdlParser::parse_package(const Token& start, const bool body)
             const auto generic_start = advance();
             parse_vhdl_generic_subprogram(unit, generic_start, true);
         } else if (!body && match_keyword("generic", true)) {
+            // Packages have generic clauses from VHDL-2008 (4.7).
+            (void)require_vhdl_standard(previous(), VhdlStandard::Vhdl2008,
+                "a package generic clause",
+                "select VHDL-2008 or declare the parameters as constants");
             parse_vhdl_generics(unit, previous());
         } else if (match_keyword("constant", true)) {
             parse_package_constant(unit, previous(), body);
@@ -491,6 +495,9 @@ DesignUnit VhdlParser::parse_entity(const Token& start)
                 // 1076-2008 6.5.6.1).
                 error(previous(), "FSIM-VHDL-SEM-117",
                     "a generic clause must precede the port clause");
+            } else if (!unit.parameters.empty()) {
+                error(previous(), "FSIM-VHDL-PARSE-302",
+                    "an entity header has at most one generic clause");
             }
             parse_vhdl_generics(unit, previous());
         } else if ((keyword("pure", 0, true) || keyword("impure", 0, true)) && keyword("function", 1, true)) {
@@ -810,6 +817,10 @@ void VhdlParser::parse_vhdl_generics(DesignUnit& unit, const Token& start,
 void VhdlParser::parse_vhdl_ports(DesignUnit& unit)
 {
     expect(TokenKind::LeftParen, "'(' after port", "FSIM-VHDL-PARSE-003");
+    if (at(TokenKind::RightParen)) {
+        // A port clause lists at least one interface (IEEE 1076-2008 6.5.6.3).
+        error(current(), "FSIM-VHDL-PARSE-302", "a VHDL port clause cannot be empty");
+    }
     while (!at_end() && !at(TokenKind::RightParen)) {
         std::vector<Token> names;
         names.push_back(expect_identifier("port name"));
@@ -1412,12 +1423,20 @@ std::optional<DiscreteRangeExpression> VhdlParser::parse_vhdl_discrete_range(
     return range;
 }
 
-void VhdlParser::parse_vhdl_end(std::string_view expected_kind)
+void VhdlParser::parse_vhdl_end(std::string_view expected_kind,
+    std::string_view expected_name)
 {
     expect_keyword("end", true, "FSIM-VHDL-PARSE-012");
     match_keyword(expected_kind, true);
     if (at(TokenKind::Identifier)) {
-        advance();
+        const auto end_name = advance();
+        // The simple name at the end repeats the unit's (IEEE 1076-2008
+        // 3.3.1, 3.2.1, 4.7).
+        if (!expected_name.empty() && vhdl_name(end_name.text) != expected_name) {
+            error(end_name, "FSIM-VHDL-SEM-123",
+                "the name at the end of the " + std::string { expected_kind }
+                    + " does not repeat its name '" + std::string { expected_name } + "'");
+        }
     }
     expect(TokenKind::Semicolon, "';' after end clause", "FSIM-VHDL-PARSE-013");
 }
@@ -1538,7 +1557,7 @@ DesignUnit VhdlParser::parse_architecture(const Token& start)
         unit.vhdl_disconnections,
         unit.concurrent_statements);
     rewrite_vhdl_formal_conversions(unit);
-    parse_vhdl_end("architecture");
+    parse_vhdl_end("architecture", unit.name);
     for (auto& item : deferred_context_items_) {
         unit.vhdl_context.push_back(std::move(item));
     }

@@ -102,8 +102,9 @@ namespace fsim::app::application_detail {
     const auto type_id = ensure_type(
         input.name,
         scope,
-        subtype_form ? semantic::TypeKind::subtype
-                     : semantic::TypeKind::declaration,
+        subtype_form && !input.vhdl_scalar_type
+            ? semantic::TypeKind::subtype
+            : semantic::TypeKind::declaration,
         *output.subtype,
         output.source,
         output.origin);

@@ -225,7 +225,9 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
     std::size_t& concurrent_order,
     std::vector<semantic::ProcessId>* const deferred_processes,
     std::vector<std::pair<semantic::StatementId, std::size_t>>* const
-        deferred_statements)
+        deferred_statements,
+    std::vector<DeferredGeneratedSystemVerilogItem>* const
+        deferred_generated)
 {
     std::unordered_map<const semantic::sv::GenerateRegion*,
         std::vector<semantic::DeclarationId>> generated_signal_declarations;
@@ -536,11 +538,26 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
                 systemverilog_generated_concurrent_occurrences_);
             const auto replayed_before = lowering_census_enabled_
                 ? systemverilog_concurrent_templates_replayed_ : 0U;
+            const auto order = concurrent_order++;
+            const auto diagnostics_before = diagnostics_.size();
+            generated_lowerer.reset_hierarchical_reference_state();
+            generated_lowerer.set_hierarchical_reference_retry(
+                deferred_generated != nullptr);
             auto lowered = lower_cached_systemverilog_concurrent_statement(
                 unit, *occurrence.specialization, generated_lowerer,
                 statement_id, source_language,
                 declaration_bindings->second, occurrence.path,
-                concurrent_order++, program_owner);
+                order, program_owner);
+            generated_lowerer.set_hierarchical_reference_retry(false);
+            if (!lowered && deferred_generated != nullptr
+                && generated_lowerer.hierarchical_reference_missed()) {
+                // `assign intf.member = ...` names a member of an interface
+                // instance of this block, created after the statements.
+                diagnostics_.resize(diagnostics_before);
+                deferred_generated->push_back({ index, statement_id,
+                    std::nullopt, order, declaration_bindings->second });
+                continue;
+            }
             if (lowering_census_enabled_
                 && systemverilog_concurrent_templates_replayed_
                     != replayed_before) {
@@ -658,10 +675,25 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
                 invocation_before
                     = generated_lowerer
                         .next_hir_callable_invocation_identity();
+                generated_lowerer.reset_hierarchical_reference_state();
+                generated_lowerer.set_hierarchical_reference_retry(
+                    deferred_generated != nullptr);
                 lowered = generated_lowerer.lower_hir_process(
                     process_id, source_language, occurrence.path);
+                generated_lowerer.set_hierarchical_reference_retry(false);
                 generated_lowerer.set_hir_code_coverage_active(false);
                 lowered_here = lowered.has_value();
+                if (!lowered && deferred_generated != nullptr
+                    && generated_lowerer.hierarchical_reference_missed()) {
+                    diagnostics_.resize(diagnostics_before);
+                    deferred_generated->push_back({ index, std::nullopt,
+                        process_id, 0U,
+                        declaration_bindings
+                                != generated_signal_declarations.end()
+                            ? declaration_bindings->second
+                            : std::vector<semantic::DeclarationId> { } });
+                    continue;
+                }
             }
             if (!lowered) {
                 report("FSIM-ELAB-HIR-001",
@@ -723,6 +755,126 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
         }
     }
     flush_constant_drivers();
+    return true;
+}
+
+bool HierarchyBuilder::lower_deferred_generated_systemverilog(
+    const semantic::sv::Unit& unit,
+    const frontend::Language source_language,
+    const std::vector<hierarchy_sv_generate_detail::Occurrence>&
+        generate_occurrences,
+    std::vector<SystemVerilogHirMaterialization>&
+        generated_materializations,
+    const std::vector<DeferredGeneratedSystemVerilogItem>& deferred,
+    const std::size_t specialization_index,
+    const std::optional<std::uint32_t> program_owner)
+{
+    for (const auto& item : deferred) {
+        if (item.occurrence >= generate_occurrences.size()
+            || item.occurrence >= generated_materializations.size()) {
+            return false;
+        }
+        const auto& occurrence = generate_occurrences[item.occurrence];
+        auto& materialization = generated_materializations[item.occurrence];
+        Lowerer generated_lowerer {
+            design_,
+            materialization.signals,
+            materialization.read_only_signals,
+            materialization.string_objects,
+            materialization.read_only_strings,
+            materialization.container_objects,
+            materialization.read_only_containers,
+            diagnostics_,
+        };
+        generated_lowerer.set_hir_container_declaration_bindings(
+            &materialization.container_declaration_bindings);
+        generated_lowerer.set_specialized_hir_unit(
+            occurrence.specialization.get());
+        generated_lowerer.set_systemverilog_interface_handles(
+            &systemverilog_interface_handles_, &systemverilog_interface_types_);
+        generated_lowerer.set_systemverilog_program_owner(program_owner);
+        auto& specialization
+            = design_.specializations_[specialization_index];
+        const auto append_generated = [&] {
+            for (auto& generated : generated_lowerer.take_generated_processes()) {
+                generated.language_standard = unit.standard;
+                generated.compatibility_profile = unit.compatibility_profile;
+                canonicalize_process_operations(generated);
+                design_.specializations_[specialization_index]
+                    .processes.push_back(generated.id);
+                design_.append_process_record(std::move(generated));
+            }
+        };
+        if (item.statement) {
+            const auto statement = occurrence.specialization
+                                       ->find_statement(*item.statement);
+            auto lowered = lower_cached_systemverilog_concurrent_statement(
+                unit, *occurrence.specialization, generated_lowerer,
+                *item.statement, source_language, item.declarations,
+                occurrence.path, item.order, program_owner);
+            if (!lowered) {
+                report("FSIM-ELAB-HIR-001",
+                    "compiled generated concurrent statement could not "
+                    "be lowered from HIR",
+                    compiled_source_span(*compiled_,
+                        statement && statement->systemverilog != nullptr
+                            ? statement->systemverilog->source
+                            : unit.source));
+                return false;
+            }
+            if (lowered->instance) {
+                auto& instance = *lowered->instance;
+                instance.reactive = program_owner.has_value();
+                instance.program_owner = program_owner;
+                canonicalize_process_operations(lowered->common, instance);
+                specialization.processes.push_back(instance.id);
+                design_.append_process_instance_record(
+                    std::move(lowered->common), std::move(instance));
+            } else {
+                auto& process = *lowered->process;
+                process.language_standard = unit.standard;
+                process.compatibility_profile = unit.compatibility_profile;
+                process.reactive = program_owner.has_value();
+                process.program_owner = program_owner;
+                canonicalize_process_operations(process);
+                specialization.processes.push_back(process.id);
+                design_.append_process_record(std::move(process));
+            }
+            append_generated();
+            continue;
+        }
+        const auto process = occurrence.specialization->find_process(
+            *item.process);
+        auto lowered = generated_lowerer.lower_hir_process(
+            *item.process, source_language, occurrence.path);
+        if (!lowered) {
+            report("FSIM-ELAB-HIR-001",
+                "compiled generated process could not be lowered from HIR",
+                compiled_source_span(*compiled_,
+                    process && process->systemverilog != nullptr
+                        ? process->systemverilog->source
+                        : unit.source));
+            return false;
+        }
+        const bool concurrent_assertion = process
+            && process->systemverilog != nullptr
+            && process->systemverilog->concurrent_assertion;
+        if (process && process->systemverilog != nullptr
+            && process->systemverilog->name == "<process>") {
+            lowered->name = occurrence.path;
+        }
+        lowered->language_standard = unit.standard;
+        lowered->compatibility_profile = unit.compatibility_profile;
+        lowered->observed = concurrent_assertion;
+        lowered->reactive = !concurrent_assertion && program_owner.has_value();
+        lowered->program_owner = program_owner;
+        canonicalize_process_operations(*lowered);
+        specialization.processes.push_back(lowered->id);
+        specialization.semantic_processes.emplace_back(
+            lowered->id, *item.process);
+        design_.append_process_record(std::move(*lowered));
+        append_generated();
+    }
     return true;
 }
 

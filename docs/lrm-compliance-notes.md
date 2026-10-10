@@ -455,3 +455,31 @@ gives fsim's result in each case checked.
   the whole signal, then waits again unless a named signal or element had
   an event. A `wait on` of a record field named by its selected name is
   still unsupported.
+
+## Analysis checks and distinct scalar types (batch 27)
+
+- `type T is range ...` is still lowered as a subtype of INTEGER or REAL,
+  but its semantic type is recorded as a declaration (not a subtype), and
+  the type checks root a subtype chain at such a type. Values of two such
+  types, or of one and INTEGER, are distinct; universal literals match any
+  of them.
+- Most new VHDL checks run in the analysis-time elaboration of each
+  compiled architecture and are whitelisted there. They are deliberately
+  conservative: a check reports only when the operand types are classified
+  with certainty, and calls to STD and IEEE subprograms are not checked
+  against their formals, because STD.TEXTIO overloads are not retained.
+- A multiple-index name such as `k(5,5)` is held as a single index operand
+  in the HIR, so the number of indices is not checked.
+- The VHDL-93 port association mode rules are checked in the frontend for
+  ports of the enclosing entity named directly as actuals, against component
+  declarations of the architecture and entities of the same compilation.
+  VHDL-2008 relaxes them (buffer ports), so they are not applied there.
+- All logical operators share one precedence in the VHDL parser, so a
+  mixture of AND and OR without parentheses is reported rather than parsed
+  with an invented precedence.
+- Generate blocks: a concurrent statement or process of a generate block
+  that names a member of an interface instance of the block is lowered
+  after the unit's instances, as module-level statements already were.
+- The automatic time resolution only ever refines the 1 ns default because
+  of a literal; when a delay selects the resolution, a literal can make it
+  finer (to ps or fs) but not coarser.

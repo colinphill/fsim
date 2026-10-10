@@ -1028,6 +1028,194 @@ void validate_vhdl_mode_view_interfaces(
   }
 }
 
+void validate_vhdl_package_body_subprograms(
+    const std::span<const frontend::DesignUnit> units,
+    diagnostic::Engine& diagnostics) {
+  const auto lower = [](std::string_view text) {
+    std::string result { text };
+    std::ranges::transform(result, result.begin(),
+        [](const unsigned char character) {
+          return static_cast<char>(std::tolower(character));
+        });
+    return result;
+  };
+  for (const auto& unit : units) {
+    if (unit.kind != frontend::UnitKind::VhdlPackage
+        || unit.primary_name.empty()) {
+      continue;
+    }
+    std::set<std::string> defined;
+    for (const auto& procedure : unit.procedures) {
+      if (procedure.defined) {
+        defined.insert(lower(procedure.name));
+      }
+    }
+    for (const auto& function : unit.functions) {
+      if (function.defined) {
+        defined.insert(lower(function.name));
+      }
+    }
+    const auto check = [&](const auto& callable) {
+      if (!callable.defined && !defined.contains(lower(callable.name))) {
+        diagnostics.error("FSIM-VHDL-SEM-122",
+            "subprogram '" + callable.name
+                + "' is declared in a package body without a body there",
+            span(callable.span));
+      }
+    };
+    for (const auto& procedure : unit.procedures) {
+      check(procedure);
+    }
+    for (const auto& function : unit.functions) {
+      check(function);
+    }
+  }
+}
+
+void validate_vhdl_port_association_modes(
+    const std::span<const frontend::DesignUnit> units,
+    diagnostic::Engine& diagnostics) {
+  using frontend::PortDirection;
+  const auto lower = [](std::string_view text) {
+    std::string result { text };
+    std::ranges::transform(result, result.begin(),
+        [](const unsigned char character) {
+          return static_cast<char>(std::tolower(character));
+        });
+    return result;
+  };
+  const auto find_entity = [&](const std::string& library,
+                               const std::string& name)
+      -> const DesignUnit* {
+    for (const auto& unit : units) {
+      if (unit.kind == frontend::UnitKind::VhdlEntity
+          && lower(library_of(unit)) == lower(library)
+          && lower(unit.name) == lower(name)) {
+        return &unit;
+      }
+    }
+    return nullptr;
+  };
+  // VHDL-1993 rules; VHDL-2008 6.5.6.3 relaxes buffer associations.
+  const auto compatible = [](const PortDirection formal,
+                             const PortDirection actual) {
+    switch (formal) {
+    case PortDirection::Input:
+      return actual == PortDirection::Input || actual == PortDirection::Inout
+          || actual == PortDirection::Buffer;
+    case PortDirection::Output:
+      return actual == PortDirection::Output
+          || actual == PortDirection::Inout;
+    case PortDirection::Inout:
+      return actual == PortDirection::Inout;
+    case PortDirection::Buffer:
+      return actual == PortDirection::Buffer;
+    default:
+      return true;
+    }
+  };
+  const auto mode_name = [](const PortDirection direction) {
+    switch (direction) {
+    case PortDirection::Input: return "in";
+    case PortDirection::Output: return "out";
+    case PortDirection::Inout: return "inout";
+    case PortDirection::Buffer: return "buffer";
+    default: return "linkage";
+    }
+  };
+  for (const auto& architecture : units) {
+    if (architecture.kind != frontend::UnitKind::VhdlArchitecture
+        || architecture.vhdl_standard >= frontend::VhdlStandard::Vhdl2008) {
+      continue;
+    }
+    const auto* entity = find_entity(
+        library_of(architecture), architecture.primary_name);
+    if (entity == nullptr) {
+      continue;
+    }
+    const auto actual_mode = [&](const frontend::Expression& value)
+        -> std::optional<PortDirection> {
+      if (value.kind != frontend::ExpressionKind::Identifier) {
+        return std::nullopt;
+      }
+      const auto name = lower(value.text);
+      // A signal of the architecture hides a port of the same name.
+      if (std::ranges::any_of(architecture.signals, [&](const auto& signal) {
+            return lower(signal.name) == name;
+          })) {
+        return std::nullopt;
+      }
+      for (const auto& port : entity->ports) {
+        if (lower(port.name) == name
+            && port.direction != PortDirection::Unknown) {
+          return port.direction;
+        }
+      }
+      return std::nullopt;
+    };
+    for (const auto& instance : architecture.instances) {
+      std::vector<std::pair<std::string, PortDirection>> formals;
+      if (instance.vhdl_component_instance) {
+        const auto component = std::ranges::find_if(
+            architecture.vhdl_component_declarations,
+            [&](const frontend::VhdlComponentDeclaration& declaration) {
+              return lower(declaration.name) == lower(instance.unit_name)
+                  && declaration.scope_path.empty();
+            });
+        if (component == architecture.vhdl_component_declarations.end()) {
+          continue;
+        }
+        for (const auto& port : component->ports) {
+          formals.emplace_back(lower(port.name), port.direction);
+        }
+      } else if (!instance.vhdl_configuration_instance) {
+        auto name = std::string_view { instance.unit_name };
+        name.remove_prefix(name.find_last_of('.') + 1U);
+        const auto* target = find_entity(
+            library_of(architecture), std::string { name });
+        if (target == nullptr) {
+          continue;
+        }
+        for (const auto& port : target->ports) {
+          formals.emplace_back(lower(port.name), port.direction);
+        }
+      } else {
+        continue;
+      }
+      for (std::size_t index = 0U; index < instance.connections.size();
+           ++index) {
+        const auto& connection = instance.connections[index];
+        if (connection.kind != frontend::PortActualKind::Expression) {
+          continue;
+        }
+        std::optional<PortDirection> formal;
+        if (!connection.port) {
+          if (index < formals.size()) {
+            formal = formals[index].second;
+          }
+        } else {
+          const auto port = lower(*connection.port);
+          for (const auto& [name, direction] : formals) {
+            if (name == port) {
+              formal = direction;
+            }
+          }
+        }
+        const auto actual = actual_mode(connection.value);
+        if (!formal || !actual || *formal == PortDirection::Unknown
+            || compatible(*formal, *actual)) {
+          continue;
+        }
+        diagnostics.error("FSIM-VHDL-SEM-121",
+            std::string { "an actual port of mode " } + mode_name(*actual)
+                + " cannot be associated with a formal port of mode "
+                + mode_name(*formal),
+            span(connection.span));
+      }
+    }
+  }
+}
+
 void validate_vhdl_package_declarations(
     const std::span<const frontend::DesignUnit> units,
     diagnostic::Engine& diagnostics,

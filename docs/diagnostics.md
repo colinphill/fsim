@@ -260,6 +260,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-FE-LEX-007` | error | VHDL-2008 delimited-comment nesting exceeds the bounded 64-level policy. |
 | `FSIM-VHDL-LEX-001` | error | A VHDL lexical form requires a later selected revision; the diagnostic identifies the required revision and exact source span. |
 | `FSIM-VHDL-LEX-002` | error | A word reserved by the selected VHDL revision was used where a user identifier is required; use an extended identifier or an older compatible revision. |
+| `FSIM-VHDL-LEX-005` | error | A VHDL abstract literal has an underline that is not between two digits, or an integer literal has a negative exponent (IEEE 1076-2008 15.5). |
 | `FSIM-VHDL-CA-001` | error | A conditional analysis directive was used under a VHDL revision older than 2019. |
 | `FSIM-VHDL-CA-002` | error | A conditional analysis directive or its expression is malformed. |
 | `FSIM-VHDL-CA-003` | error | Conditional analysis branch or group nesting is structurally invalid. |
@@ -816,6 +817,8 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-PARSE-298` | error | A VHDL bit string literal has no digits before VHDL-2008 (IEEE 1076-1993 13.7). |
 | `FSIM-VHDL-PARSE-299` | error | The base of a VHDL based literal is outside 2 to 16 (IEEE 1076-2008 15.5.3). |
 | `FSIM-VHDL-PARSE-300` | error | A function call whose name is an operator symbol, such as `"and"(a, b)`, has a number of actuals that the operator does not take (IEEE 1076-2008 4.5.2). |
+| `FSIM-VHDL-PARSE-301` | error | A VHDL expression mixes logical operators or repeats NAND or NOR without parentheses, or chains relational or shift operators (IEEE 1076-2008 9.1). |
+| `FSIM-VHDL-PARSE-302` | error | A VHDL port clause or process sensitivity list is empty, or an entity header has a second generic clause (IEEE 1076-2008 6.5.6, 11.3). |
 
 ### Embedded VHDL PSL parsing and ownership
 
@@ -952,6 +955,11 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-SEM-117` | error | An entity's generic clause follows its port clause (IEEE 1076-2008 6.5.6.1). |
 | `FSIM-VHDL-SEM-118` | error | An attribute specification for an entity, architecture, package or configuration appears outside that design unit's own declarative part (IEEE 1076-2008 7.2). |
 | `FSIM-VHDL-SEM-119` | error | An array type definition mixes unbounded (`<>`) and constrained index ranges (IEEE 1076-2008 5.3.2.1). |
+| `FSIM-VHDL-SEM-120` | error | An aggregate assignment target names the same object more than once (IEEE 1076-2008 10.5.2.1, 10.6.2.1). |
+| `FSIM-VHDL-SEM-121` | error | Before VHDL-2008, a port of the enclosing entity is associated with a formal port whose mode it cannot connect to (IEEE 1076-1993 1.1.1.2). |
+| `FSIM-VHDL-SEM-122` | error | A subprogram declared in a package body has no body in that package body (IEEE 1076-2008 4.2.1). |
+| `FSIM-VHDL-SEM-123` | error | The simple name at the end of a VHDL architecture does not repeat its name (IEEE 1076-2008 3.3.1). |
+| `FSIM-VHDL-SEM-124` | error | A VHDL function designator string is not an operator symbol, or an operator function has the wrong number of parameters (IEEE 1076-2008 4.5.2). |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -2115,17 +2123,25 @@ scheduler.
 | `FSIM-ELAB-VHCONV-003` | error | A VHDL conversion operand is not a supported closely related type or would change packed width or state domain. |
 | `FSIM-ELAB-VHCONV-004` | error | A VHDL conversion result is incompatible with its contextual type. |
 | `FSIM-ELAB-VHCONV-005` | error | The operand of a VHDL type conversion is a string literal, aggregate, allocator or null (IEEE 1076-2008 9.3.6). |
+| `FSIM-ELAB-VHCONV-006` | error | A conversion between array types whose index types are not closely related: neither the same type nor both integer types (IEEE 1076-1993 7.3.5). |
 | `FSIM-ELAB-VHASSIGN-001` | error | The value of a VHDL variable or signal assignment to a scalar target has another type than the target (IEEE 1076-2008 10.5.2.1, 10.6.2.1). |
 | `FSIM-ELAB-VHASSIGN-002` | error | The target of a VHDL signal assignment is a variable or constant (IEEE 1076-2008 10.5.2.1). |
+| `FSIM-ELAB-VHASSIGN-003` | error | The target of a VHDL variable assignment is a signal, constant or constant-class formal (IEEE 1076-2008 10.6.2.1). |
 | `FSIM-ELAB-VHACCESS-030` | error | A VHDL signal, constant, port or generic is of an access type; only variables can be (IEEE 1076-2008 6.4.2.1). |
+| `FSIM-ELAB-VHACCESS-031` | error | The subtype indication of an allocator names an unconstrained array type without an index constraint (IEEE 1076-2008 9.3.7). |
+| `FSIM-ELAB-VHACCESS-032` | error | A VHDL access type designates a file type (IEEE 1076-2008 5.4.1). |
 | `FSIM-ELAB-VHLOOP-001` | error | A VHDL loop parameter range has floating-point bounds; it must be discrete (IEEE 1076-2008 10.10). |
 | `FSIM-ELAB-VHATTR-012` | error | The attribute 'STABLE, 'QUIET, 'TRANSACTION or 'DELAYED is read of a formal signal parameter of a subprogram (IEEE 1076-2008 4.2.2.2). |
 | `FSIM-ELAB-VHATTR-013` | error | 'EVENT of a signal element is supported only for a static index into a whole signal. |
+| `FSIM-ELAB-VHATTR-014` | error | A VHDL attribute declaration names an access or file type (IEEE 1076-2008 6.7). |
 | `FSIM-ELAB-VHBODY-001` | error | A subprogram declared in an entity, architecture, block, process or subprogram declarative part has no body in that declarative part (IEEE 1076-2008 4.2.1). |
 | `FSIM-ELAB-VHCALL-001` | error | No visible function of the called name has formals that the call's positional and named actuals associate one to one, with defaults for the rest (IEEE 1076-2008 9.3.4, 6.5.7.1). |
+| `FSIM-ELAB-VHCALL-002` | error | No visible procedure accepts the actuals of a procedure call, by count, formal name or scalar type (IEEE 1076-2008 4.2.2.1). |
 | `FSIM-ELAB-VHNAME-002` | error | A simple name used as a value (an operand, an assignment value, a condition or an initial value) denotes no visible declaration, for example a statement label, a design-unit name or a record element name (IEEE 1076-2008 12.3). |
 | `FSIM-ELAB-VHNAME-003` | error | A selected name whose prefix is an object names something other than an element of the object's record type, for example a selection from an array or scalar object (IEEE 1076-2008 8.3). |
+| `FSIM-ELAB-VHNAME-004` | error | A name used as a value denotes a type, subtype, component, package instance, or block or generate label (IEEE 1076-2008 9.1). |
 | `FSIM-ELAB-VHOPER-001` | error | A predefined VHDL adding, multiplying, `mod`, `rem`, `**`, sign or `abs` operator is applied to operands outside its numeric type rules and no visible overload applies (IEEE 1076-2008 9.2.6-9.2.8). |
+| `FSIM-ELAB-VHOPER-002` | error | A VHDL division, MOD or REM has a static zero divisor (IEEE 1076-2008 9.2.7). |
 | `FSIM-ELAB-VHOVER-001` | error | A VHDL function call is ambiguous among the visible overloads after result and actual-profile filtering. |
 | `FSIM-ELAB-VHOVER-002` | error | A VHDL function call matches no visible overload after result and actual-profile filtering. |
 | `FSIM-ELAB-VHOVER-003` | error | Two visible VHDL function declarations have the same callable profile. |
@@ -2169,6 +2185,8 @@ scheduler.
 | `FSIM-ELAB-VHFILE-012` | error | Direct VHDL file `read` does not target a writable variable of the file element type. |
 | `FSIM-ELAB-VHFILE-013` | error | The element type of a VHDL file type is a file, access or protected type, or a composite containing one (IEEE 1076-2008 5.5.1). |
 | `FSIM-ELAB-VHFILE-014` | error | An element of a VHDL array or record type is of a file or protected type (IEEE 1076-2008 5.3.1). |
+| `FSIM-ELAB-VHFILE-015` | error | The element of a VHDL file type is a multidimensional array (IEEE 1076-2008 5.5.1). |
+| `FSIM-ELAB-VHFILE-016` | error | A VHDL generic constant or signal port is of a file type (IEEE 1076-2008 6.5.2). |
 | `FSIM-ELAB-VHTEXTIO-001` | error | `readline` or `writeline` does not have one text-file and one writable `line` actual. |
 | `FSIM-ELAB-VHTEXTIO-002` | error | A selected TextIO `read` or `write` line actual is not writable. |
 | `FSIM-ELAB-VHTEXTIO-003` | error | A TextIO `read` or `write` profile has an invalid actual count or no value actual. |
@@ -2183,6 +2201,7 @@ scheduler.
 | `FSIM-ELAB-VHTIME-001` | error | A VHDL delay or physical-time literal does not have a locally static integral magnitude. |
 | `FSIM-ELAB-VHTIME-002` | error | A VHDL physical-time value overflows the bounded signed 64-bit tick representation. |
 | `FSIM-ELAB-VHTIME-003` | error | A VHDL physical-time literal is not exactly representable at the selected project resolution. |
+| `FSIM-ELAB-VHTIME-004` | error | A VHDL timeout or waveform delay is not of type TIME (IEEE 1076-2008 10.2, 10.5.2.1). |
 | `FSIM-ELAB-VHNAME-001` | error | A VHDL function or type mark is not visible in an expression context. |
 | `FSIM-ELAB-VHRESOLVE-001` | error | A VHDL resolution indication names no visible function with an executable body. |
 | `FSIM-ELAB-VHRESOLVE-002` | error | A VHDL resolution function does not have the required pure array-input/base-result profile. |
@@ -2348,7 +2367,14 @@ scheduler.
 | `FSIM-ELAB-VHAGG-007` | error | A record aggregate would implicitly lose four- or nine-state information in a two-state element. |
 | `FSIM-ELAB-VHAGG-008` | error | A record aggregate choice is empty, names `others` with another choice, or uses a discrete/range form instead of element names. |
 | `FSIM-ELAB-VHAGG-009` | error | A record aggregate element value has an incompatible contextual subtype or state domain. |
+| `FSIM-ELAB-VHAGG-012` | error | A VHDL array aggregate mixes positional and named element associations (other than a final OTHERS) (IEEE 1076-2008 9.3.3.3). |
+| `FSIM-ELAB-VHAGG-013` | error | A VHDL aggregate gives the same choice more than once (IEEE 1076-2008 9.3.3.1). |
+| `FSIM-ELAB-VHAGG-014` | error | A VHDL aggregate element value does not have the element type of the aggregate's type (IEEE 1076-2008 9.3.3). |
+| `FSIM-ELAB-VHAGG-015` | error | An element association of a multidimensional VHDL array aggregate is not an aggregate or string literal (IEEE 1076-2008 9.3.3.3). |
+| `FSIM-ELAB-VHAGG-016` | error | A VHDL aggregate with OTHERS is qualified by an unconstrained array type mark (IEEE 1076-2008 9.3.3.3). |
 | `FSIM-ELAB-VHRANGE-001` | error | The bounds of a VHDL range in a type definition differ in type, or a scalar type definition has non-numeric bounds (IEEE 1076-2008 5.2.1, 5.3.2.1). |
+| `FSIM-ELAB-VHRANGE-002` | error | Before VHDL-2019, an INTEGER range bound exceeds the 32-bit INTEGER range (IEEE 1076-2008 5.2.3.1). |
+| `FSIM-ELAB-VHRANGE-003` | error | The static initial value of a VHDL object lies outside its integer subtype (IEEE 1076-2008 14.4.2). |
 | `FSIM-ELAB-VHRECORD-001` | error | A VHDL record element does not resolve to a concrete bounded packed scalar, vector, enumeration, array, or nested-record layout. |
 | `FSIM-ELAB-VHRECORD-002` | error | A VHDL record element or total recursive record layout overflows the bounded packed representation. |
 | `FSIM-ELAB-VHCOMPOP-001` | error | VHDL composite comparison operands do not share one nominal record or array base and compatible element profile, or lack bounded executable widths. |
@@ -2367,6 +2393,9 @@ scheduler.
 | `FSIM-ELAB-VHARRAY-006` | error | Assignment or comparison mixes values from different nominal VHDL array types. |
 | `FSIM-ELAB-VHARRAY-007` | error | An operator other than equality, inequality, or matching equality is applied to a VHDL array value in the current bounded semantic path. |
 | `FSIM-ELAB-VHARRAY-008` | error | The number of constraints on a VHDL array subtype indication does not match the base array rank. |
+| `FSIM-ELAB-VHARRAY-009` | error | Before VHDL-2008, an array element or record element has an unconstrained array subtype (IEEE 1076-1993 3.2.1.1, 3.2.2). |
+| `FSIM-ELAB-VHARRAY-010` | error | A VHDL signal or variable has an unconstrained array subtype (IEEE 1076-2008 6.4.2.3, 6.4.2.4). |
+| `FSIM-ELAB-VHARRAY-011` | error | An index constraint of a BIT_VECTOR or STRING object has a bound outside NATURAL or POSITIVE (IEEE 1076-2008 5.3.2.2). |
 | `FSIM-ELAB-VHARRAYAGG-002` | error | Contextual VHDL array layout or aggregate-choice HIR metadata is inconsistent with the aggregate value. |
 | `FSIM-ELAB-VHARRAYAGG-003` | error | A VHDL array aggregate choice is nonstatic or outside the contextual index range. |
 | `FSIM-ELAB-VHARRAYAGG-004` | error | A VHDL array aggregate covers an index more than once, has too many positional values, or repeats `others`. |
@@ -2379,6 +2408,7 @@ scheduler.
 | `FSIM-ELAB-VHARRAYSEL-002` | error | A runtime multidimensional VHDL array index is not an integer-family signed 32-bit value with representable bounds. |
 | `FSIM-ELAB-VHARRAYSEL-003` | error | A multidimensional VHDL array read or target index is outside its selected source dimension. |
 | `FSIM-ELAB-VHARRAYSEL-004` | error | A multidimensional VHDL array slice has incompatible direction, bounds, placement, or contextual shape. |
+| `FSIM-ELAB-VHARRAYSEL-006` | error | A VHDL array index is not of the type of its dimension's index (IEEE 1076-2008 8.4). |
 | `FSIM-ELAB-VHARRAYATTR-001` | error | A VHDL array attribute prefix is unknown, nonarray, unconstrained (other than an interface object or function result, whose range comes from its actual), null, or otherwise lacks a concrete bounded range. |
 | `FSIM-ELAB-VHARRAYATTR-002` | error | A VHDL array attribute selects a nonstatic dimension or a dimension outside the concrete array rank. |
 | `FSIM-ELAB-VHARRAYATTR-003` | error | VHDL `range` or `reverse_range` is used as a scalar expression rather than a discrete range. |
@@ -2400,6 +2430,10 @@ scheduler.
 | `FSIM-ELAB-VHDLCASE-004` | error | Two VHDL case choices or nonnull ranges overlap. |
 | `FSIM-ELAB-VHDLCASE-005` | error | A VHDL case statement neither covers its complete selector subtype nor supplies `others`. |
 | `FSIM-ELAB-VHDLCASE-006` | error | Validated VHDL case-range HIR is malformed or lost its static bounds before lowering. |
+| `FSIM-ELAB-VHDLCASE-007` | error | A VHDL case expression is of a floating-point or other non-discrete, non-array type (IEEE 1076-2008 10.9). |
+| `FSIM-ELAB-VHDLCASE-008` | error | A VHDL case choice does not have the type of the case expression (IEEE 1076-2008 10.9). |
+| `FSIM-ELAB-VHDLCASE-009` | error | A static VHDL case choice lies outside the subtype of the case expression (IEEE 1076-2008 10.9). |
+| `FSIM-ELAB-VHDLCASE-010` | error | A string VHDL case choice does not have the length of the case expression (IEEE 1076-2008 10.9). |
 | `FSIM-ELAB-VHDLGUARD-001` | error | A guarded concurrent assignment has no enclosing Boolean block guard or no retained assignment leaf. |
 | `FSIM-ELAB-VHDLGUARD-002` | error | A guarded driver disconnection targets a local or non-nine-state signal. |
 | `FSIM-ELAB-VHENUM-001` | error | A contextual VHDL enumeration type has no matching identifier or character literal. |

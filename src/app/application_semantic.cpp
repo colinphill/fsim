@@ -244,7 +244,9 @@ class SemanticModelBuilder final {
           source, unit_origin, declaration->name);
       (void)model_.add_type(
           scope,
-          semantic_type_kind(declaration->declaration_kind),
+          declaration->vhdl_scalar_type
+              ? semantic::TypeKind::declaration
+              : semantic_type_kind(declaration->declaration_kind),
           declaration->name,
           type_reference(
               declaration->type,

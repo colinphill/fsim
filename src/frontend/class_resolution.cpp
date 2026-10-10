@@ -123,11 +123,19 @@ void assign_class_identities(
     }
     return unique_entries(std::move(result));
   };
+  // Package names form one name space across libraries (IEEE 1800-2017
+  // 3.13): a package compiled into another library, such as a mapped UVM
+  // library, is still found by its name. The owner's library is preferred.
+  const auto in_library = [&](const auto& predicate) {
+    auto local = matching([&](const ClassEntry& entry) {
+      return entry.library == owner.library && predicate(entry);
+    });
+    return local.empty() ? matching(predicate) : local;
+  };
   if (spelling.find("::") != std::string_view::npos) {
-    return matching([&](const ClassEntry& entry) {
-      return entry.library == owner.library
-          && ends_with_scope(
-              entry.declaration->canonical_identity, spelling);
+    return in_library([&](const ClassEntry& entry) {
+      return ends_with_scope(
+          entry.declaration->canonical_identity, spelling);
     });
   }
 
@@ -164,11 +172,10 @@ void assign_class_identities(
       if (!import.name.empty() && import.name != spelling) {
         continue;
       }
-      auto candidates = matching([&](const ClassEntry& entry) {
-        return entry.library == owner.library
-            && ends_with_scope(
-                entry.declaration->canonical_identity,
-                import.package + "::" + std::string{spelling});
+      auto candidates = in_library([&](const ClassEntry& entry) {
+        return ends_with_scope(
+            entry.declaration->canonical_identity,
+            import.package + "::" + std::string{spelling});
       });
       imported.insert(
           imported.end(), candidates.begin(), candidates.end());
@@ -832,7 +839,7 @@ bool resolve_systemverilog_classes(
         prefix,
         library,
         declaration.compilation_unit_identity,
-        nullptr,
+        &declaration.compilation_unit_imports,
         entries);
   }
 

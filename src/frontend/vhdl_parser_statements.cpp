@@ -959,6 +959,24 @@ std::optional<Statement> VhdlParser::parse_assignment(bool concurrent) {
          "FSIM-VHDL-PARSE-029");
   statement.span = span_from(start, previous());
   if (!aggregate_targets.empty()) {
+    // An aggregate target may not name the same object more than once
+    // (IEEE 1076-2008 10.5.2.1, 10.6.2.1).
+    for (std::size_t first { }; first < aggregate_targets.size(); ++first) {
+      for (auto second = first + 1U; second < aggregate_targets.size();
+           ++second) {
+        const auto& left = aggregate_targets[first];
+        const auto& right = aggregate_targets[second];
+        if (left.kind == ExpressionKind::Identifier
+            && right.kind == ExpressionKind::Identifier
+            && detail::ascii_lower(left.text)
+                == detail::ascii_lower(right.text)) {
+          error(start, "FSIM-VHDL-SEM-120",
+              "an aggregate assignment target names '" + right.text
+                  + "' more than once");
+          return statement;
+        }
+      }
+    }
     if (auto split = split_vhdl_aggregate_assignment(
             statement, aggregate_targets)) {
       return split;

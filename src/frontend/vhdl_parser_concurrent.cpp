@@ -1240,6 +1240,11 @@ Process VhdlParser::parse_process(
   process.name = label ? vhdl_name(label->text) : std::string{};
 
   if (match(TokenKind::LeftParen)) {
+    if (at(TokenKind::RightParen)) {
+      // A sensitivity list names at least one signal (IEEE 1076-2008 11.3).
+      error(current(), "FSIM-VHDL-PARSE-302",
+          "a VHDL process sensitivity list cannot be empty");
+    }
     while (!at_end() && !at(TokenKind::RightParen)) {
       auto expression = parse_expression();
       const bool identifier =
