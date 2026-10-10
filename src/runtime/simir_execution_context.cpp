@@ -1313,7 +1313,8 @@ Interpreter::Impl::ExecutionContext::signal_last_event(const SignalId signal) co
     const auto& event = owner.signal_events[signal];
     return event
         ? owner.scheduler.now() - event->first
-        : std::numeric_limits<SimulationTick>::max();
+        : static_cast<SimulationTick>(
+              std::numeric_limits<std::int64_t>::max());
 }
 
 [[nodiscard]] bool

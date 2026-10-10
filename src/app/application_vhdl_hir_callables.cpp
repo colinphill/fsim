@@ -35,6 +35,7 @@ namespace fsim::app::application_detail {
     profile.function = true;
     profile.pure = input.pure;
     profile.defined = input.defined;
+    profile.specification_lexemes = input.vhdl_specification_lexemes;
     profile.return_type = result_type;
     std::vector<semantic::DeclarationId> children;
     if (!input.vhdl_return_identifier.empty()) {
@@ -152,6 +153,7 @@ namespace fsim::app::application_detail {
     profile.function = false;
     profile.pure = false;
     profile.defined = input.defined;
+    profile.specification_lexemes = input.vhdl_specification_lexemes;
     for (const auto& argument : input.arguments) {
         profile.formals.push_back(add_procedure_argument(
             argument, procedure_scope, declaration_origin));

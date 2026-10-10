@@ -977,7 +977,11 @@ private:
         const auto numeric_class = [](const OperandClass kind) {
             return kind == OperandClass::integer || kind == OperandClass::floating;
         };
+        // The bounds of an integer or floating type definition need only
+        // be of some integer or floating type (IEEE 1076-1993 3.1.2, 3.1.4).
         const auto mismatch = left.kind != right.kind
+            || (!scalar_definition && left.kind == OperandClass::enumeration
+                && roots_conflict(left.root, right.root))
             || (scalar_definition && !numeric_class(left.kind));
         if (mismatch) {
             report("FSIM-ELAB-VHRANGE-001",
@@ -1772,6 +1776,31 @@ private:
                 }
                 return subtype_operand_type(subtype, depth + 1U);
             }
+            // T'LEFT, T'RIGHT, T'LOW and T'HIGH of a scalar type mark have
+            // the type of T (IEEE 1076-1993 14.1).
+            if ((value.text == "'left" || value.text == "'right"
+                    || value.text == "'low" || value.text == "'high")
+                && value.operands.size() == 1U) {
+                const auto prefix = specialization_.find_expression(
+                    value.operands.front());
+                if (prefix && prefix->vhdl != nullptr
+                    && prefix->vhdl->kind == Kind::name) {
+                    if (const auto type = named_type(
+                            prefix->vhdl->text, value.scope)) {
+                        SubtypeIndication subtype;
+                        subtype.type_mark.spelling = prefix->vhdl->text;
+                        subtype.type_mark.target = *type;
+                        const auto result
+                            = subtype_operand_type(subtype, depth + 1U);
+                        if (result.kind == OperandClass::enumeration
+                            || result.kind == OperandClass::integer
+                            || result.kind == OperandClass::physical
+                            || result.kind == OperandClass::floating) {
+                            return result;
+                        }
+                    }
+                }
+            }
             return { };
         case Kind::unary:
             if (value.operands.size() == 1U
@@ -2362,6 +2391,17 @@ private:
     // its use in a sensitivity list are errors (IEEE 1076-1993 1.1.1.2).
     [[nodiscard]] bool out_port_name(const semantic::ExpressionId id) const
     {
+        return port_name(id, semantic::vhdl::Direction::output);
+    }
+
+    [[nodiscard]] bool linkage_port_name(const semantic::ExpressionId id) const
+    {
+        return port_name(id, semantic::vhdl::Direction::inout, true);
+    }
+
+    [[nodiscard]] bool port_name(const semantic::ExpressionId id,
+        const semantic::vhdl::Direction direction, const bool linkage = false) const
+    {
         const auto prefix = specialization_.find_expression(id);
         if (!prefix || prefix->vhdl == nullptr || !prefix->vhdl->referenced_name) {
             return false;
@@ -2376,7 +2416,8 @@ private:
             : std::nullopt;
         return declaration && declaration->vhdl != nullptr
             && declaration->vhdl->form == semantic::vhdl::DeclarationForm::port
-            && declaration->vhdl->direction == semantic::vhdl::Direction::output;
+            && declaration->vhdl->direction == direction
+            && (!linkage || declaration->vhdl->linkage);
     }
 
     [[nodiscard]] bool before_2008() const
@@ -2387,7 +2428,7 @@ private:
 
     void validate_out_port_attribute(const semantic::vhdl::Expression& expression)
     {
-        if (!before_2008() || expression.kind != semantic::vhdl::ExpressionKind::call
+        if (expression.kind != semantic::vhdl::ExpressionKind::call
             || expression.operands.empty()) {
             return;
         }
@@ -2399,7 +2440,16 @@ private:
             })) {
             return;
         }
-        if (out_port_name(expression.operands.front())) {
+        // The value of a linkage port is not read, including through its
+        // signal attributes (IEEE 1076-1993 4.3.2).
+        if (linkage_port_name(expression.operands.front())) {
+            report("FSIM-ELAB-VHPORT-003",
+                "the attribute " + expression.text
+                    + " of a port of mode linkage cannot be read",
+                expression.source);
+            return;
+        }
+        if (before_2008() && out_port_name(expression.operands.front())) {
             report("FSIM-ELAB-VHPORT-003",
                 "the attribute " + expression.text
                     + " of a port of mode out cannot be read before VHDL-2008",
@@ -3609,6 +3659,11 @@ private:
                     && index->vhdl->kind == semantic::vhdl::ExpressionKind::binary
                     && (index->vhdl->text == "to" || index->vhdl->text == "downto")) {
                     validate_slice_prefix(found->vhdl->operands.front(), found->vhdl->source);
+                    if (index->vhdl->operands.size() == 2U) {
+                        validate_slice_bounds(found->vhdl->operands.front(),
+                            index->vhdl->operands[0], index->vhdl->operands[1],
+                            found->vhdl->source);
+                    }
                 }
                 if (!index || index->vhdl == nullptr
                     || (index->vhdl->kind == semantic::vhdl::ExpressionKind::binary
@@ -3931,6 +3986,67 @@ private:
             || type.kind == OperandClass::record) {
             report("FSIM-ELAB-VHARRAYSEL-005",
                 "a VHDL slice requires a one-dimensional array prefix", source);
+        }
+    }
+
+    // IEEE 1076-1993 6.5: the bounds of a slice's discrete range have one
+    // type, the index type of the prefix.
+    void validate_slice_bounds(const semantic::ExpressionId prefix_id,
+        const semantic::ExpressionId left_id, const semantic::ExpressionId right_id,
+        const semantic::SourceSpanId source)
+    {
+        const auto left = operand_type(left_id);
+        const auto right = operand_type(right_id);
+        const auto known = [](const OperandType& type) {
+            return type.kind != OperandClass::unknown;
+        };
+        if (known(left) && known(right)
+            && (left.kind != right.kind || roots_conflict(left.root, right.root))) {
+            report("FSIM-ELAB-VHRANGE-001",
+                "the bounds of a VHDL range must have the same type", source);
+            return;
+        }
+        const auto prefix = specialization_.find_expression(prefix_id);
+        if (!prefix || prefix->vhdl == nullptr
+            || prefix->vhdl->kind != semantic::vhdl::ExpressionKind::name
+            || !prefix->vhdl->referenced_name || !prefix->vhdl->referenced_name->selected) {
+            return;
+        }
+        const auto declaration = specialization_.find_declaration(
+            *prefix->vhdl->referenced_name->selected);
+        if (!declaration || declaration->vhdl == nullptr || !declaration->vhdl->subtype) {
+            return;
+        }
+        const auto* array = root_definition(*declaration->vhdl->subtype);
+        if (array == nullptr || array->form != TypeForm::array
+            || array->array_dimensions.size() != 1U) {
+            return;
+        }
+        const auto& index_name = array->array_dimensions.front().index_subtype;
+        const auto index_declaration = index_name.selected
+            ? specialization_.find_declaration(*index_name.selected)
+            : std::nullopt;
+        if (!index_declaration || index_declaration->vhdl == nullptr
+            || !index_declaration->vhdl->declared_type) {
+            return;
+        }
+        SubtypeIndication index;
+        index.type_mark.spelling = index_name.spelling;
+        index.type_mark.target = *index_declaration->vhdl->declared_type;
+        const auto index_type = subtype_operand_type(index, 0U);
+        if (index_type.kind != OperandClass::integer
+            && index_type.kind != OperandClass::enumeration) {
+            return;
+        }
+        for (const auto& bound : { left, right }) {
+            if (known(bound) && known(index_type)
+                && (bound.kind != index_type.kind
+                    || roots_conflict(bound.root, index_type.root))) {
+                report("FSIM-ELAB-VHRANGE-001",
+                    "a VHDL slice range must have the index type of its prefix",
+                    source);
+                return;
+            }
         }
     }
 
@@ -4840,6 +4956,20 @@ private:
         }
         std::unordered_set<std::uint32_t> visiting;
         const auto prefix_profile = profile(*prefix, visiting);
+        // Only an array attribute takes a dimension argument; 'LEFT, 'RIGHT,
+        // 'LOW and 'HIGH of a scalar have none (IEEE 1076-1993 14.1).
+        if (expression.operands.size() == 2U
+            && (prefix_profile.kind == ProfileKind::scalar
+                || prefix_profile.kind == ProfileKind::integer
+                || prefix_profile.kind == ProfileKind::enumeration)
+            && (expression.text == "'left" || expression.text == "'right"
+                || expression.text == "'low" || expression.text == "'high")) {
+            report("FSIM-ELAB-VHATTR-015",
+                "the scalar attribute " + expression.text
+                    + " does not take an argument",
+                expression.source);
+            return;
+        }
         if (prefix_profile.kind == ProfileKind::unknown
             || (prefix_profile.kind != ProfileKind::array
                 && prefix_profile.kind != ProfileKind::record)) {
@@ -5638,6 +5768,18 @@ private:
                         break;
                     }
                 }
+                if (statement.loop_initial && statement.loop_limit) {
+                    const auto left = operand_type(*statement.loop_initial);
+                    const auto right = operand_type(*statement.loop_limit);
+                    if (left.kind != OperandClass::unknown
+                        && right.kind != OperandClass::unknown
+                        && (left.kind != right.kind
+                            || roots_conflict(left.root, right.root))) {
+                        report("FSIM-ELAB-VHRANGE-001",
+                            "the bounds of a VHDL range must have the same type",
+                            statement.source);
+                    }
+                }
             }
             if (statement.kind
                     == semantic::vhdl::StatementKind::signal_assignment
@@ -5727,6 +5869,37 @@ private:
                 }
             }
         }
+        // A linkage port is read or updated only as an actual of a port
+        // association; its signal attributes are checked separately (IEEE
+        // 1076-1993 4.3.2).
+        std::unordered_set<std::uint32_t> linkage_uses;
+        for (const auto& instance : specialization_.design().vhdl_hir.instances()) {
+            for (const auto& association : instance.port_map) {
+                if (association.expression) {
+                    linkage_uses.insert(association.expression->value());
+                }
+            }
+        }
+        for (const auto& stored : specialization_.design().vhdl_hir.expressions()) {
+            if (stored.kind == semantic::vhdl::ExpressionKind::call
+                && stored.text.starts_with('\'') && !stored.operands.empty()) {
+                linkage_uses.insert(stored.operands.front().value());
+            }
+        }
+        for (const auto& stored : specialization_.design().vhdl_hir.expressions()) {
+            const auto effective = specialization_.find_expression(stored.id);
+            if (!effective || effective->vhdl == nullptr
+                || effective->vhdl->kind != semantic::vhdl::ExpressionKind::name
+                || !selected_scope(effective->vhdl->scope)
+                || linkage_uses.contains(stored.id.value())) {
+                continue;
+            }
+            if (linkage_port_name(stored.id)) {
+                report("FSIM-ELAB-VHPORT-004",
+                    "a port of mode linkage cannot be read or updated",
+                    effective->vhdl->source);
+            }
+        }
         // Index expressions that are the prefix of another index: a name
         // with several indices (`k(5,5)`) is retained as nested indices.
         std::unordered_set<std::uint32_t> inner_indices;
@@ -5749,6 +5922,12 @@ private:
             if (expression.kind == semantic::vhdl::ExpressionKind::index
                 && !inner_indices.contains(expression.id.value())) {
                 validate_index_chain(expression.id);
+            }
+            if (expression.kind == semantic::vhdl::ExpressionKind::slice
+                && expression.operands.size() == 3U) {
+                validate_slice_bounds(expression.operands[0],
+                    expression.operands[1], expression.operands[2],
+                    expression.source);
             }
             if (architecture_.standard != "2019"
                 && expression.kind

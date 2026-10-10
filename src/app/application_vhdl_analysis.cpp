@@ -1165,8 +1165,11 @@ void validate_vhdl_port_association_modes(
         if (component == architecture.vhdl_component_declarations.end()) {
           continue;
         }
+        // A linkage formal accepts an actual of any mode (IEEE
+        // 1076-1993 1.1.1.2).
         for (const auto& port : component->ports) {
-          formals.emplace_back(lower(port.name), port.direction);
+          formals.emplace_back(lower(port.name),
+              port.vhdl_linkage ? PortDirection::Unknown : port.direction);
         }
       } else if (!instance.vhdl_configuration_instance) {
         auto name = std::string_view { instance.unit_name };
@@ -1177,7 +1180,8 @@ void validate_vhdl_port_association_modes(
           continue;
         }
         for (const auto& port : target->ports) {
-          formals.emplace_back(lower(port.name), port.direction);
+          formals.emplace_back(lower(port.name),
+              port.vhdl_linkage ? PortDirection::Unknown : port.direction);
         }
       } else {
         continue;

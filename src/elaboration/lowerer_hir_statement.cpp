@@ -862,6 +862,11 @@ bool Lowerer::lower_hir_statements(
             if (record && record->systemverilog != nullptr) {
                 const auto origin = hir_source_span(
                     record->systemverilog->source);
+                const auto task = record->systemverilog->kind
+                            == semantic::sv::StatementKind::task_call
+                        && detail.empty()
+                    ? "; task '" + record->systemverilog->task.spelling + "'"
+                    : std::string { };
                 report(
                     "FSIM-ELAB-HIR-001",
                     "compiled SystemVerilog HIR statement "
@@ -870,7 +875,7 @@ bool Lowerer::lower_hir_statements(
                             record->systemverilog->kind))
                         + " at source line "
                         + std::to_string(origin.begin.line)
-                        + " could not be lowered" + detail,
+                        + " could not be lowered" + detail + task,
                     origin);
             } else if (record && record->vhdl != nullptr) {
                 const auto origin = hir_source_span(record->vhdl->source);

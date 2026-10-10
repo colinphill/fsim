@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "class_expression_resolution_internal.hpp"
+#include <array>
 
 #include <algorithm>
 #include <cctype>
@@ -961,6 +962,31 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
         return;
       }
     }
+    if (receiver_type && !class_identity(*receiver_type)
+        && statement.task_arguments.empty()) {
+      // A built-in array method without arguments may omit its parentheses
+      // (IEEE 1800-2017 7.10.2, 7.12, 13.4.1): `q.delete;`, `a.sort;`.
+      static constexpr std::array argument_free_methods{
+          std::string_view{"delete"}, std::string_view{"reverse"},
+          std::string_view{"sort"}, std::string_view{"rsort"},
+          std::string_view{"shuffle"}, std::string_view{"pop_front"},
+          std::string_view{"pop_back"}};
+      const auto name = std::string_view{statement.task_name}.substr(
+          dot + 1U);
+      if (std::ranges::find(argument_free_methods, name)
+          != argument_free_methods.end()) {
+        Expression call{ExpressionKind::Call, "." + std::string{name}, {},
+            statement.span};
+        call.operands.push_back(Expression{ExpressionKind::Identifier,
+            statement.task_name.substr(0, dot), {}, statement.span});
+        resolve_expression(call, scope);
+        statement.kind = StatementKind::ContainerMethod;
+        statement.value = std::move(call);
+        statement.task_name.clear();
+        statement.task_argument_names.clear();
+        return;
+      }
+    }
     if (receiver_type && class_identity(*receiver_type)) {
       const auto name = statement.task_name.substr(dot + 1U);
       if (name == "srandom" && statement.task_arguments.size() == 1U) {
@@ -982,11 +1008,17 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
             ? SystemVerilogClassMethodKind::Function
             : SystemVerilogClassMethodKind::Task;
       }
+      // The built-in randomization methods are functions too (IEEE
+      // 1800-2017 18.6.1, 18.8, 18.9, 18.13).
+      const bool builtin_function = name == "randomize"
+          || name == "rand_mode" || name == "constraint_mode"
+          || name == "get_randstate" || name == "set_randstate";
       if (kind == SystemVerilogClassMethodKind::Function
-          && scope.class_owner == nullptr
-          && !find_methods(*class_identity(*receiver_type), name,
-                  SystemVerilogClassMethodKind::Function)
-                  .empty()) {
+          && (builtin_function
+              || (scope.class_owner == nullptr
+                  && !find_methods(*class_identity(*receiver_type), name,
+                      SystemVerilogClassMethodKind::Function)
+                      .empty()))) {
         // A function method called as a statement discards its result
         // (IEEE 1800-2017 13.4.1); outside class methods it lowers as an
         // expression statement. Class method bodies keep the task form,

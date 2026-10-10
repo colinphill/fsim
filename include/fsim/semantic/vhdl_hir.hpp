@@ -564,6 +564,9 @@ struct CallableProfile {
     std::optional<SubtypeIndication> return_type;
     std::optional<DeclarationId> return_identifier;
     std::vector<DeclarationId> formals;
+    // Case-folded lexical elements of the specification (IEEE 1076-1993
+    // 2.7 conformance); empty when unknown.
+    std::string specification_lexemes;
 };
 
 struct ComponentProfile {
@@ -651,6 +654,8 @@ struct Declaration {
     std::optional<ExpressionId> file_open_kind;
     ObjectClass object_class { ObjectClass::constant };
     Direction direction { Direction::unknown };
+    // A port of mode linkage (its direction is inout).
+    bool linkage { };
     bool shared { };
     bool local { };
     // Present for an alias declaration. Protected method aliases are untyped,

@@ -414,6 +414,9 @@ struct ProcedureDeclaration {
     std::vector<Statement> statements;
     Language language { Language::Vhdl2008 };
     bool defined { true };
+    // The lexical elements of the specification from its designator,
+    // case-folded, for conformance (IEEE 1076-1993 2.7).
+    std::string vhdl_specification_lexemes;
     // Nonempty only for an elaborated generic-subprogram instance.
     std::string specialization_identity;
     SourceSpan span;

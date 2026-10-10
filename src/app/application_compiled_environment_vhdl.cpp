@@ -230,11 +230,19 @@ namespace {
     }
 
     bool callable_names_conform(const semantic::CompiledDesign& design,
-        const vh::Declaration& specification, const vh::Declaration& body)
+        const vh::Declaration& specification, const vh::Declaration& body,
+        const bool lexical)
     {
         const auto& a = *specification.callable;
         const auto& b = *body.callable;
         if (a.pure != b.pure || a.formals.size() != b.formals.size()) {
+            return false;
+        }
+        // Before VHDL-2008 the specifications are formed by the same
+        // sequence of lexical elements (IEEE 1076-1993 2.7).
+        if (lexical && !a.specification_lexemes.empty()
+            && !b.specification_lexemes.empty()
+            && a.specification_lexemes != b.specification_lexemes) {
             return false;
         }
         for (std::size_t index = 0; index < a.formals.size(); ++index) {
@@ -260,7 +268,8 @@ namespace {
             body = declaration(design, resolution.candidates.front().body);
         }
         if (body == nullptr || !body->callable
-            || !callable_names_conform(design, specification, *body)) {
+            || !callable_names_conform(design, specification, *body,
+                package.standard < std::string_view { "2008" })) {
             diagnostics.error("FSIM-FE-VHDECL-004",
                 "VHDL package subprogram '" + specification.name
                     + "' has no unique conforming body",

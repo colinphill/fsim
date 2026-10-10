@@ -240,6 +240,7 @@ void VhdlParser::parse_vhdl_component_ports(
         "FSIM-VHDL-PARSE-222");
 
     PortDirection direction = PortDirection::Unknown;
+    bool linkage { };
     std::optional<VhdlModeViewIndication> mode_view;
     Type type;
     if (match_keyword("in", true)) {
@@ -252,6 +253,7 @@ void VhdlParser::parse_vhdl_component_ports(
       direction = PortDirection::Buffer;
     } else if (match_keyword("linkage", true)) {
       direction = PortDirection::Inout;
+      linkage = true;
     } else if (match_keyword("view", true)) {
       auto parsed = parse_vhdl_mode_view_indication(previous());
       type = std::move(parsed.type);
@@ -309,6 +311,7 @@ void VhdlParser::parse_vhdl_component_ports(
               default_value,
               span_from(name, previous()),
               mode_view});
+      declaration.ports.back().vhdl_linkage = linkage;
     }
     if (!match(TokenKind::Semicolon)
         && !at(TokenKind::RightParen)) {

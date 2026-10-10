@@ -12,7 +12,9 @@ template <typename Owner>
   const auto& transaction = owner.signal_transactions[signal];
   return transaction
       ? owner.scheduler.now() - transaction->first
-      : std::numeric_limits<SimulationTick>::max();
+      // Never active: TIME'HIGH (IEEE 1076-2008 16.2.4).
+      : static_cast<SimulationTick>(
+            std::numeric_limits<std::int64_t>::max());
 }
 
 template <typename Owner>

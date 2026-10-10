@@ -837,7 +837,8 @@ ProcessExecutionContext::signal_last_value_logic9_word(SignalId) const
 
 [[nodiscard]] SimulationTick ProcessExecutionContext::signal_last_event(SignalId) const
 {
-    return std::numeric_limits<SimulationTick>::max();
+    return static_cast<SimulationTick>(
+        std::numeric_limits<std::int64_t>::max());
 }
 
 [[nodiscard]] bool ProcessExecutionContext::signal_active(SignalId) const
@@ -847,7 +848,8 @@ ProcessExecutionContext::signal_last_value_logic9_word(SignalId) const
 
 [[nodiscard]] SimulationTick ProcessExecutionContext::signal_last_active(SignalId) const
 {
-    return std::numeric_limits<SimulationTick>::max();
+    return static_cast<SimulationTick>(
+        std::numeric_limits<std::int64_t>::max());
 }
 
 [[nodiscard]] bool ProcessExecutionContext::signal_driving(SignalId) const

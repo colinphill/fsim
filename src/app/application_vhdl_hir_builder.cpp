@@ -178,6 +178,7 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
         vh::ObjectClass::signal,
         vhdl_direction(input.direction),
         input.default_value);
+    declaration(id).linkage = input.vhdl_linkage;
     attach_interface_view(id, input, scope);
     return id;
 }

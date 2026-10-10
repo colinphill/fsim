@@ -853,6 +853,9 @@ struct SignalDeclaration {
     // Present only for a VHDL-2019 view-based interface declaration. The
     // scalar direction remains Unknown because each leaf owns its direction.
     std::optional<VhdlModeViewIndication> vhdl_mode_view;
+    // A VHDL port of mode linkage, which connects like inout but is never
+    // read or updated (IEEE 1076-2008 6.5.2).
+    bool vhdl_linkage { };
 
     SignalDeclaration() = default;
     SignalDeclaration(
@@ -1144,6 +1147,8 @@ struct VhdlComponentPort {
     std::optional<Expression> default_value;
     SourceSpan span;
     std::optional<VhdlModeViewIndication> vhdl_mode_view;
+    // A port of mode linkage; its direction is inout.
+    bool vhdl_linkage { };
 };
 
 enum class ParameterKind {
@@ -1745,6 +1750,9 @@ struct FunctionDeclaration {
     Language language { Language::SystemVerilog2017 };
     bool pure { };
     bool defined { true };
+    // The lexical elements of a VHDL subprogram specification from its
+    // designator, case-folded, for conformance (IEEE 1076-1993 2.7).
+    std::string vhdl_specification_lexemes;
     // Nonempty only for an elaborated generic-subprogram instance.
     std::string specialization_identity;
     SourceSpan span;

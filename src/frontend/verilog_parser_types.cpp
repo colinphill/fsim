@@ -1156,16 +1156,18 @@ bool VerilogParser::parse_optional_container_dimension(Type& type)
                 "']' after associative-array index type",
                 "FSIM-SV-PARSE-157");
         } else if (at(TokenKind::Star)) {
-            error(
-                current(),
-                "FSIM-SV-SEM-078",
-                "wildcard associative-array indices are not supported");
+            // A wildcard index takes integral values of any width, compared
+            // numerically (IEEE 1800-2017 7.8.1); keys are held in 64
+            // unsigned bits.
             (void)advance();
             expect(
                 TokenKind::RightBracket,
                 "']' after associative-array index type",
                 "FSIM-SV-PARSE-157");
-            return true;
+            container.kind = SystemVerilogContainerKind::AssociativeArray;
+            container.associative_index_type = std::make_shared<Type>(
+                ValueDomain::Bit2, "bit", PackedRange { 63, 0, true },
+                false);
         } else {
             auto left = parse_expression();
             if (match(TokenKind::Colon)) {
@@ -1228,6 +1230,31 @@ bool VerilogParser::parse_optional_container_dimension(Type& type)
                     index_type.named_type = left.text;
                     index_type.named_type_span = left.span;
                     container.associative_index_type = std::make_shared<Type>(std::move(index_type));
+                } else if (left.kind != ExpressionKind::IntegerLiteral
+                    && left.kind != ExpressionKind::LogicLiteral) {
+                    // A constant size expression `[N + 1]` is `[0:N]`
+                    // (IEEE 1800-2017 7.4.2); specialization evaluates it.
+                    container.kind = SystemVerilogContainerKind::StaticArray;
+                    const auto size_span = left.span;
+                    container.static_range_expressions.push_back(
+                        PackedRangeExpression {
+                            Expression {
+                                ExpressionKind::IntegerLiteral,
+                                "0",
+                                { },
+                                size_span },
+                            Expression {
+                                ExpressionKind::Binary,
+                                "-",
+                                { std::move(left),
+                                    Expression {
+                                        ExpressionKind::IntegerLiteral,
+                                        "1",
+                                        { },
+                                        size_span } },
+                                size_span },
+                            cover(start.span, previous().span),
+                            std::nullopt });
                 } else {
                     error(
                         start,

@@ -562,7 +562,8 @@ void Interpreter::Impl::execute(ProcessId id)
                     const auto& event = signal_events[op.signal];
                     const auto elapsed = event
                         ? scheduler.now() - event->first
-                        : std::numeric_limits<SimulationTick>::max();
+                        : static_cast<SimulationTick>(
+                              std::numeric_limits<std::int64_t>::max());
                     get_register(process, op.destination) = PackedLogic4::from_aval_bval(64, elapsed, 0);
                     ++process.pc;
                 } else if constexpr (

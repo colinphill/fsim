@@ -5311,6 +5311,14 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
                       << record->systemverilog->operands.size()
                       << " width=" << expected_width
                       << " retry=" << hierarchical_reference_retry_ << '\n';
+        } else if (record && record->vhdl != nullptr) {
+            std::cerr << "[fsim-hir-lower] vhdl-expression-failure id="
+                      << expression_id.value() << " kind="
+                      << static_cast<int>(record->vhdl->kind)
+                      << " text=" << record->vhdl->text
+                      << " operands=" << record->vhdl->operands.size()
+                      << " type=" << record->vhdl->nominal_type
+                      << " width=" << expected_width << '\n';
         }
     }
     return result;
@@ -8265,40 +8273,59 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         && expression->vhdl->decoded_string
         && !expression->vhdl->decoded_string->empty()) {
         auto decoded = *expression->vhdl->decoded_string;
-        std::ranges::transform(
-            decoded,
-            decoded.begin(),
-            [](const char value) {
-                return static_cast<char>(
-                    std::toupper(static_cast<unsigned char>(value)));
-            });
-        if (!std::ranges::all_of(
+        if (expected_width == 8U * decoded.size()) {
+            // A string literal of a one-dimensional array of CHARACTER
+            // (IEEE 1076-2008 9.3.2) holds each element's position in an
+            // 8-bit field, the leftmost element most significant.
+            std::string bits;
+            bits.reserve(expected_width);
+            for (const auto value : decoded) {
+                const auto position = static_cast<unsigned char>(value);
+                for (int bit = 7; bit >= 0; --bit) {
+                    bits.push_back(((position >> bit) & 1U) != 0U ? '1' : '0');
+                }
+            }
+            const auto destination = allocate_register(
+                expected_width, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(LoadConstant {
+                destination, PackedLogic4::from_msb_string(bits) });
+            result = destination;
+        } else {
+            std::ranges::transform(
+                decoded,
+                decoded.begin(),
+                [](const char value) {
+                    return static_cast<char>(
+                        std::toupper(static_cast<unsigned char>(value)));
+                });
+            if (!std::ranges::all_of(
+                    decoded,
+                    [](const char value) {
+                        return value == 'U' || value == 'X'
+                            || value == '0' || value == '1'
+                            || value == 'Z' || value == 'W'
+                            || value == 'L' || value == 'H'
+                            || value == '-';
+                    })) {
+                return std::nullopt;
+            }
+            const auto two_state = std::ranges::all_of(
                 decoded,
                 [](const char value) {
-                    return value == 'U' || value == 'X'
-                        || value == '0' || value == '1'
-                        || value == 'Z' || value == 'W'
-                        || value == 'L' || value == 'H'
-                        || value == '-';
-                })) {
-            return std::nullopt;
-        }
-        const auto two_state = std::ranges::all_of(
-            decoded,
-            [](const char value) {
-                return value == '0' || value == '1';
+                    return value == '0' || value == '1';
+                });
+            const auto destination = allocate_register(
+                decoded.size(),
+                two_state ? frontend::ValueDomain::Bit2
+                          : frontend::ValueDomain::Logic9);
+            process_.operations.emplace_back(LoadConstant {
+                destination,
+                two_state
+                    ? PackedLogic4::from_msb_string(decoded)
+                    : PackedLogic4::from_logic9_msb_string(decoded),
             });
-        const auto destination = allocate_register(
-            decoded.size(),
-            two_state ? frontend::ValueDomain::Bit2
-                      : frontend::ValueDomain::Logic9);
-        process_.operations.emplace_back(LoadConstant {
-            destination,
-            two_state
-                ? PackedLogic4::from_msb_string(decoded)
-                : PackedLogic4::from_logic9_msb_string(decoded),
-        });
-        result = destination;
+            result = destination;
+        }
     } else if (expression->vhdl != nullptr
         && expression->vhdl->kind
             == semantic::vhdl::ExpressionKind::call
@@ -8993,6 +9020,63 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             expression->systemverilog->text == "!=",
         });
         result = destination;
+    } else if (expression->systemverilog != nullptr
+        && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::call
+        && expression->systemverilog->text == "$clog2"
+        && expression->systemverilog->operands.size() == 1U
+        && !hir_constant_integer(expression_id)) {
+        // $clog2 of a run-time value (IEEE 1800-2017 20.8.1): the bit length
+        // of x - 1, found by smearing its highest set bit rightward and
+        // counting ones; $clog2(0) is 0.
+        const auto operand = expression->systemverilog->operands.front();
+        const auto width = hir_expression_width(operand, hir_process_scope_);
+        const auto value = width && *width != 0U
+            ? lower_hir_expression(operand, *width)
+            : std::nullopt;
+        if (!value) {
+            return std::nullopt;
+        }
+        const auto operand_width = register_width(*value);
+        const auto constant = [&](const std::size_t constant_width,
+                                  const std::uint64_t constant_value) {
+            const auto destination = allocate_register(
+                constant_width, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(LoadConstant {
+                destination, unsigned_value(constant_value, constant_width) });
+            return destination;
+        };
+        auto smeared = allocate_register(
+            operand_width, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::subtract_unsigned, smeared, *value,
+            constant(operand_width, 1U) });
+        for (std::size_t step = 1U; step < operand_width; step *= 2U) {
+            const auto shifted = allocate_register(
+                operand_width, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(Shift {
+                ShiftOperator::logical_right, shifted, smeared,
+                constant(32U, step) });
+            const auto merged = allocate_register(
+                operand_width, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::bit_or, merged, smeared, shifted });
+            smeared = merged;
+        }
+        const auto count = allocate_register(32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(CountOnes { count, smeared });
+        const auto nonzero = allocate_register(1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::not_equal, nonzero, *value,
+            constant(operand_width, 0U) });
+        const auto destination = allocate_register(
+            32U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::multiply_unsigned, destination, count,
+            resize_register(nonzero, 32U, false) });
+        result = expected_width != 0U && expected_width != 32U
+            ? std::optional { resize_register(destination, expected_width, true) }
+            : std::optional { destination };
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call

@@ -1983,6 +1983,7 @@ tests/fixtures/compliance/analysis_errors/record_addition.vhd
 tests/fixtures/compliance/analysis_errors/run_analysis_error.cmake
 tests/fixtures/compliance/analysis_errors/signed_factor.vhd
 tests/fixtures/compliance/run_compliance.cmake
+tests/fixtures/compliance/sv_array_sizes_and_methods.sv
 tests/fixtures/compliance/sv_class_construction_in_methods.sv
 tests/fixtures/compliance/sv_class_statements.sv
 tests/fixtures/compliance/sv_compilation_unit_declarations.sv
@@ -2017,6 +2018,7 @@ tests/fixtures/compliance/sv_values_and_assertion_items.sv
 tests/fixtures/compliance/verilog_2005_begin_keywords.v
 tests/fixtures/compliance/vhdl_aliases_and_array_formals.vhd
 tests/fixtures/compliance/vhdl_attributes_and_conversions.vhd
+tests/fixtures/compliance/vhdl_character_arrays_and_bounds.vhd
 tests/fixtures/compliance/vhdl_character_type.vhd
 tests/fixtures/compliance/vhdl_composite_constants.vhd
 tests/fixtures/compliance/vhdl_constant_bounds_and_file_images.vhd

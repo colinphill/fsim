@@ -837,6 +837,7 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit)
         expect(TokenKind::Colon, "':' after port name", "FSIM-VHDL-PARSE-004");
 
         PortDirection direction = PortDirection::Unknown;
+        bool linkage { };
         std::optional<VhdlModeViewIndication> mode_view;
         Type type;
         if (match_keyword("in", true)) {
@@ -851,6 +852,7 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit)
             // A linkage port is only associated, never read or updated
             // (IEEE 1076-2008 6.5.2); it connects like an inout port.
             direction = PortDirection::Inout;
+            linkage = true;
         } else if (match_keyword("view", true)) {
             auto parsed = parse_vhdl_mode_view_indication(previous());
             type = std::move(parsed.type);
@@ -898,6 +900,7 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit)
                     { },
                     default_value,
                     mode_view });
+                unit.ports.back().vhdl_linkage = linkage;
             }
         }
 

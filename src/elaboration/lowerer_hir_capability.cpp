@@ -2643,18 +2643,38 @@ bool Lowerer::hir_dynamic_index_supported(
         ? vhdl_array_definition(
               *specialized_hir_unit_, subtype->type_mark.target)
         : nullptr;
+    // A named subtype of a predefined vector (`subtype BYTE is
+    // BIT_VECTOR(0 to 7)`) carries its constraint in the subtype
+    // declaration.
+    auto predefined_spelling = subtype
+        ? std::string_view { subtype->type_mark.spelling }
+        : std::string_view { };
+    bool named_subtype { };
+    if (subtype && array == nullptr) {
+        auto type_id = subtype->type_mark.target;
+        std::unordered_set<std::uint32_t> visited;
+        while (type_id.valid() && visited.insert(type_id.value()).second) {
+            const auto type = specialized_hir_unit_->find_type(type_id);
+            if (!type || type->vhdl == nullptr
+                || (type->vhdl->form != semantic::vhdl::TypeForm::subtype
+                    && type->vhdl->form
+                        != semantic::vhdl::TypeForm::alias)) {
+                break;
+            }
+            predefined_spelling = type->vhdl->base.type_mark.spelling;
+            named_subtype = true;
+            type_id = type->vhdl->base.type_mark.target;
+        }
+    }
     const auto predefined_array = subtype && array == nullptr
-        && subtype->constraints.size() == 1U
-        && (same_hir_identifier(
-                subtype->type_mark.spelling, "bit_vector", true)
+        && (subtype->constraints.size() == 1U || named_subtype)
+        && (same_hir_identifier(predefined_spelling, "bit_vector", true)
             || same_hir_identifier(
-                subtype->type_mark.spelling, "std_logic_vector", true)
+                predefined_spelling, "std_logic_vector", true)
             || same_hir_identifier(
-                subtype->type_mark.spelling, "std_ulogic_vector", true)
-            || same_hir_identifier(
-                subtype->type_mark.spelling, "signed", true)
-            || same_hir_identifier(
-                subtype->type_mark.spelling, "unsigned", true));
+                predefined_spelling, "std_ulogic_vector", true)
+            || same_hir_identifier(predefined_spelling, "signed", true)
+            || same_hir_identifier(predefined_spelling, "unsigned", true));
     const auto element = array != nullptr && array->element_subtype
         ? hir_effective_vhdl_subtype(*array->element_subtype)
         : std::nullopt;
@@ -7557,7 +7577,24 @@ Lowerer::hir_vhdl_attribute_profile(
             terminal_spelling, "natural", true);
         const bool positive = same_hir_identifier(
             terminal_spelling, "positive", true);
-        if (integer || natural || positive) {
+        const bool time = same_hir_identifier(
+            terminal_spelling, "time", true);
+        const bool delay_length = same_hir_identifier(
+            terminal_spelling, "delay_length", true);
+        if (time || delay_length) {
+            // TIME spans the 64-bit femtosecond count; DELAY_LENGTH is its
+            // nonnegative subtype (IEEE 1076-2008 16.3).
+            scalar_range = semantic::vhdl::RangeConstraint {
+                semantic::vhdl::RangeKind::integer,
+                time ? std::numeric_limits<std::int64_t>::min() : 0,
+                std::numeric_limits<std::int64_t>::max(),
+                std::nullopt,
+                std::nullopt,
+                false,
+                false,
+                { },
+            };
+        } else if (integer || natural || positive) {
             const auto first = integer
                 ? vhdl_standard_ == frontend::VhdlStandard::Vhdl2019
                     ? std::numeric_limits<std::int64_t>::min()

@@ -253,6 +253,53 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 30: character arrays, predefined bounds, analysis checks, SV array forms
+
+Fixtures: `vhdl_character_arrays_and_bounds.vhd` and
+`sv_array_sizes_and_methods.sv` (both pass on xsim).
+
+VHDL values:
+- String literals of user arrays of CHARACTER (`type t is array (...) of
+  character`), compared and passed as packed values.
+- `'LEFT`, `'LOW` and `'HIGH` of the predefined REAL and TIME type marks.
+  `'LAST_EVENT` and `'LAST_ACTIVE` before any event return TIME'HIGH. The
+  TIME image of TIME'LOW no longer overflows at coarse resolutions.
+- Dynamic indexing of objects whose subtype is a named subtype of a
+  predefined vector (`subtype byte is bit_vector(0 to 7)`).
+
+VHDL analysis checks:
+- Lexical conformance of subprogram bodies to their declarations before
+  VHDL-2008, both in packages and in one declarative region
+  (`FSIM-VHDL-SEM-125`).
+- Linkage ports: reads and updates outside port associations
+  (`FSIM-ELAB-VHPORT-004`) and signal-attribute reads (`-003`). A linkage
+  formal accepts actuals of any mode.
+- Range bounds of different enumeration types, in array index constraints
+  and loops; slice bounds of a type other than the prefix's index type
+  (`FSIM-ELAB-VHRANGE-001`).
+- Scalar `'LEFT`/`'RIGHT`/`'LOW`/`'HIGH` given an argument
+  (`FSIM-ELAB-VHATTR-015`).
+
+SystemVerilog:
+- `#1step` delays.
+- Built-in array methods without parentheses (`q.delete;`, `a.sort;`).
+- Unpacked dimensions given by a constant size expression (`[N+1]`,
+  `[2**W]`); `**` in static integer evaluation.
+- Wildcard associative arrays (`int a[*]`).
+- Run-time `$clog2`.
+- A class specialization's parameter read through a handle (`obj.P`).
+- `obj.randomize();` and the other built-in randomization methods as
+  statements.
+- Task names in the `FSIM-ELAB-HIR-001` message for task calls that cannot
+  be lowered.
+
+Corpus effect (interpreter): VESTs +40 (3048 to 3084 in w92, plus tc308 and
+tc1076 restored after that run); nvc +1 (546); vhdl-compliance +1 (18);
+ivtest +6 (2069); sv-tests +3 (1280); Verilator `#1step` cases
+(`t_delay_1step`, `t_clocking_input_default`, `t_clocking_input_0_delay`).
+No regressions in nvc, vhdl-compliance, ivtest or sv-tests against r72/w91.
+Verilator was not rerun.
+
 ### Batch 29: subprogram array formals, slice aliases, strings, NBA struct members
 
 Fixtures: `vhdl_aliases_and_array_formals.vhd` and
@@ -1463,7 +1510,14 @@ error, and each exposes an existing gap:
 | SV: nonblocking whole-object writes of unpacked aggregates (`out <= buffer[i]`) and continuous assignment to unpacked structure members | Verilator |
 | SV: `randomize` and constraint blocks | 36 sv-tests cases (`FSIM-SV-CLASS-005`) |
 | VHDL: chained signal attributes (`clk'delayed'last_event`) | 16 VESTs cases (`FSIM-VHDL-PARSE-046`) |
-| SV: UVM `run_test` from source: the phase, objection and report services exist but are only driven through the C++ API | 100 UVM sv-tests |
+| SV: UVM `run_test` from source: the phase, objection and report services exist but are only driven through the C++ API. Lowering `run_test()` fails because the frame of `uvm_root::run_test` is allocated as static and its locals (`l_rs`, `factory`, `test_names`, `phase_runner_proc`, ...) do not initialize; a minimal `uvm_env` test reproduces it (batch 30) | 100 UVM sv-tests |
+| VHDL: general user resolution functions (only `return a or b` / `and` bodies run); plan: a resolver program per resolved signal run in the update phase over the driver values | 28 VESTs + 18 nvc cases (`FSIM-ELAB-VHRESOLVE-002/-004`) |
+| VHDL: REAL objects without an initial value start at 0.0 instead of REAL'LEFT (signals, variables, record and array elements) | nvc record17, default2 |
+| VHDL: names in package-body subprograms are not checked at analysis (the validator selects only entity and architecture scopes) | VESTs tc907-tc909 |
+| VHDL: constant names folded during normalization lose their type, so slice bounds given by constants are not checked against the index type | VESTs tc1125, tc1133 |
+| SV: run-time rise/fall delays on a continuous assignment to a bit or part select (`assign #(d1, d2) o[1] = i`) | 5 ivtest `rise_fall_*` cases |
+| SV: associative-array assignment patterns with a `default:` member, and `foreach` over a `bit [63:0]`-indexed associative array | Verilator `t_assoc_wildcard*` |
+| SV: packed arrays of packed structures (`entry_t [3:0] e;`, `struct packed {...} [15:0]`) | 6 Verilator cases (`FSIM-SV-PARSE-008`) |
 | SV: interface parameters read through a port (`a.PARAM`) | Verilator interface cases |
 | SV hierarchical references (`s.a`) in expressions | ~361 Verilator cases (`FSIM-ELAB-HIR-001` kind 3) |
 | Verilator: parameter defaults, typedefs, class out-of-block methods, `$sformatf` formats | top Verilator causes |

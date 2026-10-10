@@ -1169,6 +1169,40 @@ void Resolver::retain_result_type(
       return std::nullopt;
     }
     if (!match.property) {
+      // A parameter of the object's class specialization, `obj.P`, denotes
+      // its value (IEEE 1800-2017 8.25).
+      if (const auto* owner = find_class(*class_identity(*receiver_type))) {
+        const auto parameter = std::ranges::find_if(
+            owner->parameters, [&](const ParameterDeclaration& candidate) {
+              return candidate.kind == ParameterKind::Value
+                  && candidate.name == member;
+            });
+        if (parameter != owner->parameters.end()) {
+          // The specialization's actual (positional or named), else the
+          // parameter's default.
+          const Expression* value = &parameter->default_value;
+          const auto& actuals = receiver_type->systemverilog_class_parameter_actuals;
+          const auto position = static_cast<std::size_t>(
+              parameter - owner->parameters.begin());
+          for (std::size_t index = 0; index < actuals.size(); ++index) {
+            const auto& actual = actuals[index];
+            if (actual.type_actual) {
+              continue;
+            }
+            if ((actual.name && *actual.name == member)
+                || (!actual.name && index == position)) {
+              value = &actual.value;
+              break;
+            }
+          }
+          if (value->kind != ExpressionKind::Identifier && !value->text.empty()) {
+            const auto span = expression.span;
+            expression = *value;
+            expression.span = span;
+            return resolve_expression(expression, scope);
+          }
+        }
+      }
       const auto method = select_method(
           *class_identity(*receiver_type),
           member,

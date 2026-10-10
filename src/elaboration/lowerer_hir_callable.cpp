@@ -3454,6 +3454,19 @@ Lowerer::hir_vhdl_type_actual(
         result.signed_value = true;
         return result;
     }
+    if (name == "time" || name == "delay_length") {
+        // TIME is a 64-bit physical type (IEEE 1076-2008 5.2.4.2).
+        result.domain = semantic::vhdl::ValueDomain::integer;
+        result.executable_width = 64U;
+        result.integer_storage_width = 64U;
+        result.signed_value = true;
+        return result;
+    }
+    if (name == "real") {
+        result.domain = semantic::vhdl::ValueDomain::bit2;
+        result.executable_width = 64U;
+        return result;
+    }
     if (name == "boolean") {
         result.domain = semantic::vhdl::ValueDomain::boolean;
         result.executable_width = 1U;

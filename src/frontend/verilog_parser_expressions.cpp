@@ -32,6 +32,16 @@ DelayAlternative VerilogParser::parse_verilog_delay_alternative()
         alternative.span = current().span;
         return alternative;
     }
+    if (at(TokenKind::Number) && current().text == "1"
+        && at(TokenKind::Identifier, 1) && current(1).text == "step") {
+        // `#1step` is one unit of the global time precision (IEEE
+        // 1800-2017 14.4), one project tick.
+        advance();
+        advance();
+        alternative.magnitude = 1;
+        alternative.span = span_from(start, previous());
+        return alternative;
+    }
     const bool explicit_time_literal = at(TokenKind::Number)
         && at(TokenKind::Identifier, 1)
         && time_unit_femtoseconds(current(1).text).has_value();

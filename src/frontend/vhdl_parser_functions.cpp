@@ -3,6 +3,66 @@
 
 namespace fsim::frontend {
 
+namespace {
+
+// The case-folded lexical elements of a subprogram specification, used to
+// check that a body conforms to its declaration (IEEE 1076-1993 2.7).
+[[nodiscard]] std::string vhdl_specification_lexemes(
+    const std::vector<Token>& tokens, const std::size_t begin,
+    const std::size_t end)
+{
+  std::string result;
+  for (auto index = begin; index < end && index < tokens.size(); ++index) {
+    if (!result.empty()) {
+      result.push_back('\x1f');
+    }
+    const auto& token = tokens[index];
+    result += token.kind == TokenKind::Identifier
+            || token.kind == TokenKind::StringLiteral
+        ? detail::ascii_lower(token.text)
+        : token.text;
+  }
+  return result;
+}
+
+// A subprogram body whose earlier declaration in the same region has the
+// same designator and formal type marks must repeat its specification's
+// lexical elements before VHDL-2008 (IEEE 1076-1993 2.7).
+template <typename Callable>
+[[nodiscard]] bool vhdl_body_conforms(
+    const std::vector<Callable>& region, const Callable& body)
+{
+  if (!body.defined || body.vhdl_specification_lexemes.empty()) {
+    return true;
+  }
+  const auto same_marks = [&](const Callable& declaration) {
+    if (declaration.arguments.size() != body.arguments.size()) {
+      return false;
+    }
+    for (std::size_t index = 0; index < body.arguments.size(); ++index) {
+      const auto& left = declaration.arguments[index].type;
+      const auto& right = body.arguments[index].type;
+      if (detail::ascii_lower(left.spelling)
+              != detail::ascii_lower(right.spelling)
+          || detail::ascii_lower(left.named_type)
+              != detail::ascii_lower(right.named_type)) {
+        return false;
+      }
+    }
+    return true;
+  };
+  return std::ranges::none_of(region, [&](const Callable& declaration) {
+    return !declaration.defined && declaration.name == body.name
+        && !declaration.vhdl_specification_lexemes.empty()
+        && same_marks(declaration)
+        && declaration.vhdl_specification_lexemes
+            != body.vhdl_specification_lexemes;
+  });
+}
+
+} // namespace
+
+
 bool VhdlParser::vhdl_generic_clause_precedes_subprogram() const {
   const std::size_t first =
       keyword("generic", 0, true) ? 1 : 0;
@@ -163,9 +223,14 @@ void VhdlParser::parse_vhdl_function_item(
       && keyword("is", 1, true)
       && keyword("new", 2, true);
   if (!instance) {
-    unit.functions.push_back(
-        parse_vhdl_function(
-            start, pure, allow_declaration));
+    auto function = parse_vhdl_function(start, pure, allow_declaration);
+    if (vhdl_standard_ < VhdlStandard::Vhdl2008
+        && !vhdl_body_conforms(unit.functions, function)) {
+      error(start, "FSIM-VHDL-SEM-125",
+          "the body of function '" + function.name
+              + "' does not conform to its declaration");
+    }
+    unit.functions.push_back(std::move(function));
     return;
   }
   if (!pure) {
@@ -219,9 +284,14 @@ void VhdlParser::parse_vhdl_procedure_item(
       && keyword("is", 1, true)
       && keyword("new", 2, true);
   if (!instance) {
-    unit.procedures.push_back(
-        parse_vhdl_procedure(
-            start, allow_declaration));
+    auto procedure = parse_vhdl_procedure(start, allow_declaration);
+    if (vhdl_standard_ < VhdlStandard::Vhdl2008
+        && !vhdl_body_conforms(unit.procedures, procedure)) {
+      error(start, "FSIM-VHDL-SEM-125",
+          "the body of procedure '" + procedure.name
+              + "' does not conform to its declaration");
+    }
+    unit.procedures.push_back(std::move(procedure));
     return;
   }
   auto parsed =
@@ -749,6 +819,7 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
   function.language = Language::Vhdl2008;
   function.pure = pure;
   function.automatic = true;
+  const auto specification_start = position();
 
   Token name;
   if (at(TokenKind::StringLiteral)) {
@@ -853,6 +924,8 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
         "std_logic, string, or visible subtype results");
   }
 
+  function.vhdl_specification_lexemes = vhdl_specification_lexemes(
+      tokens_, specification_start, position());
   if (match(TokenKind::Semicolon)) {
     function.defined = false;
     function.span = span_from(start, previous());
@@ -1079,6 +1152,7 @@ ProcedureDeclaration VhdlParser::parse_vhdl_procedure(
   const bool allow_declaration) {
   ProcedureDeclaration procedure;
   procedure.language = Language::Vhdl2008;
+  const auto specification_start = position();
 
   Token name;
   if (at(TokenKind::StringLiteral)) {
@@ -1093,6 +1167,8 @@ ProcedureDeclaration VhdlParser::parse_vhdl_procedure(
     procedure.name = vhdl_name(name.text);
   }
   procedure.arguments = parse_vhdl_procedure_parameters();
+  procedure.vhdl_specification_lexemes = vhdl_specification_lexemes(
+      tokens_, specification_start, position());
 
   if (match(TokenKind::Semicolon)) {
     procedure.defined = false;

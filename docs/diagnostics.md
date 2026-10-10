@@ -961,6 +961,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-SEM-122` | error | A subprogram declared in a package body has no body in that package body (IEEE 1076-2008 4.2.1). |
 | `FSIM-VHDL-SEM-123` | error | The simple name at the end of a VHDL architecture does not repeat its name (IEEE 1076-2008 3.3.1). |
 | `FSIM-VHDL-SEM-124` | error | A VHDL function designator string is not an operator symbol, or an operator function has the wrong number of parameters (IEEE 1076-2008 4.5.2). |
+| `FSIM-VHDL-SEM-125` | error | Before VHDL-2008, a subprogram body's specification does not repeat the lexical elements of its earlier declaration in the same declarative region (IEEE 1076-1993 2.7). |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |
@@ -2138,6 +2139,7 @@ scheduler.
 | `FSIM-ELAB-VHATTR-012` | error | The attribute 'STABLE, 'QUIET, 'TRANSACTION or 'DELAYED is read of a formal signal parameter of a subprogram (IEEE 1076-2008 4.2.2.2). |
 | `FSIM-ELAB-VHATTR-013` | error | 'EVENT of a signal element is supported only for a static index into a whole signal. |
 | `FSIM-ELAB-VHATTR-014` | error | A VHDL attribute declaration names an access or file type (IEEE 1076-2008 6.7). |
+| `FSIM-ELAB-VHATTR-015` | error | The scalar attribute 'LEFT, 'RIGHT, 'LOW or 'HIGH is given an argument (IEEE 1076-1993 14.1). |
 | `FSIM-ELAB-VHBODY-001` | error | A subprogram declared in an entity, architecture, block, process or subprogram declarative part has no body in that declarative part (IEEE 1076-2008 4.2.1). |
 | `FSIM-ELAB-VHCALL-001` | error | No visible function of the called name has formals that the call's positional and named actuals associate one to one, with defaults for the rest (IEEE 1076-2008 9.3.4, 6.5.7.1). |
 | `FSIM-ELAB-VHCALL-002` | error | No visible procedure accepts the actuals of a procedure call, by count, formal name or scalar type (IEEE 1076-2008 4.2.2.1). |
@@ -2469,7 +2471,8 @@ scheduler.
 | `FSIM-ELAB-VHENUMRANGE-004` | error | A locally static value assigned to a constrained VHDL enumeration object lies outside the subtype range. |
 | `FSIM-ELAB-VHPORT-001` | error | A VHDL input-port expression is not a supported locally static value for its contextual formal type, or a nonstatic expression requires VHDL-2008 and an explicitly driven intermediate signal under the selected older revision. |
 | `FSIM-ELAB-VHPORT-002` | error | A VHDL output, buffer, or inout port is associated with an expression that is not a writable signal name. |
-| `FSIM-ELAB-VHPORT-003` | error | A port of mode out is read through a signal attribute or a sensitivity list before VHDL-2008 (IEEE 1076-1993 1.1.1.2). |
+| `FSIM-ELAB-VHPORT-003` | error | A port of mode out is read through a signal attribute or a sensitivity list before VHDL-2008 (IEEE 1076-1993 1.1.1.2), or a port of mode linkage through a signal attribute. |
+| `FSIM-ELAB-VHPORT-004` | error | A port of mode linkage is read or updated other than as the actual of a port association (IEEE 1076-1993 4.3.2). |
 | `FSIM-ELAB-VHVIEW-001` | error | A VHDL view-based interface names no unique visible mode-view declaration during elaboration. |
 | `FSIM-ELAB-VHVIEW-002` | error | A VHDL view-based interface has a recursive composed leaf-direction map. |
 | `FSIM-ELAB-VHVIEW-003` | error | A VHDL view root is invalid or incomplete, or a nested view is incompatible with its record member or array element subtype. |

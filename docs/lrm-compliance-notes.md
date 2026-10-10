@@ -529,3 +529,42 @@ gives fsim's result in each case checked.
   published, applies the member write and writes the object back. Reading at
   publish time is what lets two member writes of one element in one time
   step both take effect.
+
+## Character arrays, predefined bounds and analysis checks (batch 30)
+
+- A VHDL string literal whose context expects 8 bits per character is an
+  array of CHARACTER (a user `array (...) of character` type rather than
+  STRING): each element is held as its character position, the leftmost
+  element most significant. Other string literals keep the bit and
+  STD_ULOGIC element encodings.
+- REAL and TIME type marks are recognized as attribute prefixes without a
+  HIR definition. TIME spans the 64-bit tick count, so TIME'HIGH is
+  `INT64_MAX` ticks; `'LAST_EVENT` and `'LAST_ACTIVE` of a signal that never
+  had an event or transaction return that value rather than the unsigned
+  tick maximum. The TIME image converts ticks to femtoseconds in 128 bits,
+  since TIME'LOW at a ps resolution overflows 64.
+- Lexical conformance (IEEE 1076-1993 2.7) is checked before VHDL-2008
+  only: the parser records the case-folded lexical elements of each
+  subprogram specification from its designator. A body in the same region
+  must repeat them when its formal type marks match a declaration; a
+  package body's subprograms are compared when the package is linked.
+- Linkage ports are parsed as inout with a `linkage` flag. The flag lets
+  the validator reject reads and updates outside port associations and
+  signal-attribute reads, and makes the port-mode association check accept
+  any actual mode for a linkage formal.
+- Constant names are folded to literals during normalization and lose
+  their type there, so the slice range check cannot compare a constant
+  bound's type with the index type (tc1125, tc1133 remain).
+- Range-bound type checks compare enumeration roots only: the bounds of an
+  integer or floating type definition may have different types, and such a
+  definition is retained as a constrained subtype.
+- A wildcard associative-array index (`[*]`) is held in 64 unsigned bits.
+  Associative patterns with a `default:` member, and `foreach` over a
+  `bit [63:0]` index, are not supported yet.
+- A run-time `$clog2` smears the highest set bit of `x - 1` rightward and
+  counts ones; `$clog2(0)` is 0.
+- `obj.randomize();` and the other built-in randomization methods called as
+  statements become expression statements, including inside class methods
+  (the class executor evaluates them). The sv-tests that use them still stop
+  at UVM `run_test`, which fails to lower `uvm_root::run_test`'s static
+  locals (see the gaps queue).

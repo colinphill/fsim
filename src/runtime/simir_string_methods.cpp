@@ -291,10 +291,17 @@ std::string vhdl_time_text(const PackedLogic4& value,
         * std::max<std::uint64_t>(resolution_femtoseconds, 1U);
     const auto& unit = unit_index < units.size() ? units[unit_index]
                                                  : units.front();
-    const auto whole = static_cast<std::uint64_t>(magnitude / unit.second);
+    auto whole = magnitude / unit.second;
     auto remainder = static_cast<std::uint64_t>(magnitude % unit.second);
+    // TIME'LOW and TIME'HIGH in femtoseconds exceed 64 bits at coarser
+    // resolutions.
+    std::string digits;
+    do {
+        digits.insert(digits.begin(), static_cast<char>('0' + whole % 10U));
+        whole /= 10U;
+    } while (whole != 0U);
     std::string text = negative ? "-" : "";
-    text += std::to_string(whole);
+    text += digits;
     if (remainder != 0U) {
         // A value that is not a multiple of the unit is written with the
         // fraction it needs (IEEE 1076-2008 16.4).

@@ -1495,6 +1495,23 @@ std::optional<std::int64_t> evaluate_binary(
         }
         return left >> static_cast<unsigned>(right);
     }
+    if (operation == "**") {
+        if (right < 0) {
+            return std::nullopt;
+        }
+        std::int64_t result = 1;
+        for (std::int64_t step { }; step < right; ++step) {
+            const auto product = checked_multiply(result, left);
+            if (!product) {
+                return std::nullopt;
+            }
+            result = *product;
+            if (result == 0 || result == 1) {
+                break;
+            }
+        }
+        return result;
+    }
     return std::nullopt;
 }
 
