@@ -172,6 +172,20 @@ public:
         std::string_view hierarchy,
         std::size_t order);
 
+    // A VHDL resolver program (IEEE 1076-2008 14.7.3.2): the runtime writes
+    // the driving values of `signal`'s `driver_count` drivers, leftmost
+    // first, to `input` and reads the resolved value from `output` after one
+    // pass of the program.
+    struct HirVhdlResolverProgram {
+        Process process;
+        RegisterId input { };
+        RegisterId output { };
+    };
+    [[nodiscard]] std::optional<HirVhdlResolverProgram>
+    lower_hir_vhdl_resolver_process(SignalId signal,
+        semantic::DeclarationId function, std::size_t driver_count,
+        std::string_view hierarchy);
+
     [[nodiscard]] std::vector<Process> take_generated_processes();
 
     void set_systemverilog_program_owner(
@@ -306,6 +320,12 @@ private:
         bool wait_before_first_execution { };
         bool concurrent_assertion { };
         bool vhdl_guarded_assignment { };
+        struct VhdlResolver {
+            SignalId signal { };
+            semantic::DeclarationId function;
+            std::size_t driver_count { };
+        };
+        std::optional<VhdlResolver> vhdl_resolver;
     };
 
     [[nodiscard]] std::optional<Process> lower_hir_process_body(
@@ -1560,6 +1580,11 @@ private:
         bool string { };
         std::optional<ContainerType> container;
     };
+    // The default value of a VHDL record, array or REAL subtype (IEEE
+    // 1076-2008 6.4.2.3); other scalars return nullopt unless `scalar`.
+    [[nodiscard]] std::optional<PackedLogic4> hir_vhdl_default_value(
+        const semantic::vhdl::SubtypeIndication& subtype, std::size_t width,
+        std::size_t depth = 0U, bool scalar = false) const;
     [[nodiscard]] std::optional<HirCallableType> hir_callable_type(
         semantic::DeclarationId declaration,
         std::size_t contextual_width = 0U) const;
@@ -1859,6 +1884,10 @@ private:
     };
     [[nodiscard]] bool allocate_hir_static_callable_declarations(
         std::size_t frame_index);
+    [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_resolution_call(
+        semantic::DeclarationId function, RegisterId driving_values,
+        std::size_t driver_count, std::size_t element_width);
+    std::optional<std::pair<RegisterId, RegisterId>> hir_vhdl_resolver_registers_;
     std::vector<HirCallableFrame> hir_callable_frames_;
     std::unordered_map<std::string, std::size_t> hir_callable_indices_;
     std::unordered_map<std::string, std::size_t>

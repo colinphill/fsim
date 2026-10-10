@@ -16,6 +16,7 @@ enum class SignalDriverInventoryResolution : std::uint8_t {
     sv_wand,
     sv_wor,
     sv_user_first,
+    vhdl_user_function,
 };
 
 enum class SignalDriverInventoryValueKind : std::uint8_t {

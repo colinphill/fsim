@@ -2409,6 +2409,7 @@ void HierarchyBuilder::validate_process_drivers()
         }
     }
     std::unordered_map<SignalId, std::vector<ProcessDriver>> drivers;
+    std::unordered_map<SignalId, std::vector<ProcessId>> driver_processes;
     for (std::size_t process_index = 0U;
         process_index < design_.process_count(); ++process_index) {
         const auto process = design_.process_view(process_index);
@@ -2468,6 +2469,8 @@ void HierarchyBuilder::validate_process_drivers()
             drivers[signal].push_back(ProcessDriver {
                 std::move(regions), continuous, event_controlled,
                 vhdl_language_standard(process.language_standard()) });
+            driver_processes[signal].push_back(
+                static_cast<ProcessId>(process_index));
         }
     }
     for (SignalId signal = 0;
@@ -2486,6 +2489,7 @@ void HierarchyBuilder::validate_process_drivers()
                 native_resolution(
                     design_.signal_info_.at(signal))));
     }
+    lower_compiled_vhdl_resolvers(driver_processes);
     for (const auto& [signal, process_drivers] : drivers) {
         const auto& info = design_.signal_info_.at(signal);
         const auto boundary_drivers = boundary_driver_paths_.find(signal);

@@ -1212,7 +1212,16 @@ bool Lowerer::initialize_hir_declarations(
             hir_local_registers_.emplace(
                 declaration_id.value(), destination);
         }
-        if (!retained_static && binding->width != 0U) {
+        const auto vhdl_composite_default = declaration->vhdl != nullptr
+                && declaration->vhdl->subtype && !initializer && !vhdl_file
+            ? hir_vhdl_default_value(*declaration->vhdl->subtype,
+                  binding->width)
+            : std::nullopt;
+        if (!retained_static && binding->width != 0U
+            && vhdl_composite_default) {
+            process_.operations.emplace_back(LoadConstant {
+                destination, *vhdl_composite_default });
+        } else if (!retained_static && binding->width != 0U) {
             process_.operations.emplace_back(LoadConstant {
                 destination,
                 vhdl_enumeration_default
@@ -2079,6 +2088,44 @@ std::optional<Process> Lowerer::lower_hir_input_actual(
     return lower_hir_process_body(description, language, hierarchy);
 }
 
+std::optional<Lowerer::HirVhdlResolverProgram>
+Lowerer::lower_hir_vhdl_resolver_process(const SignalId signal,
+    const semantic::DeclarationId function, const std::size_t driver_count,
+    const std::string_view hierarchy)
+{
+    [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
+        *this
+    };
+    const auto declaration = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_declaration(function)
+        : std::nullopt;
+    if (!declaration || declaration->vhdl == nullptr
+        || signal >= design_.signal_info_.size()) {
+        return std::nullopt;
+    }
+    HirProcessDescription description;
+    description.source = declaration->vhdl->source;
+    description.scope = declaration->vhdl->scope;
+    const auto& name = design_.signal_info_[signal].name;
+    description.name = "resolver_"
+        + name.substr(name.find_last_of('.') + 1U);
+    description.kind = frontend::ProcessKind::VhdlProcess;
+    description.vhdl_resolver = HirProcessDescription::VhdlResolver {
+        signal, function, driver_count };
+    hir_vhdl_resolver_registers_.reset();
+    auto process = lower_hir_process_body(
+        description, frontend::Language::Vhdl2008, hierarchy);
+    if (!process || !hir_vhdl_resolver_registers_) {
+        return std::nullopt;
+    }
+    // The runtime runs the program once per resolution; it is never
+    // scheduled itself.
+    process->initialize = false;
+    return HirVhdlResolverProgram { std::move(*process),
+        hir_vhdl_resolver_registers_->first,
+        hir_vhdl_resolver_registers_->second };
+}
+
 std::optional<Process> Lowerer::lower_hir_output_actual(
     const SignalId source,
     const semantic::ExpressionId expression,
@@ -2575,6 +2622,27 @@ std::optional<Process> Lowerer::lower_hir_process_body(
             complete,
             UnknownBranchPolicy::when_false,
         };
+    } else if (description.vhdl_resolver) {
+        const auto& resolver = *description.vhdl_resolver;
+        const auto& signal = design_.signal_info_[resolver.signal];
+        if (resolver.driver_count == 0U || signal.width == 0U
+            || signal.width > std::numeric_limits<std::size_t>::max()
+                / resolver.driver_count) {
+            process_ = { };
+            return std::nullopt;
+        }
+        const auto input = allocate_register(
+            signal.width * resolver.driver_count, signal.source_domain);
+        auto resolved = lower_hir_vhdl_resolution_call(
+            resolver.function, input, resolver.driver_count, signal.width);
+        if (!resolved || register_width(*resolved) != signal.width) {
+            process_ = { };
+            return std::nullopt;
+        }
+        const auto output = allocate_register(
+            signal.width, signal.source_domain);
+        process_.operations.emplace_back(CopyRegister { output, *resolved });
+        hir_vhdl_resolver_registers_ = std::pair { input, output };
     } else if (description.input_actual) {
         const auto destination = *description.input_actual_destination;
         const auto& signal = design_.signal_info_[destination];
@@ -3010,7 +3078,8 @@ std::optional<Process> Lowerer::lower_hir_process_body(
         && process_.static_sensitivity.empty();
     std::optional<InstructionIndex> vhdl_trailing_wait;
     std::vector<Operation> process_termination;
-    if (description.initial || description.final || executes_once) {
+    if (description.initial || description.final || executes_once
+        || description.vhdl_resolver) {
         process_termination.emplace_back(Halt { });
     } else if (waits_before_first_execution
         || description.body_timed_always) {

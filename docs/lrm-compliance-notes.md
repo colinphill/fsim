@@ -568,3 +568,39 @@ gives fsim's result in each case checked.
   (the class executor evaluates them). The sv-tests that use them still stop
   at UVM `run_test`, which fails to lower `uvm_root::run_test`'s static
   locals (see the gaps queue).
+
+## Resolution functions and default values (batch 31)
+
+- A VHDL resolution function other than the `return a or b` / `and` forms
+  makes its signal `ResolutionKind::vhdl_user_function`. After all processes
+  are lowered, `validate_process_drivers` knows each signal's driving
+  processes; a resolver program is then lowered per signal, in the scope
+  that declared the signal (the binding keeps a copy of that
+  specialization). The program calls the function once with a hand-built
+  frame whose formal range is the formal index subtype's low bound up to
+  low + N - 1, from an input register to an output register, and halts.
+- The resolver is not scheduled. `Signal::vhdl_resolver` names its process,
+  registers and driver processes. Resolution of such a signal at commit
+  returns the last resolved value and marks the signal pending; after the
+  update callback's commits, each pending resolver is run (the runtime fills
+  the input register with the driving values, the first driver most
+  significant, resets the program counter, executes the program, and commits
+  the output with `commit`). A driver that has not written yet supplies the
+  signal's declared initial value. At start the resolvers run once and the
+  results become the initial values, without events.
+- A signal without drivers keeps its declared value (no resolver).
+  Guarded `bus`/`register` signals, which disconnect drivers and so change N
+  at run time, and arrays of resolved elements (per-element resolution) are
+  not supported yet.
+- Default values: a VHDL record or array signal or variable without an
+  initial value gets each scalar subelement's leftmost value (integer range
+  left, NATURAL 0, POSITIVE 1, enumeration left, REAL'LEFT), the first record
+  element and the left array element most significant. REAL objects start at
+  REAL'LEFT. REAL subtypes keep their 64-bit packed range as an
+  `array_index` constraint, which does not count as a range constraint here.
+- Physical literals of a user physical type evaluate statically wherever
+  the type is declared (the evaluator searched only the specialization's
+  replaced types). Signal initializers given by a constant of a CHARACTER or
+  REAL subtype, or by a constant with a static packed value, are evaluated.
+- Member names of signals whose subtype is a resolved record subtype follow
+  the subtype to its record definition.

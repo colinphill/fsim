@@ -10,6 +10,8 @@ enum class ResolutionKind : std::uint8_t {
     sv_wand,
     sv_wor,
     sv_user_first,
+    // A VHDL resolution function run as the signal's resolver program.
+    vhdl_user_function,
 };
 
 enum class ValueKind : std::uint8_t {
@@ -37,6 +39,20 @@ struct DriveStrength {
       const DriveStrength&, const DriveStrength&) = default;
 };
 
+/// The program that resolves a VHDL signal with a user resolution function
+/// (IEEE 1076-2008 14.7.3.2). The runtime writes the driving values of
+/// `drivers`, in order and leftmost first, to register `input` of `process`,
+/// runs one pass of the program and takes the effective value from `output`.
+struct VhdlSignalResolver {
+  ProcessId process{};
+  RegisterId input{};
+  RegisterId output{};
+  std::vector<ProcessId> drivers;
+
+  friend bool operator==(
+      const VhdlSignalResolver&, const VhdlSignalResolver&) = default;
+};
+
 struct Signal {
   std::string name;
   PackedLogic4 initial_value;
@@ -50,6 +66,7 @@ struct Signal {
   SystemVerilogScalarKind systemverilog_scalar{
       SystemVerilogScalarKind::None};
   bool event_variable { };
+  std::optional<VhdlSignalResolver> vhdl_resolver;
 
   Signal() = default;
   Signal(

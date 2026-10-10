@@ -1988,6 +1988,15 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<std::uint32_t> signal_writer_counts;
     std::uint64_t signal_writer_revision { };
     std::vector<PackedLogic4> driven_values;
+    // Signals resolved by a VHDL resolution function: their resolver
+    // programs, last resolved values, and the signals whose drivers changed
+    // since their resolver last ran.
+    std::unordered_map<SignalId, VhdlSignalResolver> vhdl_resolvers;
+    std::unordered_map<SignalId, PackedLogic4> vhdl_resolved_values;
+    std::unordered_map<SignalId, PackedLogic4> vhdl_driver_initial_values;
+    mutable std::vector<SignalId> pending_vhdl_resolutions;
+    mutable std::unordered_set<SignalId> pending_vhdl_resolution_set;
+    bool running_vhdl_resolvers { };
     std::vector<DriverTable> driver_values;
     // Certified disjoint owners use this as their raw-driver authority.
     // Their DriverRecord values are restored on cold demotion.
@@ -4958,6 +4967,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     [[nodiscard]] PackedLogic4 resolved_local_driver_value(
         SignalId signal_id,
         const ForcedDriverMapView* override_maps = nullptr) const;
+    [[nodiscard]] PackedLogic4 run_vhdl_resolver(SignalId signal_id);
+    void drain_vhdl_resolutions();
+    void initialize_vhdl_resolutions();
 
     [[nodiscard]] DriveStrength resolved_signal_strength(
         SignalId signal_id) const;

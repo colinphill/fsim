@@ -2034,6 +2034,7 @@ tests/fixtures/compliance/vhdl_range_constraints.vhd
 tests/fixtures/compliance/vhdl_real_arithmetic.vhd
 tests/fixtures/compliance/vhdl_reanalysis.vhd
 tests/fixtures/compliance/vhdl_reanalysis_first.vhd.in
+tests/fixtures/compliance/vhdl_resolution_functions.vhd
 tests/fixtures/compliance/vhdl_scalar_type_declarations.vhd
 tests/fixtures/compliance/vhdl_signal_formals.vhd
 tests/fixtures/compliance/vhdl_string_generics.vhd

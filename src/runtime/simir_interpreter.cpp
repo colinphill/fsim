@@ -350,6 +350,12 @@ SignalId Interpreter::add_signal(Signal signal)
             impl_->direct_wide_signal_logic9_plane3.end(),
             plane3.begin(), plane3.end());
     }
+    if (signal.vhdl_resolver) {
+        // Each driver of a resolved VHDL signal starts at the signal's
+        // initial value (IEEE 1076-2008 14.7.2).
+        impl_->vhdl_resolvers.emplace(id, std::move(*signal.vhdl_resolver));
+        impl_->vhdl_driver_initial_values.emplace(id, signal.initial_value);
+    }
     SignalHot hot {
         .initial_value = std::move(signal.initial_value),
         .resolution = signal.resolution,
@@ -2807,6 +2813,7 @@ void Interpreter::start()
     // before creating any such bindings.
     impl_->processes.freeze_initial_storage();
     impl_->started = true;
+    impl_->initialize_vhdl_resolutions();
     for (const auto& entry : impl_->startup_write_body_caches) {
         entry.second->release_registration_identity();
     }

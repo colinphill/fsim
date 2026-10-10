@@ -253,6 +253,31 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 31: VHDL resolution functions and default values
+
+Fixture: `vhdl_resolution_functions.vhd` (passes on xsim).
+
+- General VHDL resolution functions. A function other than `return a or b`
+  / `and` now runs as a per-signal resolver program over the drivers'
+  values, indexed from the low bound of the formal's index subtype. It runs
+  after each update's driver commits, and once at start for the initial
+  value. Records, integers, enumerations and BIT/STD_ULOGIC element types
+  are supported.
+- Default values of records and arrays without an initial value come from
+  each scalar subelement's subtype (NATURAL 0, POSITIVE 1, integer range
+  left, enumeration left, REAL'LEFT), for signals and variables. REAL
+  objects start at REAL'LEFT.
+- Physical literals of user physical types evaluate statically; signal
+  initializers given by CHARACTER, REAL or other statically valued constants
+  are accepted.
+- Member names of signals of resolved record subtypes.
+
+Corpus effect (interpreter, w94): VESTs +20 (3104), nvc +10 (556),
+vhdl-compliance unchanged (18); no regressions. Still open: guarded `bus`
+and `register` signals (disconnection changes the driver count) and arrays
+of resolved elements (7 VESTs, nvc guard4), and record signals initialized
+from record constants of 2-D arrays (6 VESTs).
+
 ### Batch 30: character arrays, predefined bounds, analysis checks, SV array forms
 
 Fixtures: `vhdl_character_arrays_and_bounds.vhd` and
@@ -1511,8 +1536,8 @@ error, and each exposes an existing gap:
 | SV: `randomize` and constraint blocks | 36 sv-tests cases (`FSIM-SV-CLASS-005`) |
 | VHDL: chained signal attributes (`clk'delayed'last_event`) | 16 VESTs cases (`FSIM-VHDL-PARSE-046`) |
 | SV: UVM `run_test` from source: the phase, objection and report services exist but are only driven through the C++ API. Lowering `run_test()` fails because the frame of `uvm_root::run_test` is allocated as static and its locals (`l_rs`, `factory`, `test_names`, `phase_runner_proc`, ...) do not initialize; a minimal `uvm_env` test reproduces it (batch 30) | 100 UVM sv-tests |
-| VHDL: general user resolution functions (only `return a or b` / `and` bodies run); plan: a resolver program per resolved signal run in the update phase over the driver values | 28 VESTs + 18 nvc cases (`FSIM-ELAB-VHRESOLVE-002/-004`) |
-| VHDL: REAL objects without an initial value start at 0.0 instead of REAL'LEFT (signals, variables, record and array elements) | nvc record17, default2 |
+| VHDL: resolution of guarded `bus`/`register` signals (disconnected drivers leave the driving-value array, so the resolver needs one variant per driver count) and of arrays of resolved elements; general resolution functions done in batch 31 | 7 VESTs (`FSIM-ELAB-VHDLGUARD-001/-002`), nvc guard4, VESTs tc1709/tc1711 |
+| VHDL: record signals initialized from static record constants that contain 2-D arrays | VESTs tc440, tc449, tc473, tc474, tc485, tc486 |
 | VHDL: names in package-body subprograms are not checked at analysis (the validator selects only entity and architecture scopes) | VESTs tc907-tc909 |
 | VHDL: constant names folded during normalization lose their type, so slice bounds given by constants are not checked against the index type | VESTs tc1125, tc1133 |
 | SV: run-time rise/fall delays on a continuous assignment to a bit or part select (`assign #(d1, d2) o[1] = i`) | 5 ivtest `rise_fall_*` cases |

@@ -12,6 +12,25 @@
 namespace fsim::elaboration {
 namespace {
 
+    // The type a VHDL subtype chain denotes, through resolved subtypes and
+    // aliases (`subtype r is resolve rec`) to its record definition.
+    std::optional<semantic::CompiledTypeView> vhdl_record_through_subtypes(
+        const semantic::SpecializedHirUnit& unit, semantic::TypeId type_id)
+    {
+        auto definition = unit.find_type(type_id);
+        std::unordered_set<std::uint32_t> visited;
+        while (definition && definition->vhdl != nullptr
+            && (definition->vhdl->form == semantic::vhdl::TypeForm::subtype
+                || definition->vhdl->form == semantic::vhdl::TypeForm::alias)
+            && definition->vhdl->base.type_mark.target.valid()
+            && visited.insert(definition->vhdl->base.type_mark.target.value())
+                   .second) {
+            definition = unit.find_type(definition->vhdl->base.type_mark.target);
+        }
+        return definition;
+    }
+
+
     constexpr std::size_t maximum_hir_loop_iterations = 1'000'000U;
 
     bool same_hir_identifier(
@@ -3313,8 +3332,23 @@ Lowerer::hir_referenced_declaration(
             if (!current->type_mark.target.valid()) {
                 return false;
             }
-            const auto definition = specialized_hir_unit_->find_type(
+            // A resolved record subtype names its record through the
+            // subtype's base.
+            auto definition = specialized_hir_unit_->find_type(
                 current->type_mark.target);
+            std::unordered_set<std::uint32_t> visited_subtypes;
+            while (definition && definition->vhdl != nullptr
+                && (definition->vhdl->form
+                        == semantic::vhdl::TypeForm::subtype
+                    || definition->vhdl->form
+                        == semantic::vhdl::TypeForm::alias)
+                && definition->vhdl->base.type_mark.target.valid()
+                && visited_subtypes
+                       .insert(definition->vhdl->base.type_mark.target.value())
+                       .second) {
+                definition = specialized_hir_unit_->find_type(
+                    definition->vhdl->base.type_mark.target);
+            }
             if (!definition || definition->vhdl == nullptr
                 || definition->vhdl->form
                     != semantic::vhdl::TypeForm::record) {
@@ -9610,6 +9644,148 @@ void Lowerer::collect_hir_vhdl_character_contexts() const
     }
 }
 
+std::optional<PackedLogic4> Lowerer::hir_vhdl_default_value(
+    const semantic::vhdl::SubtypeIndication& declared,
+    const std::size_t width,
+    const std::size_t depth,
+    const bool scalar) const
+{
+    if (specialized_hir_unit_ == nullptr || depth > 16U || width == 0U) {
+        return std::nullopt;
+    }
+    const auto effective = hir_effective_vhdl_subtype(declared);
+    const auto& subtype = effective ? *effective : declared;
+    const auto simple = [](std::string_view name) {
+        if (const auto separator = name.find_last_of(".:");
+            separator != std::string_view::npos) {
+            name.remove_prefix(separator + 1U);
+        }
+        return name;
+    };
+    const semantic::vhdl::TypeDefinition* definition = nullptr;
+    bool real = same_hir_identifier(
+        simple(subtype.type_mark.spelling), "real", true);
+    auto type_id = subtype.type_mark.target;
+    std::unordered_set<std::uint32_t> visiting;
+    while (type_id.valid() && visiting.insert(type_id.value()).second) {
+        const auto type = specialized_hir_unit_->find_type(type_id);
+        if (!type || type->vhdl == nullptr) {
+            break;
+        }
+        definition = type->vhdl;
+        real = real || same_hir_identifier(simple(definition->name), "real", true)
+            || same_hir_identifier(
+                simple(definition->base.type_mark.spelling), "real", true);
+        if (definition->form != semantic::vhdl::TypeForm::subtype
+            && definition->form != semantic::vhdl::TypeForm::alias) {
+            break;
+        }
+        type_id = definition->base.type_mark.target;
+    }
+    if (real) {
+        // REAL keeps its 64-bit packed range as an index constraint; only a
+        // range constraint changes the leftmost value.
+        if (width != 64U
+            || std::ranges::any_of(subtype.constraints,
+                [](const semantic::vhdl::RangeConstraint& range) {
+                    return range.kind
+                        != semantic::vhdl::RangeKind::array_index;
+                })) {
+            return std::nullopt;
+        }
+        return unsigned_value(std::bit_cast<std::uint64_t>(
+            -std::numeric_limits<double>::max()), 64U);
+    }
+    if (definition != nullptr
+        && definition->form == semantic::vhdl::TypeForm::record) {
+        PackedLogic4 result { width, Logic4::zero };
+        auto offset = width;
+        for (const auto& element : definition->record_elements) {
+            const auto element_width = vhdl_runtime_width(element.subtype);
+            if (!element_width || *element_width > offset) {
+                return std::nullopt;
+            }
+            offset -= *element_width;
+            const auto value = hir_vhdl_default_value(
+                element.subtype, *element_width, depth + 1U, true);
+            if (!value) {
+                return std::nullopt;
+            }
+            for (std::size_t bit { }; bit < *element_width; ++bit) {
+                if (value->is_logic9() || result.is_logic9()) {
+                    return std::nullopt;
+                }
+                result.set(offset + bit, value->get(bit));
+            }
+        }
+        return offset == 0U ? std::optional { result } : std::nullopt;
+    }
+    if (definition != nullptr
+        && definition->form == semantic::vhdl::TypeForm::array
+        && definition->element_subtype) {
+        const auto element_width
+            = vhdl_runtime_width(*definition->element_subtype);
+        if (!element_width || width % *element_width != 0U) {
+            return std::nullopt;
+        }
+        const auto value = hir_vhdl_default_value(
+            *definition->element_subtype, *element_width, depth + 1U, true);
+        if (!value || value->is_logic9()) {
+            return std::nullopt;
+        }
+        PackedLogic4 result { width, Logic4::zero };
+        for (std::size_t offset { }; offset < width; offset += *element_width) {
+            for (std::size_t bit { }; bit < *element_width; ++bit) {
+                result.set(offset + bit, value->get(bit));
+            }
+        }
+        return result;
+    }
+    if (!scalar) {
+        return std::nullopt;
+    }
+    const auto domain = vhdl_domain(subtype.domain);
+    if (domain == frontend::ValueDomain::Logic9) {
+        return std::nullopt;
+    }
+    if (domain == frontend::ValueDomain::Integer) {
+        const auto constraint = std::ranges::find_if(subtype.constraints,
+            [](const semantic::vhdl::RangeConstraint& range) {
+                return range.left.has_value();
+            });
+        if (constraint != subtype.constraints.end()) {
+            return integer_value(*constraint->left, width);
+        }
+        if (definition != nullptr && definition->scalar_range
+            && definition->scalar_range->left) {
+            return integer_value(*definition->scalar_range->left, width);
+        }
+        const auto name = simple(subtype.type_mark.spelling);
+        if (same_hir_identifier(name, "natural", true)) {
+            return integer_value(0, width);
+        }
+        if (same_hir_identifier(name, "positive", true)) {
+            return integer_value(1, width);
+        }
+        return integer_value(width == 64U
+                ? std::numeric_limits<std::int64_t>::min()
+                : static_cast<std::int64_t>(
+                      std::numeric_limits<std::int32_t>::min()),
+            width);
+    }
+    if (definition != nullptr && !definition->enumeration_literals.empty()) {
+        const auto constraint = std::ranges::find_if(subtype.constraints,
+            [](const semantic::vhdl::RangeConstraint& range) {
+                return range.left.has_value();
+            });
+        return unsigned_value(static_cast<std::uint64_t>(
+            constraint != subtype.constraints.end() ? *constraint->left : 0),
+            width);
+    }
+    return PackedLogic4 { width,
+        domain == frontend::ValueDomain::Logic4 ? Logic4::x : Logic4::zero };
+}
+
 std::optional<std::uint64_t> Lowerer::hir_vhdl_character_literal_code(
     const semantic::ExpressionId expression_id,
     const std::size_t expected_width) const
@@ -12867,8 +13043,8 @@ Lowerer::hir_vhdl_member_selection(
             if (!subtype->type_mark.target.valid()) {
                 return std::nullopt;
             }
-            const auto definition = specialized_hir_unit_->find_type(
-                subtype->type_mark.target);
+            const auto definition = vhdl_record_through_subtypes(
+                *specialized_hir_unit_, subtype->type_mark.target);
             if (!definition || definition->vhdl == nullptr
                 || definition->vhdl->form
                     != semantic::vhdl::TypeForm::record) {
@@ -13076,8 +13252,8 @@ Lowerer::hir_vhdl_member_selection(
     if (!base_subtype->type_mark.target.valid()) {
         return std::nullopt;
     }
-    const auto definition = specialized_hir_unit_->find_type(
-        base_subtype->type_mark.target);
+    const auto definition = vhdl_record_through_subtypes(
+        *specialized_hir_unit_, base_subtype->type_mark.target);
     if (!definition || definition->vhdl == nullptr
         || definition->vhdl->form != semantic::vhdl::TypeForm::record) {
         return std::nullopt;

@@ -46,6 +46,9 @@ struct CompiledVhdlResolutionBinding {
         CompiledVhdlResolutionIssue::none
     };
     semantic::SourceSpanId source;
+    // The function body run by the signal's resolver program when `kind` is
+    // vhdl_user_function.
+    semantic::DeclarationId body;
 };
 
 struct CompiledVhdlResolutionDiagnostic {
@@ -831,7 +834,12 @@ private:
         SignalId signal,
         const semantic::vhdl::SubtypeIndication& subtype,
         semantic::SourceSpanId declaration_source,
-        const CompiledVhdlResolutionBinding& binding);
+        const CompiledVhdlResolutionBinding& binding,
+        const semantic::SpecializedHirUnit& specialization);
+    // Lower the resolver programs of signals resolved by a VHDL resolution
+    // function, given each signal's driving processes in process order.
+    void lower_compiled_vhdl_resolvers(
+        const std::unordered_map<SignalId, std::vector<ProcessId>>& drivers);
 
     bool instantiate_compiled_systemverilog_unit(
         CompiledSystemVerilogInstantiationContext context);
@@ -1623,6 +1631,12 @@ private:
     std::unordered_map<std::uint32_t, PackageObjectBindings>
         vhdl_package_object_bindings_;
     std::unordered_map<SignalId, std::string> resolver_by_signal_;
+    struct PendingVhdlResolver {
+        semantic::DeclarationId body;
+        semantic::SourceSpanId source;
+        std::shared_ptr<const semantic::SpecializedHirUnit> specialization;
+    };
+    std::map<SignalId, PendingVhdlResolver> vhdl_function_resolvers_;
     std::unordered_map<std::string, ResolutionKind>
         vhdl_resolution_kinds_;
     std::unordered_map<std::string, ResolutionKind>

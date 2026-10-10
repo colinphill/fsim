@@ -1247,6 +1247,12 @@ bool Interpreter::Impl::update_container_alias_driver_force(
     const SignalId signal_id) const
 {
     const auto& signal = get_signal(signal_id);
+    if (signal.resolution == ResolutionKind::vhdl_user_function) {
+        if (const auto declared = vhdl_driver_initial_values.find(signal_id);
+            declared != vhdl_driver_initial_values.end()) {
+            return declared->second;
+        }
+    }
     if (signal.value_kind == ValueKind::logic9) {
         auto result = PackedLogic4 {
             signal.initial_value.width(), Logic4::x
@@ -1265,6 +1271,80 @@ bool Interpreter::Impl::update_container_alias_driver_force(
         ? Logic4::one
         : Logic4::x;
     return PackedLogic4 { signal.initial_value.width(), initial };
+}
+
+PackedLogic4 Interpreter::Impl::run_vhdl_resolver(const SignalId signal_id)
+{
+    const auto& resolver = vhdl_resolvers.at(signal_id);
+    const auto& signal = get_signal(signal_id);
+    const auto width = signal.initial_value.width();
+    const auto count = resolver.drivers.size();
+    PackedLogic4 driving { width * count, Logic4::x };
+    if (signal.value_kind == ValueKind::logic9) {
+        driving.fill(Logic9::u);
+    }
+    auto& values = driver_values.at(signal_id);
+    for (std::size_t index = 0U; index < count; ++index) {
+        // The leftmost element of the driving-value array is the first
+        // driver, held in the most significant position.
+        const auto* record = values.find(resolver.drivers[index]);
+        const auto& value = record != nullptr
+            ? record->value
+            : vhdl_driver_initial_values.at(signal_id);
+        driving.insert_bits(value, (count - 1U - index) * width);
+    }
+    auto& process = get_process(resolver.process);
+    get_register(process, resolver.input) = std::move(driving);
+    // Each resolution is one complete pass of the program, which halts.
+    process.pc = 0U;
+    process.halted = false;
+    execute(resolver.process);
+    return coerce_value_kind(
+        get_register(process, resolver.output), signal.value_kind);
+}
+
+void Interpreter::Impl::drain_vhdl_resolutions()
+{
+    if (running_vhdl_resolvers || pending_vhdl_resolutions.empty()) {
+        return;
+    }
+    running_vhdl_resolvers = true;
+    struct Reset {
+        bool& running;
+        ~Reset() { running = false; }
+    } reset { running_vhdl_resolvers };
+    for (std::size_t index = 0U; index < pending_vhdl_resolutions.size();
+        ++index) {
+        const auto signal_id = pending_vhdl_resolutions[index];
+        auto value = run_vhdl_resolver(signal_id);
+        vhdl_resolved_values.insert_or_assign(signal_id, value);
+        commit(signal_id, apply_force(signal_id, std::move(value)));
+    }
+    pending_vhdl_resolutions.clear();
+    pending_vhdl_resolution_set.clear();
+}
+
+void Interpreter::Impl::initialize_vhdl_resolutions()
+{
+    // A resolved signal's initial value is its resolution function applied
+    // to the drivers' initial values (IEEE 1076-2008 14.7.3.4); it is not an
+    // event.
+    running_vhdl_resolvers = true;
+    struct Reset {
+        bool& running;
+        ~Reset() { running = false; }
+    } reset { running_vhdl_resolvers };
+    for (const auto& [signal_id, resolver] : vhdl_resolvers) {
+        auto value = run_vhdl_resolver(signal_id);
+        vhdl_resolved_values.insert_or_assign(signal_id, value);
+        if (signal_id < driven_values.size()) {
+            driven_values[signal_id] = value;
+        }
+        signals[signal_id].initial_value = std::move(value);
+        refresh_direct_signal_planes(signal_id);
+    }
+    pending_vhdl_resolutions.clear();
+    pending_vhdl_resolution_set.clear();
 }
 
 PackedLogic4& Interpreter::Impl::driver_slot(
@@ -1344,6 +1424,19 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
     const SignalId signal_id,
     const ForcedDriverMapView* const override_maps) const
 {
+    if (get_signal(signal_id).resolution
+        == ResolutionKind::vhdl_user_function) {
+        // The resolver program runs after the update's driver commits; until
+        // then the signal keeps its last resolved value.
+        if (!running_vhdl_resolvers
+            && pending_vhdl_resolution_set.insert(signal_id).second) {
+            pending_vhdl_resolutions.push_back(signal_id);
+        }
+        const auto found = vhdl_resolved_values.find(signal_id);
+        return found != vhdl_resolved_values.end()
+            ? found->second
+            : get_signal(signal_id).initial_value;
+    }
     if (owned_driver_active(signal_id)) {
         return owned_driver_composites[signal_id].committed;
     }

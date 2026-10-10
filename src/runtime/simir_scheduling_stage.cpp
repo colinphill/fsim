@@ -1791,6 +1791,9 @@ void Interpreter::Impl::schedule_update_commit()
                     { },
                     queued.selected_leaves);
             }
+            // VHDL resolution functions run once all of this update's
+            // driving values are committed.
+            drain_vhdl_resolutions();
         };
     }
 

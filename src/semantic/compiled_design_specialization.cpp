@@ -7447,7 +7447,9 @@ private:
         if (!magnitude) {
             return std::nullopt;
         }
-        for (const auto& stored : unit_.vhdl_types()) {
+        // The physical type may be declared anywhere in the design, not only
+        // among the specialization's replaced types.
+        for (const auto& stored : unit_.design().vhdl_hir.types()) {
             const auto type = unit_.find_type(stored.id);
             if (!type || type->vhdl == nullptr
                 || type->vhdl->form != vhdl::TypeForm::physical) {

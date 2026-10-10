@@ -6583,6 +6583,161 @@ Lowerer::lower_hir_function_call_value(
     };
 }
 
+std::optional<RegisterId> Lowerer::lower_hir_vhdl_resolution_call(
+    const semantic::DeclarationId function,
+    const RegisterId driving_values,
+    const std::size_t driver_count,
+    const std::size_t element_width)
+{
+    // A resolution function receives the driving values as an array indexed
+    // 0 to N-1 of the formal's index subtype (IEEE 1076-2008 4.6).
+    const auto declaration = specialized_hir_unit_->find_declaration(function);
+    if (!declaration || declaration->vhdl == nullptr
+        || !declaration->vhdl->callable
+        || declaration->vhdl->callable->formals.size() != 1U
+        || !declaration->vhdl->nested_scope || driver_count == 0U) {
+        return std::nullopt;
+    }
+    const auto type = hir_callable_type(function, element_width);
+    if (!type || type->string || type->container
+        || type->width != element_width) {
+        return std::nullopt;
+    }
+    const auto formal = declaration->vhdl->callable->formals.front();
+    // The driving values are indexed from the low bound of the formal's
+    // index subtype (NATURAL from 0, POSITIVE from 1).
+    std::int64_t low { };
+    if (const auto formal_record = specialized_hir_unit_->find_declaration(formal);
+        formal_record && formal_record->vhdl != nullptr
+        && formal_record->vhdl->subtype) {
+        auto type_id = formal_record->vhdl->subtype->type_mark.target;
+        std::unordered_set<std::uint32_t> visiting;
+        const semantic::vhdl::TypeDefinition* array = nullptr;
+        while (type_id.valid() && visiting.insert(type_id.value()).second) {
+            const auto candidate = specialized_hir_unit_->find_type(type_id);
+            if (!candidate || candidate->vhdl == nullptr) {
+                break;
+            }
+            if (candidate->vhdl->form == semantic::vhdl::TypeForm::array) {
+                array = candidate->vhdl;
+                break;
+            }
+            type_id = candidate->vhdl->base.type_mark.target;
+        }
+        if (array != nullptr && array->array_dimensions.size() == 1U) {
+            const auto& index = array->array_dimensions.front().index_subtype;
+            auto name = std::string_view { index.spelling };
+            name.remove_prefix(name.find_last_of(".:") + 1U);
+            if (same_callable_name(name, "positive", true)) {
+                low = 1;
+            } else if (index.selected) {
+                const auto index_declaration
+                    = specialized_hir_unit_->find_declaration(*index.selected);
+                const auto index_type = index_declaration
+                        && index_declaration->vhdl != nullptr
+                        && index_declaration->vhdl->declared_type
+                    ? specialized_hir_unit_->find_type(
+                          *index_declaration->vhdl->declared_type)
+                    : std::nullopt;
+                if (index_type && index_type->vhdl != nullptr
+                    && index_type->vhdl->scalar_range
+                    && index_type->vhdl->scalar_range->left
+                    && index_type->vhdl->scalar_range->right) {
+                    low = std::min(*index_type->vhdl->scalar_range->left,
+                        *index_type->vhdl->scalar_range->right);
+                }
+            }
+        }
+    }
+    const auto callable_key = "vhdl-resolver:"
+        + std::to_string(function.value()) + ":"
+        + std::to_string(driver_count) + ":"
+        + std::to_string(element_width);
+    auto frame_index = hir_callable_frames_.size();
+    if (const auto found = hir_callable_indices_.find(callable_key);
+        found != hir_callable_indices_.end()) {
+        frame_index = found->second;
+    } else {
+        hir_callable_indices_.emplace(callable_key, frame_index);
+        HirCallableFrame frame;
+        frame.declaration = function;
+        frame.scope = *declaration->vhdl->nested_scope;
+        frame.type = *type;
+        frame.formals = { formal };
+        frame.vhdl_formal_ranges.emplace(formal.value(),
+            HirPackedRange { low,
+                low + static_cast<std::int64_t>(driver_count) - 1, false });
+        frame.result = allocate_register(type->width, type->domain);
+        frame.invocation_registers.push_back(frame.result);
+        frame.invocation_identity = next_callable_invocation_identity_++;
+        if (frame.invocation_identity == 0U) {
+            frame.invocation_identity = next_callable_invocation_identity_++;
+        }
+        frame.argument_is_string.push_back(false);
+        frame.argument_is_container.push_back(false);
+        frame.arguments.push_back(allocate_register(
+            register_width(driving_values), register_domain(driving_values)));
+        frame.string_arguments.push_back({ });
+        frame.container_arguments.push_back({ });
+        frame.container_output_defaults.push_back(std::nullopt);
+        frame.invocation_registers.push_back(frame.arguments.back());
+        frame.directions.push_back(frontend::PortDirection::Input);
+        frame.allocated = true;
+        hir_callable_frames_.push_back(std::move(frame));
+        if (!allocate_hir_static_callable_declarations(frame_index)) {
+            return std::nullopt;
+        }
+    }
+    auto& frame = hir_callable_frames_[frame_index];
+    if (frame.type.automatic) {
+        const auto push_site = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(CallableFramePush {
+            frame.invocation_identity,
+            frame.invocation_registers,
+            frame.invocation_strings,
+            frame.invocation_containers,
+            true,
+        });
+        if (!frame.snapshot_complete) {
+            frame.invocation_push_sites.push_back(push_site);
+        }
+    }
+    process_.operations.emplace_back(LoadConstant {
+        frame.result,
+        callable_default_value(frame.type.width, frame.type.domain),
+    });
+    process_.operations.emplace_back(CopyRegister {
+        frame.arguments.front(), driving_values });
+    const auto call_site = static_cast<InstructionIndex>(
+        process_.operations.size());
+    process_.operations.emplace_back(Call {
+        frame.target.value_or(0U),
+        static_cast<InstructionIndex>(call_site + 1U),
+        { },
+    });
+    if (!frame.target) {
+        frame.call_sites.push_back(call_site);
+    }
+    if (!frame.queued && !frame.lowered) {
+        frame.queued = true;
+        pending_hir_callables_.push_back(frame_index);
+    }
+    const auto destination = allocate_register(
+        frame.type.width, frame.type.domain);
+    process_.operations.emplace_back(CopyRegister {
+        destination, frame.result });
+    if (frame.type.automatic) {
+        process_.operations.emplace_back(CallableFramePop {
+            frame.invocation_identity,
+            std::vector<RegisterId> { destination },
+            { },
+            { },
+        });
+    }
+    return destination;
+}
+
 std::optional<RegisterId> Lowerer::lower_hir_dpi_function_call(
     const semantic::ExpressionId expression_id,
     const std::size_t expected_width)
