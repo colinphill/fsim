@@ -2,17 +2,112 @@
 #include "vhdl_parser_internal.hpp"
 
 #include <bit>
+#include <array>
+#include <cctype>
 #include <charconv>
+#include <cmath>
+#include <cstdio>
 #include <new>
 
 namespace fsim::frontend {
 namespace {
 
+// A based real literal (IEEE 1076-2008 15.5.3): base # digits . digits #
+// with an exponent of the base, as a decimal spelling.
+std::optional<std::string> vhdl_based_real_decimal(const std::string_view spelling)
+{
+    {
+        const auto first = spelling.find('#');
+        if (first == std::string_view::npos) {
+            return std::nullopt;
+        }
+        const auto second = spelling.find('#', first + 1U);
+        if (second == std::string_view::npos) {
+            return std::nullopt;
+        }
+        unsigned base { };
+        for (const auto character : spelling.substr(0U, first)) {
+            if (character == '_') {
+                continue;
+            }
+            if (character < '0' || character > '9') {
+                return std::nullopt;
+            }
+            base = base * 10U + static_cast<unsigned>(character - '0');
+        }
+        if (base < 2U || base > 16U) {
+            return std::nullopt;
+        }
+        long double value { };
+        long double scale { 1.0L };
+        bool fraction { };
+        bool digits { };
+        for (const auto character : spelling.substr(first + 1U, second - first - 1U)) {
+            if (character == '_') {
+                continue;
+            }
+            if (character == '.') {
+                if (fraction) {
+                    return std::nullopt;
+                }
+                fraction = true;
+                continue;
+            }
+            const auto lowered = static_cast<char>(
+                std::tolower(static_cast<unsigned char>(character)));
+            const unsigned digit = lowered >= '0' && lowered <= '9'
+                ? static_cast<unsigned>(lowered - '0')
+                : lowered >= 'a' && lowered <= 'f'
+                ? static_cast<unsigned>(lowered - 'a') + 10U
+                : 16U;
+            if (digit >= base) {
+                return std::nullopt;
+            }
+            digits = true;
+            if (fraction) {
+                scale /= static_cast<long double>(base);
+                value += static_cast<long double>(digit) * scale;
+            } else {
+                value = value * static_cast<long double>(base)
+                    + static_cast<long double>(digit);
+            }
+        }
+        if (!digits || !fraction) {
+            return std::nullopt;
+        }
+        auto rest = spelling.substr(second + 1U);
+        if (!rest.empty()) {
+            if (rest.front() != 'e' && rest.front() != 'E') {
+                return std::nullopt;
+            }
+            rest.remove_prefix(1U);
+            if (!rest.empty() && rest.front() == '+') {
+                rest.remove_prefix(1U);
+            }
+            long long exponent { };
+            const auto parsed = std::from_chars(rest.data(), rest.data() + rest.size(), exponent);
+            if (rest.empty() || parsed.ec != std::errc { }
+                || parsed.ptr != rest.data() + rest.size()) {
+                return std::nullopt;
+            }
+            value *= std::pow(static_cast<long double>(base),
+                static_cast<long double>(exponent));
+        }
+        std::array<char, 64> buffer { };
+        const auto written = std::snprintf(buffer.data(), buffer.size(), "%.17Le", value);
+        if (written <= 0 || static_cast<std::size_t>(written) >= buffer.size()) {
+            return std::nullopt;
+        }
+        return std::string { buffer.data(), static_cast<std::size_t>(written) };
+    }
+}
+
 std::optional<SystemVerilogDecimalLiteral> vhdl_real_payload(
     const std::string_view spelling)
 {
     if (spelling.find('#') != std::string_view::npos) {
-        return std::nullopt;
+        const auto decimal = vhdl_based_real_decimal(spelling);
+        return decimal ? vhdl_real_payload(*decimal) : std::nullopt;
     }
     std::string compact;
     compact.reserve(spelling.size());
@@ -37,8 +132,11 @@ std::optional<SystemVerilogDecimalLiteral> vhdl_real_payload(
     }
     std::int64_t exponent{};
     if (exponent_position != std::string::npos) {
-        const auto text = std::string_view{compact}.substr(
+        auto text = std::string_view{compact}.substr(
             exponent_position + 1U);
+        if (!text.empty() && text.front() == '+') {
+            text.remove_prefix(1U);
+        }
         const auto parsed = std::from_chars(
             text.data(), text.data() + text.size(), exponent);
         if (text.empty() || parsed.ec != std::errc{}
@@ -674,6 +772,9 @@ Expression VhdlParser::parse_primary()
             } else {
                 literal.systemverilog_scalar_kind =
                     SystemVerilogScalarKind::Real;
+                if (token.text.find('#') != std::string::npos) {
+                    literal.text = vhdl_based_real_decimal(token.text).value_or(literal.text);
+                }
             }
         }
         static constexpr std::array<std::string_view, 34>
@@ -1095,6 +1196,13 @@ Expression VhdlParser::parse_primary()
                 std::move(operands), cover(name.span, previous().span) };
         }
         if (match(TokenKind::LeftParen)) {
+            if (at(TokenKind::RightParen)) {
+                // An actual parameter part or index list is never empty;
+                // a call without actuals has no parentheses (IEEE 1076-2008
+                // 9.3.4).
+                error(current(), "FSIM-VHDL-PARSE-303",
+                    "VHDL parentheses after a name cannot be empty");
+            }
             const auto base = Expression { ExpressionKind::Identifier, canonical, { }, name.span };
             std::vector<Expression> arguments;
             std::vector<std::string> argument_names;

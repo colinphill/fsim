@@ -1625,10 +1625,30 @@ private:
     // digit grouping for an array value.
     // 'EVENT of a statically indexed element of `signal`, given the
     // signal's own 'EVENT register.
+    // Typed VHDL file READ/WRITE of one element through its text image.
+    enum class HirVhdlFileImageResult : std::uint8_t {
+        lowered,
+        unsupported,
+        failed,
+    };
+    [[nodiscard]] HirVhdlFileImageResult lower_hir_vhdl_file_image(
+        bool write, RegisterId handle,
+        const semantic::vhdl::SubtypeIndication& element,
+        semantic::ExpressionId value,
+        std::optional<semantic::ExpressionId> length,
+        const frontend::SourceSpan& span);
     [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_element_event(
         semantic::ExpressionId element, SignalId signal,
         RegisterId signal_event, const frontend::SourceSpan& span,
         bool report_failure = true);
+    // A local VHDL constant of a multi-bit logic vector subtype, held in
+    // process-local storage like a variable so it can be indexed.
+    [[nodiscard]] bool hir_vhdl_local_vector_constant(
+        const semantic::vhdl::Declaration& declaration) const;
+    // The static text of E'SIMPLE_NAME, E'PATH_NAME or E'INSTANCE_NAME for
+    // a named entity E in the current instance (IEEE 1076-2008 16.2.5).
+    [[nodiscard]] std::optional<std::string> hir_vhdl_path_attribute(
+        semantic::ExpressionId expression) const;
     // Whether a VHDL expression is a CHARACTER value (a character literal or
     // an object of type CHARACTER).
     [[nodiscard]] bool hir_vhdl_character_expression(

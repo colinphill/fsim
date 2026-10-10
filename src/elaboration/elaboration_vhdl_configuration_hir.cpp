@@ -410,9 +410,15 @@ const semantic::vhdl::Declaration* named_declaration(
     for (const auto& declaration : compiled.vhdl_hir.declarations()) {
         using Form = semantic::vhdl::DeclarationForm;
         if ((declaration.form != Form::constant
+                && declaration.form != Form::generic_constant
+                && declaration.form != Form::signal
                 && declaration.form != Form::type
                 && declaration.form != Form::subtype)
-            || !configuration_name_equal(declaration.name, expression.text)) {
+            || !configuration_name_equal(declaration.name, expression.text)
+            // A deferred constant's value is in its package body.
+            || ((declaration.form == Form::constant
+                    || declaration.form == Form::generic_constant)
+                && !declaration.initializer)) {
             continue;
         }
         if (found != nullptr) {
@@ -431,8 +437,11 @@ std::optional<std::int64_t> static_range_bound(
     const std::size_t depth)
 {
     const semantic::vhdl::RangeConstraint* range = nullptr;
+    // A scalar range, or the first index range of an array object.
     for (const auto& constraint : subtype.constraints) {
-        if (constraint.kind == semantic::vhdl::RangeKind::integer) {
+        if (constraint.kind == semantic::vhdl::RangeKind::integer
+            || constraint.kind == semantic::vhdl::RangeKind::array_index
+            || constraint.kind == semantic::vhdl::RangeKind::discrete) {
             range = &constraint;
             break;
         }
@@ -499,8 +508,11 @@ std::optional<std::int64_t> static_integer(
         // A constant whose initializer is itself static (IEEE 1076-2008
         // 9.4.2).
         const auto* declaration = named_declaration(compiled, *expression);
+        // A generic of the configured entity takes its default.
         if (declaration == nullptr
-            || declaration->form != semantic::vhdl::DeclarationForm::constant
+            || (declaration->form != semantic::vhdl::DeclarationForm::constant
+                && declaration->form
+                    != semantic::vhdl::DeclarationForm::generic_constant)
             || !declaration->initializer) {
             return std::nullopt;
         }
@@ -608,6 +620,47 @@ std::optional<std::vector<std::string>> configuration_block_scopes(
                 block.block.spelling + "[" + std::to_string(value) + "]");
         }
         return scopes;
+    }
+    // A range attribute or a subtype name is the discrete range of the
+    // subtype (IEEE 1076-2008 5.3.2.1).
+    if (index != nullptr) {
+        const semantic::vhdl::Expression* subtype_name = nullptr;
+        if (index->kind == semantic::vhdl::ExpressionKind::call
+            && !index->operands.empty() && index->operands.size() <= 2U
+            && (index->text == "'range" || index->text == "'reverse_range")) {
+            subtype_name = expression_for(compiled, index->operands.front());
+        } else if (index->kind == semantic::vhdl::ExpressionKind::name) {
+            subtype_name = index;
+        }
+        const auto* declaration = subtype_name != nullptr
+            ? named_declaration(compiled, *subtype_name)
+            : nullptr;
+        if (declaration != nullptr
+            && (declaration->form == semantic::vhdl::DeclarationForm::subtype
+                || declaration->form == semantic::vhdl::DeclarationForm::type
+                || (subtype_name != index && declaration->subtype))) {
+            std::optional<std::int64_t> low;
+            std::optional<std::int64_t> high;
+            if (declaration->subtype) {
+                low = static_range_bound(compiled, *declaration->subtype, "'low", 0U);
+                high = static_range_bound(compiled, *declaration->subtype, "'high", 0U);
+            } else if (declaration->declared_type) {
+                const auto type = compiled.find_type(*declaration->declared_type);
+                if (type && type->vhdl != nullptr) {
+                    low = static_range_bound(compiled, type->vhdl->base, "'low", 0U);
+                    high = static_range_bound(compiled, type->vhdl->base, "'high", 0U);
+                }
+            }
+            if (!low || !high || (*low <= *high && *high - *low >= 65536)) {
+                return std::nullopt;
+            }
+            std::vector<std::string> scopes;
+            for (auto value = *low; value <= *high; ++value) {
+                scopes.push_back(
+                    block.block.spelling + "[" + std::to_string(value) + "]");
+            }
+            return scopes;
+        }
     }
     const auto value = configuration_static_integer(
         compiled, *block.generate_index);

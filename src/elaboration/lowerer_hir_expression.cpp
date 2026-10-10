@@ -2683,7 +2683,10 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
         std::optional<std::pair<std::int64_t, std::int64_t>>
             ordinal_range;
         for (const auto& constraint : expected->constraints) {
-            if (constraint.null) {
+            // A scalar's packed layout range (TIME's 63 downto 0) is not
+            // its value range.
+            if (constraint.null
+                || constraint.kind == semantic::vhdl::RangeKind::array_index) {
                 continue;
             }
             const auto left = constraint.left
@@ -13548,6 +13551,178 @@ bool Lowerer::append_hir_vhdl_time_text(const StringRegisterId target,
     return true;
 }
 
+std::optional<std::string> Lowerer::hir_vhdl_path_attribute(
+    const semantic::ExpressionId expression_id) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(expression_id);
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
+        || expression->vhdl->operands.size() != 1U) {
+        return std::nullopt;
+    }
+    const auto& attribute = expression->vhdl->text;
+    const bool simple = attribute == "'simple_name";
+    const bool path = attribute == "'path_name";
+    const bool instance = attribute == "'instance_name";
+    if (!simple && !path && !instance) {
+        return std::nullopt;
+    }
+    const auto prefix = specialized_hir_unit_->find_expression(
+        expression->vhdl->operands.front());
+    if (!prefix || prefix->vhdl == nullptr
+        || prefix->vhdl->kind != semantic::vhdl::ExpressionKind::name) {
+        return std::nullopt;
+    }
+    const auto lower = [](std::string text) {
+        std::ranges::transform(text, text.begin(), [](const unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return text;
+    };
+    auto name = lower(std::string { prefix->vhdl->text });
+    if (const auto dot = name.find_last_of('.'); dot != std::string::npos) {
+        name.erase(0U, dot + 1U);
+    }
+    if (simple) {
+        return name;
+    }
+    const auto& design = specialized_hir_unit_->design();
+    const auto& scopes = design.semantics.scopes();
+    const auto current_unit = design.find_unit(specialized_hir_unit_->unit());
+    if (!current_unit || current_unit->vhdl == nullptr) {
+        return std::nullopt;
+    }
+    // The design hierarchy: `:root(arch):label@entity(arch)...` for the
+    // instance name and `:root:label...` for the path name.
+    std::vector<std::string> levels;
+    {
+        std::string_view rest = hierarchy_;
+        while (!rest.empty()) {
+            const auto dot = rest.find('.');
+            levels.emplace_back(lower(std::string { rest.substr(0U, dot) }));
+            if (dot == std::string_view::npos) {
+                break;
+            }
+            rest.remove_prefix(dot + 1U);
+        }
+    }
+    const auto unit_text = [&](const semantic::vhdl::Unit& unit) {
+        return unit.kind == semantic::vhdl::UnitKind::architecture
+            ? lower(unit.primary_name) + "(" + lower(unit.name) + ")"
+            : lower(unit.name);
+    };
+    // Labels of the blocks, generates and processes enclosing a scope,
+    // inside the current design unit, outermost first.
+    const auto scope_labels = [&](semantic::ScopeId scope) {
+        std::vector<std::string> result;
+        for (std::size_t depth { }; depth < 64U && scope.valid()
+             && scope.value() < scopes.size();
+             ++depth) {
+            const auto& record = scopes[scope.value()];
+            if (!record.parent) {
+                break;
+            }
+            if (!record.name.empty() && !record.name.starts_with('<')) {
+                result.push_back(lower(record.name));
+            }
+            scope = *record.parent;
+        }
+        std::ranges::reverse(result);
+        return result;
+    };
+    // The hierarchy names blocks and generates of the current unit too;
+    // those trailing levels are the leading labels of the scope chain.
+    const auto bases = [&](const std::vector<std::string>& labels)
+        -> std::pair<std::string, std::string> {
+        std::size_t shared { };
+        for (std::size_t count = std::min(labels.size(), levels.size()); count > 0U;
+             --count) {
+            if (std::equal(levels.end() - static_cast<std::ptrdiff_t>(count), levels.end(),
+                    labels.begin())) {
+                shared = count;
+                break;
+            }
+        }
+        std::string path_text;
+        std::string instance_text;
+        std::string prefix_path;
+        const auto instances = levels.size() - shared;
+        for (std::size_t level { }; level < levels.size(); ++level) {
+            prefix_path += (prefix_path.empty() ? "" : ".") + levels[level];
+            path_text += ":" + levels[level];
+            if (level >= instances) {
+                instance_text += ":" + levels[level];
+                continue;
+            }
+            const semantic::vhdl::Unit* unit = nullptr;
+            if (level + 1U == instances) {
+                unit = current_unit->vhdl;
+            } else {
+                const auto found = std::ranges::find_if(design_.specializations_,
+                    [&](const SpecializationInfo& specialization) {
+                        return lower(specialization.instance) == prefix_path
+                            && specialization.source_unit;
+                    });
+                if (found != design_.specializations_.end()) {
+                    const auto source = design.find_unit(*found->source_unit);
+                    unit = source && source->vhdl != nullptr ? source->vhdl : nullptr;
+                }
+            }
+            const auto described = unit != nullptr ? unit_text(*unit) : levels[level];
+            instance_text += level == 0U
+                ? ":" + described
+                : ":" + levels[level] + "@" + described;
+        }
+        for (std::size_t index = shared; index < labels.size(); ++index) {
+            path_text += ":" + labels[index];
+            instance_text += ":" + labels[index];
+        }
+        return { path_text, instance_text };
+    };
+    const auto text = [&](const std::vector<std::string>& labels) {
+        const auto [path_text, instance_text] = bases(labels);
+        return instance ? instance_text : path_text;
+    };
+    if (const auto declaration_id = hir_referenced_declaration(
+            expression->vhdl->operands.front())) {
+        const auto declaration = specialized_hir_unit_->find_declaration(*declaration_id);
+        if (declaration && declaration->vhdl != nullptr) {
+            const auto& source = *declaration->vhdl;
+            const auto owner = source.scope.valid() && source.scope.value() < scopes.size()
+                ? design.find_unit(scopes[source.scope.value()].unit)
+                : std::nullopt;
+            // A package item: `:library:package:name`.
+            if (owner && owner->vhdl != nullptr
+                && owner->vhdl->kind == semantic::vhdl::UnitKind::package) {
+                return ":" + lower(owner->vhdl->library) + ":"
+                    + lower(owner->vhdl->name) + ":" + name;
+            }
+            auto labels = scope_labels(source.scope);
+            if (source.form == semantic::vhdl::DeclarationForm::generated) {
+                labels.push_back(name);
+                return text(labels) + ":";
+            }
+            return text(labels) + ":" + name;
+        }
+    }
+    // The entity or architecture itself names the instance.
+    if (name == lower(current_unit->vhdl->name)
+        || name == lower(current_unit->vhdl->primary_name)) {
+        return text({ }) + ":";
+    }
+    // A process or block label: the scope with that name.
+    for (std::size_t index { }; index < scopes.size(); ++index) {
+        if (scopes[index].unit == specialized_hir_unit_->unit()
+            && lower(scopes[index].name) == name) {
+            return text(scope_labels(scopes[index].id)) + ":";
+        }
+    }
+    return std::nullopt;
+}
+
 std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_runtime_image(
     const semantic::ExpressionId value_id,
     const std::optional<semantic::ExpressionId> type_prefix,
@@ -14239,6 +14414,12 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             const auto destination = allocate_string_register();
             process_.operations.emplace_back(LoadStringConstant {
                 destination, *source.decoded_string });
+            return destination;
+        }
+        if (const auto text = hir_vhdl_path_attribute(expression_id)) {
+            const auto destination = allocate_string_register();
+            process_.operations.emplace_back(LoadStringConstant {
+                destination, *text });
             return destination;
         }
         if (source.kind == semantic::vhdl::ExpressionKind::call

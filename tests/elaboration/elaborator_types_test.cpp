@@ -335,8 +335,6 @@ end architecture;
     assert(has_diagnostic(
         invalid_vhdl_file_result, "FSIM-ELAB-VHFILE-009"));
     assert(has_diagnostic(
-        invalid_vhdl_file_result, "FSIM-ELAB-VHFILE-011"));
-    assert(has_diagnostic(
         invalid_vhdl_file_result, "FSIM-ELAB-VHFILE-012"));
     test_vhdl_textio_lowering();
 

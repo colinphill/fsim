@@ -3963,6 +3963,57 @@ namespace {
 
     // A static REAL value: a literal, a sign, arithmetic of static values, or
     // a constant whose initial value is one (IEEE 1076-2008 9.4.1).
+    std::optional<PackedLogic4> compiled_vhdl_static_packed_array_initializer(
+        const semantic::SpecializedHirUnit& specialization,
+        semantic::ExpressionId expression_id,
+        const semantic::vhdl::SubtypeIndication& target_subtype,
+        semantic::ScopeId target_scope,
+        const PackedTypeMetadata& target_type,
+        std::size_t width);
+    std::optional<PackedLogic4> compiled_vhdl_static_composite_initializer(
+        const semantic::SpecializedHirUnit& specialization,
+        semantic::ExpressionId expression_id,
+        const semantic::vhdl::SubtypeIndication& target_subtype,
+        semantic::ScopeId target_scope,
+        const PackedTypeMetadata& target_type,
+        std::size_t width);
+
+    // Whether a subtype denotes REAL or a floating type derived from it.
+    bool compiled_vhdl_real_subtype(
+        const semantic::SpecializedHirUnit& specialization,
+        const semantic::vhdl::SubtypeIndication& subtype,
+        const semantic::ScopeId scope)
+    {
+        auto current = compiled_vhdl_link_subtype(specialization, subtype, scope);
+        std::unordered_set<std::uint32_t> visited;
+        for (;;) {
+            if (compiled_vhdl_name_equal(
+                    compiled_vhdl_simple_name(current.type_mark.spelling), "real")) {
+                return true;
+            }
+            const auto type_id = current.type_mark.target;
+            if (!type_id.valid() || !visited.insert(type_id.value()).second) {
+                return false;
+            }
+            const auto type = specialization.find_type(type_id);
+            if (!type || type->vhdl == nullptr) {
+                return false;
+            }
+            const auto& definition = *type->vhdl;
+            if (compiled_vhdl_name_equal(compiled_vhdl_simple_name(definition.name), "real")) {
+                return true;
+            }
+            if (definition.form != semantic::vhdl::TypeForm::subtype
+                && definition.form != semantic::vhdl::TypeForm::alias
+                && definition.form != semantic::vhdl::TypeForm::scalar) {
+                return false;
+            }
+            const auto declaration = specialization.find_declaration(definition.declaration);
+            current = compiled_vhdl_link_subtype(specialization, definition.base,
+                declaration && declaration->vhdl != nullptr ? declaration->vhdl->scope : scope);
+        }
+    }
+
     std::optional<double> compiled_vhdl_static_real(
         const semantic::SpecializedHirUnit& specialization,
         const semantic::ExpressionId id,
@@ -4036,8 +4087,23 @@ namespace {
         const auto declaration = selected
             ? specialization.find_declaration(*selected)
             : std::nullopt;
+        // A generic constant takes its bound actual, else its default.
+        if (declaration && declaration->vhdl != nullptr
+            && declaration->vhdl->form
+                == semantic::vhdl::DeclarationForm::generic_constant) {
+            for (const auto& actual : specialization.specialization().actual_identities) {
+                if (actual.declaration == *selected) {
+                    return actual.actual_expression && *actual.actual_expression != id
+                        ? compiled_vhdl_static_real(
+                              specialization, *actual.actual_expression, depth + 1U)
+                        : std::nullopt;
+                }
+            }
+        }
         if (!declaration || declaration->vhdl == nullptr
-            || declaration->vhdl->form != semantic::vhdl::DeclarationForm::constant
+            || (declaration->vhdl->form != semantic::vhdl::DeclarationForm::constant
+                && declaration->vhdl->form
+                    != semantic::vhdl::DeclarationForm::generic_constant)
             || !declaration->vhdl->initializer
             || *declaration->vhdl->initializer == id) {
             return std::nullopt;
@@ -4331,6 +4397,33 @@ namespace {
             if (elements.empty()) {
                 return std::nullopt;
             }
+            // A record constant (or generic default) denotes its initializer.
+            if (source.kind == semantic::vhdl::ExpressionKind::name
+                && source.referenced_name && source.referenced_name->selected) {
+                const auto constant = specialization.find_declaration(
+                    *source.referenced_name->selected);
+                if (constant && constant->vhdl != nullptr
+                    && (constant->vhdl->form == semantic::vhdl::DeclarationForm::constant
+                        || constant->vhdl->form
+                            == semantic::vhdl::DeclarationForm::generic_constant)) {
+                    std::optional<semantic::ExpressionId> initializer
+                        = constant->vhdl->initializer;
+                    if (constant->vhdl->form
+                        == semantic::vhdl::DeclarationForm::generic_constant) {
+                        for (const auto& actual
+                            : specialization.specialization().actual_identities) {
+                            if (actual.declaration == *source.referenced_name->selected) {
+                                initializer = actual.actual_expression;
+                            }
+                        }
+                    }
+                    if (!initializer || *initializer == expression_id) {
+                        return std::nullopt;
+                    }
+                    return compiled_vhdl_static_port_value(specialization,
+                        *initializer, subtype, scope, domain, width);
+                }
+            }
             std::vector<std::optional<std::string>> values(
                 elements.size());
             std::optional<semantic::ExpressionId> others;
@@ -4344,6 +4437,69 @@ namespace {
                     specialization, elements[index].subtype, scope);
                 if (!layout || layout->width == 0U) {
                     return false;
+                }
+                // A REAL element holds its 64-bit IEEE 754 encoding.
+                if (layout->width == 64U
+                    && compiled_vhdl_real_subtype(
+                        specialization, elements[index].subtype, scope)) {
+                    const auto real = compiled_vhdl_static_real(specialization, value);
+                    if (!real) {
+                        return false;
+                    }
+                    values[index] = PackedLogic4::from_aval_bval(
+                        64U, std::bit_cast<std::uint64_t>(*real), 0U).to_msb_string();
+                    return true;
+                }
+                // An array element uses the composite initializer.
+                if (const auto element_type = compiled_vhdl_signal_type(
+                        specialization, elements[index].subtype, scope);
+                    element_type && element_type->vhdl_array) {
+                    auto composite = compiled_vhdl_static_composite_initializer(
+                        specialization, value, elements[index].subtype, scope,
+                        *element_type, layout->width);
+                    if (!composite) {
+                        composite = compiled_vhdl_static_packed_array_initializer(
+                            specialization, value, elements[index].subtype, scope,
+                            *element_type, layout->width);
+                    }
+                    if (composite && composite->width() == layout->width) {
+                        values[index] = composite->to_msb_string();
+                        return true;
+                    }
+                }
+                // A CHARACTER element holds its literal's position.
+                if (layout->width == 8U
+                    && compiled_vhdl_name_equal(
+                        compiled_vhdl_simple_name(elements[index].subtype.type_mark.spelling),
+                        "character")) {
+                    auto current = value;
+                    for (std::size_t depth { }; depth < 16U; ++depth) {
+                        const auto literal = specialization.find_expression(current);
+                        if (!literal || literal->vhdl == nullptr) {
+                            return false;
+                        }
+                        if (literal->vhdl->kind == semantic::vhdl::ExpressionKind::logic_literal
+                            && literal->vhdl->text.size() == 3U
+                            && literal->vhdl->text.front() == '\'') {
+                            values[index] = PackedLogic4::from_aval_bval(8U,
+                                static_cast<unsigned char>(literal->vhdl->text[1]), 0U)
+                                                .to_msb_string();
+                            return true;
+                        }
+                        const auto constant = literal->vhdl->kind
+                                    == semantic::vhdl::ExpressionKind::name
+                                && literal->vhdl->referenced_name
+                                && literal->vhdl->referenced_name->selected
+                            ? specialization.find_declaration(
+                                  *literal->vhdl->referenced_name->selected)
+                            : std::nullopt;
+                        if (!constant || constant->vhdl == nullptr
+                            || constant->vhdl->form != semantic::vhdl::DeclarationForm::constant
+                            || !constant->vhdl->initializer) {
+                            break;
+                        }
+                        current = *constant->vhdl->initializer;
+                    }
                 }
                 const auto evaluated = compiled_vhdl_static_port_value(
                     specialization,
@@ -6644,7 +6800,14 @@ namespace {
         std::size_t& matches)
     {
         std::optional<semantic::CompiledUnitView> result;
+        const semantic::vhdl::Unit* latest { };
         matches = 0U;
+        const auto& spans = compiled.semantics.source_spans();
+        const auto position = [&](const semantic::vhdl::Unit& unit) {
+            return unit.source.valid() && unit.source.value() < spans.size()
+                ? std::optional { spans[unit.source.value()].begin.offset }
+                : std::nullopt;
+        };
         for (const auto& candidate : compiled.vhdl_units()) {
             if (candidate.kind != semantic::vhdl::UnitKind::architecture
                 || !compiled_vhdl_library_equal(candidate.library, library)
@@ -6654,7 +6817,17 @@ namespace {
                         candidate.name, architecture))) {
                 continue;
             }
-            result = compiled.find_unit(candidate.id);
+            // Without a name, the most recently analyzed architecture: the
+            // later one of a source (IEEE 1076-2008 7.3.3).
+            const auto same_source = latest != nullptr && position(*latest)
+                && position(candidate)
+                && spans[latest->source.value()].logical_name
+                    == spans[candidate.source.value()].logical_name;
+            if (latest == nullptr || !architecture.empty() || !same_source
+                || position(candidate) > position(*latest)) {
+                result = compiled.find_unit(candidate.id);
+                latest = &candidate;
+            }
             ++matches;
         }
         return result;
@@ -14520,6 +14693,71 @@ std::optional<SignalId> HierarchyBuilder::add_compiled_vhdl_constant_signal(
         specialization, *declaration.subtype, declaration.scope);
     const auto layout = compiled_vhdl_named_signal_layout(
         specialization, *declaration.subtype, declaration.scope);
+    std::optional<PackedLogic4> packed_vector_value;
+    const bool bit_elements = type && type->vhdl_array
+        && type->vhdl_array->element_types.size() == 1U
+        && type->vhdl_array->element_types.front().width()
+            == std::optional<std::uint64_t> { 1U }
+        && !type->vhdl_array->element_types.front().vhdl_array
+        && type->vhdl_array->element_types.front().packed_members.empty()
+        && type->vhdl_array->element_types.front().domain
+            == frontend::ValueDomain::Bit2;
+    if (type
+        && (!type->vhdl_array || bit_elements
+            || type->vhdl_array->element_types.empty())
+        && layout && layout->width != 0U
+        && layout->width <= 4096U
+        && layout->domain == frontend::ValueDomain::Bit2
+        && type->packed_range && type->enumeration_literals.empty()
+        && type->systemverilog_scalar == frontend::SystemVerilogScalarKind::None
+        && type->domain == frontend::ValueDomain::Bit2) {
+        // A BIT_VECTOR constant: folding covers reads of the whole
+        // constant, but an indexed or sliced read selects from storage
+        // holding its folded value.
+        const auto evaluated = specialization.evaluate_vhdl_constant_expression(
+            *declaration.initializer);
+        const auto* packed = evaluated
+            ? std::get_if<semantic::SpecializedHirVhdlPackedValue>(&*evaluated)
+            : nullptr;
+        if (packed != nullptr && packed->bits.size() == layout->width
+            && std::ranges::all_of(packed->bits,
+                [](const char bit) { return bit == '0' || bit == '1'; })) {
+            packed_vector_value = PackedLogic4::from_msb_string(packed->bits);
+        }
+    }
+    if (bit_elements && !packed_vector_value) {
+        return std::nullopt;
+    }
+    if (packed_vector_value) {
+        const auto id = static_cast<SignalId>(design_.signals_.size());
+        design_.signal_by_name_.emplace(name, id);
+        SignalInfo info;
+        info.id = id;
+        info.name = name;
+        info.width = layout->width;
+        info.type_name = type->spelling;
+        info.source_domain = frontend::ValueDomain::Bit2;
+        info.is_signed = type->is_signed;
+        info.packed_range = type->packed_range;
+        info.integer_range = type->integer_range;
+        info.nominal_type = type->nominal_type;
+        info.direction = frontend::PortDirection::Input;
+        info.declaration_span = compiled_source_span(
+            *compiled_, declaration.source);
+        design_.signal_info_.push_back(std::move(info));
+        design_.signals_.push_back(runtime::simir::Signal {
+            name,
+            *packed_vector_value,
+            ResolutionKind::none,
+            value_kind(frontend::ValueDomain::Bit2),
+            std::nullopt,
+            { StrengthRank::pull, StrengthRank::pull },
+            std::nullopt,
+            std::nullopt,
+            frontend::SystemVerilogScalarKind::None,
+        });
+        return id;
+    }
     if (!type || !type->vhdl_array || type->vhdl_array->unconstrained
         || type->vhdl_array->element_types.size() != 1U || !layout
         || layout->width == 0U
@@ -15591,6 +15829,10 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                     }
                     text->push_back(element->vhdl->text[1]);
                 }
+            }
+            if (!text) {
+                text = working_specialization.evaluate_string_expression(
+                    *declaration.initializer);
             }
             if (text) {
                 if (text->size() * 8U == width) {
@@ -18013,12 +18255,21 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                                         declaration_unit->name,
                                         candidate_unit->primary_name)));
                     });
+                // A type alias (IEEE 1076-2008 6.6.3) is not a type
+                // declaration but still denotes a type.
+                const auto alias_named = std::ranges::any_of(
+                    compiled_->vhdl_hir.declarations(),
+                    [&](const semantic::vhdl::Declaration& candidate) {
+                        return candidate.form == semantic::vhdl::DeclarationForm::alias
+                            && compiled_vhdl_name_equal(candidate.name,
+                                compiled_vhdl_simple_name(reference.spelling));
+                    });
                 if (profile.type_class == SubtypeClass::unknown
                     && linked_subtype.unspecified_class
                         == semantic::vhdl::UnspecifiedTypeClass::none
-                    && !generic_type_visible) {
+                    && !generic_type_visible && !alias_named) {
                     report(
-                        "FSIM-ELAB-VHTYPE-001",
+                        "FSIM-ELAB-VHTYPE-006",
                         "VHDL type '" + reference.spelling
                             + "' is not visible at this declaration",
                         compiled_source_span(
@@ -18050,7 +18301,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                 continue;
             }
             report(
-                "FSIM-ELAB-VHTYPE-001",
+                "FSIM-ELAB-VHTYPE-006",
                 "VHDL type '"
                     + declaration->vhdl->subtype->type_mark.spelling
                     + "' is not visible at this declaration",
@@ -22159,7 +22410,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_generated_declaration_visibility(
             continue;
         }
         report(
-            "FSIM-ELAB-VHTYPE-001",
+            "FSIM-ELAB-VHTYPE-006",
             "VHDL type '" + type_mark.spelling
                 + "' is not visible at this declaration",
             use_span);
@@ -22818,6 +23069,11 @@ HierarchyBuilder::select_compiled_vhdl_child(
             child = compiled_vhdl_architecture(
                 *compiled_, requested_library, parts.back(),
                 architecture_name, matches);
+            // Without an architecture the binding takes the most recently
+            // analyzed one (IEEE 1076-2008 7.3.2.2).
+            if (architecture_name.empty() && matches > 1U && child) {
+                matches = 1U;
+            }
             if (matches != 1U || !child) {
                 report(
                     matches == 0U

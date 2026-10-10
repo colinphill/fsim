@@ -253,6 +253,94 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 28: typed-file images, constant bounds, signal initial values, analysis checks
+
+Fixture: `vhdl_constant_bounds_and_file_images.vhd` (passes on xsim).
+
+Typed VHDL files (`file of T` for any scalar, record or array `T`) now use a
+line-oriented text image codec, which is the representation of the VESTs
+iofiles: one element per line; scalars as their images (decimal integers,
+REAL in standard form, enumeration literals, physical values with a unit,
+TIME in fs, a standalone CHARACTER as `'c'`); composites as their scalar
+parts separated by single spaces; strings as their characters. READ of an
+unconstrained array type takes a LENGTH and reads as many elements as the
+line holds. A fixed-shape element is scanned from the file, so lines are
+not limited by the 4096-byte runtime string size; writes emit each part as
+it is formatted. The codec replaces the decimal/hexadecimal per-line format
+of batch 6 (files written by older builds are not readable).
+
+VHDL elaboration and runtime:
+- An unconstrained array constant takes its index range from its value
+  (`'LENGTH`, `'LEFT`, `'RIGHT`, `'ASCENDING`; a string literal or positional
+  aggregate starts at the index subtype's left bound); the specialization's
+  integral evaluator derives `'LENGTH` from literals, positional aggregates
+  and parameterless functions that return them, so bounds checks such as
+  `constant c2 : real_vector(1 to c1'length) := (6 elements)` are reported.
+- `'LEFT`, `'RIGHT`, `'LOW`, `'HIGH`, `'ASCENDING` of floating subtypes;
+  array attributes through an access value whose designated subtype is
+  constrained (`head'low`).
+- Signal initial values: negative TIME values (TIME now has the full 64-bit
+  range; DELAY_LENGTH keeps 0 to TIME'HIGH), records with REAL, CHARACTER
+  and array elements, record constants and generics, STRING generics, REAL
+  generics in array aggregates.
+- Aggregates: a scalar element's packed layout range (TIME's 63 downto 0)
+  is no longer taken as its value range (2 us in a record aggregate failed
+  a range check).
+- Configurations: `use entity lib.e` without an architecture selects the
+  most recently analyzed one; `label : comp;` without maps instantiates a
+  declared component.
+- Workspaces whose objects use different subsets of the compiler-supplied
+  VHDL packages (one with NUMERIC_STD, one without) link with the largest
+  set; before, the second object failed with `FSIM-ART-VHDEP-001`.
+
+VHDL parsing: based real literals (`16#F.F#E1`, `5:1234.4321:E-10` with
+the colon replacement character), `E+n` exponents, the optional `signal`
+keyword and `linkage` mode in port clauses, component ports without a mode,
+empty parentheses after a name (`FSIM-VHDL-PARSE-303`).
+
+VHDL analysis-time checks (reported by `fsim compile`): index counts and
+types of indexed names (`FSIM-ELAB-VHARRAYSEL-005`), object alias subtypes
+(`FSIM-ELAB-VHALIAS-001`/`-002`), slice assignment lengths
+(`FSIM-ELAB-VHASSIGN-004`), return values of another type
+(`FSIM-ELAB-VHRETURN-001`), subaggregate lengths (`FSIM-ELAB-VHAGG-017`),
+record aggregate OTHERS and multiple choices (`FSIM-ELAB-VHAGG-018`),
+characters that are not elements of BIT or STD_ULOGIC in string literals
+(`FSIM-ELAB-VHAGG-019`), statements of passive entities
+(`FSIM-ELAB-VHPASSIVE-001`), waveforms whose delays do not increase
+(`FSIM-ELAB-VHWAVE-001`), record element names used as type marks in the
+record (`FSIM-ELAB-VHRECORD-003`), type marks not visible at their
+declaration (`FSIM-ELAB-VHTYPE-006`, split from `-001`), signal actuals of
+variable formals and the reverse, scalar values assigned to composite
+targets, OTHERS aggregates passed to unconstrained formals, signal
+attributes and sensitivity-list reads of `out` ports before VHDL-2008
+(`FSIM-ELAB-VHPORT-003`), non-static sensitivity-list names
+(`FSIM-ELAB-VHSENS-001`), `.all` of a non-access value
+(`FSIM-ELAB-VHACCESS-033`), relational operators between two aggregates
+(`FSIM-ELAB-VHAGG-020`), a second port clause. At elaboration, an
+instantiated component must be declared (`FSIM-ELAB-VHCOMP-016`) and map
+actuals must be values (instantiating architectures are not elaborated by
+`fsim compile`, so these do not fire there).
+
+Configurations: generate index specifications accept deferred constants,
+generics with defaults, range attributes of objects and subtypes, and
+subtype names (`for G(dumy'range)`, `for G(sub)`).
+
+Earlier in the batch: BIT_VECTOR constants are materialized as read-only
+signals for indexed reads; process-local array constants; `'SIMPLE_NAME`,
+`'PATH_NAME` and `'INSTANCE_NAME`; the UVM library path of the corpus
+runner is absolute (the batch 27 relative path failed 8 UVM cases).
+
+Runner: a VESTs test whose top entity has a configuration elaborates the
+configuration, which supplies the component bindings.
+
+Corpus effect (interpreter, full VHDL suites and reruns of the Batch 27
+baseline's UVM failures): VESTs +172 (3003/3648), nvc +14 (525), VHDL
+Compliance-Tests +1 (18), sv-tests +8 (the UVM library path); about 195
+closed. Nine VESTs negative cases that were rejected only because the
+`signal` keyword in a port clause was not parsed are now accepted: reads of
+`linkage` ports (5, not recorded in the HIR) and instance checks in
+instantiating architectures (4, which `fsim compile` does not elaborate).
+
 ### Batch 27: VHDL analysis checks, distinct scalar types, generate interfaces, UVM library
 
 Fixtures: `vhdl_time_literals_and_scalar_types.vhd` and
@@ -1337,7 +1425,11 @@ error, and each exposes an existing gap:
 | VHDL: library-level package instantiation (`package p is new work.g generic map (...)`) | 21 nvc/VHDL-Compliance cases (`FSIM-VHDL-UNSUPPORTED-022` 'new') |
 | VHDL: names in a configuration are not resolved against the configured architecture (architecture-local constants in generate specifications); design-wide unique names are used as a fallback | nvc config cases (`FSIM-ELAB-VHCONFIG-010`) |
 | VHDL: aggregate initializers of arrays of SEVERITY_LEVEL (`(others => note)`) | VESTs |
-| VHDL: typed files of non-integer elements (`file of real`, records, arrays, TIME), read in the VESTs text format (one value image per line; composites space-separated) | 111 VESTs/nvc cases (`FSIM-ELAB-VHFILE-011`) plus 20 VESTs reads |
+| VHDL: user resolution functions other than a single OR/AND reduction (a runtime resolver calling the function on the driver values) | 28 VESTs cases (`FSIM-ELAB-VHRESOLVE-002`/`-004`), nvc |
+| VHDL: indexing and slicing an unconstrained constant (`constant c : bit_vector := "0101"; c(1)`); its attributes were done in batch 28 | VESTs |
+| VHDL: configuration specifications in block declarative parts | 7 VESTs cases (`FSIM-VHDL-PARSE-078`) |
+| VHDL: records whose elements are two-dimensional or subtype-constrained arrays as signal initial values | 11 VESTs cases (`FSIM-ELAB-HIR-001` initializer) |
+| CLI: `fsim elaborate --top <entity>` for a VHDL entity fails with `FSIM-ELAB-004` (the CLI qualifies the name without an architecture); `entity(arch)` works | usability |
 | SV: an X/Z or out-of-range dynamic index in a signal write must skip the write instead of failing (interpreter and LLVM paths) | Verilator, ivtest (`FSIM-RUN-0001`) |
 | SV: `void'($fgets(...))` and other discarded system-function calls | sv-tests chapter 21 |
 | SV: packed arrays of a named type (`T [3:0] v;`, `typedef T1 [7:0] T2;`) | ~80 ivtest/Verilator cases (`FSIM-SV-UNSUPPORTED-004`/`-024`) |

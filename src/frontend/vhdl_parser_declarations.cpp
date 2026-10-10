@@ -2027,9 +2027,17 @@ void VhdlParser::parse_concurrent_statement(DesignUnit &unit) {
         parse_vhdl_static_block(*label_token, previous()));
     return;
   }
+  // `label : name;` instantiates a declared component without maps (IEEE
+  // 1076-2008 11.7.1); otherwise it is a concurrent procedure call.
+  const bool component_without_maps = label_token && at(TokenKind::Identifier)
+      && at(TokenKind::Semicolon, 1)
+      && std::ranges::any_of(unit.vhdl_component_declarations,
+          [&](const VhdlComponentDeclaration& component) {
+            return component.name == vhdl_name(current().text);
+          });
   if (label_token &&
       (keyword("entity", 0, true) || keyword("configuration", 0, true) ||
-       keyword("component", 0, true) ||
+       keyword("component", 0, true) || component_without_maps ||
        (at(TokenKind::Identifier) &&
         (keyword("port", 1, true) || keyword("generic", 1, true))))) {
     unit.instances.push_back(parse_vhdl_instance(*label_token));

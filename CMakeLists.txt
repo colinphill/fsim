@@ -924,6 +924,7 @@ endif()
       src/elaboration/lowerer_hir_container.cpp
       src/elaboration/lowerer_hir_expression.cpp
       src/elaboration/lowerer_hir_file.cpp
+      src/elaboration/lowerer_hir_file_image.cpp
       src/elaboration/lowerer_hir_let.cpp
       src/elaboration/lowerer_hir_math.cpp
       src/elaboration/lowerer_hir_process.cpp

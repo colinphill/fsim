@@ -4206,6 +4206,8 @@ Lowerer::hir_runtime_binding(
         process_variable = materialized_local
             || loop_parameter
             || (source.scope == process_scope
+                && hir_vhdl_local_vector_constant(source))
+            || (source.scope == process_scope
                 && (source.form == semantic::vhdl::DeclarationForm::variable
                     || source.form
                         == semantic::vhdl::DeclarationForm::file
@@ -6235,6 +6237,47 @@ Lowerer::hir_string_binding(
     return result;
 }
 
+bool Lowerer::hir_vhdl_local_vector_constant(
+    const semantic::vhdl::Declaration& declaration) const
+{
+    if (declaration.form != semantic::vhdl::DeclarationForm::constant
+        || !declaration.initializer || !declaration.subtype) {
+        return false;
+    }
+    const auto effective = hir_effective_vhdl_subtype(*declaration.subtype);
+    if (!effective) {
+        return false;
+    }
+    auto mark = std::string_view { effective->type_mark.spelling };
+    mark.remove_prefix(mark.find_last_of(".:") + 1U);
+    // REAL is a 64-bit value and character arrays are string objects.
+    if (same_hir_identifier(mark, "real", true)
+        || effective->domain == semantic::vhdl::ValueDomain::string) {
+        return false;
+    }
+    const bool array = !effective->constraints.empty() || [&] {
+        auto type_id = effective->type_mark.target;
+        for (std::size_t depth { }; depth < 16U && type_id.valid(); ++depth) {
+            const auto type = specialized_hir_unit_->find_type(type_id);
+            if (!type || type->vhdl == nullptr) {
+                return false;
+            }
+            if (type->vhdl->form == semantic::vhdl::TypeForm::array) {
+                return true;
+            }
+            if (type->vhdl->form != semantic::vhdl::TypeForm::subtype
+                && type->vhdl->form != semantic::vhdl::TypeForm::alias) {
+                return false;
+            }
+            type_id = type->vhdl->base.type_mark.target;
+        }
+        return false;
+    }();
+    return array && effective->executable_width
+        && *effective->executable_width > 1U
+        && *effective->executable_width <= 4096U;
+}
+
 bool Lowerer::hir_expression_is_string(
     const semantic::ExpressionId expression_id,
     const semantic::ScopeId process_scope) const
@@ -6351,6 +6394,12 @@ bool Lowerer::hir_expression_is_string(
         if (source.kind == semantic::vhdl::ExpressionKind::call
             && source.text == "'image" && !source.operands.empty()
             && source.operands.size() <= 2U) {
+            return true;
+        }
+        if (source.kind == semantic::vhdl::ExpressionKind::call
+            && (source.text == "'simple_name" || source.text == "'path_name"
+                || source.text == "'instance_name")
+            && hir_vhdl_path_attribute(expression_id)) {
             return true;
         }
         if (source.kind == semantic::vhdl::ExpressionKind::call
@@ -6638,7 +6687,7 @@ Lowerer::hir_vhdl_attribute_profile(
         std::optional<semantic::DeclarationId> declaration;
         bool type_prefix { };
     };
-    const auto prefix_profile = [&]() -> std::optional<AttributePrefix> {
+    auto prefix_profile = [&]() -> std::optional<AttributePrefix> {
         const auto prefix = specialized_hir_unit_->find_expression(
             source.operands.front());
         const auto declaration_id = hir_referenced_declaration(
@@ -6780,6 +6829,40 @@ Lowerer::hir_vhdl_attribute_profile(
     }();
     if (!prefix_profile) {
         return std::nullopt;
+    }
+    // An access value prefix of an array attribute denotes the designated
+    // object (IEEE 1076-2008 8.3, implicit dereference).
+    if (!prefix_profile->type_prefix) {
+        auto type_id = prefix_profile->subtype.type_mark.target;
+        std::unordered_set<std::uint32_t> visited;
+        while (type_id.valid() && visited.insert(type_id.value()).second) {
+            const auto type = specialized_hir_unit_->find_type(type_id);
+            if (!type || type->vhdl == nullptr) {
+                break;
+            }
+            if (type->vhdl->form == semantic::vhdl::TypeForm::access) {
+                if (type->vhdl->designated_subtype) {
+                    if (auto designated = hir_effective_vhdl_subtype(
+                            *type->vhdl->designated_subtype)) {
+                        const auto designated_type = designated->type_mark.target.valid()
+                            ? specialized_hir_unit_->find_type(designated->type_mark.target)
+                            : std::nullopt;
+                        prefix_profile->subtype = std::move(*designated);
+                        prefix_profile->definition
+                            = designated_type && designated_type->vhdl != nullptr
+                            ? designated_type->vhdl
+                            : nullptr;
+                        prefix_profile->declaration.reset();
+                    }
+                }
+                break;
+            }
+            if (type->vhdl->form != semantic::vhdl::TypeForm::subtype
+                && type->vhdl->form != semantic::vhdl::TypeForm::alias) {
+                break;
+            }
+            type_id = type->vhdl->base.type_mark.target;
+        }
     }
 
     const auto boundary = [&](const std::optional<std::int64_t> value,
@@ -6997,7 +7080,102 @@ Lowerer::hir_vhdl_attribute_profile(
         }
         const auto index = static_cast<std::size_t>(dimension - 1);
         std::optional<semantic::vhdl::RangeConstraint> range;
-        if (index < prefix_profile->subtype.constraints.size()) {
+        // An unconstrained array constant takes its index range from its
+        // value (IEEE 1076-2008 5.3.2.2).
+        if (index == 0U && prefix_profile->declaration
+            && std::ranges::none_of(prefix_profile->subtype.constraints,
+                [&](const semantic::vhdl::RangeConstraint& constraint) {
+                    return concrete_range(constraint).has_value();
+                })
+            && (array == nullptr || array->array_dimensions.empty()
+                || array->array_dimensions.front().unconstrained)) {
+            const auto constant = specialized_hir_unit_->find_declaration(
+                *prefix_profile->declaration);
+            if (constant && constant->vhdl != nullptr
+                && (constant->vhdl->form == semantic::vhdl::DeclarationForm::constant
+                    || constant->vhdl->form
+                        == semantic::vhdl::DeclarationForm::generic_constant)
+                && constant->vhdl->initializer) {
+                std::optional<std::pair<std::int64_t, std::int64_t>> bounds;
+                if (const auto packed = specialized_hir_unit_
+                        ->evaluate_vhdl_packed_value_declaration(*prefix_profile->declaration)) {
+                    bounds.emplace(packed->left_bound, packed->right_bound);
+                } else if (const auto elements = specialized_hir_unit_
+                               ->evaluate_vhdl_packed_array_declaration(
+                                   *prefix_profile->declaration)) {
+                    bounds.emplace(elements->left_bound, elements->right_bound);
+                } else if (const auto value = specialized_hir_unit_
+                               ->evaluate_vhdl_constant_expression(
+                                   *constant->vhdl->initializer)) {
+                    if (const auto* bits = std::get_if<
+                            semantic::SpecializedHirVhdlPackedValue>(&*value)) {
+                        bounds.emplace(bits->left_bound, bits->right_bound);
+                    }
+                }
+                if (bounds) {
+                    semantic::vhdl::RangeConstraint value_range;
+                    value_range.kind = semantic::vhdl::RangeKind::array_index;
+                    value_range.left = bounds->first;
+                    value_range.right = bounds->second;
+                    value_range.descending = bounds->first > bounds->second;
+                    // A string literal or positional aggregate starts at the
+                    // index subtype's left bound in its direction (IEEE
+                    // 1076-2008 9.3.2, 9.3.3.3).
+                    const auto initializer = specialized_hir_unit_->find_expression(
+                        *constant->vhdl->initializer);
+                    const bool positional = initializer && initializer->vhdl != nullptr
+                        && (initializer->vhdl->kind
+                                == semantic::vhdl::ExpressionKind::string_literal
+                            || (initializer->vhdl->kind
+                                    == semantic::vhdl::ExpressionKind::aggregate
+                                && std::ranges::all_of(initializer->vhdl->associations,
+                                    [](const auto& association) {
+                                        return association.choices.empty()
+                                            && association.choice_spelling.empty();
+                                    })));
+                    std::optional<std::pair<std::int64_t, bool>> index_start;
+                    if (positional && array != nullptr && !array->array_dimensions.empty()) {
+                        const auto& index_name = array->array_dimensions.front().index_subtype;
+                        const auto index_type = index_name.selected
+                            ? specialized_hir_unit_->find_declaration(*index_name.selected)
+                            : std::nullopt;
+                        const auto index_view = index_type && index_type->vhdl != nullptr
+                                && index_type->vhdl->declared_type
+                            ? specialized_hir_unit_->find_type(*index_type->vhdl->declared_type)
+                            : std::nullopt;
+                        const auto* definition = index_view ? index_view->vhdl : nullptr;
+                        if (definition != nullptr && definition->scalar_range
+                            && definition->scalar_range->left) {
+                            index_start.emplace(*definition->scalar_range->left,
+                                definition->scalar_range->descending);
+                        } else if (same_hir_identifier(index_name.spelling, "natural", true)
+                            || same_hir_identifier(index_name.spelling, "integer", true)) {
+                            index_start.emplace(same_hir_identifier(
+                                index_name.spelling, "natural", true) ? 0 : -2147483647 - 1, false);
+                        } else if (same_hir_identifier(index_name.spelling, "positive", true)) {
+                            index_start.emplace(1, false);
+                        }
+                    } else if (positional && array == nullptr) {
+                        // Predefined vectors are indexed by NATURAL; STRING
+                        // by POSITIVE.
+                        index_start.emplace(
+                            same_hir_identifier(terminal_spelling, "string", true) ? 1 : 0,
+                            false);
+                    }
+                    if (index_start) {
+                        const auto count = static_cast<std::int64_t>(
+                            index_distance(bounds->first, bounds->second));
+                        value_range.left = index_start->first;
+                        value_range.right = index_start->second
+                            ? index_start->first - count
+                            : index_start->first + count;
+                        value_range.descending = index_start->second;
+                    }
+                    range = std::move(value_range);
+                }
+            }
+        }
+        if (!range && index < prefix_profile->subtype.constraints.size()) {
             range = concrete_range(
                 prefix_profile->subtype.constraints[index]);
         }
@@ -7100,6 +7278,125 @@ Lowerer::hir_vhdl_attribute_profile(
         return fail(enumeration_prefix
                 ? HirVhdlAttributeFailure::enumeration_profile
                 : HirVhdlAttributeFailure::scalar_profile);
+    }
+    // A floating subtype's bounds are static reals: 'LEFT, 'RIGHT, 'LOW and
+    // 'HIGH give their 64-bit encodings (IEEE 1076-2008 16.2.2).
+    if (prefix_profile->type_prefix && source.operands.size() == 1U
+        && hir_vhdl_subtype_is_real(prefix_profile->subtype)
+        && (source.text == "'left" || source.text == "'right"
+            || source.text == "'low" || source.text == "'high"
+            || source.text == "'ascending")) {
+        const auto fold = [&](const auto& self, const semantic::ExpressionId id,
+                              const std::size_t depth) -> std::optional<double> {
+            const auto value = specialized_hir_unit_->find_expression(id);
+            if (!value || value->vhdl == nullptr || depth > 32U) {
+                return std::nullopt;
+            }
+            const auto& node = *value->vhdl;
+            using Kind = semantic::vhdl::ExpressionKind;
+            if (node.kind == Kind::real_literal || node.kind == Kind::integer_literal) {
+                if (const auto real = systemverilog_real_literal(node.text)) {
+                    return real;
+                }
+                const auto integral = hir_constant_integer(id);
+                return integral ? std::optional { static_cast<double>(*integral) }
+                                : std::nullopt;
+            }
+            if (node.kind == Kind::unary && node.operands.size() == 1U
+                && (node.text == "-" || node.text == "+")) {
+                const auto operand = self(self, node.operands.front(), depth + 1U);
+                return operand && node.text == "-" ? std::optional { -*operand } : operand;
+            }
+            if (node.kind == Kind::binary && node.operands.size() == 2U
+                && (node.text == "+" || node.text == "-" || node.text == "*"
+                    || node.text == "/")) {
+                const auto lhs = self(self, node.operands[0], depth + 1U);
+                const auto rhs = self(self, node.operands[1], depth + 1U);
+                if (!lhs || !rhs || (node.text == "/" && *rhs == 0.0)) {
+                    return std::nullopt;
+                }
+                return node.text == "+" ? *lhs + *rhs
+                    : node.text == "-"  ? *lhs - *rhs
+                    : node.text == "*"  ? *lhs * *rhs
+                                        : *lhs / *rhs;
+            }
+            if (node.kind == Kind::name && node.referenced_name
+                && node.referenced_name->selected) {
+                const auto declaration = specialized_hir_unit_->find_declaration(
+                    *node.referenced_name->selected);
+                if (declaration && declaration->vhdl != nullptr
+                    && declaration->vhdl->form == semantic::vhdl::DeclarationForm::constant
+                    && declaration->vhdl->initializer
+                    && *declaration->vhdl->initializer != id) {
+                    return self(self, *declaration->vhdl->initializer, depth + 1U);
+                }
+            }
+            return std::nullopt;
+        };
+        // The first range constraint along the subtype chain.
+        std::optional<semantic::vhdl::RangeConstraint> real_range;
+        bool resolved_chain = true;
+        {
+            auto current = prefix_profile->subtype;
+            std::unordered_set<std::uint32_t> visited;
+            for (;;) {
+                if (!current.constraints.empty()) {
+                    real_range = current.constraints.front();
+                    break;
+                }
+                const auto type_id = current.type_mark.target;
+                if (!type_id.valid() || !visited.insert(type_id.value()).second) {
+                    break;
+                }
+                const auto type = specialized_hir_unit_->find_type(type_id);
+                if (!type || type->vhdl == nullptr) {
+                    resolved_chain = false;
+                    break;
+                }
+                if (type->vhdl->scalar_range) {
+                    real_range = *type->vhdl->scalar_range;
+                    break;
+                }
+                if (type->vhdl->form != semantic::vhdl::TypeForm::subtype
+                    && type->vhdl->form != semantic::vhdl::TypeForm::alias
+                    && type->vhdl->form != semantic::vhdl::TypeForm::scalar) {
+                    resolved_chain = false;
+                    break;
+                }
+                current = type->vhdl->base;
+            }
+        }
+        std::optional<double> left;
+        std::optional<double> right;
+        bool descending { };
+        if (real_range) {
+            left = real_range->left_expression
+                ? fold(fold, *real_range->left_expression, 0U) : std::nullopt;
+            right = real_range->right_expression
+                ? fold(fold, *real_range->right_expression, 0U) : std::nullopt;
+            descending = real_range->descending;
+        } else if (resolved_chain) {
+            // REAL itself spans the representable doubles.
+            left = -std::numeric_limits<double>::max();
+            right = std::numeric_limits<double>::max();
+        }
+        if (!left || !right) {
+            return fail(HirVhdlAttributeFailure::scalar_profile);
+        }
+        if (source.text == "'ascending") {
+            result.constant = descending ? 0 : 1;
+            result.width = 1U;
+            result.domain = frontend::ValueDomain::Boolean;
+            return result;
+        }
+        const auto selected = source.text == "'left" ? *left
+            : source.text == "'right"               ? *right
+            : source.text == "'low"                 ? std::min(*left, *right)
+                                                    : std::max(*left, *right);
+        result.constant = std::bit_cast<std::int64_t>(selected);
+        result.width = 64U;
+        result.domain = frontend::ValueDomain::Bit2;
+        return result;
     }
     std::optional<semantic::vhdl::RangeConstraint> scalar_range;
     const auto constraint = std::ranges::find_if(

@@ -148,7 +148,7 @@ void test_generate_slice_and_case_closure(
             "vhdl:work.generated_vhdl_forward_generated_type(rtl)");
     assert(!forward_generated_type.ok());
     assert(has_diagnostic(
-        forward_generated_type, "FSIM-ELAB-VHTYPE-001"));
+        forward_generated_type, "FSIM-ELAB-VHTYPE-006"));
 
     const auto duplicate_generated_callable =
         compile_and_elaborate(

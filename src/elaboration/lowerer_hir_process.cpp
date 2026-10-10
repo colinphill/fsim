@@ -780,8 +780,13 @@ bool Lowerer::initialize_hir_declarations(
             }
         } else if (!vhdl_loop_parameter) {
             using Form = semantic::vhdl::DeclarationForm;
+            // A local constant of a multi-bit logic vector subtype is held
+            // like a variable, so an indexed or sliced read can select from
+            // it; scalar constants keep the folding paths.
+            const auto vector_constant
+                = hir_vhdl_local_vector_constant(*declaration->vhdl);
             if (declaration->vhdl->form != Form::variable
-                && declaration->vhdl->form != Form::file) {
+                && declaration->vhdl->form != Form::file && !vector_constant) {
                 // Constants, types, aliases, package instances, attributes,
                 // and nested subprograms remain available through HIR name
                 // resolution. Only variables and file objects own

@@ -35,19 +35,18 @@ VhdlParser::parse_vhdl_binding_indication(
     result.entity_name =
         parse_vhdl_selected_name(
             "entity aspect in configuration binding");
-    expect(
-        TokenKind::LeftParen,
-        "'(' before configured architecture name",
-        "FSIM-VHDL-PARSE-210");
-    const auto architecture =
-        expect_identifier(
-            "architecture name in configuration binding");
-    result.architecture_name =
-        vhdl_name(architecture.text);
-    expect(
-        TokenKind::RightParen,
-        "')' after configured architecture name",
-        "FSIM-VHDL-PARSE-210");
+    // The architecture is optional (IEEE 1076-2008 7.3.2.2).
+    if (match(TokenKind::LeftParen)) {
+      const auto architecture =
+          expect_identifier(
+              "architecture name in configuration binding");
+      result.architecture_name =
+          vhdl_name(architecture.text);
+      expect(
+          TokenKind::RightParen,
+          "')' after configured architecture name",
+          "FSIM-VHDL-PARSE-210");
+    }
   } else if (match_keyword("configuration", true)) {
     result.kind = VhdlBindingAspectKind::Configuration;
     result.configuration_name =

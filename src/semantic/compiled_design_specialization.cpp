@@ -2935,6 +2935,24 @@ private:
                     } else {
                         result = evaluate_vhdl_value(initializer);
                     }
+                    // A packed initial value takes the index range of the
+                    // constant's constrained subtype (IEEE 1076-2008 6.4.2.2,
+                    // implicit subtype conversion), e.g. a string literal
+                    // initializing a BIT_VECTOR(0 to 3).
+                    if (result && result->kind == VhdlConstantValue::Kind::packed
+                        && view->vhdl->subtype
+                        && !view->vhdl->subtype->constraints.empty()) {
+                        if (const auto effective = CompiledDesignResolver { unit_ }
+                                .effective_vhdl_subtype(
+                                    *view->vhdl->subtype, view->vhdl->scope)) {
+                            if (auto coerced = vhdl_coerce_callable_return(
+                                    *result, *effective);
+                                coerced
+                                && coerced->kind == VhdlConstantValue::Kind::packed) {
+                                result = std::move(coerced);
+                            }
+                        }
+                    }
                     const auto work_delta = constant_work_units_ - work_before;
                     if (memo_eligible && result
                         && vhdl_initializer_value_complete(*result)
@@ -7000,6 +7018,76 @@ private:
         return result;
     }
 
+    // The element count of a one-dimensional value whose shape is evident
+    // without evaluating its elements: a string literal, a positional
+    // aggregate, a constant with such a value, or a call of a parameterless
+    // function whose return statements all have such values.
+    [[nodiscard]] std::optional<std::int64_t> vhdl_value_shape_length(
+        const ExpressionId id, const std::size_t depth)
+    {
+        const auto view = unit_.find_expression(id);
+        if (!view || view->vhdl == nullptr || depth > 16U) {
+            return std::nullopt;
+        }
+        const auto& value = *view->vhdl;
+        if (value.kind == vhdl::ExpressionKind::string_literal) {
+            if (value.decoded_string) {
+                return static_cast<std::int64_t>(value.decoded_string->size());
+            }
+            return std::nullopt;
+        }
+        if (value.kind == vhdl::ExpressionKind::aggregate) {
+            if (value.associations.empty()
+                || !std::ranges::all_of(value.associations, [](const auto& association) {
+                       return association.choices.empty()
+                           && association.choice_spelling.empty();
+                   })) {
+                return std::nullopt;
+            }
+            return static_cast<std::int64_t>(value.associations.size());
+        }
+        if (value.kind == vhdl::ExpressionKind::call
+            && value.text.starts_with("@vhdl-qualified:") && value.operands.size() == 1U) {
+            return vhdl_value_shape_length(value.operands.front(), depth + 1U);
+        }
+        if ((value.kind != vhdl::ExpressionKind::name
+                && value.kind != vhdl::ExpressionKind::call)
+            || !value.referenced_name || !value.referenced_name->selected
+            || !value.operands.empty()) {
+            return std::nullopt;
+        }
+        const auto declaration = unit_.find_declaration(*value.referenced_name->selected);
+        if (!declaration || declaration->vhdl == nullptr) {
+            return std::nullopt;
+        }
+        if (declaration->vhdl->form == vhdl::DeclarationForm::constant
+            && declaration->vhdl->initializer && *declaration->vhdl->initializer != id) {
+            return vhdl_value_shape_length(*declaration->vhdl->initializer, depth + 1U);
+        }
+        if (declaration->vhdl->form != vhdl::DeclarationForm::function
+            || !declaration->vhdl->callable
+            || !declaration->vhdl->callable->formals.empty()
+            || declaration->vhdl->statements.empty()) {
+            return std::nullopt;
+        }
+        std::optional<std::int64_t> result;
+        for (const auto statement_id : declaration->vhdl->statements) {
+            const auto statement = unit_.find_statement(statement_id);
+            if (!statement || statement->vhdl == nullptr
+                || statement->vhdl->kind != vhdl::StatementKind::return_statement) {
+                continue;
+            }
+            const auto length = statement->vhdl->value
+                ? vhdl_value_shape_length(*statement->vhdl->value, depth + 1U)
+                : std::nullopt;
+            if (!length || (result && *result != *length)) {
+                return std::nullopt;
+            }
+            result = length;
+        }
+        return result;
+    }
+
     [[nodiscard]] std::optional<std::int64_t> evaluate_vhdl_attribute(
         const vhdl::Expression& expression)
     {
@@ -7138,6 +7226,30 @@ private:
             const auto index = static_cast<std::size_t>(dimension - 1);
             if (index < subtype->constraints.size()) {
                 range = concrete_range(subtype->constraints[index]);
+            }
+            // An unconstrained constant's length is its value's (IEEE
+            // 1076-2008 5.3.2.2).
+            if (!range && index == 0U && expression.text == "'length"
+                && (definition == nullptr || definition->array_dimensions.empty()
+                    || definition->array_dimensions.front().unconstrained)
+                && declaration && declaration->vhdl != nullptr
+                && declaration->vhdl->form == vhdl::DeclarationForm::constant
+                && declaration->vhdl->initializer) {
+                if (const auto value = evaluate_vhdl_value(*declaration->vhdl->initializer)) {
+                    if (value->kind == VhdlConstantValue::Kind::array) {
+                        return static_cast<std::int64_t>(value->elements.size());
+                    }
+                    if (value->kind == VhdlConstantValue::Kind::packed) {
+                        const auto distance = value->packed.left_bound > value->packed.right_bound
+                            ? value->packed.left_bound - value->packed.right_bound
+                            : value->packed.right_bound - value->packed.left_bound;
+                        return value->packed.bits.empty() ? 0 : distance + 1;
+                    }
+                }
+                if (const auto length = vhdl_value_shape_length(
+                        *declaration->vhdl->initializer, 0U)) {
+                    return length;
+                }
             }
             if (!range && definition != nullptr
                 && definition->form == vhdl::TypeForm::array

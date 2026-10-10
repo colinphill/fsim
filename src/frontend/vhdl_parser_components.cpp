@@ -226,6 +226,7 @@ void VhdlParser::parse_vhdl_component_ports(
       "'(' after component port",
       "FSIM-VHDL-PARSE-221");
   while (!at_end() && !at(TokenKind::RightParen)) {
+    (void)match_keyword("signal", true);
     std::vector<Token> names;
     names.push_back(
         expect_identifier("component port name"));
@@ -249,10 +250,15 @@ void VhdlParser::parse_vhdl_component_ports(
       direction = PortDirection::Inout;
     } else if (match_keyword("buffer", true)) {
       direction = PortDirection::Buffer;
+    } else if (match_keyword("linkage", true)) {
+      direction = PortDirection::Inout;
     } else if (match_keyword("view", true)) {
       auto parsed = parse_vhdl_mode_view_indication(previous());
       type = std::move(parsed.type);
       mode_view = std::move(parsed.indication);
+    } else if (at(TokenKind::Identifier)) {
+      // An omitted mode is `in` (IEEE 1076-2008 6.5.2).
+      direction = PortDirection::Input;
     } else {
       error(
           current(),

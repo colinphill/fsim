@@ -699,7 +699,11 @@ def vests_cases(root: Path) -> list[Case]:
                     top = None
                 else:
                     configs = {c: e for c, e in vhdl_units(text)[2]}
+                    # A configuration of the chosen entity is the intended
+                    # top: it supplies the component bindings.
+                    owned = [c for c, e in configs.items() if e == entity.lower()]
                     top = entity.lower() if entity.lower() in configs \
+                        else owned[-1] if owned \
                         else vhdl_top_spec(entity, [text])
                 elab = ["elaborate", "-q", "--no-aot"]
                 for lib in libraries:
@@ -927,7 +931,8 @@ def prepare_uvm_libraries(cases: list[Case], fsim: Path, root: Path, out: Path,
     every test."""
     releases = sorted({c.uvm_release for c in cases if c.uvm_release and not c.skip})
     for release in releases:
-        workspace = out / "shared" / f"uvm-{release}"
+        # Absolute: each case maps the library from its own working directory.
+        workspace = (out / "shared" / f"uvm-{release}").resolve()
         remove_tree(workspace)
         workspace.mkdir(parents=True, exist_ok=True)
         uvm_src = root / "uvm" / f"uvm-{release}" / "src"

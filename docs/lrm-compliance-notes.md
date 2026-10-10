@@ -483,3 +483,26 @@ gives fsim's result in each case checked.
 - The automatic time resolution only ever refines the 1 ns default because
   of a literal; when a delay selects the resolution, a literal can make it
   finer (to ps or fs) but not coarser.
+
+## Typed-file images and constant bounds (batch 28)
+
+- Typed files are lowered per element as a list of scalar parts in the
+  element's packed (most significant first) order. Reads of a fixed shape
+  scan the parts from the file and then skip the rest of the line; reads of
+  an unconstrained array scan from the line, unrolled up to the target's
+  length (at most 4096 elements), and stop at the first part that does not
+  convert. Integers of 32 bits or fewer accept a one-digit character literal
+  image (`'1'`), as some VESTs iofiles contain one where an INTEGER file is
+  read.
+- TIME parts read as a magnitude and a unit; the resolution needed to turn
+  them into ticks is not known to the lowerer, so it is obtained at run time
+  from the fs image of one tick (`format_vhdl_time`).
+- A CHARACTER part is read raw after one separator, since it may be a
+  space; a standalone CHARACTER is written quoted so that `'` round-trips.
+- The bounds of an unconstrained constant come from the evaluated value;
+  for a string literal or positional aggregate the left bound is the index
+  subtype's left bound (NATURAL for BIT_VECTOR, POSITIVE for STRING), not
+  the packed layout's N-1 downto 0.
+- `FSIM-ELAB-VHTYPE-001` covered both "not visible here" and "unresolved";
+  only the first is reported at compile time (as `-006`), because the
+  analysis elaboration does not resolve some IEEE subtypes such as X01.

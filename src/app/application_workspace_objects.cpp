@@ -195,9 +195,14 @@ struct CompilerEnvironment {
     std::optional<std::string> standard;
     std::vector<library::VhdlPackageDependency> dependencies;
     std::optional<std::string> bytes;
+    // The object whose compiler package set covers every other object's:
+    // it alone supplies the shared packages.
+    std::optional<std::filesystem::path> provider;
+    std::vector<library::VhdlPackageDependency> provided;
 };
 
 std::optional<std::vector<std::string>> select_compiler_environment(
+    const std::filesystem::path& metadata_path,
     const artifact::ObjectMetadata& metadata,
     const semantic::CompiledDesign& design,
     CompilerEnvironment& environment,
@@ -223,6 +228,18 @@ std::optional<std::vector<std::string>> select_compiler_environment(
     }
     if (metadata.vhdl_package_dependencies.empty()) {
         return libraries;
+    }
+    // An object whose packages are a subset of the provider's uses the
+    // provider's copies (identical revision and source digest).
+    if (environment.provider && *environment.provider != metadata_path) {
+        const bool covered = std::ranges::all_of(metadata.vhdl_package_dependencies,
+            [&](const library::VhdlPackageDependency& dependency) {
+                return std::ranges::find(environment.provided, dependency)
+                    != environment.provided.end();
+            });
+        if (covered) {
+            return std::vector<std::string> { };
+        }
     }
     auto projected = semantic::extract_compiled_libraries(design, libraries);
     if (!projected.ok()) {
@@ -376,6 +393,38 @@ std::optional<CompilationWorkspace> load_workspace_objects(
     std::set<std::string> known_units;
     std::map<std::string, std::string> known_sources;
     CompilerEnvironment environment;
+    // The provider has the largest compiler package set; every other set
+    // must be contained in it, or the objects use one set each as before.
+    {
+        std::vector<std::pair<std::filesystem::path,
+            std::vector<library::VhdlPackageDependency>>> sets;
+        for (const auto* entry : *ordered) {
+            if (entry->active_units.empty()) {
+                continue;
+            }
+            diagnostic::Engine quiet;
+            const auto metadata = artifact::load_object_metadata(entry->path, quiet);
+            if (!metadata) {
+                sets.clear();
+                break;
+            }
+            if (!metadata->vhdl_package_dependencies.empty()) {
+                sets.emplace_back(entry->path, metadata->vhdl_package_dependencies);
+            }
+        }
+        const auto largest = std::ranges::max_element(sets, { },
+            [](const auto& item) { return item.second.size(); });
+        if (largest != sets.end()
+            && std::ranges::all_of(sets, [&](const auto& item) {
+                   return std::ranges::all_of(item.second, [&](const auto& dependency) {
+                       return std::ranges::find(largest->second, dependency)
+                           != largest->second.end();
+                   });
+               })) {
+            environment.provider = largest->first;
+            environment.provided = largest->second;
+        }
+    }
     compiler::CacheKeyBuilder uvm_identity;
     uvm_identity.add("uvm-provenance-schema", "fsim-uvm-object-v1");
     for (const auto* entry : *ordered) {
@@ -399,7 +448,7 @@ std::optional<CompilationWorkspace> load_workspace_objects(
             return std::nullopt;
         }
         const auto libraries = select_compiler_environment(
-            *metadata, *input, environment, diagnostics);
+            selection.path, *metadata, *input, environment, diagnostics);
         if (!libraries) {
             return std::nullopt;
         }

@@ -435,12 +435,25 @@ class Lexer {
         }
     }
 
-    if (is_vhdl() && peek() == '#') {
+    // A colon replaces both sharps of a based literal (IEEE 1076-2008
+    // 15.10); `5:1234.4321:E-10` is `5#1234.4321#E-10`.
+    const bool colon_based = is_vhdl() && peek() == ':' && [&] {
+      std::size_t index = 1U;
+      bool digits = false;
+      while (std::isxdigit(static_cast<unsigned char>(peek(index))) != 0
+          || peek(index) == '_' || peek(index) == '.') {
+        digits = true;
+        ++index;
+      }
+      return digits && peek(index) == ':' && peek(index + 1U) != '=';
+    }();
+    if (is_vhdl() && (peek() == '#' || colon_based)) {
+      const char delimiter = peek();
       advance();
-      while (!at_end() && peek() != '#') {
+      while (!at_end() && peek() != delimiter) {
         advance();
       }
-      if (consume_if('#') && (peek() == 'e' || peek() == 'E')) {
+      if (consume_if(delimiter) && (peek() == 'e' || peek() == 'E')) {
         advance();
         if (peek() == '+' || peek() == '-') {
           advance();
@@ -518,6 +531,10 @@ class Lexer {
         diagnose("FSIM-VHDL-LEX-005",
             "a VHDL integer literal cannot have a negative exponent", begin);
       }
+    }
+    if (colon_based) {
+      auto& text = result_.tokens.back().text;
+      std::ranges::replace(text, ':', '#');
     }
     if (sized_spaced) {
       auto& text = result_.tokens.back().text;

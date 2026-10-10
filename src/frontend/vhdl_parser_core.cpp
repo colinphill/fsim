@@ -487,6 +487,10 @@ DesignUnit VhdlParser::parse_entity(const Token& start)
             const auto generic_start = advance();
             parse_vhdl_generic_subprogram(unit, generic_start, true);
         } else if (match_keyword("port", true)) {
+            if (entity_ports_seen) {
+                error(previous(), "FSIM-VHDL-PARSE-302",
+                    "an entity header has at most one port clause");
+            }
             parse_vhdl_ports(unit);
             entity_ports_seen = true;
         } else if (match_keyword("generic", true)) {
@@ -822,6 +826,9 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit)
         error(current(), "FSIM-VHDL-PARSE-302", "a VHDL port clause cannot be empty");
     }
     while (!at_end() && !at(TokenKind::RightParen)) {
+        // A port is an interface signal declaration, which may name its
+        // class (IEEE 1076-2008 6.5.2).
+        (void)match_keyword("signal", true);
         std::vector<Token> names;
         names.push_back(expect_identifier("port name"));
         while (match(TokenKind::Comma)) {
@@ -840,12 +847,15 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit)
             direction = PortDirection::Inout;
         } else if (match_keyword("buffer", true)) {
             direction = PortDirection::Buffer;
+        } else if (match_keyword("linkage", true)) {
+            // A linkage port is only associated, never read or updated
+            // (IEEE 1076-2008 6.5.2); it connects like an inout port.
+            direction = PortDirection::Inout;
         } else if (match_keyword("view", true)) {
             auto parsed = parse_vhdl_mode_view_indication(previous());
             type = std::move(parsed.type);
             mode_view = std::move(parsed.indication);
-        } else if (at(TokenKind::Identifier)
-            && !keyword("linkage", 0, true)) {
+        } else if (at(TokenKind::Identifier)) {
             // An omitted mode is `in` (IEEE 1076-2008 6.5.2).
             direction = PortDirection::Input;
         } else {
@@ -1267,7 +1277,9 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
         type.domain = ValueDomain::Integer;
         type.is_signed = true;
         type.packed_range = PackedRange { 63, 0, true };
-        type.integer_range = IntegerRange { 0, std::numeric_limits<std::int64_t>::max(), false };
+        type.integer_range = IntegerRange {
+            simple_name == "time" ? std::numeric_limits<std::int64_t>::min() : 0,
+            std::numeric_limits<std::int64_t>::max(), false };
         type.nominal_type = "@builtin:time";
         type.vhdl_type_declaration = type.nominal_type;
     } else if (simple_name == "integer" || simple_name == "natural" || simple_name == "positive") {
