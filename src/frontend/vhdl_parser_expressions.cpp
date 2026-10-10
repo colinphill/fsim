@@ -348,6 +348,14 @@ Expression VhdlParser::parse_expression(
             error(current(), "FSIM-VHDL-PARSE-114",
                 "a signed VHDL exponent must be parenthesized");
         }
+        // A sign begins only a simple expression (IEEE 1076-2008 9.1), so
+        // the right operand of an adding or multiplying operator is unsigned.
+        if ((operation->precedence == 5 || operation->precedence == 6)
+            && (at(TokenKind::Plus) || at(TokenKind::Minus))) {
+            error(current(), "FSIM-VHDL-PARSE-297",
+                "a signed operand of a VHDL adding or multiplying operator "
+                "must be parenthesized");
+        }
         Expression right = parse_expression(
             operation->precedence + 1, allow_conditional);
         const auto combined_span = cover(left.span, right.span);
@@ -417,6 +425,10 @@ Expression VhdlParser::parse_unary()
 {
     if (at(TokenKind::Plus) || at(TokenKind::Minus)) {
         const auto operation = advance();
+        if (at(TokenKind::Plus) || at(TokenKind::Minus)) {
+            error(current(), "FSIM-VHDL-PARSE-297",
+                "a signed operand of a VHDL sign must be parenthesized");
+        }
         Expression operand = parse_expression(6);
         return Expression { ExpressionKind::Unary,
             detail::ascii_lower(operation.text),
@@ -425,6 +437,12 @@ Expression VhdlParser::parse_unary()
     }
     if (keyword("not", 0, true) || keyword("abs", 0, true)) {
         const auto operation = advance();
+        if (at(TokenKind::Plus) || at(TokenKind::Minus)) {
+            error(current(), "FSIM-VHDL-PARSE-297",
+                "a signed operand of a VHDL '"
+                    + detail::ascii_lower(operation.text)
+                    + "' operator must be parenthesized");
+        }
         Expression operand = parse_unary();
         return Expression { ExpressionKind::Unary,
             detail::ascii_lower(operation.text),

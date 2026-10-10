@@ -4670,13 +4670,27 @@ Lowerer::resolve_hir_vhdl_function_call(
                           ? actual->vhdl->scope
                           : process_scope)
                 : std::optional<bool> { };
+            // A record formal packs its elements; an integer element
+            // actual (`l.a + r.a` inside an overload for the record) must
+            // not match it through the shared integer domain.
+            const auto formal_record = formal_subtype
+                && formal_subtype->type_mark.target.valid()
+                && [&] {
+                       const auto definition = specialized_hir_unit_->find_type(
+                           base_type(formal_subtype->type_mark.target));
+                       return definition && definition->vhdl != nullptr
+                           && definition->vhdl->form
+                               == semantic::vhdl::TypeForm::record;
+                   }();
             compatible = actual_width && actual_domain
                 && *actual_domain == formal->domain
                 && same_nominal_type
                 && (!array_shapes_match || *array_shapes_match)
                 && (formal->domain == frontend::ValueDomain::Integer
                     || *actual_width == formal->width
-                    || same_nominal_array);
+                    || same_nominal_array)
+                && (!formal_record || aggregate_actual
+                    || *actual_width == formal->width);
         }
         if (uses_unspecified_type
             && !expression->vhdl->unspecified_type_inference_unique) {

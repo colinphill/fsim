@@ -3,10 +3,12 @@
 #include "application_workspace_internal.hpp"
 
 #include "fsim/artifact/object.hpp"
+#include "fsim/elaboration/elaborator.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/path.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <iterator>
 #include <map>
 #include <set>
@@ -317,6 +319,114 @@ namespace {
         catalog.artifacts.insert(catalog.artifacts.end(), records.begin(), records.end());
     }
 
+    // Several VHDL analysis rules (IEEE 1076-2008 9, 10, 11) are checked only
+    // where the elaborator types expressions. Elaborating each newly analyzed
+    // architecture on its own reports those violations at analysis time;
+    // diagnostics outside the analyzed files, and lowering gaps that do not
+    // identify an analysis rule, are not reported here.
+    bool check_vhdl_analysis_elaboration(const CheckedProject& checked,
+        std::span<const CompiledObject> groups, const project::SourceSet& sources,
+        diagnostic::Engine& diagnostics)
+    {
+        if (const auto* disabled = std::getenv("FSIM_NO_ANALYSIS_ELABORATION");
+            disabled != nullptr && *disabled != '\0') {
+            return true;
+        }
+        std::set<std::uint64_t> analyzed;
+        for (const auto& group : groups) {
+            for (const auto& unit : group.units) {
+                analyzed.insert(unit.value());
+            }
+        }
+        std::set<std::string> files;
+        for (const auto& file : sources.files) {
+            files.insert(support::path_to_utf8(file.filename()));
+        }
+        // Elaboration codes that identify a violated analysis rule. Other
+        // elaboration diagnostics may stem from a missing design context
+        // (generic values, bindings) or from bounded-runtime limits.
+        static const std::set<std::string, std::less<>> analysis_codes {
+            "FSIM-ELAB-048", "FSIM-ELAB-051", "FSIM-ELAB-053", "FSIM-ELAB-059",
+            "FSIM-ELAB-068", "FSIM-ELAB-074", "FSIM-ELAB-077", "FSIM-ELAB-079",
+            "FSIM-ELAB-082", "FSIM-ELAB-091", "FSIM-ELAB-092",
+            "FSIM-ELAB-DYNINDEX-002", "FSIM-ELAB-GEN-002", "FSIM-ELAB-PKG-009",
+            "FSIM-ELAB-VHACCESS-009", "FSIM-ELAB-VHACCESS-020",
+            "FSIM-ELAB-VHAGG-003", "FSIM-ELAB-VHAGG-008",
+            "FSIM-ELAB-VHARRAY-003",
+            "FSIM-ELAB-VHARRAY-006", "FSIM-ELAB-VHARRAY-008",
+            "FSIM-ELAB-VHARRAYAGG-002", "FSIM-ELAB-VHARRAYAGG-003",
+            "FSIM-ELAB-VHARRAYAGG-004", "FSIM-ELAB-VHARRAYATTR-002",
+            "FSIM-ELAB-VHARRAYSEL-003", "FSIM-ELAB-VHARRAYSEL-004",
+            "FSIM-ELAB-VHCOMPOP-001",
+            "FSIM-ELAB-VHDLCASE-003", "FSIM-ELAB-VHDLCASE-005",
+            "FSIM-ELAB-VHENUM-002", "FSIM-ELAB-VHENUM-003",
+            "FSIM-ELAB-VHENUMRANGE-003", "FSIM-ELAB-VHENUMRANGE-004",
+            "FSIM-ELAB-VHLEGAL-002", "FSIM-ELAB-VHLEGAL-004",
+            "FSIM-ELAB-VHLEGAL-010", "FSIM-ELAB-VHOPER-001", "FSIM-ELAB-VHRANGE-001",
+            "FSIM-ELAB-VHPHYSICAL-003", "FSIM-ELAB-VHPHYSICAL-004",
+            "FSIM-ELAB-VHPHYSICAL-011", "FSIM-ELAB-VHPROC-014",
+            "FSIM-ELAB-VHPROC-018", "FSIM-ELAB-VHPROC-022",
+            "FSIM-ELAB-VHQUAL-002", "FSIM-ELAB-VHQUAL-003",
+            "FSIM-ELAB-VHRECORD-001", "FSIM-ELAB-VHREPORT-001", "FSIM-ELAB-VHREPORT-002",
+            "FSIM-ELAB-VHSLICE-002", "FSIM-ELAB-VHSUBTYPE-001",
+            "FSIM-ELAB-VHSUBTYPE-002", "FSIM-ELAB-VHSUBTYPE-003",
+            "FSIM-ELAB-VHSUBTYPE-004",
+        };
+        const auto analysis_rule = [](const std::string_view code) {
+            return analysis_codes.contains(code);
+        };
+        // A unit that needs generic values or other design context cannot be
+        // checked on its own.
+        const auto incomplete_context = [](const std::string_view code) {
+            return code.starts_with("FSIM-ELAB-GENERIC-")
+                || code.starts_with("FSIM-ELAB-VHFUNC-");
+        };
+        // Elaborating an architecture also elaborates everything it
+        // instantiates, which can cost more than the analysis itself; an
+        // architecture with instances (directly or in a generate statement)
+        // is left to `fsim elaborate`.
+        std::set<std::uint64_t> instantiating_units;
+        const auto& scopes = checked.semantics.scopes();
+        for (const auto& instance : checked.vhdl_hir.instances()) {
+            if (instance.scope.valid() && instance.scope.value() < scopes.size()) {
+                instantiating_units.insert(scopes[instance.scope.value()].unit.value());
+            }
+        }
+        bool clean = true;
+        for (const auto& unit : checked.vhdl_hir.units()) {
+            if (unit.kind != semantic::vhdl::UnitKind::architecture
+                || !analyzed.contains(unit.id.value())
+                || instantiating_units.contains(unit.id.value())) {
+                continue;
+            }
+            const auto top = unit.library + "." + unit.primary_name + "(" + unit.name + ")";
+            const auto elaborated = elaboration::elaborate(checked, top);
+            if (std::ranges::any_of(elaborated.diagnostics, [&](const auto& input) {
+                    return incomplete_context(input.code);
+                })) {
+                continue;
+            }
+            for (const auto& input : elaborated.diagnostics) {
+                const auto file = support::path_to_utf8(
+                    std::filesystem::path { input.span.source_name.str() }.filename());
+                if (!analysis_rule(input.code) || !files.contains(file)) {
+                    continue;
+                }
+                diagnostic::SourceSpan span;
+                span.path = input.span.source_name.str();
+                span.begin.line = static_cast<std::uint32_t>(input.span.begin.line);
+                span.begin.column = static_cast<std::uint32_t>(input.span.begin.column);
+                span.begin.offset = input.span.begin.offset;
+                span.end.line = static_cast<std::uint32_t>(input.span.end.line);
+                span.end.column = static_cast<std::uint32_t>(input.span.end.column);
+                span.end.offset = input.span.end.offset;
+                diagnostics.error(input.code, input.message, std::move(span));
+                clean = false;
+            }
+        }
+        return clean;
+    }
+
     std::vector<std::string> supporting_libraries(const CheckedProject& checked)
     {
         std::vector<std::string> result;
@@ -458,6 +568,10 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
             }
         }
         records.push_back(std::move(*record));
+    }
+    if (sources.language == project::Language::vhdl
+        && !check_vhdl_analysis_elaboration(checked, *groups, sources, diagnostics)) {
+        return 1;
     }
     auto& target = catalogs->front();
     replace_catalog_sources(target, replaced_sources, records);

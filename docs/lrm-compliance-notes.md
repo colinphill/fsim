@@ -349,3 +349,35 @@ gives fsim's result in each case checked.
   Aggregate assignment targets (`(a, b) := v;`) are split into one
   assignment per name: an aggregate value by element, a string literal by
   character, and an array object `v` by `v(v'left + k * sign)`.
+
+## Analysis-time checks and operator overloads (batch 24)
+
+- Most VHDL typing rules are checked where the elaborator types expressions,
+  not in the analyzer. A VESTs analyzer-failure test is analyzed only, so an
+  invalid unit that fails at elaboration still counted as accepted. `fsim
+  compile` now elaborates each architecture it has just analyzed, as its own
+  root, before committing the library, and reports diagnostics whose code is
+  on an explicit list of analysis rules and whose location is in the
+  analyzed files. Other elaboration diagnostics are ignored at this point:
+  many come from missing design context (generic values given only to
+  `elaborate`, unbound components) or from bounded-runtime limits that are
+  not language errors (`FSIM-ELAB-VHPHYSICAL-006`, `FSIM-ELAB-HIR-001`). A
+  code joins the list only after it fires on no compliant case in VESTs,
+  nvc or the VHDL Compliance-Tests. An architecture that needs generic
+  values is skipped, and so is one that instantiates anything (directly or
+  in a generate statement): elaborating it would elaborate its whole subtree
+  and made compiling the mixed-language benchmark designs four times slower.
+  Packages are not elaborated this way.
+- Where one diagnostic code covered both an analysis rule and an
+  implementation limit, the limit moved to its own code: a condition or
+  report expression whose type the elaborator cannot determine
+  (`FSIM-ELAB-093`, `FSIM-ELAB-VHREPORT-003`), and a physical type with real
+  bounds (`FSIM-ELAB-VHPHYSICAL-011`).
+- `numeric_std` and `numeric_bit` arithmetic is provided natively, without
+  visible operator declarations, so the predefined-operator check leaves
+  array operands alone; it rejects records, enumerations, access values and
+  `null` only when no function named like the operator is visible.
+- A local subprogram hid every imported subprogram with the same
+  designator. Only homographs hide (12.3): an imported overload stays visible
+  unless a local declaration has the same parameter and result base types.
+  When a local profile cannot be determined, the old rule still applies.

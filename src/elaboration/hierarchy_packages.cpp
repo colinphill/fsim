@@ -16430,7 +16430,10 @@ bool HierarchyBuilder::validate_compiled_vhdl_object_composite_types(
                 // occurrence's associated actual supplies their concrete
                 // bounds.  Other objects still require a fully concrete
                 // executable layout here.
-                if (form != Form::port) {
+                // A constant takes its bounds from its initial value.
+                if (form != Form::port
+                    && !(form == Form::constant
+                        && declaration->vhdl->initializer)) {
                     report(
                         "FSIM-ELAB-VHRECORD-001",
                         "VHDL object '" + declaration->vhdl->name
@@ -16790,6 +16793,21 @@ bool HierarchyBuilder::validate_compiled_vhdl_physical_type_units(
                 "a VHDL physical type requires a range and a primary "
                 "unit",
                 compiled_source_span(*compiled_, type.source));
+            valid = false;
+            continue;
+        }
+        const auto real_bound = [&](const std::optional<semantic::ExpressionId> id) {
+            const auto bound = id ? specialized->find_expression(*id) : std::nullopt;
+            return bound && bound->vhdl != nullptr
+                && bound->vhdl->kind == semantic::vhdl::ExpressionKind::real_literal;
+        };
+        if (real_bound(type.scalar_range->left_expression)
+            || real_bound(type.scalar_range->right_expression)) {
+            report(
+                "FSIM-ELAB-VHPHYSICAL-011",
+                "the range of a VHDL physical type must have integer bounds",
+                compiled_source_span(
+                    *compiled_, type.scalar_range->source));
             valid = false;
             continue;
         }

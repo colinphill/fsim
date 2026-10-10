@@ -7578,6 +7578,29 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
             return type->domain;
         }
     }
+    // An operand literal can leave the overload open (std_match on a string
+    // literal); the call is still BOOLEAN when every candidate returns
+    // BOOLEAN.
+    if (const auto expression
+        = specialized_hir_unit_->find_expression(expression_id);
+        expression && expression->vhdl != nullptr
+        && expression->vhdl->kind == semantic::vhdl::ExpressionKind::call
+        && expression->vhdl->referenced_name
+        && !expression->vhdl->operands.empty()) {
+        const auto candidates = hir_vhdl_callable_resolutions(
+            *expression->vhdl->referenced_name, expression->vhdl->scope);
+        const auto boolean = !candidates.empty()
+            && std::ranges::all_of(candidates, [&](const auto& candidate) {
+                   const auto candidate_type
+                       = hir_callable_type(candidate.body, 0U);
+                   return candidate_type && !candidate_type->string
+                       && candidate_type->domain
+                           == frontend::ValueDomain::Boolean;
+               });
+        if (boolean) {
+            return frontend::ValueDomain::Boolean;
+        }
+    }
     if (const auto binding = hir_case_pattern_binding(expression_id)) {
         return binding->domain;
     }
@@ -8347,9 +8370,29 @@ bool Lowerer::hir_vhdl_expression_is_real(
                 && source.text != "**")) {
             return false;
         }
-        return hir_vhdl_expression_is_real(source.operands.front())
-            && (source.text == "**"
-                || hir_vhdl_expression_is_real(source.operands.back()));
+        {
+            // universal_real * universal_integer, universal_integer *
+            // universal_real and universal_real / universal_integer are
+            // universal_real (IEEE 1076-2008 9.2.7).
+            const auto universal_integer = [&](const semantic::ExpressionId id) {
+                const auto operand = specialized_hir_unit_->find_expression(id);
+                return operand && operand->vhdl != nullptr
+                    && operand->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::integer_literal
+                    && operand->vhdl->nominal_type.empty();
+            };
+            const auto left_real = hir_vhdl_expression_is_real(source.operands.front());
+            const auto right_real = hir_vhdl_expression_is_real(source.operands.back());
+            if ((source.text == "*" || source.text == "/") && left_real
+                && universal_integer(source.operands.back())) {
+                return true;
+            }
+            if (source.text == "*" && right_real
+                && universal_integer(source.operands.front())) {
+                return true;
+            }
+            return left_real && (source.text == "**" || right_real);
+        }
     case semantic::vhdl::ExpressionKind::call: {
         if (source.text == "'left" || source.text == "'right"
             || source.text == "'high" || source.text == "'low"

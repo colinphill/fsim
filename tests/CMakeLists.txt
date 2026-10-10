@@ -7033,6 +7033,25 @@ if(TARGET fsim)
   endforeach()
 endif()
 
+# Invalid VHDL units that analysis (`fsim compile`) must reject, each with the
+# diagnostic code named in its header.
+if(TARGET fsim)
+  file(GLOB analysis_error_fixtures CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/compliance/analysis_errors/*.vhd")
+  foreach(analysis_error_fixture IN LISTS analysis_error_fixtures)
+    get_filename_component(analysis_error_name "${analysis_error_fixture}" NAME_WE)
+    add_test(
+      NAME "fsim.analysis-error.${analysis_error_name}"
+      COMMAND "${CMAKE_COMMAND}"
+        "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+        "-DFSIM_FIXTURE=${analysis_error_fixture}"
+        -P "${PROJECT_SOURCE_DIR}/tests/fixtures/compliance/analysis_errors/run_analysis_error.cmake")
+    set_tests_properties("fsim.analysis-error.${analysis_error_name}" PROPERTIES
+      LABELS "application;compliance"
+      TIMEOUT 120)
+  endforeach()
+endif()
+
 # The scheduling contract is kept as a source-only CLI corpus so both runtime
 # engines run the same independent-oracle transcripts from fresh workspaces.
 if(TARGET fsim)

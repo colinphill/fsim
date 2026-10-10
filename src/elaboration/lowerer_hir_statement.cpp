@@ -7436,9 +7436,13 @@ bool Lowerer::lower_hir_statement(
                         == frontend::ValueDomain::Logic4
                     || *condition_domain
                         == frontend::ValueDomain::Logic9);
-            if ((!condition_domain
-                    || *condition_domain
-                        != frontend::ValueDomain::Boolean)
+            if (!condition_domain) {
+                report("FSIM-ELAB-093",
+                    "the type of a VHDL condition cannot be determined",
+                    span);
+                return false;
+            }
+            if (*condition_domain != frontend::ValueDomain::Boolean
                 && !vhdl_2019_logic_condition) {
                 const auto assignment
                     = statement->vhdl->conditional_assignment;
@@ -14212,9 +14216,25 @@ bool Lowerer::lower_hir_statement(
         if (input.report
             && !hir_expression_is_string(
                 *input.report, hir_process_scope_)) {
+            // A concatenation or an expression of unknown type may still be
+            // a STRING the lowerer does not model.
+            const auto report_domain = report_expression
+                    && report_expression->vhdl != nullptr
+                    && report_expression->vhdl->kind
+                        != semantic::vhdl::ExpressionKind::concatenation
+                    && report_expression->vhdl->text.find('\'')
+                        == std::string::npos
+                ? hir_expression_domain(*input.report, hir_process_scope_)
+                : std::nullopt;
+            const auto known_non_string = report_domain
+                && *report_domain != frontend::ValueDomain::String;
             report(
-                "FSIM-ELAB-VHREPORT-001",
-                "VHDL report expression must have a string type",
+                known_non_string ? "FSIM-ELAB-VHREPORT-001"
+                                 : "FSIM-ELAB-VHREPORT-003",
+                known_non_string
+                    ? "VHDL report expression must have a string type"
+                    : "the type of a VHDL report expression cannot be "
+                      "determined as STRING",
                 report_expression && report_expression->vhdl != nullptr
                     ? hir_source_span(report_expression->vhdl->source)
                     : span);
@@ -14375,6 +14395,12 @@ bool Lowerer::lower_hir_statement(
                     && expression->vhdl != nullptr
                 ? hir_source_span(expression->vhdl->source)
                 : span;
+            if (!condition_domain) {
+                report("FSIM-ELAB-093",
+                    "the type of a VHDL condition cannot be determined",
+                    condition_source);
+                return true;
+            }
             report(
                 "FSIM-ELAB-051",
                 "a VHDL assertion condition must have type boolean",

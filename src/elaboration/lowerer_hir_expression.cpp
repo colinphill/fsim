@@ -12777,8 +12777,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             return kind == ScalarKind::ShortReal || kind == ScalarKind::Real
                 || kind == ScalarKind::Realtime;
         };
-        // IEEE 1800-2017 11.4.3: a power with a real operand is real.
-        if (source.text == "**" && expression->systemverilog != nullptr
+        // IEEE 1800-2017 11.4.3: a power with a real operand is real; so is
+        // a VHDL floating-point power (IEEE 1076-2008 9.2.8).
+        if (source.text == "**"
+            && (expression->systemverilog != nullptr
+                || expression->vhdl != nullptr)
             && (real_scalar(lhs_scalar) || real_scalar(rhs_scalar))) {
             const auto lower_power_operand
                 = [&](const semantic::ExpressionId operand)
@@ -12856,8 +12859,18 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             -> std::optional<RegisterId> {
             const bool real_kind = kind == ScalarKind::ShortReal
                 || kind == ScalarKind::Real || kind == ScalarKind::Realtime;
-            if (real_kind && expression->systemverilog != nullptr
-                && hir_systemverilog_scalar_kind(operand) == ScalarKind::None) {
+            // A VHDL universal_integer operand of a universal_real product
+            // or quotient converts the same way (IEEE 1076-2008 9.2.7).
+            const auto vhdl_operand = expression->vhdl != nullptr
+                ? specialized_hir_unit_->find_expression(operand)
+                : std::nullopt;
+            const bool integral_operand = expression->systemverilog != nullptr
+                ? hir_systemverilog_scalar_kind(operand) == ScalarKind::None
+                : vhdl_operand && vhdl_operand->vhdl != nullptr
+                    && vhdl_operand->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::integer_literal
+                    && vhdl_operand->vhdl->nominal_type.empty();
+            if (real_kind && integral_operand) {
                 const auto width = hir_expression_width(
                     operand, hir_process_scope_)
                                        .value_or(32U);

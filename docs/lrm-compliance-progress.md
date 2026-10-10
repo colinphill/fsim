@@ -249,6 +249,60 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 24: VHDL analysis-time checks, predefined operators, overload visibility
+
+Fixtures: `vhdl_operator_overloads.vhd` (passes on xsim), and five invalid
+units under `tests/fixtures/compliance/analysis_errors/` that `fsim compile`
+must reject with a named code (xsim rejects each at analysis).
+
+Analysis-time checks (IEEE 1076-2008 13.1):
+- `fsim compile` elaborates each VHDL architecture it analyzes on its own
+  and reports, at analysis, the elaboration diagnostics that identify a
+  violated analysis rule (type of a condition, report or severity
+  expression, operator operand types, index and range types, selections,
+  qualified expressions, aggregates, access assignments). Diagnostics that
+  come from missing design context (generic values, bindings) or from
+  bounded-runtime limits are not reported there. An architecture that needs
+  generic values, or that instantiates anything, is skipped, so compile time
+  of the benchmark designs is unchanged. `FSIM_NO_ANALYSIS_ELABORATION=1`
+  turns the check off.
+- Predefined adding, multiplying, `mod`, `rem`, `**`, sign and `abs`
+  operators applied to operands outside their numeric type rules, when no
+  visible overload applies (`FSIM-ELAB-VHOPER-001`, 9.2.4-9.2.8). Array
+  operands are left to library packages.
+- A sign after an adding or multiplying operator, `abs`, `not` or another
+  sign (`a / -b`) must be parenthesized (`FSIM-VHDL-PARSE-297`, 9.1).
+- The bounds of a range in a type definition must have the same type, and a
+  scalar type definition needs integer or floating-point bounds
+  (`FSIM-ELAB-VHRANGE-001`); a physical type needs integer bounds
+  (`FSIM-ELAB-VHPHYSICAL-011`).
+- Conditions and report expressions whose type cannot be determined get
+  their own codes (`FSIM-ELAB-093`, `FSIM-ELAB-VHREPORT-003`), separate
+  from a known non-BOOLEAN condition or non-STRING report expression.
+
+Corrections found by the analysis-time check:
+- A function call that matches several overloads which all return BOOLEAN
+  (`std_match` with a string-literal operand) is a BOOLEAN condition.
+- A constant of an unconstrained array type takes its bounds from its
+  initial value, and an access assignment from a record element of an
+  incompletely declared type is accepted.
+
+Overloads and arithmetic:
+- A local subprogram hides an imported one only when the two are homographs
+  (12.3, 12.4): a local `"-"(character, character)` no longer hides an
+  imported `"-"(pair)`.
+- A record formal no longer matches an integer element actual, so
+  `l.a + r.a` inside an overload of `"+"` for the record calls the
+  predefined integer operator instead of recursing.
+- `real ** integer` at run time, and universal_real * universal_integer
+  (`2.5 * 2`) computed as REAL (9.2.7, 9.2.8).
+
+Corpus effect (interpreter, against Batch 23): VESTs +299 (2397/3665, no
+regressions), nvc unchanged (499/1482), VHDL Compliance-Tests unchanged
+(16/72). The batch changes only VHDL paths, so the SystemVerilog suites were
+not rerun. Compile time of the benchmark designs is unchanged, and all ten
+parity designs give the same output as their frozen runs.
+
 ### Batch 23: interface ports, declarations, time-zero values, VHDL ports
 
 Fixtures: `sv_interface_ports_and_waits.sv` and `sv_declarations_and_calls.sv`
@@ -1086,11 +1140,10 @@ error, and each exposes an existing gap:
 | SV: modport expressions (`modport mp(input .p(expr))`) | 9 Verilator cases |
 | SV: static task/function locals shared across processes and reachable hierarchically (`task.var`) | ivtest `ldelay1`, `pr307a`, `br1004` |
 | SV: `force` with a non-constant expression follows the expression's changes | ivtest `pr245` and others |
-| SV: `%v` strength format | 17 ivtest cases (`FSIM-SV-SEM-042`) |
+| SV: `%v` strength format; needs a per-bit resolved-strength query from the display formatter (the interpreter resolves strength per signal) | 18 ivtest cases (`FSIM-SV-SEM-042`) |
 | VHDL: record element constraints (`rec(y(1 to 3))`) | 26 nvc cases (`FSIM-VHDL-PARSE-009`) |
 | VHDL: slice and index alias targets (`alias a : string(1 to 4) is s(1 to 4);`) | 19 VESTs cases (`FSIM-VHDL-PARSE-236`) |
 | VHDL: chained signal attributes (`clk'delayed'last_event`) | 16 VESTs cases (`FSIM-VHDL-PARSE-046`) |
-| VHDL: operator type checks (predefined operators applied to wrong type classes) | ~240 VESTs negative cases (sections 7.2.x) |
 | SV: UVM `run_test` from source: the phase, objection and report services exist but are only driven through the C++ API | 100 UVM sv-tests |
 | SV: interface parameters read through a port (`a.PARAM`) | Verilator interface cases |
 | SV hierarchical references (`s.a`) in expressions | ~361 Verilator cases (`FSIM-ELAB-HIR-001` kind 3) |
@@ -1115,7 +1168,7 @@ error, and each exposes an existing gap:
 | SV legality: an enum base that names a non-integral typedef; unpacked array assignment between enum and integer element types | ivtest negative cases |
 | VHDL: an array element such as `bit_vector(0 to N-1)`, constrained with non-literal bounds, was treated as unconstrained and gated to VHDL-2008 (fixed in batch 4) | 126 nvc/VESTs cases (`FSIM-FE-VHSTD-003`) |
 | VHDL: unconstrained array ports (`port (d : in bit_vector)`) bind with width 1 (`FSIM-ELAB-BIND-020`) | VESTs, generic-width library cells |
-| VHDL: analysis-time legality (index-constraint bounds and types, slices of multidimensional arrays, labels as primaries) | about 33 VESTs negative tests exposed by batch 4, part of the 724 accepted-invalid cases |
+| VHDL: analysis-time legality still unchecked: labels and design-unit names as primaries, expanded names, record element names, process-local type conversions, attributes of formal signal parameters, missing subprogram bodies | about 440 VESTs negative cases (`accepted invalid input`) |
 | SV: package-level events (`event e;` in a package or `$unit`) | Verilator fork/process tests |
 | SV: property writes in methods of classes declared inside a module fail at run time ("class HIR assignment target is not executable", "SimIR driver assignment width mismatch"); classes at `$unit` or in packages work | sv-tests chapter 8 |
 | SV: string-valued (virtual) class methods in expressions such as `$display` | Verilator, sv-tests |

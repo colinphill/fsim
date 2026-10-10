@@ -898,12 +898,70 @@ private:
         }
     }
 
+    // IEEE 1076-2008 5.2.1, 5.3.2.1: both bounds of a range have the same
+    // type, integer or floating point in a scalar type definition.
+    void validate_range_bound_types(
+        const std::optional<RangeConstraint>& range,
+        const bool scalar_definition, const semantic::SourceSpanId fallback)
+    {
+        if (!range) {
+            return;
+        }
+        const auto bound_type = [&](const std::optional<std::int64_t> value,
+                                    const std::optional<semantic::ExpressionId> id) {
+            if (id) {
+                return operand_type(*id);
+            }
+            return value ? OperandType { OperandClass::integer, { } } : OperandType { };
+        };
+        const auto left = bound_type(range->left, range->left_expression);
+        const auto right = bound_type(range->right, range->right_expression);
+        const auto known = [](const OperandClass kind) {
+            return kind != OperandClass::unknown;
+        };
+        if (!known(left.kind) || !known(right.kind)) {
+            return;
+        }
+        const auto numeric_class = [](const OperandClass kind) {
+            return kind == OperandClass::integer || kind == OperandClass::floating;
+        };
+        const auto mismatch = left.kind != right.kind
+            || (scalar_definition && !numeric_class(left.kind));
+        if (mismatch) {
+            report("FSIM-ELAB-VHRANGE-001",
+                "the bounds of a VHDL range must have the same type"
+                    + std::string { scalar_definition
+                            ? ", integer or floating point"
+                            : "" },
+                range->source.valid() ? range->source : fallback);
+        }
+    }
+
+    void validate_type_bounds(const TypeDefinition& type)
+    {
+        if (type.form == TypeForm::scalar) {
+            validate_range_bound_types(type.scalar_range, true, type.source);
+        }
+        if ((type.form == TypeForm::subtype || type.form == TypeForm::alias)
+            && type.base.constraints.size() == 1U) {
+            validate_range_bound_types(
+                type.base.constraints.front(), false, type.source);
+        }
+        if (type.form == TypeForm::array) {
+            for (const auto& dimension : type.array_dimensions) {
+                validate_range_bound_types(
+                    dimension.constraint, false, dimension.source);
+            }
+        }
+    }
+
     void validate_type_definition(const TypeDefinition& type)
     {
         if (type.form == TypeForm::subtype
             || type.form == TypeForm::alias) {
             validate_constraints(type.base, type.source);
         }
+        validate_type_bounds(type);
         if (type.form != TypeForm::array) {
             return;
         }
@@ -1224,6 +1282,316 @@ private:
             return profile(*subtype, visiting);
         }
         return std::nullopt;
+    }
+
+    enum class OperandClass : std::uint8_t {
+        unknown,
+        integer,
+        floating,
+        physical,
+        enumeration,
+        array,
+        record,
+        access,
+        null,
+        other,
+    };
+
+    struct OperandType {
+        OperandClass kind { OperandClass::unknown };
+        // Root type identity; empty for universal literals and unknown roots.
+        std::string root;
+    };
+
+    static OperandClass builtin_operand_class(const std::string_view spelling)
+    {
+        const auto name = simple_name(spelling);
+        const auto any = [&](const std::initializer_list<std::string_view> names) {
+            return std::ranges::any_of(names,
+                [&](const auto candidate) { return name_equal(name, candidate); });
+        };
+        if (any({ "integer", "natural", "positive" })) {
+            return OperandClass::integer;
+        }
+        if (any({ "real" })) {
+            return OperandClass::floating;
+        }
+        if (any({ "time", "delay_length" })) {
+            return OperandClass::physical;
+        }
+        if (any({ "boolean", "bit", "character", "severity_level",
+                "file_open_kind", "file_open_status", "std_ulogic",
+                "std_logic" })) {
+            return OperandClass::enumeration;
+        }
+        if (any({ "string", "bit_vector", "std_ulogic_vector",
+                "std_logic_vector", "boolean_vector", "integer_vector",
+                "real_vector", "time_vector", "signed", "unsigned" })) {
+            return OperandClass::array;
+        }
+        return OperandClass::unknown;
+    }
+
+    static std::string builtin_root(const std::string_view spelling)
+    {
+        const auto name = simple_name(spelling);
+        if (name_equal(name, "natural") || name_equal(name, "positive")) {
+            return "integer";
+        }
+        if (name_equal(name, "delay_length")) {
+            return "time";
+        }
+        std::string result { name };
+        std::ranges::transform(result, result.begin(), [](const unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return result;
+    }
+
+    OperandType subtype_operand_type(
+        const SubtypeIndication& subtype, const std::size_t depth) const
+    {
+        const auto* definition = root_definition(subtype);
+        if (definition == nullptr) {
+            const auto kind = builtin_operand_class(subtype.type_mark.spelling);
+            return { kind,
+                kind == OperandClass::unknown
+                    ? std::string { }
+                    : builtin_root(subtype.type_mark.spelling) };
+        }
+        const auto named = builtin_operand_class(definition->name);
+        if (named != OperandClass::unknown) {
+            return { named, builtin_root(definition->name) };
+        }
+        const auto root = "#" + std::to_string(definition->id.value());
+        switch (definition->form) {
+        case TypeForm::enumeration:
+            return { OperandClass::enumeration, root };
+        case TypeForm::array:
+            return { OperandClass::array, root };
+        case TypeForm::record:
+            return { OperandClass::record, root };
+        case TypeForm::access:
+            return { OperandClass::access, root };
+        case TypeForm::physical:
+            return { OperandClass::physical, root };
+        case TypeForm::file:
+        case TypeForm::protected_type:
+        case TypeForm::protected_body:
+            return { OperandClass::other, root };
+        case TypeForm::scalar: {
+            if (!definition->scalar_range || depth > 8U) {
+                return { };
+            }
+            const auto bound_class = [&](const std::optional<semantic::ExpressionId> id) {
+                return id ? operand_type(*id, depth + 1U).kind : OperandClass::unknown;
+            };
+            const auto left = bound_class(definition->scalar_range->left_expression);
+            const auto right = bound_class(definition->scalar_range->right_expression);
+            if (left == OperandClass::floating || right == OperandClass::floating) {
+                return { OperandClass::floating, root };
+            }
+            if (left == OperandClass::integer || right == OperandClass::integer
+                || (definition->scalar_range->left && definition->scalar_range->right
+                    && !definition->scalar_range->left_expression
+                    && !definition->scalar_range->right_expression)) {
+                return { OperandClass::integer, root };
+            }
+            return { };
+        }
+        default:
+            return { };
+        }
+    }
+
+    OperandType operand_type(
+        const semantic::ExpressionId id, const std::size_t depth = 0U) const
+    {
+        const auto expression = specialization_.find_expression(id);
+        if (!expression || expression->vhdl == nullptr || depth > 8U) {
+            return { };
+        }
+        const auto& value = *expression->vhdl;
+        using Kind = semantic::vhdl::ExpressionKind;
+        switch (value.kind) {
+        case Kind::integer_literal:
+            if (!value.nominal_type.empty()) {
+                break;
+            }
+            return { OperandClass::integer, { } };
+        case Kind::real_literal:
+            if (!value.nominal_type.empty()) {
+                break;
+            }
+            return { OperandClass::floating, { } };
+        case Kind::boolean_literal:
+            return { OperandClass::enumeration, "boolean" };
+        case Kind::logic_literal:
+            if (value.text.starts_with('\'')) {
+                return { OperandClass::enumeration, { } };
+            }
+            return { };
+        case Kind::call:
+            if (value.text == "@vhdl-null") {
+                return { OperandClass::null, { } };
+            }
+            return { };
+        case Kind::unary:
+            if (value.operands.size() == 1U
+                && (value.text == "-" || value.text == "+" || value.text == "abs")
+                && predefined_operator(value)) {
+                const auto operand = operand_type(value.operands.front(), depth + 1U);
+                if (operand.kind == OperandClass::integer
+                    || operand.kind == OperandClass::floating
+                    || operand.kind == OperandClass::physical) {
+                    return operand;
+                }
+            }
+            return { };
+        case Kind::name:
+        case Kind::index:
+        case Kind::slice:
+            if (value.text.find('\'') != std::string::npos) {
+                return { };
+            }
+            break;
+        default:
+            return { };
+        }
+        const auto subtype = expression_subtype(id);
+        if (!subtype) {
+            return { };
+        }
+        return subtype_operand_type(*subtype, depth);
+    }
+
+    // True when no function named like the operator is visible, so only the
+    // predefined operator can apply.
+    bool predefined_operator(const semantic::vhdl::Expression& expression) const
+    {
+        if (!expression.referenced_name) {
+            return true;
+        }
+        if (expression.referenced_name->selected
+            || !expression.referenced_name->overloads.empty()) {
+            return false;
+        }
+        return semantic::CompiledDesignResolver { specialization_ }
+            .resolve_vhdl_callables(
+                *expression.referenced_name, expression.scope)
+            .candidates.empty();
+    }
+
+    // IEEE 1076-2008 9.2.6-9.2.8: the predefined adding, multiplying,
+    // remainder and exponentiation operators apply only to numeric operands.
+    void validate_predefined_operator(const semantic::vhdl::Expression& expression)
+    {
+        if (!predefined_operator(expression)
+            || expression.builtin_operator
+                != semantic::vhdl::BuiltinOperatorIdentity::none) {
+            return;
+        }
+        const auto& operation = expression.text;
+        const auto numeric = [](const OperandClass kind) {
+            return kind == OperandClass::integer || kind == OperandClass::floating
+                || kind == OperandClass::physical;
+        };
+        const auto known = [](const OperandClass kind) {
+            return kind != OperandClass::unknown;
+        };
+        const auto reject = [&] {
+            report("FSIM-ELAB-VHOPER-001",
+                "the predefined VHDL operator \"" + operation
+                    + "\" is not defined for these operand types",
+                expression.source);
+        };
+        if (expression.kind == semantic::vhdl::ExpressionKind::unary
+            && expression.operands.size() == 1U) {
+            if (operation != "+" && operation != "-" && operation != "abs") {
+                return;
+            }
+            const auto operand = operand_type(expression.operands.front());
+            if (known(operand.kind) && !numeric(operand.kind)
+                && operand.kind != OperandClass::array) {
+                reject();
+            }
+            return;
+        }
+        if (expression.kind != semantic::vhdl::ExpressionKind::binary
+            || expression.operands.size() != 2U) {
+            return;
+        }
+        const auto adding = operation == "+" || operation == "-";
+        const auto multiplying = operation == "*" || operation == "/";
+        const auto remainder = operation == "mod" || operation == "rem";
+        const auto power = operation == "**";
+        if (!adding && !multiplying && !remainder && !power) {
+            return;
+        }
+        const auto left = operand_type(expression.operands[0]);
+        const auto right = operand_type(expression.operands[1]);
+        // Array arithmetic comes from library packages (numeric_std,
+        // numeric_bit) whose operators the elaborator provides natively
+        // rather than as visible declarations.
+        if (left.kind == OperandClass::array || right.kind == OperandClass::array) {
+            return;
+        }
+        const auto non_numeric = [&](const OperandType& operand) {
+            return known(operand.kind) && !numeric(operand.kind);
+        };
+        if (non_numeric(left) || non_numeric(right)) {
+            reject();
+            return;
+        }
+        if (!known(left.kind) || !known(right.kind)) {
+            return;
+        }
+        const auto same_type = left.kind == right.kind
+            && (left.root.empty() || right.root.empty() || left.root == right.root);
+        if (adding) {
+            if (!same_type) {
+                reject();
+            }
+            return;
+        }
+        if (remainder) {
+            // VHDL-2008 also predefines mod and rem for physical types.
+            const auto physical_remainder = left.kind == OperandClass::physical
+                && architecture_.standard != "1987" && architecture_.standard != "1993"
+                && architecture_.standard != "2000" && architecture_.standard != "2002";
+            if ((left.kind != OperandClass::integer && !physical_remainder)
+                || !same_type) {
+                reject();
+            }
+            return;
+        }
+        if (power) {
+            if (left.kind == OperandClass::physical
+                || right.kind != OperandClass::integer
+                || (!right.root.empty() && right.root != "integer")) {
+                reject();
+            }
+            return;
+        }
+        // Multiplying operators.
+        const auto left_physical = left.kind == OperandClass::physical;
+        const auto right_physical = right.kind == OperandClass::physical;
+        if (!left_physical && !right_physical) {
+            const auto universal_mix = left.root.empty() && right.root.empty();
+            if (!same_type && !universal_mix) {
+                reject();
+            }
+            return;
+        }
+        if (left_physical && right_physical) {
+            if (operation != "/" || left.root != right.root) {
+                reject();
+            }
+            return;
+        }
+        if (right_physical && operation == "/") {
+            reject();
+        }
     }
 
     std::optional<SubtypeIndication> array_element_subtype(
@@ -2328,6 +2696,19 @@ private:
                 && (scopes[scope.value()].unit == entity_.id
                     || scopes[scope.value()].unit == architecture_.id);
         };
+        // Types declared in processes and subprograms are not object types of
+        // the unit, but their range bounds are still checked.
+        for (const auto& stored :
+            specialization_.design().vhdl_hir.declarations()) {
+            if (!stored.declared_type || !selected_scope(stored.scope)
+                || relevant_types_.contains(stored.declared_type->value())) {
+                continue;
+            }
+            const auto type = specialization_.find_type(*stored.declared_type);
+            if (type && type->vhdl != nullptr) {
+                validate_type_bounds(*type->vhdl);
+            }
+        }
         struct InactiveGenerateBranch {
             semantic::ScopeId body_scope;
             semantic::ScopeId active_else_scope;
@@ -2563,6 +2944,7 @@ private:
                     validate_selection(expression.id);
                 }
             }
+            validate_predefined_operator(expression);
             if (expression.kind
                     != semantic::vhdl::ExpressionKind::binary
                 || expression.operands.size() != 2U) {

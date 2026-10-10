@@ -812,6 +812,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-PARSE-294` | error | A VHDL-2019 subtype-valued predefined attribute has a malformed argument list. |
 | `FSIM-VHDL-PARSE-295` | error | A VHDL-2019 converse mode-view alias has a missing attribute delimiter or terminator. |
 | `FSIM-VHDL-PARSE-296` | error | A VHDL real literal has malformed or unsupported spelling. |
+| `FSIM-VHDL-PARSE-297` | error | A sign follows an adding or multiplying operator, `abs`, `not` or another sign; a sign may only begin a simple expression (IEEE 1076-2008 9.1). |
 
 ### Embedded VHDL PSL parsing and ownership
 
@@ -1943,6 +1944,7 @@ scheduler.
 | `FSIM-ELAB-090` | error | `$dimensions` or `$unpacked_dimensions` is used outside SystemVerilog or without one statically sized packed argument. |
 | `FSIM-ELAB-091` | error | Bounded VHDL packed exponentiation has a dynamic or negative exponent. |
 | `FSIM-ELAB-092` | error | A VHDL conditional-assignment condition is not Boolean. |
+| `FSIM-ELAB-093` | error | The type of a VHDL `if`, conditional-assignment or assertion condition cannot be determined, for example because the function it calls is not visible. |
 | `FSIM-ELAB-094` | error | The VHDL `'event` attribute does not name one visible signal. |
 | `FSIM-ELAB-095` | error | The VHDL `'last_value` attribute does not name one visible signal. |
 | `FSIM-ELAB-096` | error | The VHDL `'last_event` attribute does not name one visible signal. |
@@ -2105,6 +2107,7 @@ scheduler.
 | `FSIM-ELAB-VHCONV-002` | error | A visible VHDL conversion target has no positive SimIR-representable executable width. |
 | `FSIM-ELAB-VHCONV-003` | error | A VHDL conversion operand is not a supported closely related type or would change packed width or state domain. |
 | `FSIM-ELAB-VHCONV-004` | error | A VHDL conversion result is incompatible with its contextual type. |
+| `FSIM-ELAB-VHOPER-001` | error | A predefined VHDL adding, multiplying, `mod`, `rem`, `**`, sign or `abs` operator is applied to operands outside its numeric type rules and no visible overload applies (IEEE 1076-2008 9.2.6-9.2.8). |
 | `FSIM-ELAB-VHOVER-001` | error | A VHDL function call is ambiguous among the visible overloads after result and actual-profile filtering. |
 | `FSIM-ELAB-VHOVER-002` | error | A VHDL function call matches no visible overload after result and actual-profile filtering. |
 | `FSIM-ELAB-VHOVER-003` | error | Two visible VHDL function declarations have the same callable profile. |
@@ -2132,6 +2135,7 @@ scheduler.
 | `FSIM-ELAB-VHIMAGE-001` | error | A runtime VHDL 'IMAGE or TO_STRING operand is not a statically sized scalar or one-dimensional array, or its type has no runtime image yet. |
 | `FSIM-ELAB-VHREPORT-001` | error | A VHDL report expression does not have string type. |
 | `FSIM-ELAB-VHREPORT-002` | error | A VHDL severity expression does not have severity_level type. |
+| `FSIM-ELAB-VHREPORT-003` | error | The elaborator cannot establish that a VHDL report expression (for example a concatenation with an unmodeled attribute) has type STRING. |
 | `FSIM-ELAB-VHFILE-001` | error | A VHDL scope declares the same file object more than once. |
 | `FSIM-ELAB-VHFILE-002` | error | A VHDL file object has no visible retained file type. |
 | `FSIM-ELAB-VHFILE-003` | error | A VHDL file declaration logical name is not a string expression. |
@@ -2287,6 +2291,7 @@ scheduler.
 | `FSIM-ELAB-VHPHYSICAL-008` | error | A physical expression combines distinct nominal physical types. |
 | `FSIM-ELAB-VHPHYSICAL-009` | error | Assignment mixes distinct nominal physical types. |
 | `FSIM-ELAB-VHPHYSICAL-010` | error | A physical target receives an untyped nonphysical value without explicit conversion. |
+| `FSIM-ELAB-VHPHYSICAL-011` | error | A VHDL physical type range has a real bound; physical ranges are integer ranges (IEEE 1076-2008 5.2.4.1). |
 | `FSIM-ELAB-VHPROTECTED-001` | error | A protected body has no visible protected type declaration. |
 | `FSIM-ELAB-VHPROTECTED-002` | error | A public protected function has no conforming body. |
 | `FSIM-ELAB-VHPROTECTED-003` | error | Retired catalog identity: a protected body may declare private functions (IEEE 1076-2008 5.6.3). |
@@ -2319,6 +2324,7 @@ scheduler.
 | `FSIM-ELAB-VHAGG-007` | error | A record aggregate would implicitly lose four- or nine-state information in a two-state element. |
 | `FSIM-ELAB-VHAGG-008` | error | A record aggregate choice is empty, names `others` with another choice, or uses a discrete/range form instead of element names. |
 | `FSIM-ELAB-VHAGG-009` | error | A record aggregate element value has an incompatible contextual subtype or state domain. |
+| `FSIM-ELAB-VHRANGE-001` | error | The bounds of a VHDL range in a type definition differ in type, or a scalar type definition has non-numeric bounds (IEEE 1076-2008 5.2.1, 5.3.2.1). |
 | `FSIM-ELAB-VHRECORD-001` | error | A VHDL record element does not resolve to a concrete bounded packed scalar, vector, enumeration, array, or nested-record layout. |
 | `FSIM-ELAB-VHRECORD-002` | error | A VHDL record element or total recursive record layout overflows the bounded packed representation. |
 | `FSIM-ELAB-VHCOMPOP-001` | error | VHDL composite comparison operands do not share one nominal record or array base and compatible element profile, or lack bounded executable widths. |

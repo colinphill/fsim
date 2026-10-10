@@ -661,8 +661,8 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
                       *specialized_hir_unit_, *assigned_subtype,
                       semantic::vhdl::TypeForm::access)
                 : nullptr;
-            if (assigned_type == nullptr
-                || assigned_type->id != type->id) {
+            if (assigned_type != nullptr
+                && assigned_type->id != type->id) {
                 report(
                     "FSIM-ELAB-VHACCESS-020",
                     "VHDL access assignment requires the same nominal "

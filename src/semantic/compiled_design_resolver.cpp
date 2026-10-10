@@ -4359,16 +4359,91 @@ CompiledDesignResolver::resolve_vhdl_callables(
                     return candidate.member == declaration;
                 });
         };
-        // resolve_vhdl() already applies lexical-tier hiding.  If its visible
-        // tier contains a declaration that did not come from an imported
-        // package, that local homograph hides every imported declaration with
-        // the same designator.  Do not reintroduce those imports while
-        // expanding declarations into callable bodies below.
-        if (std::ranges::any_of(visible.candidates,
-                [&](const DeclarationId declaration) {
-                    return !imported(declaration);
-                })) {
-            package_members.candidates.clear();
+        // resolve_vhdl() already applies lexical-tier hiding.  A local
+        // declaration hides an imported one only when the two are homographs
+        // (IEEE 1076-2008 12.3, 12.4); imported overloads with other
+        // parameter and result type profiles stay visible.  An unknown
+        // profile is treated as a homograph.
+        const auto type_key = [&](const std::optional<vhdl::SubtypeIndication>& subtype)
+            -> std::string {
+            if (!subtype) {
+                return "-";
+            }
+            auto type = subtype->type_mark.target;
+            std::set<std::uint32_t> visiting;
+            while (type.valid() && visiting.insert(type.value()).second) {
+                const auto definition = effective_ != nullptr
+                    ? effective_->find_type(type)
+                    : design_->find_type(type);
+                if (!definition || definition->vhdl == nullptr
+                    || (definition->vhdl->form != vhdl::TypeForm::subtype
+                        && definition->vhdl->form != vhdl::TypeForm::alias)
+                    || !definition->vhdl->base.type_mark.target.valid()) {
+                    break;
+                }
+                type = definition->vhdl->base.type_mark.target;
+            }
+            if (type.valid()) {
+                return "#" + std::to_string(type.value());
+            }
+            const std::string_view full { subtype->type_mark.spelling };
+            const auto separator = full.find_last_of('.');
+            auto spelling = std::string { separator == std::string_view::npos
+                    ? full
+                    : full.substr(separator + 1U) };
+            std::ranges::transform(spelling, spelling.begin(),
+                [](const unsigned char c) {
+                    return static_cast<char>(std::tolower(c));
+                });
+            return spelling.empty() ? "?" : "@" + spelling;
+        };
+        const auto profile_key = [&](const DeclarationId id)
+            -> std::optional<std::string> {
+            const auto declaration = find_declaration(*design_, effective_, id);
+            if (!declaration || declaration->vhdl == nullptr
+                || !declaration->vhdl->callable) {
+                return std::nullopt;
+            }
+            const auto& callable = *declaration->vhdl->callable;
+            std::string key = callable.function ? "f" : "p";
+            for (const auto formal_id : callable.formals) {
+                const auto formal = find_declaration(*design_, effective_, formal_id);
+                if (!formal || formal->vhdl == nullptr) {
+                    return std::nullopt;
+                }
+                const auto formal_type = type_key(formal->vhdl->subtype);
+                if (formal_type == "?" || formal_type == "-") {
+                    return std::nullopt;
+                }
+                key += "|" + formal_type;
+            }
+            if (callable.function) {
+                const auto result_type = type_key(callable.return_type);
+                if (result_type == "?" || result_type == "-") {
+                    return std::nullopt;
+                }
+                key += ">" + result_type;
+            }
+            return key;
+        };
+        std::vector<std::optional<std::string>> local_profiles;
+        for (const auto declaration : visible.candidates) {
+            if (!imported(declaration)) {
+                local_profiles.push_back(profile_key(declaration));
+            }
+        }
+        if (!local_profiles.empty()) {
+            const auto unknown_local = std::ranges::any_of(local_profiles,
+                [](const auto& profile) { return !profile.has_value(); });
+            std::erase_if(package_members.candidates, [&](const auto& candidate) {
+                if (unknown_local) {
+                    return true;
+                }
+                const auto profile = profile_key(candidate.member);
+                return !profile
+                    || std::ranges::find(local_profiles, profile)
+                        != local_profiles.end();
+            });
         }
     }
     std::vector<CompiledVhdlCallableResolution> candidates;
