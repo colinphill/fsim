@@ -7495,6 +7495,44 @@ private:
             || expression.kind == Kind::boolean_literal
             || expression.kind == Kind::logic_literal) {
             const auto literal = parse_integral_identity(expression.text);
+            if constexpr (!systemverilog) {
+                // A decimal integer literal with an exponent (`2E9`, IEEE
+                // 1076-2008 15.5.2).
+                if (!literal && expression.kind == Kind::integer_literal
+                    && expression.text.find('#') == std::string::npos) {
+                    const auto exponent_at = expression.text.find_first_of("eE");
+                    if (exponent_at != std::string::npos) {
+                        std::string mantissa;
+                        for (const auto character : expression.text.substr(0, exponent_at)) {
+                            if (character != '_') {
+                                mantissa.push_back(character);
+                            }
+                        }
+                        auto exponent_text = expression.text.substr(exponent_at + 1U);
+                        if (!exponent_text.empty() && exponent_text.front() == '+') {
+                            exponent_text.erase(0, 1);
+                        }
+                        std::int64_t value { };
+                        std::int64_t exponent { };
+                        const auto parsed_mantissa = std::from_chars(mantissa.data(),
+                            mantissa.data() + mantissa.size(), value);
+                        const auto parsed_exponent = std::from_chars(exponent_text.data(),
+                            exponent_text.data() + exponent_text.size(), exponent);
+                        if (!mantissa.empty() && parsed_mantissa.ec == std::errc { }
+                            && parsed_mantissa.ptr == mantissa.data() + mantissa.size()
+                            && parsed_exponent.ec == std::errc { }
+                            && parsed_exponent.ptr == exponent_text.data() + exponent_text.size()
+                            && exponent >= 0 && exponent <= 18) {
+                            for (std::int64_t step { }; step < exponent; ++step) {
+                                if (__builtin_mul_overflow(value, std::int64_t { 10 }, &value)) {
+                                    return std::nullopt;
+                                }
+                            }
+                            return value;
+                        }
+                    }
+                }
+            }
             if (literal || systemverilog
                 || expression.kind != Kind::logic_literal) {
                 return literal;

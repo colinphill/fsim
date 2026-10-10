@@ -108,7 +108,8 @@ struct Interpreter::Impl::ExecutionContext final
         const PackedLogic4& value,
         const ProcessId generated_process,
         const InstructionIndex instruction,
-        const bool nonblocking) override;
+        const bool nonblocking,
+        std::span<const std::uint32_t> members = { }) override;
     void write_container_object_dynamic_part_element(
         const ContainerObjectId object,
         const PackedLogic4& index,

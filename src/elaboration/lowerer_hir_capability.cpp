@@ -1713,6 +1713,32 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_expression_range(
     if (!width || *width == 0U) {
         return std::nullopt;
     }
+    // An alias of a slice has the index range of its own subtype (IEEE
+    // 1076-2008 6.6.2).
+    if (const auto target = hir_vhdl_alias_target_expression(expression_id)) {
+        const auto declaration = specialized_hir_unit_->find_declaration(
+            *expression->vhdl->referenced_name->selected);
+        if (declaration && declaration->vhdl != nullptr && declaration->vhdl->subtype) {
+            for (const auto& constraint : declaration->vhdl->subtype->constraints) {
+                if (constraint.kind != semantic::vhdl::RangeKind::array_index) {
+                    continue;
+                }
+                const auto left = constraint.left ? constraint.left
+                    : constraint.left_expression
+                    ? hir_constant_integer(*constraint.left_expression)
+                    : std::nullopt;
+                const auto right = constraint.right ? constraint.right
+                    : constraint.right_expression
+                    ? hir_constant_integer(*constraint.right_expression)
+                    : std::nullopt;
+                if (left && right) {
+                    return HirPackedRange { *left, *right, constraint.descending };
+                }
+                break;
+            }
+        }
+        return hir_expression_range(*target, process_scope);
+    }
     if (const auto member = hir_systemverilog_member_selection(
             expression_id);
         member && member->range) {
@@ -1742,7 +1768,7 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_expression_range(
                     range.left, range.right);
                 if (distance
                         == std::numeric_limits<std::uint64_t>::max()
-                    || distance + 1U != *width
+                    || *width % (distance + 1U) != 0U
                     || (range.left != range.right
                         && range.descending
                             != (range.left > range.right))) {
@@ -3975,6 +4001,13 @@ Lowerer::hir_runtime_binding(
     if (declaration->vhdl != nullptr
         && declaration->vhdl->form
             == semantic::vhdl::DeclarationForm::alias
+        && declaration->vhdl->initializer) {
+        // An alias of an element or slice is not its prefix object.
+        return std::nullopt;
+    }
+    if (declaration->vhdl != nullptr
+        && declaration->vhdl->form
+            == semantic::vhdl::DeclarationForm::alias
         && declaration->vhdl->alias_target) {
         const auto& source = *declaration->vhdl;
         auto selected = source.alias_target->selected;
@@ -6113,6 +6146,26 @@ Lowerer::hir_string_binding(
     if (!declaration) {
         return std::nullopt;
     }
+    // An alias of a whole STRING object denotes that object.
+    if (declaration->vhdl != nullptr
+        && declaration->vhdl->form == semantic::vhdl::DeclarationForm::alias
+        && !declaration->vhdl->initializer && declaration->vhdl->alias_target) {
+        auto target = declaration->vhdl->alias_target->selected;
+        if (!target) {
+            target = semantic::CompiledDesignResolver { *specialized_hir_unit_ }
+                         .resolve_vhdl(*declaration->vhdl->alias_target,
+                             declaration->vhdl->scope,
+                             [&](const semantic::CompiledDeclarationView& candidate) {
+                                 return candidate.vhdl != nullptr
+                                     && candidate.vhdl->form
+                                         != semantic::vhdl::DeclarationForm::alias;
+                             })
+                         .unique();
+        }
+        if (target && *target != declaration_id) {
+            return hir_string_binding(*target, process_scope, require_storage);
+        }
+    }
     if (declaration->vhdl != nullptr) {
         const auto& source = *declaration->vhdl;
         const auto subtype = source.subtype
@@ -6284,6 +6337,43 @@ bool Lowerer::hir_expression_is_string(
 {
     if (specialized_hir_unit_ == nullptr) {
         return false;
+    }
+    if (const auto target = hir_vhdl_alias_target_expression(expression_id)) {
+        return hir_expression_is_string(*target, process_scope);
+    }
+    if (const auto slice = specialized_hir_unit_->find_expression(expression_id);
+        slice && slice->vhdl != nullptr
+        && slice->vhdl->kind == semantic::vhdl::ExpressionKind::slice
+        && slice->vhdl->operands.size() == 3U) {
+        return hir_expression_is_string(slice->vhdl->operands[0], process_scope);
+    }
+    // A name of an alias of a whole STRING object.
+    if (const auto named = specialized_hir_unit_->find_expression(expression_id);
+        named && named->vhdl != nullptr
+        && named->vhdl->kind == semantic::vhdl::ExpressionKind::name) {
+        const auto selected = hir_referenced_declaration(expression_id);
+        const auto alias = selected
+            ? specialized_hir_unit_->find_declaration(*selected)
+            : std::nullopt;
+        if (alias && alias->vhdl != nullptr
+            && alias->vhdl->form == semantic::vhdl::DeclarationForm::alias
+            && !alias->vhdl->initializer
+            && hir_string_binding(*selected, process_scope, true)) {
+            return true;
+        }
+        // An alias of a STRING constant denotes the constant's value.
+        if (const auto object = selected ? hir_vhdl_alias_object(*selected) : std::nullopt) {
+            const auto constant = specialized_hir_unit_->find_declaration(*object);
+            const auto subtype = constant && constant->vhdl != nullptr && constant->vhdl->subtype
+                ? hir_effective_vhdl_subtype(*constant->vhdl->subtype)
+                : std::nullopt;
+            if (constant && constant->vhdl != nullptr
+                && constant->vhdl->form == semantic::vhdl::DeclarationForm::constant
+                && constant->vhdl->initializer && subtype
+                && subtype->domain == semantic::vhdl::ValueDomain::string) {
+                return hir_expression_is_string(*constant->vhdl->initializer, process_scope);
+            }
+        }
     }
     if (const auto method = hir_systemverilog_enumeration_method(
             expression_id)) {
@@ -9530,12 +9620,118 @@ std::optional<std::size_t> Lowerer::hir_vhdl_null_concatenation_operand(
     return *left == 0U ? 1U : 0U;
 }
 
+std::optional<semantic::ExpressionId> Lowerer::hir_vhdl_alias_target_expression(
+    const semantic::ExpressionId expression_id) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(expression_id);
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->kind != semantic::vhdl::ExpressionKind::name
+        || !expression->vhdl->referenced_name
+        || !expression->vhdl->referenced_name->selected) {
+        return std::nullopt;
+    }
+    const auto declaration = specialized_hir_unit_->find_declaration(
+        *expression->vhdl->referenced_name->selected);
+    if (!declaration || declaration->vhdl == nullptr
+        || declaration->vhdl->form != semantic::vhdl::DeclarationForm::alias
+        || !declaration->vhdl->initializer
+        || *declaration->vhdl->initializer == expression_id) {
+        return std::nullopt;
+    }
+    return declaration->vhdl->initializer;
+}
+
+bool Lowerer::vhdl_string_formal(const semantic::DeclarationId formal) const
+{
+    const auto declaration = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_declaration(formal)
+        : std::nullopt;
+    if (!declaration || declaration->vhdl == nullptr || !declaration->vhdl->subtype) {
+        return false;
+    }
+    const auto subtype = hir_effective_vhdl_subtype(*declaration->vhdl->subtype);
+    return subtype && subtype->domain == semantic::vhdl::ValueDomain::string;
+}
+
+bool Lowerer::hir_vhdl_runtime_string_prefix(const semantic::ExpressionId prefix) const
+{
+    if (!hir_expression_is_string(prefix, hir_process_scope_)) {
+        return false;
+    }
+    if (hir_vhdl_alias_target_expression(prefix)) {
+        return true;
+    }
+    auto declaration = hir_referenced_declaration(prefix);
+    if (declaration) {
+        if (const auto object = hir_vhdl_alias_object(*declaration)) {
+            declaration = object;
+        }
+    }
+    if (!declaration) {
+        return false;
+    }
+    const auto binding = hir_string_binding(*declaration, hir_process_scope_, true);
+    if (binding && binding->local) {
+        return true;
+    }
+    // A constant of a STRING subtype (not, say, a BIT_VECTOR given by a
+    // string literal).
+    const auto constant = specialized_hir_unit_->find_declaration(*declaration);
+    const auto subtype = constant && constant->vhdl != nullptr && constant->vhdl->subtype
+        ? hir_effective_vhdl_subtype(*constant->vhdl->subtype)
+        : std::nullopt;
+    return constant && constant->vhdl != nullptr
+        && constant->vhdl->form == semantic::vhdl::DeclarationForm::constant
+        && constant->vhdl->initializer && subtype
+        && subtype->domain == semantic::vhdl::ValueDomain::string;
+}
+
+std::optional<semantic::DeclarationId> Lowerer::hir_vhdl_alias_object(
+    const semantic::DeclarationId alias_id) const
+{
+    const auto alias = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_declaration(alias_id)
+        : std::nullopt;
+    if (!alias || alias->vhdl == nullptr
+        || alias->vhdl->form != semantic::vhdl::DeclarationForm::alias
+        || alias->vhdl->initializer || !alias->vhdl->alias_target) {
+        return std::nullopt;
+    }
+    auto target = alias->vhdl->alias_target->selected;
+    if (!target) {
+        target = semantic::CompiledDesignResolver { *specialized_hir_unit_ }
+                     .resolve_vhdl(*alias->vhdl->alias_target, alias->vhdl->scope,
+                         [&](const semantic::CompiledDeclarationView& candidate) {
+                             return candidate.vhdl != nullptr
+                                 && candidate.vhdl->form
+                                     != semantic::vhdl::DeclarationForm::alias;
+                         })
+                     .unique();
+    }
+    return target && *target != alias_id ? target : std::nullopt;
+}
+
 std::optional<std::size_t> Lowerer::hir_expression_width(
     const semantic::ExpressionId expression_id,
     const semantic::ScopeId process_scope) const
 {
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
+    }
+    if (const auto target = hir_vhdl_alias_target_expression(expression_id)) {
+        return hir_expression_width(*target, process_scope);
+    }
+    // An element of a STRING held as a runtime string is a CHARACTER.
+    if (const auto element = specialized_hir_unit_->find_expression(expression_id);
+        element && element->vhdl != nullptr
+        && element->vhdl->kind == semantic::vhdl::ExpressionKind::index
+        && element->vhdl->operands.size() == 2U) {
+        if (hir_vhdl_runtime_string_prefix(element->vhdl->operands[0])) {
+            return 8U;
+        }
     }
     if (hir_vhdl_now_expression(expression_id)) {
         return 64U;
@@ -9677,21 +9873,22 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
                 }
                 formal_index = index;
             }
-            if (!formal_index || *formal_index >= frame.arguments.size()
-                || *formal_index >= frame.argument_is_string.size()
-                || *formal_index >= frame.argument_is_container.size()
-                || frame.argument_is_string[*formal_index]
-                || frame.argument_is_container[*formal_index]) {
-                return std::nullopt;
+            // The argument register holds whole elements; otherwise the
+            // formal is sized by its binding below.
+            if (formal_index && *formal_index < frame.arguments.size()
+                && *formal_index < frame.argument_is_string.size()
+                && *formal_index < frame.argument_is_container.size()
+                && !frame.argument_is_string[*formal_index]
+                && !frame.argument_is_container[*formal_index]) {
+                const auto argument = frame.arguments[*formal_index];
+                const auto domain = register_domain(argument);
+                if (register_width(argument) != 0U
+                    && register_width(argument) % formal_width == 0U
+                    && domain != frontend::ValueDomain::Unknown
+                    && domain != frontend::ValueDomain::String) {
+                    return register_width(argument);
+                }
             }
-            const auto argument = frame.arguments[*formal_index];
-            const auto domain = register_domain(argument);
-            if (register_width(argument) != formal_width
-                || domain == frontend::ValueDomain::Unknown
-                || domain == frontend::ValueDomain::String) {
-                return std::nullopt;
-            }
-            return formal_width;
         }
     }
     if (const auto selection
@@ -11615,6 +11812,18 @@ Lowerer::hir_vhdl_expression_subtype(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
+    // An element of a STRING held as a runtime string is a CHARACTER.
+    if (const auto element = specialized_hir_unit_->find_expression(expression_id);
+        element && element->vhdl != nullptr
+        && element->vhdl->kind == semantic::vhdl::ExpressionKind::index
+        && element->vhdl->operands.size() == 2U
+        && hir_vhdl_runtime_string_prefix(element->vhdl->operands[0])) {
+        semantic::vhdl::SubtypeIndication character;
+        character.type_mark.spelling = "character";
+        character.domain = semantic::vhdl::ValueDomain::bit2;
+        character.executable_width = 8U;
+        return character;
+    }
     if (const auto subtype
         = hir_vhdl_original_integer_generic_subtype(expression_id)) {
         return subtype;
@@ -11689,7 +11898,7 @@ Lowerer::hir_vhdl_expression_subtype(
                 range->left, range->right);
             if (distance
                     == std::numeric_limits<std::uint64_t>::max()
-                || distance + 1U != *width
+                || *width % (distance + 1U) != 0U
                 || (range->left != range->right
                     && range->descending
                         != (range->left > range->right))) {
@@ -12041,10 +12250,13 @@ Lowerer::hir_vhdl_expression_subtype(
                 const auto& packed_range = **callable_range;
                 const auto distance = index_distance(
                     packed_range.left, packed_range.right);
-                if (!binding || binding->width == 0U
+                // A STRING formal is a runtime string, without a packed width.
+                const bool string_formal = vhdl_string_formal(*selected);
+                if ((!string_formal
+                        && (!binding || binding->width == 0U
+                            || binding->width % (distance + 1U) != 0U))
                     || distance
                         == std::numeric_limits<std::uint64_t>::max()
-                    || distance + 1U != binding->width
                     || (packed_range.left != packed_range.right
                         && packed_range.descending
                             != (packed_range.left > packed_range.right))) {
@@ -12191,7 +12403,7 @@ Lowerer::hir_vhdl_array_selection(
             packed_range.left, packed_range.right);
         if (!binding || binding->width == 0U
             || distance == std::numeric_limits<std::uint64_t>::max()
-            || distance + 1U != binding->width
+            || binding->width % (distance + 1U) != 0U
             || (packed_range.left != packed_range.right
                 && packed_range.descending
                     != (packed_range.left > packed_range.right))) {

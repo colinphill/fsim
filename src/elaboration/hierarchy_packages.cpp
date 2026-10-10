@@ -1275,14 +1275,43 @@ namespace {
                     1U, frontend::ValueDomain::Boolean
                 };
             }
+            // The VHDL-2008 STD.STANDARD vectors (IEEE 1076-2008 16.3).
+            if (compiled_vhdl_name_equal(name, "integer_vector")) {
+                return CompiledVhdlSignalLayout {
+                    32U, frontend::ValueDomain::Integer
+                };
+            }
+            if (compiled_vhdl_name_equal(name, "real_vector")) {
+                return CompiledVhdlSignalLayout {
+                    64U, frontend::ValueDomain::Bit2
+                };
+            }
+            if (compiled_vhdl_name_equal(name, "time_vector")) {
+                return CompiledVhdlSignalLayout {
+                    64U, frontend::ValueDomain::Integer
+                };
+            }
             return std::nullopt;
         };
         const auto boundary = [&](const std::optional<std::int64_t> value,
                                   const std::optional<semantic::ExpressionId>
-                                      expression) {
-            return expression
-                ? specialization.evaluate_integral_expression(*expression)
-                : value;
+                                      expression) -> std::optional<std::int64_t> {
+            if (!expression) {
+                return value;
+            }
+            if (const auto evaluated
+                = specialization.evaluate_integral_expression(*expression)) {
+                return evaluated;
+            }
+            // A CHARACTER bound is its position (IEEE 1076-2008 16.3).
+            const auto literal = specialization.find_expression(*expression);
+            if (literal && literal->vhdl != nullptr
+                && literal->vhdl->kind == semantic::vhdl::ExpressionKind::logic_literal
+                && literal->vhdl->text.size() == 3U && literal->vhdl->text.front() == '\'') {
+                return static_cast<std::int64_t>(
+                    static_cast<unsigned char>(literal->vhdl->text[1]));
+            }
+            return value;
         };
         const auto range_count = [&](
                                      const semantic::vhdl::RangeConstraint& range)
@@ -17253,15 +17282,22 @@ bool HierarchyBuilder::validate_compiled_vhdl_physical_type_units(
             valid = false;
             continue;
         }
-        if (!type.scalar_range->left || !type.scalar_range->right
-            || *type.scalar_range->left
-                < std::numeric_limits<std::int32_t>::min()
-            || *type.scalar_range->left
-                > std::numeric_limits<std::int32_t>::max()
-            || *type.scalar_range->right
-                < std::numeric_limits<std::int32_t>::min()
-            || *type.scalar_range->right
-                > std::numeric_limits<std::int32_t>::max()) {
+        // Bounds written as static expressions (`2e9`, `t'(-32000)`).
+        const auto static_bound = [&](const std::optional<std::int64_t> value,
+                                      const std::optional<semantic::ExpressionId> id) {
+            return value ? value
+                : id     ? specialized->evaluate_integral_expression(*id)
+                         : std::nullopt;
+        };
+        const auto range_left = static_bound(
+            type.scalar_range->left, type.scalar_range->left_expression);
+        const auto range_right = static_bound(
+            type.scalar_range->right, type.scalar_range->right_expression);
+        if (!range_left || !range_right
+            || *range_left < std::numeric_limits<std::int32_t>::min()
+            || *range_left > std::numeric_limits<std::int32_t>::max()
+            || *range_right < std::numeric_limits<std::int32_t>::min()
+            || *range_right > std::numeric_limits<std::int32_t>::max()) {
             report(
                 "FSIM-ELAB-VHPHYSICAL-002",
                 "a bounded physical range must be locally static and "

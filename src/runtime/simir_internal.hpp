@@ -4194,6 +4194,27 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessId process,
         InstructionIndex instruction,
         SignalChangeOrigin origin = { });
+    // Update one member of an unpacked aggregate element of a container
+    // value (index, then member path).
+    void apply_container_aggregate_member(
+        ContainerValue& target,
+        const PackedLogic4& index,
+        bool signed_index,
+        bool linear_index,
+        std::span<const std::uint32_t> members,
+        const PackedLogic4& value,
+        ProcessId process,
+        InstructionIndex instruction);
+    void write_container_object_member_value(
+        ContainerObjectId id,
+        const PackedLogic4& index,
+        bool signed_index,
+        bool linear_index,
+        std::span<const std::uint32_t> members,
+        const PackedLogic4& value,
+        ProcessId process,
+        InstructionIndex instruction,
+        SignalChangeOrigin origin = { });
     void write_container_object_dynamic_part_element_value(
         ContainerObjectId id,
         const PackedLogic4& index,

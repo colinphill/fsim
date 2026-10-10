@@ -156,7 +156,7 @@ std::shared_ptr<VhdlProtectedInfo> VhdlParser::parse_vhdl_protected_type(
       } else {
         method_aliases.push_back(SignalAliasDeclaration{
             canonical_alias, std::move(target), {}, PortDirection::Unknown,
-            span_from(alias_start, previous())});
+            span_from(alias_start, previous()), std::nullopt});
       }
       continue;
     }
@@ -1761,7 +1761,15 @@ void VhdlParser::parse_vhdl_object_alias(
     type = parse_vhdl_type(true, true);
   }
   expect_keyword("is", true, "FSIM-VHDL-PARSE-236");
+  const auto target_start = position();
   const auto actual = parse_vhdl_selected_name("alias target");
+  // An object alias may denote an element or slice of an object (IEEE
+  // 1076-2008 6.6.2): the whole name is kept as an expression.
+  std::optional<Expression> actual_expression;
+  if (at(TokenKind::LeftParen)) {
+    rewind(target_start);
+    actual_expression = parse_expression();
+  }
   if (match(TokenKind::LeftBracket)) {
       const auto signature_start = previous();
       require_vhdl_standard(
@@ -1791,7 +1799,8 @@ void VhdlParser::parse_vhdl_object_alias(
   }
   aliases.push_back(SignalAliasDeclaration {
       canonical, std::move(actual), std::move(type),
-      PortDirection::Unknown, span_from(start, previous()) });
+      PortDirection::Unknown, span_from(start, previous()),
+      std::move(actual_expression) });
 }
 
 bool VhdlParser::parse_vhdl_local_nonobject_declaration(

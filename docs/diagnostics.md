@@ -2401,6 +2401,7 @@ scheduler.
 | `FSIM-ELAB-VHSUBTYPE-004` | error | A constrained packed-array subtype is constrained again. |
 | `FSIM-ELAB-VHALIAS-001` | error | Before VHDL-2008, an object alias has a multidimensional array subtype (IEEE 1076-1993 4.3.3.1). |
 | `FSIM-ELAB-VHALIAS-002` | error | The subtype indication of a VHDL object alias is not of the aliased object's type (IEEE 1076-2008 6.6.2). |
+| `FSIM-ELAB-VHALIAS-003` | error | A VHDL array alias of a slice has a different number of elements than the slice (IEEE 1076-2008 6.6.2). |
 | `FSIM-ELAB-VHARRAY-001` | error | A VHDL array element subtype is missing, indefinite, zero-width, integer, string, unknown, or otherwise outside the bounded packed runtime. |
 | `FSIM-ELAB-VHARRAY-003` | error | A VHDL array constraint lies outside its `integer`, `natural`, or `positive` index subtype. |
 | `FSIM-ELAB-VHARRAY-004` | error | A VHDL array constraint width overflows the packed runtime representation. |

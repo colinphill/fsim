@@ -381,7 +381,9 @@ void Interpreter::Impl::ExecutionContext::write_container_object_element(
     const PackedLogic4& value,
     const ProcessId generated_process,
     const InstructionIndex instruction,
-    const bool nonblocking){
+    const bool nonblocking,
+    const std::span<const std::uint32_t> member_path){
+    const std::vector<std::uint32_t> members(member_path.begin(), member_path.end());
     const auto process_domain
         = owner.processes.program_view(generated_process).scheduling_domain();
     const auto update_domain
@@ -398,7 +400,13 @@ void Interpreter::Impl::ExecutionContext::write_container_object_element(
     if (nonblocking) {
         const auto publish = [&owner = owner, object, index, signed_index,
             linear_index, value, generated_process, instruction,
-            origin](Scheduler&) {
+            origin, members](Scheduler&) {
+                if (!members.empty()) {
+                    owner.write_container_object_member_value(
+                        object, index, signed_index, linear_index, members,
+                        value, generated_process, instruction, origin);
+                    return;
+                }
                 owner.write_container_object_element_value(
                     object, index, signed_index, linear_index, value,
                     generated_process, instruction, origin);
@@ -410,6 +418,10 @@ void Interpreter::Impl::ExecutionContext::write_container_object_element(
             owner.scheduler.schedule(
                 SchedulerPhase::update, generated_process, publish);
         }
+    } else if (!members.empty()) {
+        owner.write_container_object_member_value(
+            object, index, signed_index, linear_index, members, value,
+            generated_process, instruction, origin);
     } else {
         owner.write_container_object_element_value(
             object, index, signed_index, linear_index, value,

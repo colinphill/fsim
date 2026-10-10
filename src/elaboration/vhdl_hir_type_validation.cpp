@@ -3708,7 +3708,51 @@ private:
                 && target->vhdl->form != Form::generic_constant)) {
             return;
         }
-        const auto expected = subtype_operand_type(*target->vhdl->subtype, 0U);
+        // 6.6.2: an array alias has a matching element for each element of
+        // the named object.
+        if (alias.initializer) {
+            const auto slice = specialization_.find_expression(*alias.initializer);
+            if (slice && slice->vhdl != nullptr
+                && slice->vhdl->kind == semantic::vhdl::ExpressionKind::slice
+                && slice->vhdl->operands.size() == 3U) {
+                const auto low = specialization_.evaluate_integral_expression(slice->vhdl->operands[1]);
+                const auto high = specialization_.evaluate_integral_expression(slice->vhdl->operands[2]);
+                std::optional<std::int64_t> alias_length;
+                for (const auto& constraint : alias.subtype->constraints) {
+                    if (constraint.kind != semantic::vhdl::RangeKind::array_index) {
+                        continue;
+                    }
+                    const auto left = constraint.left ? constraint.left
+                        : constraint.left_expression
+                        ? specialization_.evaluate_integral_expression(*constraint.left_expression)
+                        : std::nullopt;
+                    const auto right = constraint.right ? constraint.right
+                        : constraint.right_expression
+                        ? specialization_.evaluate_integral_expression(*constraint.right_expression)
+                        : std::nullopt;
+                    if (left && right) {
+                        alias_length = std::max<std::int64_t>(
+                            0, (constraint.descending ? *left - *right : *right - *left) + 1);
+                    }
+                    break;
+                }
+                if (low && high && alias_length) {
+                    const auto slice_length = std::max<std::int64_t>(0,
+                        std::max(*low, *high) - std::min(*low, *high) + 1);
+                    if (slice_length != *alias_length) {
+                        report("FSIM-ELAB-VHALIAS-003",
+                            "VHDL alias '" + alias.name
+                                + "' does not have one element for each element of the named object",
+                            alias.source);
+                        return;
+                    }
+                }
+            }
+        }
+        // An element or slice target has the type of that name.
+        const auto expected = alias.initializer
+            ? operand_type(*alias.initializer)
+            : subtype_operand_type(*target->vhdl->subtype, 0U);
         const auto given = subtype_operand_type(*alias.subtype, 0U);
         const auto scalar = [](const OperandClass kind) {
             return kind == OperandClass::integer || kind == OperandClass::floating

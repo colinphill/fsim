@@ -506,3 +506,26 @@ gives fsim's result in each case checked.
 - `FSIM-ELAB-VHTYPE-001` covered both "not visible here" and "unresolved";
   only the first is reported at compile time (as `-006`), because the
   analysis elaboration does not resolve some IEEE subtypes such as X01.
+
+## Array formals, slice aliases and NBA struct members (batch 29)
+
+- An unconstrained array formal's frame range is captured when the actual
+  holds `count * element_width` bits; the consumers of the range
+  (`hir_expression_range`, the subtype the lowerer gives the formal, and the
+  formal's width) accept any whole number of bits per index. A frame is keyed
+  by the captured ranges, so calls with differently sized actuals do not share
+  one.
+- A slice or element alias stores its target as the HIR declaration's
+  `initializer`; `alias_target` names the prefix. Lowering redirects a name
+  of such an alias to its target expression, and an indexed name of it to an
+  extract at the position in the alias's own range. The alias does not bind
+  to the prefix object, so assignments through such an alias are not yet
+  lowered.
+- Runtime STRING values (variables, string formals, STRING constants) are
+  indexed with `getc` and sliced with `substr`; a constant counts only when
+  its subtype is STRING, since a BIT_VECTOR constant given by a string
+  literal is also reported as string-valued by the expression check.
+- A nonblocking member write reads the container object when it is
+  published, applies the member write and writes the object back. Reading at
+  publish time is what lets two member writes of one element in one time
+  step both take effect.

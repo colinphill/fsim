@@ -5321,6 +5321,116 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_untraced(
     const std::size_t expected_width,
     const frontend::SystemVerilogScalarKind scalar_context)
 {
+    if (const auto target = hir_vhdl_alias_target_expression(expression_id)) {
+        return lower_hir_expression(*target, expected_width, scalar_context);
+    }
+    // An element of an alias of a packed slice, at its position in the
+    // alias's own index range.
+    if (const auto element = specialized_hir_unit_ != nullptr
+                ? specialized_hir_unit_->find_expression(expression_id)
+                : std::nullopt;
+        element && element->vhdl != nullptr
+        && element->vhdl->kind == semantic::vhdl::ExpressionKind::index
+        && element->vhdl->operands.size() == 2U
+        && hir_vhdl_alias_target_expression(element->vhdl->operands[0])
+        && !hir_expression_is_string(element->vhdl->operands[0], hir_process_scope_)) {
+        const auto prefix = element->vhdl->operands[0];
+        const auto range = hir_expression_range(prefix, hir_process_scope_);
+        const auto width = hir_expression_width(prefix, hir_process_scope_);
+        const auto index = hir_constant_integer(element->vhdl->operands[1]);
+        if (range && width && index) {
+            const auto count = index_distance(range->left, range->right) + 1U;
+            const auto low = std::min(range->left, range->right);
+            const auto high = std::max(range->left, range->right);
+            if (count != 0U && *width % count == 0U && *index >= low && *index <= high) {
+                const auto element_width = *width / count;
+                // Position from the left; the left element is the most
+                // significant.
+                const auto position = index_distance(range->left, *index);
+                const auto value = lower_hir_expression(prefix, *width);
+                if (!value) {
+                    return std::nullopt;
+                }
+                const auto selected = allocate_register(element_width, register_domain(*value));
+                process_.operations.emplace_back(Extract { selected, *value,
+                    static_cast<std::uint32_t>((count - 1U - position) * element_width),
+                    static_cast<std::uint32_t>(element_width) });
+                return expected_width == 0U || expected_width == element_width
+                    ? selected
+                    : resize_register(selected, expected_width, false);
+            }
+        }
+    }
+    // An element of a STRING held as a runtime string is its character.
+    if (const auto element = specialized_hir_unit_ != nullptr
+                ? specialized_hir_unit_->find_expression(expression_id)
+                : std::nullopt;
+        element && element->vhdl != nullptr
+        && element->vhdl->kind == semantic::vhdl::ExpressionKind::index
+        && element->vhdl->operands.size() == 2U) {
+        const auto alias_target = hir_vhdl_alias_target_expression(element->vhdl->operands[0]);
+        const auto prefix_declaration = alias_target
+            ? hir_referenced_declaration(element->vhdl->operands[0])
+            : hir_target_declaration(element->vhdl->operands[0]);
+        const auto prefix_string = prefix_declaration && !alias_target
+            ? hir_string_binding(*prefix_declaration, hir_process_scope_, true)
+            : std::nullopt;
+        if (hir_vhdl_runtime_string_prefix(element->vhdl->operands[0])) {
+            const auto alias_declaration = alias_target && prefix_declaration
+                ? specialized_hir_unit_->find_declaration(*prefix_declaration)
+                : std::nullopt;
+            const auto prefix_subtype = alias_declaration && alias_declaration->vhdl != nullptr
+                    && alias_declaration->vhdl->subtype
+                ? std::optional { *alias_declaration->vhdl->subtype }
+                : hir_vhdl_expression_subtype(element->vhdl->operands[0]);
+            std::int64_t prefix_left = 1;
+            bool prefix_descending { };
+            if (prefix_subtype) {
+                for (const auto& constraint : prefix_subtype->constraints) {
+                    if (constraint.kind != semantic::vhdl::RangeKind::array_index) {
+                        continue;
+                    }
+                    const auto left = constraint.left ? constraint.left
+                        : constraint.left_expression
+                        ? hir_constant_integer(*constraint.left_expression)
+                        : std::nullopt;
+                    prefix_left = left.value_or(1);
+                    prefix_descending = constraint.descending;
+                    break;
+                }
+            }
+            auto index = lower_hir_expression(element->vhdl->operands[1], 32U);
+            if (!index) {
+                return std::nullopt;
+            }
+            if (register_width(*index) != 32U) {
+                index = resize_register(*index, 32U, true);
+            }
+            const auto base = allocate_register(32U, frontend::ValueDomain::Integer);
+            process_.operations.emplace_back(LoadConstant { base,
+                integer_value(prefix_left, 32U) });
+            const auto offset = allocate_register(32U, frontend::ValueDomain::Integer);
+            process_.operations.emplace_back(IntegerBinary { IntegerBinaryOperator::subtract,
+                offset, prefix_descending ? base : *index, prefix_descending ? *index : base });
+            const auto source_string = prefix_string && prefix_string->local
+                ? std::optional { *prefix_string->local }
+                : lower_hir_string_expression(element->vhdl->operands[0]);
+            if (!source_string) {
+                return std::nullopt;
+            }
+            StringMethod method;
+            method.operation = StringMethodOperator::getc;
+            method.destination = allocate_register(32U, frontend::ValueDomain::Integer);
+            method.source = *source_string;
+            method.first = offset;
+            process_.operations.emplace_back(method);
+            const auto character = allocate_register(8U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(Extract { character, method.destination, 0U, 8U });
+            return expected_width == 0U || expected_width == 8U
+                ? character
+                : resize_register(character, expected_width, false);
+        }
+    }
     // IEEE 1800-2017 11.4.12: real operands are not allowed in a
     // concatenation.
     if (specialized_hir_unit_ != nullptr) {
@@ -14028,6 +14138,65 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
+    if (const auto target = hir_vhdl_alias_target_expression(expression_id)) {
+        return lower_hir_string_expression(*target);
+    }
+    // A slice of a STRING is the substring at the slice's positions in the
+    // prefix's index range (IEEE 1076-2008 8.5).
+    if (const auto slice = specialized_hir_unit_->find_expression(expression_id);
+        slice && slice->vhdl != nullptr
+        && slice->vhdl->kind == semantic::vhdl::ExpressionKind::slice
+        && slice->vhdl->operands.size() == 3U
+        && hir_expression_is_string(slice->vhdl->operands[0], hir_process_scope_)) {
+        const auto prefix_subtype = hir_vhdl_expression_subtype(slice->vhdl->operands[0]);
+        std::optional<std::int64_t> prefix_left;
+        bool prefix_descending { };
+        if (prefix_subtype) {
+            for (const auto& constraint : prefix_subtype->constraints) {
+                if (constraint.kind != semantic::vhdl::RangeKind::array_index) {
+                    continue;
+                }
+                prefix_left = constraint.left ? constraint.left
+                    : constraint.left_expression
+                    ? hir_constant_integer(*constraint.left_expression)
+                    : std::nullopt;
+                prefix_descending = constraint.descending;
+                break;
+            }
+        }
+        if (!prefix_left) {
+            prefix_left = 1;
+        }
+        const auto source_string = lower_hir_string_expression(slice->vhdl->operands[0]);
+        auto left = lower_hir_expression(slice->vhdl->operands[1], 32U);
+        auto right = lower_hir_expression(slice->vhdl->operands[2], 32U);
+        if (!source_string || !left || !right) {
+            return std::nullopt;
+        }
+        if (register_width(*left) != 32U) {
+            left = resize_register(*left, 32U, true);
+        }
+        if (register_width(*right) != 32U) {
+            right = resize_register(*right, 32U, true);
+        }
+        const auto base = allocate_register(32U, frontend::ValueDomain::Integer);
+        process_.operations.emplace_back(LoadConstant { base,
+            integer_value(*prefix_left, 32U) });
+        const auto offset = [&](const RegisterId bound) {
+            const auto result = allocate_register(32U, frontend::ValueDomain::Integer);
+            process_.operations.emplace_back(IntegerBinary { IntegerBinaryOperator::subtract,
+                result, prefix_descending ? base : bound, prefix_descending ? bound : base });
+            return result;
+        };
+        StringMethod method;
+        method.operation = StringMethodOperator::substr;
+        method.source = *source_string;
+        method.string_destination = allocate_string_register();
+        method.first = offset(*left);
+        method.second = offset(*right);
+        process_.operations.emplace_back(method);
+        return method.string_destination;
+    }
     if (const auto method = hir_systemverilog_enumeration_method(
             expression_id);
         method && method->method == "name") {
@@ -14649,9 +14818,12 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
         if (source.kind != semantic::vhdl::ExpressionKind::name) {
             return std::nullopt;
         }
-        const auto declaration = hir_referenced_declaration(expression_id);
+        auto declaration = hir_referenced_declaration(expression_id);
         if (!declaration) {
             return std::nullopt;
+        }
+        if (const auto object = hir_vhdl_alias_object(*declaration)) {
+            declaration = object;
         }
         if (const auto initializer = hir_constant_initializer(*declaration);
             initializer && *initializer != expression_id) {
@@ -15925,7 +16097,7 @@ bool Lowerer::lower_hir_packed_copy_out(
                 element->indices.size() > 1U,
                 false,
                 std::nullopt,
-                std::nullopt,
+                std::nullopt, { }
             });
         }
         end_hir_fixed_array_write(write_guard);

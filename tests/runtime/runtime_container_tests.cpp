@@ -1460,7 +1460,7 @@ void test_simir_containers()
         LoadConstant { 1, value(8, 0xaa) },
         WriteContainerObjectElement {
             bridged_object, 0, 1, true, false, false, std::nullopt,
-            std::nullopt },
+            std::nullopt, { } },
         Halt { }
     };
     (void)bridged.add_process(std::move(bridged_process));
@@ -1566,7 +1566,7 @@ void test_simir_containers()
             LoadConstant { 1U, value(8U, 0xaaU) },
             WriteContainerObjectElement {
                 object, 0U, 1U, true, false, true,
-                transaction, std::nullopt,
+                transaction, std::nullopt, { }
             },
             Halt { },
         };
@@ -1789,7 +1789,7 @@ void test_simir_containers()
             LoadConstant { 2U, value(32U, 0U) },
             WriteContainerObjectElement {
                 driven_element_object, 0U, 1U, true, false,
-                nonblocking, std::nullopt, part },
+                nonblocking, std::nullopt, part, { } },
             Halt { },
         };
         return driven_element_nets.add_process(std::move(writer));
@@ -2342,7 +2342,7 @@ void test_simir_containers()
         LoadConstant { 1, value(8, 0xaa) },
         WriteContainerObjectElement {
             dynamic_object, 0, 1, true, false, true, std::nullopt,
-            std::nullopt },
+            std::nullopt, { } },
         ReadContainerObject { 0, dynamic_object },
         ContainerRead { 2, 0, 0, true, false, false },
         Halt { }
@@ -2381,26 +2381,26 @@ void test_simir_containers()
         LoadConstant { 2, value(8, 0x12) },
         WriteContainerObjectElement {
             word_array_object, 0, 2, false, false, true,
-            std::nullopt, byte_lane },
+            std::nullopt, byte_lane, { } },
         LoadConstant { 0, value(32, 0) },
         LoadConstant { 1, value(32, 8) },
         LoadConstant { 2, value(8, 0x34) },
         WriteContainerObjectElement {
             word_array_object, 0, 2, false, false, true,
-            std::nullopt, byte_lane },
+            std::nullopt, byte_lane, { } },
         LoadConstant { 0, value(32, 0) },
         LoadConstant { 1, value(32, 0) },
         LoadConstant { 2, value(8, 0x56) },
         WriteContainerObjectElement {
             word_array_object, 0, 2, false, false, true,
-            std::nullopt, byte_lane },
+            std::nullopt, byte_lane, { } },
         LoadConstant { 0, value(32, 1) },
         LoadConstant { 1, value(32, 0) },
         LoadConstant {
             2, PackedLogic4::from_msb_string("X1010101") },
         WriteContainerObjectElement {
             word_array_object, 0, 2, false, false, true,
-            std::nullopt, byte_lane },
+            std::nullopt, byte_lane, { } },
         // Change every captured operand before the update phase begins.
         LoadConstant { 0, value(32, 0) },
         LoadConstant { 1, value(32, 8) },
@@ -2442,7 +2442,7 @@ void test_simir_containers()
                 LoadConstant { 2, value(8, 0xaa) },
                 WriteContainerObjectElement {
                     object, 0, 2, false, false, true,
-                    std::nullopt, selection },
+                    std::nullopt, selection, { } },
                 Halt { }
             };
             (void)failing.add_process(std::move(candidate));
@@ -2580,7 +2580,7 @@ void test_simir_containers()
         LoadConstant { 1U, value(8U, 0xa5U) },
         WriteContainerObjectElement {
             element_slice_formal, 0U, 1U, true, false, false,
-            std::nullopt, std::nullopt },
+            std::nullopt, std::nullopt, { } },
         Halt { },
     };
     const auto element_slice_process = element_slice_aliases.add_process(

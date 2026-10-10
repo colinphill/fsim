@@ -115,7 +115,8 @@ void ProcessExecutionContext::write_container_object_element(
     const PackedLogic4&,
     ProcessId,
     InstructionIndex,
-    bool)
+    bool,
+    std::span<const std::uint32_t>)
 {
     throw std::logic_error {
         "alternate process executor does not support direct container-object element writes"

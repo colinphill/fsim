@@ -231,6 +231,12 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
     }
     output.direction = vhdl_direction(input.direction);
     output.alias_target = name(input.actual, input.span, scope);
+    if (input.actual_expression) {
+        // An element or slice target is kept as the alias's expression.
+        const auto target = expression(
+            *input.actual_expression, scope, declaration(id).origin);
+        declaration(id).initializer = target;
+    }
     return id;
 }
 

@@ -1049,7 +1049,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     element_value,
                     process,
                     instruction,
-                    write_element->nonblocking);
+                    write_element->nonblocking,
+                    write_element->members);
             }
             if (write_element->transaction_signal) {
                 state.context->write_update_word(

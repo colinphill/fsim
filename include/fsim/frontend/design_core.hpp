@@ -974,6 +974,9 @@ struct SignalAliasDeclaration {
     Type type;
     PortDirection direction { PortDirection::Unknown };
     SourceSpan span;
+    // The whole target when it is an indexed or slice name (`s(1 to 4)`);
+    // `actual` then names its prefix.
+    std::optional<Expression> actual_expression;
 };
 
 // An IEEE 1800 alias statement joins already-declared lvalues. Unlike a VHDL

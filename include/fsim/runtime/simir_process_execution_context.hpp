@@ -152,7 +152,8 @@ public:
         const PackedLogic4&,
         ProcessId,
         InstructionIndex,
-        bool);
+        bool,
+        std::span<const std::uint32_t> members = { });
     virtual void write_container_object_dynamic_part_element(
         ContainerObjectId,
         const PackedLogic4&,

@@ -253,6 +253,54 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 29: subprogram array formals, slice aliases, strings, NBA struct members
+
+Fixtures: `vhdl_aliases_and_array_formals.vhd` and
+`sv_nonblocking_struct_members.sv` (both pass on xsim).
+
+VHDL subprograms:
+- Formals of unconstrained array types whose elements are wider than one bit
+  (arrays of INTEGER, REAL, records) take the actual's packed value and index
+  range; the captured range is valid when the actual holds a whole number of
+  elements per index, so `v'range`, `v'length` and `v(i)` work in the body.
+- Functions return arrays and records of wide elements as packed values.
+- Procedure calls capture the index ranges of unconstrained array actuals
+  (one frame per distinct range), which they did not before.
+- STRING formals of functions that do not return STRING are runtime strings,
+  with the actual's static index range (its constraint, or 1 to the length
+  of a static value).
+
+VHDL names and values:
+- Object aliases of slices and elements (`alias a : string(4 downto 1) is
+  s(1 to 4)`, `alias c : character is s(3)`): the target is kept as the
+  alias's expression; the alias's own subtype gives its index range;
+  whole-object aliases of STRING variables and constants follow their object
+  (`FSIM-ELAB-VHALIAS-003` reports an element count that differs from the
+  slice's).
+- Slices and elements of runtime STRING values (`s(1 to 4) = "Hell"`,
+  `s(4) = 'l'`), with CHARACTER as the element subtype so `'H'` and `'L'`
+  are not taken as STD_ULOGIC literals.
+- Integer literals with an exponent (`2E9`) in static evaluation, and
+  physical type ranges given by static expressions.
+- Configurations: a deferred constant's value is used for generate index
+  specifications; a generic of the configured entity takes its default;
+  range attributes of objects and subtype names select index ranges.
+
+SystemVerilog: nonblocking writes to members of unpacked structures and of
+unpacked arrays of structures (`arr[0].foo <= 0`). `WriteContainerObjectElement`
+carries an optional member path and updates the member when the write is
+published, so several member writes in one time step compose.
+
+Elaboration: arrays indexed by a CHARACTER subtype get their layout from the
+character bounds; the predefined VHDL-2008 vectors `integer_vector`,
+`real_vector` and `time_vector` have signal layouts.
+
+Corpus effect (interpreter, against the r72 baseline): VESTs +45
+(3048/3648, no regressions), nvc +20 (545, from the w90 run; the final nvc,
+ivtest, Verilator and sv-tests reruns were stopped by memory pressure and
+are taken by the next baseline), Verilator struct-member NBA cases
+(`t_nba_struct_array`, `t_struct_array_assignment_delayed`).
+
 ### Batch 28: typed-file images, constant bounds, signal initial values, analysis checks
 
 Fixture: `vhdl_constant_bounds_and_file_images.vhd` (passes on xsim).
@@ -1408,7 +1456,12 @@ error, and each exposes an existing gap:
 | SV: hierarchical task and function calls (`u.f(x)`, `block.f()`, `m1.c.f()`): callable bodies are lowered in the caller's instance context | ~25 ivtest/Verilator cases (`unsupported expression kind 9 '.f'`) |
 | SV: `%v` strength format; needs a per-bit resolved-strength query from the display formatter (the interpreter resolves strength per signal) | 18 ivtest cases (`FSIM-SV-SEM-042`) |
 | VHDL: record element constraints (`rec(y(1 to 3))`) | 26 nvc cases (`FSIM-VHDL-PARSE-009`) |
-| VHDL: slice and index alias targets (`alias a : string(1 to 4) is s(1 to 4);`) | 19 VESTs cases (`FSIM-VHDL-PARSE-236`) |
+| VHDL: VHDL-2008 element constraints of arrays and records (`t(1 to 2)(7 downto 0)`, `t(open)(7 downto 0)`, `rec(f(1 to 3))`); needs element constraints in the HIR subtype and in every array and record layout | about 50 nvc cases (`FSIM-VHDL-PARSE-009`, `-018`, `-135`) |
+| VHDL: individual (subelement) association of procedure formals (`P(1) => a, P(2) => b`), mostly `inout` | 12 VESTs cases (`FSIM-VHDL-PARSE-179`) |
+| VHDL: external names (`<<signal .a.b : t>>`) | 9 nvc cases |
+| VHDL: indexing the predefined VHDL-2008 vectors (`integer_vector`), which have no HIR type definition | nvc |
+| SV: nonblocking whole-object writes of unpacked aggregates (`out <= buffer[i]`) and continuous assignment to unpacked structure members | Verilator |
+| SV: `randomize` and constraint blocks | 36 sv-tests cases (`FSIM-SV-CLASS-005`) |
 | VHDL: chained signal attributes (`clk'delayed'last_event`) | 16 VESTs cases (`FSIM-VHDL-PARSE-046`) |
 | SV: UVM `run_test` from source: the phase, objection and report services exist but are only driven through the C++ API | 100 UVM sv-tests |
 | SV: interface parameters read through a port (`a.PARAM`) | Verilator interface cases |

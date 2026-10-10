@@ -309,10 +309,44 @@ void Interpreter::Impl::execute_container(
     const ContainerAggregateWrite& operation)
 {
     auto& target = get_container_register(process, operation.target);
+    apply_container_aggregate_member(target,
+        get_register(process, operation.index), operation.signed_index,
+        operation.linear_index, operation.members,
+        get_register(process, operation.source), process.id, process.pc);
+    ++process.pc;
+}
+
+void Interpreter::Impl::write_container_object_member_value(
+    const ContainerObjectId id,
+    const PackedLogic4& index,
+    const bool signed_index,
+    const bool linear_index,
+    const std::span<const std::uint32_t> members,
+    const PackedLogic4& value,
+    const ProcessId process,
+    const InstructionIndex instruction,
+    const SignalChangeOrigin origin)
+{
+    auto replacement = read_container_object_value(id);
+    apply_container_aggregate_member(replacement, index, signed_index,
+        linear_index, members, value, process, instruction);
+    write_container_object_value(id, replacement, process, origin);
+}
+
+void Interpreter::Impl::apply_container_aggregate_member(
+    ContainerValue& target,
+    const PackedLogic4& index,
+    const bool signed_index,
+    const bool linear_index,
+    const std::span<const std::uint32_t> members,
+    const PackedLogic4& value,
+    const ProcessId process,
+    const InstructionIndex instruction)
+{
     if (target.type.element_kind != ContainerElementKind::Aggregate
-        || operation.members.empty()) {
+        || members.empty()) {
         container_error(
-            process.id, process.pc,
+            process, instruction,
             "aggregate member write requires an unpacked aggregate container");
     }
     auto* selected = aggregate_box(target.type)
@@ -324,15 +358,15 @@ void Interpreter::Impl::execute_container(
         // of unpacked aggregates select an element before walking members.
     } else if (target.type.associative) {
         const auto key = associative_key(
-            process.id, process.pc, target.type,
-            get_register(process, operation.index));
+            process, instruction, target.type,
+            index);
         at = lower_key(target, key);
         if (at >= target.keys.size()
             || !key_equal(target.keys[at], key)) {
             if (target.keys.size()
                 >= maximum_container_elements(target.type)) {
                 container_error(
-                    process.id, process.pc,
+                    process, instruction,
                     "associative aggregate exceeds its owning-storage budget");
             }
             target.keys.insert(iterator_at(target.keys, at), key);
@@ -343,21 +377,21 @@ void Interpreter::Impl::execute_container(
         }
     } else {
         at = target.type.fixed
-            ? operation.linear_index
+            ? linear_index
                 ? known_index(
-                      process.id, process.pc,
-                      get_register(process, operation.index), true,
+                      process, instruction,
+                      index, true,
                       "multidimensional linear index")
                 : fixed_offset(
-                      process.id, process.pc, target.type,
-                      get_register(process, operation.index))
+                      process, instruction, target.type,
+                      index)
             : known_index(
-                  process.id, process.pc,
-                  get_register(process, operation.index),
-                  operation.signed_index, "container index");
+                  process, instruction,
+                  index,
+                  signed_index, "container index");
         if (at >= target.nested_elements.size()) {
             container_error(
-                process.id, process.pc,
+                process, instruction,
                 "aggregate container index is out of range");
         }
     }
@@ -366,27 +400,26 @@ void Interpreter::Impl::execute_container(
     }
     ContainerValue* direct_union = nullptr;
     for (std::size_t path_index = 0;
-        path_index < operation.members.size(); ++path_index) {
-        const auto member = operation.members[path_index];
+        path_index < members.size(); ++path_index) {
+        const auto member = members[path_index];
         if (selected->type.element_kind != ContainerElementKind::Aggregate
             || member >= selected->nested_elements.size()) {
             container_error(
-                process.id, process.pc,
+                process, instruction,
                 "aggregate member write path is invalid");
         }
         if (selected->type.union_aggregate
-            && path_index + 1U == operation.members.size()) {
+            && path_index + 1U == members.size()) {
             direct_union = selected;
         }
         selected = &selected->nested_elements[member];
     }
-    const auto& value = get_register(process, operation.source);
     if (!selected->type.fixed || selected->elements.size() != 1U
         || value.width() != selected->type.element_width
         || value.is_logic9()
         || (selected->type.two_state && has_unknown(value))) {
         container_error(
-            process.id, process.pc,
+            process, instruction,
             "aggregate member write leaf type mismatch");
     }
     selected->elements.front() = value;
@@ -398,7 +431,6 @@ void Interpreter::Impl::execute_container(
             }
         }
     }
-    ++process.pc;
 }
 
 void Interpreter::Impl::execute_container(

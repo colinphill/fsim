@@ -451,6 +451,9 @@ struct WriteContainerObjectElement {
     /// Apply a packed part-write to the current element at update time. The
     /// base register is captured with the address and value for NBA writes.
     std::optional<DynamicPartIndex> dynamic_part;
+    /// A member path inside an unpacked aggregate element: the element's
+    /// member is updated when the write is published.
+    std::vector<std::uint32_t> members;
 };
 
 struct ContainerStringRead {

@@ -3987,11 +3987,19 @@ bool Lowerer::lower_hir_statement(
         if (const auto aggregate_member
             = hir_container_aggregate_selection(*target)) {
             const auto& input = *statement->systemverilog;
-            if (signal_assignment || nonblocking
-                || input.assignment_control
-                    != semantic::sv::AssignmentControl::none
-                || input.delay
-                || input.update_kind != semantic::sv::UpdateKind::none) {
+            // A nonblocking write of a member of a static unpacked aggregate
+            // updates the member when the write is published (IEEE
+            // 1800-2017 10.4.2).
+            const bool nonblocking_member = nonblocking && !signal_assignment
+                && !aggregate_member->element.local
+                && input.assignment_control == semantic::sv::AssignmentControl::none
+                && !input.delay && input.update_kind == semantic::sv::UpdateKind::none;
+            if ((signal_assignment || nonblocking
+                    || input.assignment_control
+                        != semantic::sv::AssignmentControl::none
+                    || input.delay
+                    || input.update_kind != semantic::sv::UpdateKind::none)
+                && !nonblocking_member) {
                 return false;
             }
             if (aggregate_member->element.read_only) {
@@ -4041,6 +4049,19 @@ bool Lowerer::lower_hir_statement(
                 process_.operations.emplace_back(CopyRegister {
                     converted, *lowered });
                 lowered = converted;
+            }
+            if (nonblocking_member) {
+                WriteContainerObjectElement write;
+                write.object = aggregate_member->element.object;
+                write.index = *element_index;
+                write.source = *lowered;
+                write.signed_index = aggregate_member->element.indices.size() > 1U
+                    || aggregate_member->element.type->signed_indices;
+                write.linear_index = aggregate_member->element.indices.size() > 1U;
+                write.nonblocking = true;
+                write.members = aggregate_member->members;
+                process_.operations.emplace_back(std::move(write));
+                return true;
             }
             const auto aggregate_container = aggregate_member->element.local
                 ? *aggregate_member->element.local
@@ -4230,7 +4251,7 @@ bool Lowerer::lower_hir_statement(
                             static_cast<std::uint32_t>(*width),
                             constant_range || selection.text == "+:",
                             dynamic->left >= dynamic->right,
-                        },
+                        }, { }
                     });
                 end_hir_fixed_array_write(write_guard);
                 if (handoff) {
@@ -4824,7 +4845,7 @@ bool Lowerer::lower_hir_statement(
                         element->indices.size() > 1U,
                         nonblocking,
                         std::nullopt,
-                        std::nullopt,
+                        std::nullopt, { }
                     });
             }
             end_hir_fixed_array_write(write_guard);

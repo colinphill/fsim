@@ -450,6 +450,19 @@ private:
     [[nodiscard]] std::optional<std::size_t> hir_expression_width(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
+    // The target expression of a name that denotes an object alias of an
+    // element or slice (`alias a : t is s(1 to 4)`).
+    [[nodiscard]] std::optional<semantic::ExpressionId> hir_vhdl_alias_target_expression(
+        semantic::ExpressionId expression) const;
+    // Whether an indexed name's prefix is a STRING lowered as a runtime
+    // string (a variable, a constant, or an alias of a slice).
+    [[nodiscard]] bool hir_vhdl_runtime_string_prefix(
+        semantic::ExpressionId prefix) const;
+    // The object a whole-object alias declaration denotes.
+    // Whether a VHDL subprogram formal is of a STRING subtype.
+    [[nodiscard]] bool vhdl_string_formal(semantic::DeclarationId formal) const;
+    [[nodiscard]] std::optional<semantic::DeclarationId> hir_vhdl_alias_object(
+        semantic::DeclarationId alias) const;
     // The index of the non-null operand of a VHDL `&` whose other operand
     // is a statically null array, if exactly one operand is null.
     // The CHARACTER code of a VHDL character literal lowered self-determined

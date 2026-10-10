@@ -2000,6 +2000,7 @@ tests/fixtures/compliance/sv_hierarchical_references.sv
 tests/fixtures/compliance/sv_interface_ports_and_waits.sv
 tests/fixtures/compliance/sv_module_items.sv
 tests/fixtures/compliance/sv_net_data_types.sv
+tests/fixtures/compliance/sv_nonblocking_struct_members.sv
 tests/fixtures/compliance/sv_operand_signedness.sv
 tests/fixtures/compliance/sv_packed_multidim.sv
 tests/fixtures/compliance/sv_parameter_types.sv
@@ -2014,6 +2015,7 @@ tests/fixtures/compliance/sv_time_without_timescale.sv
 tests/fixtures/compliance/sv_type_and_class_forms.sv
 tests/fixtures/compliance/sv_values_and_assertion_items.sv
 tests/fixtures/compliance/verilog_2005_begin_keywords.v
+tests/fixtures/compliance/vhdl_aliases_and_array_formals.vhd
 tests/fixtures/compliance/vhdl_attributes_and_conversions.vhd
 tests/fixtures/compliance/vhdl_character_type.vhd
 tests/fixtures/compliance/vhdl_composite_constants.vhd

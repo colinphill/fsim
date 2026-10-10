@@ -3068,8 +3068,15 @@ void Interpreter::Impl::execute_container(
                 signed_index = operation.signed_index,
                 linear_index = operation.linear_index, value,
                 base, dynamic_part = operation.dynamic_part,
+                members = operation.members,
                 driver = process.id,
                 instruction = process.pc, origin](Scheduler&) {
+                if (!members.empty()) {
+                    write_container_object_member_value(
+                        object, index, signed_index, linear_index, members,
+                        value, driver, instruction, origin);
+                    return;
+                }
                 if (dynamic_part) {
                     if (!base) {
                         container_error(
@@ -3092,6 +3099,11 @@ void Interpreter::Impl::execute_container(
             scheduler.schedule(
                 SchedulerPhase::update, process.id, publish);
         }
+    } else if (!operation.members.empty()) {
+        write_container_object_member_value(
+            operation.object, index, operation.signed_index,
+            operation.linear_index, operation.members, value,
+            process.id, process.pc, origin);
     } else if (operation.dynamic_part) {
         if (!base) {
             container_error(
