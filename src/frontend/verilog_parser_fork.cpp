@@ -6,8 +6,14 @@ namespace fsim::frontend {
 Statement VerilogParser::parse_fork_statement(const Token& start) {
   Statement statement;
   statement.kind = StatementKind::Fork;
+  statement.label = std::exchange(pending_block_label_, { });
   if (match(TokenKind::Colon)) {
-    statement.label = expect_identifier("fork block name").text;
+    const auto name = expect_identifier("fork block name");
+    if (!statement.label.empty()) {
+      error(name, "FSIM-SV-SEM-109",
+          "a labeled fork cannot also have a block name");
+    }
+    statement.label = name.text;
   }
 
   while (!at_end() && current().text != "join"

@@ -377,6 +377,9 @@ private:
     [[nodiscard]] std::optional<std::optional<HirPackedRange>>
     hir_vhdl_callable_formal_range(
         semantic::DeclarationId declaration) const;
+    [[nodiscard]] const std::vector<semantic::vhdl::ElementConstraint>*
+    hir_vhdl_callable_formal_element_constraints(
+        semantic::DeclarationId declaration) const;
     struct HirConstantSelection {
         std::size_t offset { };
         std::size_t width { };
@@ -1861,6 +1864,11 @@ private:
         // range was not proven and must not fall back to type-level bounds.
         std::unordered_map<std::uint32_t,
             std::optional<HirPackedRange>> vhdl_formal_ranges;
+        // Element constraints an unconstrained array formal takes from its
+        // actual (IEEE 1076-2008 4.2.2.2), keyed like vhdl_formal_ranges.
+        std::unordered_map<std::uint32_t,
+            std::vector<semantic::vhdl::ElementConstraint>>
+            vhdl_formal_element_constraints;
         std::string debug_name;
         // Signal-class procedure formals denote their actual signal for the
         // whole call. Frames are specialized per actual signal set.

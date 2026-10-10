@@ -5826,6 +5826,9 @@ Lowerer::lower_hir_function_call_value(
         static_integer_actual_expressions;
     std::vector<std::pair<std::size_t, std::optional<HirPackedRange>>>
         vhdl_actual_ranges;
+    std::vector<std::pair<std::size_t,
+        std::vector<semantic::vhdl::ElementConstraint>>>
+        vhdl_actual_element_constraints;
     if (declaration->vhdl != nullptr) {
         const auto array_root = [&](semantic::TypeId type_id)
             -> std::optional<std::pair<semantic::TypeId, std::size_t>> {
@@ -6017,6 +6020,9 @@ Lowerer::lower_hir_function_call_value(
             const auto actual_predefined_vector = actual_subtype
                 ? predefined_packed_vector(*actual_subtype)
                 : std::nullopt;
+            const auto actual_effective = actual_subtype
+                ? hir_effective_vhdl_subtype(*actual_subtype)
+                : std::nullopt;
             const auto actual_array = actual_root
                     && actual_root->first
                         == semantic::vhdl::TypeForm::array
@@ -6053,8 +6059,14 @@ Lowerer::lower_hir_function_call_value(
                 if (!type || type->vhdl == nullptr || !type->vhdl->element_subtype) {
                     return 1U;
                 }
-                const auto element = hir_effective_vhdl_subtype(*type->vhdl->element_subtype)
-                    .value_or(*type->vhdl->element_subtype);
+                // An unbounded element takes the actual's element
+                // constraints (IEEE 1076-2008 5.3.2.2).
+                const auto declared_element = actual_effective
+                    ? semantic::vhdl::constrained_element_subtype(
+                          *actual_effective, "", *type->vhdl->element_subtype)
+                    : *type->vhdl->element_subtype;
+                const auto element = hir_effective_vhdl_subtype(declared_element)
+                    .value_or(declared_element);
                 return element.executable_width ? *element.executable_width
                     : element.domain == semantic::vhdl::ValueDomain::integer
                         && element.integer_storage_width != 0U
@@ -6070,6 +6082,11 @@ Lowerer::lower_hir_function_call_value(
                     || range->descending
                         == (range->left > range->right))) {
                 actual_range = *range;
+                if (actual_effective
+                    && !actual_effective->element_constraints.empty()) {
+                    vhdl_actual_element_constraints.emplace_back(
+                        index, actual_effective->element_constraints);
+                }
             }
             vhdl_actual_ranges.emplace_back(index, actual_range);
         }
@@ -6091,6 +6108,28 @@ Lowerer::lower_hir_function_call_value(
                 + (range->descending ? "down" : "up");
         } else {
             callable_key += "unknown";
+        }
+    }
+    for (const auto& [index, constraints] : vhdl_actual_element_constraints) {
+        callable_key += "|vhdl-element:" + std::to_string(index) + "=";
+        for (const auto& constraint : constraints) {
+            for (const auto& step : constraint.path) {
+                callable_key += step + "/";
+            }
+            for (const auto& range : constraint.constraints) {
+                const auto bound = [&](const std::optional<std::int64_t> value,
+                                       const std::optional<semantic::ExpressionId>
+                                           expression) {
+                    const auto folded = value ? value
+                        : expression ? hir_constant_integer(*expression)
+                                     : std::nullopt;
+                    return folded ? std::to_string(*folded) : std::string { "?" };
+                };
+                callable_key += bound(range.left, range.left_expression) + ":"
+                    + bound(range.right, range.right_expression)
+                    + (range.descending ? "d" : "a") + ",";
+            }
+            callable_key += ";";
         }
     }
     auto frame_index = hir_callable_frames_.size();
@@ -6148,6 +6187,15 @@ Lowerer::lower_hir_function_call_value(
                     != frame.formals[index]) {
                 frame.vhdl_formal_ranges.emplace(
                     frame.profile_formals[index].value(), range);
+            }
+        }
+        for (const auto& [index, constraints] :
+            vhdl_actual_element_constraints) {
+            frame.vhdl_formal_element_constraints.emplace(
+                frame.formals[index].value(), constraints);
+            if (frame.profile_formals.size() == frame.formals.size()) {
+                frame.vhdl_formal_element_constraints.emplace(
+                    frame.profile_formals[index].value(), constraints);
             }
         }
         // A VHDL function cannot suspend, so its invocation registers are no
@@ -7598,6 +7646,9 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
     // An unconstrained array formal takes the index range of its actual
     // (IEEE 1076-2008 4.2.2.2): each distinct range needs its own frame.
     std::vector<std::pair<std::size_t, HirPackedRange>> procedure_ranges;
+    std::vector<std::pair<std::size_t,
+        std::vector<semantic::vhdl::ElementConstraint>>>
+        procedure_element_constraints;
     std::string range_actual_key;
     for (std::size_t index { }; index < formals.size(); ++index) {
         if (signal_actuals[index] || string_formals[index]) {
@@ -7626,6 +7677,39 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         range_actual_key += "|r" + std::to_string(index) + ":"
             + std::to_string(range->left) + ":" + std::to_string(range->right)
             + (range->descending ? "d" : "a");
+        // An unbounded element takes the actual's element constraints.
+        const auto actual_subtype
+            = hir_vhdl_expression_subtype((*actuals)[index]);
+        const auto actual_effective = actual_subtype
+            ? hir_effective_vhdl_subtype(*actual_subtype)
+            : std::nullopt;
+        if (actual_effective
+            && !actual_effective->element_constraints.empty()) {
+            range_actual_key += "|e" + std::to_string(index) + ":"
+                + std::to_string(*width / (distance + 1U));
+            for (const auto& constraint :
+                actual_effective->element_constraints) {
+                for (const auto& step : constraint.path) {
+                    range_actual_key += step + "/";
+                }
+                for (const auto& element_range : constraint.constraints) {
+                    const auto left = element_range.left
+                        ? element_range.left
+                        : element_range.left_expression
+                        ? hir_constant_integer(*element_range.left_expression)
+                        : std::nullopt;
+                    const auto right = element_range.right
+                        ? element_range.right
+                        : element_range.right_expression
+                        ? hir_constant_integer(*element_range.right_expression)
+                        : std::nullopt;
+                    range_actual_key += (left ? std::to_string(*left) : "?")
+                        + ":" + (right ? std::to_string(*right) : "?") + ",";
+                }
+            }
+            procedure_element_constraints.emplace_back(
+                index, actual_effective->element_constraints);
+        }
     }
     const auto callable_key = vhdl_procedure_callable_key(
         resolution->key);
@@ -7667,6 +7751,15 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
             if (frame.profile_formals.size() == frame.formals.size()) {
                 frame.vhdl_formal_ranges.emplace(
                     frame.profile_formals[index].value(), range);
+            }
+        }
+        for (const auto& [index, constraints] :
+            procedure_element_constraints) {
+            frame.vhdl_formal_element_constraints.emplace(
+                frame.formals[index].value(), constraints);
+            if (frame.profile_formals.size() == frame.formals.size()) {
+                frame.vhdl_formal_element_constraints.emplace(
+                    frame.profile_formals[index].value(), constraints);
             }
         }
         frame.debug_name = statement->vhdl->procedure.spelling;

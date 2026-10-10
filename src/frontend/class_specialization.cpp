@@ -1358,6 +1358,17 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
 
   for (const auto& [identity, declaration] : declarations) {
     (void)identity;
+    // A class whose parameter has no default is specialized only by the
+    // references that supply its actuals (IEEE 1800-2017 8.25).
+    const bool requires_actual = std::ranges::any_of(
+        declaration->parameters, [](const ParameterDeclaration& parameter) {
+          return parameter.kind == ParameterKind::Type
+              ? !parameter.default_type
+              : parameter.default_value.kind == ExpressionKind::Invalid;
+        });
+    if (requires_actual) {
+      continue;
+    }
     (void)specialize(*declaration, {}, declaration->span);
   }
   for (std::size_t index = 0;

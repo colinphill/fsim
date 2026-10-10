@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <iterator>
 #include <set>
+#include <tuple>
 #include <limits>
 #include <optional>
 #include <span>
@@ -125,6 +126,7 @@ public:
         collect_unit_types(architecture_);
         validate_unit_objects(entity_);
         validate_unit_objects(architecture_);
+        validate_attribute_specifications();
         validate_actual_types();
         for (const auto id : relevant_types_) {
             const auto type = specialization_.find_type(
@@ -254,6 +256,17 @@ private:
         const SubtypeIndication& owner,
         const semantic::vhdl::RecordElement& element) const
     {
+        return constrained_element(owner, element.name, element.subtype);
+    }
+
+    // The element subtype `element` of `owner` at `step` ("" for an array
+    // element), refined by the element constraints of `owner` and of the
+    // named subtypes it denotes.
+    SubtypeIndication constrained_element(
+        const SubtypeIndication& owner,
+        const std::string_view step,
+        const SubtypeIndication& element) const
+    {
         auto collected = owner;
         auto target = owner.type_mark.target;
         std::unordered_set<std::uint32_t> visited;
@@ -271,7 +284,7 @@ private:
             target = definition->base.type_mark.target;
         }
         return specialized_subtype(semantic::vhdl::constrained_element_subtype(
-            collected, element.name, element.subtype));
+            collected, step, element));
     }
 
     SubtypeIndication specialized_subtype(SubtypeIndication subtype) const
@@ -294,6 +307,21 @@ private:
                     && declaration->vhdl->callable->return_identifier
                     && *declaration->vhdl->callable->return_identifier
                         == id;
+            });
+    }
+
+    bool subprogram_formal(const semantic::DeclarationId id) const
+    {
+        return std::ranges::any_of(
+            specialization_.design().vhdl_hir.declarations(),
+            [&](const auto& stored) {
+                const auto declaration
+                    = specialization_.find_declaration(stored.id);
+                return declaration && declaration->vhdl != nullptr
+                    && declaration->vhdl->callable
+                    && std::ranges::find(
+                           declaration->vhdl->callable->formals, id)
+                        != declaration->vhdl->callable->formals.end();
             });
     }
 
@@ -1329,6 +1357,160 @@ private:
                 "VHDL object '" + declaration.name
                     + "' requires a concrete array subtype",
                 declaration.source);
+        }
+    }
+
+    // IEEE 1076-1993 5.1: an attribute specification names entities of its
+    // entity class declared in the same declarative part by simple names;
+    // `others` and `all` come last for an attribute and class; the value
+    // has the attribute's type.
+    void validate_attribute_specifications()
+    {
+        using Form = semantic::vhdl::DeclarationForm;
+        const auto& scopes = specialization_.design().semantics.scopes();
+        const auto& declarations
+            = specialization_.design().vhdl_hir.declarations();
+        const auto visible_in = [&](const semantic::ScopeId inner,
+                                    const semantic::ScopeId outer) {
+            auto scope = inner;
+            for (std::size_t depth { }; depth <= scopes.size(); ++depth) {
+                if (scope == outer) {
+                    return true;
+                }
+                if (!scope.valid() || scope.value() >= scopes.size()
+                    || !scopes[scope.value()].parent) {
+                    return false;
+                }
+                scope = *scopes[scope.value()].parent;
+            }
+            return false;
+        };
+        const auto class_forms = [](const std::string_view entity_class)
+            -> std::vector<Form> {
+            if (name_equal(entity_class, "signal")) {
+                return { Form::signal, Form::port };
+            }
+            if (name_equal(entity_class, "variable")) {
+                return { Form::variable };
+            }
+            if (name_equal(entity_class, "constant")) {
+                return { Form::constant, Form::generic_constant };
+            }
+            if (name_equal(entity_class, "type")) {
+                return { Form::type };
+            }
+            if (name_equal(entity_class, "subtype")) {
+                return { Form::subtype };
+            }
+            return { };
+        };
+        std::set<std::tuple<std::uint32_t, std::string, std::string>>
+            closed;
+        const auto local_scope = [&](const semantic::ScopeId scope) {
+            return scope.valid() && scope.value() < scopes.size()
+                && (scopes[scope.value()].unit == entity_.id
+                    || scopes[scope.value()].unit == architecture_.id);
+        };
+        for (const auto& declaration : declarations) {
+            if (declaration.form != Form::attribute_specification
+                || !declaration.attribute || !local_scope(declaration.scope)) {
+                continue;
+            }
+            const auto& profile = *declaration.attribute;
+            std::string attribute_name { declaration.name };
+            std::string entity_class { profile.entity_class };
+            for (auto* text : { &attribute_name, &entity_class }) {
+                std::ranges::transform(*text, text->begin(),
+                    [](const unsigned char c) {
+                        return static_cast<char>(std::tolower(c));
+                    });
+            }
+            const auto key = std::tuple { declaration.scope.value(),
+                attribute_name, entity_class };
+            const auto forms = class_forms(entity_class);
+            for (const auto& entity : profile.entity_names) {
+                const auto& spelling = entity.spelling;
+                if (name_equal(spelling, "others")
+                    || name_equal(spelling, "all")) {
+                    closed.insert(key);
+                    continue;
+                }
+                if (closed.contains(key)) {
+                    report("FSIM-ELAB-VHATTR-016",
+                        "an attribute specification for '" + spelling
+                            + "' follows one for others or all",
+                        declaration.source);
+                    continue;
+                }
+                if (forms.empty()) {
+                    continue;
+                }
+                if (spelling.find('.') != std::string::npos) {
+                    report("FSIM-ELAB-VHATTR-016",
+                        "an attribute specification names entities by "
+                        "simple names",
+                        declaration.source);
+                    continue;
+                }
+                bool declared_here { };
+                bool class_match { };
+                bool visible { };
+                for (const auto& candidate : declarations) {
+                    if (!name_equal(candidate.name, spelling)) {
+                        continue;
+                    }
+                    if (candidate.scope == declaration.scope) {
+                        declared_here = true;
+                        // A subprogram formal's class follows its mode and
+                        // explicit class, which the HIR form does not keep.
+                        class_match = class_match
+                            || std::ranges::find(forms, candidate.form)
+                                != forms.end()
+                            || subprogram_formal(candidate.id);
+                    }
+                    visible = visible
+                        || visible_in(declaration.scope, candidate.scope);
+                }
+                if (declared_here && !class_match) {
+                    report("FSIM-ELAB-VHATTR-016",
+                        "'" + spelling + "' is not of entity class "
+                            + entity_class,
+                        declaration.source);
+                } else if (!declared_here && !visible) {
+                    report("FSIM-ELAB-VHATTR-016",
+                        "attribute specification names undeclared '"
+                            + spelling + "'",
+                        declaration.source);
+                }
+            }
+            if (!profile.value) {
+                continue;
+            }
+            const auto value = specialization_.find_expression(*profile.value);
+            const auto attribute = std::ranges::find_if(declarations,
+                [&](const semantic::vhdl::Declaration& candidate) {
+                    return candidate.form == Form::attribute_declaration
+                        && candidate.attribute
+                        && candidate.attribute->subtype
+                        && name_equal(candidate.name, declaration.name)
+                        && visible_in(declaration.scope, candidate.scope);
+                });
+            if (!value || value->vhdl == nullptr
+                || attribute == declarations.end()) {
+                continue;
+            }
+            const auto expected
+                = subtype_operand_type(*attribute->attribute->subtype, 0U).kind;
+            using Kind = semantic::vhdl::ExpressionKind;
+            if ((expected == OperandClass::floating
+                    && value->vhdl->kind == Kind::integer_literal)
+                || (expected == OperandClass::integer
+                    && value->vhdl->kind == Kind::real_literal)) {
+                report("FSIM-ELAB-VHATTR-016",
+                    "the value of attribute '" + declaration.name
+                        + "' does not have the attribute's type",
+                    value->vhdl->source);
+            }
         }
     }
 
@@ -3851,7 +4033,8 @@ private:
             if (!definition->element_subtype) {
                 return;
             }
-            subtype = specialized_subtype(*definition->element_subtype);
+            subtype = constrained_element(
+                subtype, "", *definition->element_subtype);
         }
     }
 
@@ -4364,8 +4547,8 @@ private:
             }
             if (definition->form == TypeForm::array) {
                 return definition->element_subtype
-                    ? std::optional {
-                          specialized_subtype(*definition->element_subtype) }
+                    ? std::optional { constrained_element(
+                          subtype, "", *definition->element_subtype) }
                     : std::nullopt;
             }
             if ((definition->form != TypeForm::subtype
@@ -5102,15 +5285,39 @@ private:
         // An unconstrained interface object (a port or subprogram formal)
         // takes its index ranges from its actual (IEEE 1076-2008 6.5.6.3).
         const auto interface_prefix = [&] {
-            const auto prefix_expression = specialization_.find_expression(
+            auto prefix_expression = specialization_.find_expression(
                 expression.operands.front());
+            // An element of an interface object also takes its bounds from
+            // the actual (IEEE 1076-2008 5.3.2.2).
+            bool element { };
+            for (std::size_t depth { }; depth < 16U && prefix_expression
+                 && prefix_expression->vhdl != nullptr
+                 && (prefix_expression->vhdl->kind
+                         == semantic::vhdl::ExpressionKind::index
+                     || prefix_expression->vhdl->kind
+                         == semantic::vhdl::ExpressionKind::slice
+                     || (prefix_expression->vhdl->kind
+                             == semantic::vhdl::ExpressionKind::call
+                         && prefix_expression->vhdl->text.starts_with(
+                             "@vhdl-member:")))
+                 && !prefix_expression->vhdl->operands.empty();
+                 ++depth) {
+                prefix_expression = specialization_.find_expression(
+                    prefix_expression->vhdl->operands.front());
+                element = true;
+            }
             if (!prefix_expression || prefix_expression->vhdl == nullptr
                 || !prefix_expression->vhdl->referenced_name
                 || !prefix_expression->vhdl->referenced_name->selected) {
                 return false;
             }
+            const auto selected
+                = *prefix_expression->vhdl->referenced_name->selected;
+            if (element && subprogram_formal(selected)) {
+                return true;
+            }
             const auto declaration = specialization_.find_declaration(
-                *prefix_expression->vhdl->referenced_name->selected);
+                selected);
             // A constant with a value takes its index ranges from it
             // (IEEE 1076-2008 5.3.2.2).
             return declaration && declaration->vhdl != nullptr

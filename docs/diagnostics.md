@@ -2141,6 +2141,7 @@ scheduler.
 | `FSIM-ELAB-VHATTR-013` | error | 'EVENT of a signal element is supported only for a static index into a whole signal. |
 | `FSIM-ELAB-VHATTR-014` | error | A VHDL attribute declaration names an access or file type (IEEE 1076-2008 6.7). |
 | `FSIM-ELAB-VHATTR-015` | error | The scalar attribute 'LEFT, 'RIGHT, 'LOW or 'HIGH is given an argument (IEEE 1076-1993 14.1). |
+| `FSIM-ELAB-VHATTR-016` | error | An attribute specification names an entity of another class, an undeclared entity, or an entity by a selected name; names an entity after `others` or `all` for the same attribute and class; or gives a value of another type (IEEE 1076-1993 5.1). |
 | `FSIM-ELAB-VHBODY-001` | error | A subprogram declared in an entity, architecture, block, process or subprogram declarative part has no body in that declarative part (IEEE 1076-2008 4.2.1). |
 | `FSIM-ELAB-VHCALL-001` | error | No visible function of the called name has formals that the call's positional and named actuals associate one to one, with defaults for the rest (IEEE 1076-2008 9.3.4, 6.5.7.1). |
 | `FSIM-ELAB-VHCALL-002` | error | No visible procedure accepts the actuals of a procedure call, by count, formal name or scalar type (IEEE 1076-2008 4.2.2.1). |

@@ -253,6 +253,28 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 34: element constraints from actuals, labels and attribute specifications
+
+Fixtures: `vhdl_formal_element_constraints.vhd` and
+`sv_block_labels_and_class_parameters.sv` (both pass on xsim).
+
+- Unbounded array formals take their actual's element constraints; frames
+  are specialized by them, and `x(i)'range` in the subprogram is bounded.
+- Element constraints in index ranges, constant selections, static signal
+  initializers, and dynamic-index and member element subtypes.
+- Constant selections of VHDL arrays with multi-bit elements: an
+  INTEGER_VECTOR element of a record in an array (`t(1).x(2)`) is read and
+  written at its own offset. Defaults of standard vectors inside records
+  are `'LEFT`.
+- Attribute specification checks (`FSIM-ELAB-VHATTR-016`).
+- Character literal indices of BIT, CHARACTER and STD_ULOGIC dimensions,
+  and multi-index calls of enumeration-indexed tables.
+- SystemVerilog block labels (`name: begin ... end: name`), and classes
+  whose parameter has no default.
+
+Corpus effect (interpreter, w102 and the sv-tests rerun): VESTs +5 (3181),
+nvc +8 (584), sv-tests +6.
+
 ### Batch 33: aggregates, imports, standard vectors and element constraints
 
 Fixtures: `vhdl_qualified_aggregates_and_imports.vhd` and
@@ -1613,7 +1635,10 @@ error, and each exposes an existing gap:
 | VHDL: library-level package instantiation (`package p is new work.g generic map (...)`) | 21 nvc/VHDL-Compliance cases (`FSIM-VHDL-UNSUPPORTED-022` 'new') |
 | VHDL: names in a configuration are not resolved against the configured architecture (architecture-local constants in generate specifications); design-wide unique names are used as a fallback | nvc config cases (`FSIM-ELAB-VHCONFIG-010`) |
 | VHDL: aggregate initializers of arrays of SEVERITY_LEVEL (`(others => note)`) | VESTs |
-| VHDL: element constraints of subprogram formals taken from the actual (`r(i)'range`, `'element`), element-constrained ports, and element constraints in protected types (syntax and object layouts done in batch 33) | ~40 nvc cases |
+| VHDL: element constraints of ports taken from the actual, `'element`, and element constraints in protected types (syntax and layouts done in batch 33, formals in batch 34) | ~35 nvc cases |
+| VHDL: `'subtype` of an object as a subtype indication (VHDL-2008) | 14 nvc cases |
+| VHDL: two-dimensional constants with bit or logic elements (`and_table('L', '1')`) | 4 VESTs clifton-labs cases |
+| SV: `new` for a variable of a specialized class type (`box #(5) b; b = new;`) constructs the default specialization | testbenches using parameterized classes |
 | VHDL: user resolution functions other than a single OR/AND reduction (a runtime resolver calling the function on the driver values) | 28 VESTs cases (`FSIM-ELAB-VHRESOLVE-002`/`-004`), nvc |
 | VHDL: indexing and slicing an unconstrained constant (`constant c : bit_vector := "0101"; c(1)`); its attributes were done in batch 28 | VESTs |
 | VHDL: configuration specifications in block declarative parts | 7 VESTs cases (`FSIM-VHDL-PARSE-078`) |

@@ -2991,6 +2991,44 @@ namespace {
                     }
                     array->index_subtype = "integer";
                     array->flat_width = result.width();
+                    // STD.STANDARD vectors of non-bit scalars carry their
+                    // element layout for static composite values.
+                    const auto scalar_element = [&]()
+                        -> std::optional<PackedTypeMetadata> {
+                        PackedTypeMetadata element;
+                        if (compiled_vhdl_name_equal(name, "integer_vector")) {
+                            element.spelling = "integer";
+                            element.domain = frontend::ValueDomain::Integer;
+                            element.is_signed = true;
+                            element.packed_range
+                                = frontend::PackedRange { 31, 0, true };
+                        } else if (compiled_vhdl_name_equal(
+                                       name, "time_vector")) {
+                            element.spelling = "time";
+                            element.domain = frontend::ValueDomain::Integer;
+                            element.is_signed = true;
+                            element.packed_range
+                                = frontend::PackedRange { 63, 0, true };
+                        } else if (compiled_vhdl_name_equal(
+                                       name, "real_vector")) {
+                            element.spelling = "real";
+                            element.domain = frontend::ValueDomain::Bit2;
+                            element.packed_range
+                                = frontend::PackedRange { 63, 0, true };
+                        } else if (compiled_vhdl_name_equal(
+                                       name, "boolean_vector")) {
+                            element.spelling = "boolean";
+                            element.domain = frontend::ValueDomain::Boolean;
+                            element.packed_range
+                                = frontend::PackedRange { 0, 0, true };
+                        } else {
+                            return std::nullopt;
+                        }
+                        return element;
+                    }();
+                    if (scalar_element) {
+                        array->element_types.push_back(*scalar_element);
+                    }
                     result.vhdl_array = std::move(array);
                 }
                 return result;
@@ -4167,14 +4205,18 @@ namespace {
             PackedLogic4 result { width, Logic4::zero };
             auto offset = width;
             for (const auto& element : definition->record_elements) {
+                const auto element_subtype = compiled_vhdl_link_subtype(
+                    specialization,
+                    semantic::vhdl::constrained_element_subtype(
+                        subtype, element.name, element.subtype));
                 const auto element_width
-                    = compiled_vhdl_signal_width(element.subtype);
+                    = compiled_vhdl_signal_width(element_subtype);
                 if (!element_width || *element_width > offset) {
                     return std::nullopt;
                 }
                 offset -= *element_width;
                 const auto value = compiled_vhdl_composite_default(
-                    specialization, element.subtype, *element_width,
+                    specialization, element_subtype, *element_width,
                     depth + 1U, true);
                 if (!value) {
                     return std::nullopt;
@@ -4186,13 +4228,17 @@ namespace {
         if (definition != nullptr
             && definition->form == semantic::vhdl::TypeForm::array
             && definition->element_subtype) {
+            const auto element_subtype = compiled_vhdl_link_subtype(
+                specialization,
+                semantic::vhdl::constrained_element_subtype(
+                    subtype, "", *definition->element_subtype));
             const auto element_width
-                = compiled_vhdl_signal_width(*definition->element_subtype);
+                = compiled_vhdl_signal_width(element_subtype);
             if (!element_width || width % *element_width != 0U) {
                 return std::nullopt;
             }
             const auto value = compiled_vhdl_composite_default(
-                specialization, *definition->element_subtype,
+                specialization, element_subtype,
                 *element_width, depth + 1U, true);
             if (!value) {
                 return std::nullopt;
@@ -5350,7 +5396,11 @@ namespace {
                     element_scope = declaration->vhdl->scope;
                 }
                 if (definition.form == semantic::vhdl::TypeForm::array) {
-                    element_subtype = definition.element_subtype;
+                    if (definition.element_subtype) {
+                        element_subtype
+                            = semantic::vhdl::constrained_element_subtype(
+                                current, "", *definition.element_subtype);
+                    }
                     break;
                 }
                 if (definition.form != semantic::vhdl::TypeForm::subtype
@@ -5361,6 +5411,14 @@ namespace {
                     specialization, definition.base, element_scope);
                 type_id = current.type_mark.target;
             }
+        }
+        if (!element_subtype && !target_subtype.type_mark.target.valid()
+            && !array.element_types.front().spelling.empty()) {
+            // A predefined vector names its scalar element.
+            semantic::vhdl::SubtypeIndication scalar;
+            scalar.type_mark.spelling = array.element_types.front().spelling;
+            element_subtype = compiled_vhdl_link_subtype(
+                specialization, scalar, target_scope);
         }
         if (!element_subtype) {
             return std::nullopt;

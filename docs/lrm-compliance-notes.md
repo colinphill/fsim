@@ -677,3 +677,36 @@ gives fsim's result in each case checked.
 - nvc issue616 now elaborates. It expects a run-time length error for a
   17-bit `to_signed` value in a 16-bit record element of an unused
   constant, and fsim does not check this.
+
+## Element constraints from actuals, labels and attribute specifications (batch 34)
+
+- An unbounded array formal takes its actual's element constraints as
+  well as its index range: the call frame keeps them per formal, and frames
+  are specialized by them. `x(i)'range` inside the subprogram is then
+  bounded. The type check accepts array attributes of elements of a port or
+  subprogram formal, whose bounds come from the actual.
+- Element constraints also apply when computing index ranges, constant
+  selections, static signal initializers with nested aggregates, and
+  element subtypes reached through dynamic indexes and member selections.
+- INTEGER_VECTOR, TIME_VECTOR and REAL_VECTOR elements are 32 or 64 bits
+  wherever an index range is derived from a width, and their static
+  aggregates nest (an array of INTEGER_VECTOR initialized by an
+  aggregate). Constant selections of VHDL arrays use the element width,
+  not one bit per index. Before, `t(1).x(2) := 8` on an INTEGER_VECTOR
+  record element in an array of records did not lower. Variable and
+  signal defaults of these vectors inside records are `'LEFT`.
+- Attribute specifications (`FSIM-ELAB-VHATTR-016`): an entity of another
+  class (subprogram formals accept any object class), an undeclared
+  entity, a selected name, an entity named after `others` or `all` for the
+  same attribute and class, and an integer value for a floating attribute
+  (or the reverse) are rejected. Specifications in entity and
+  architecture declarative parts, including processes, are checked.
+- A call of an enumeration-indexed table with one character literal per
+  dimension (`t('1', '0')`) becomes an indexed name, and character literal
+  indices of BIT, CHARACTER and STD_ULOGIC dimensions use their positions.
+  Two-dimensional constants with bit or logic elements still do not lower.
+- SystemVerilog: a statement label before `begin` or `fork` (`name: begin
+  ... end: name`) names the block. A class whose parameter has no default
+  gets no default specialization. Such a class is legal while unused, but
+  `new` for a variable of a specialized class type (`box #(5) b; b = new;`)
+  still constructs the default specialization.

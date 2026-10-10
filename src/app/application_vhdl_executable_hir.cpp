@@ -1312,9 +1312,11 @@ class VhdlExecutableBuilder final {
     };
     std::vector<vh::Expression> indexed_prefixes;
     for (auto& expression : hir_.mutable_expressions()) {
+      // One actual per index of a multidimensional object (`t('1', '0')`).
       if (expression.kind != vh::ExpressionKind::call
-          || expression.operands.size() != 1U
-          || !expression.argument_names.empty()
+          || expression.operands.empty()
+          || std::ranges::any_of(expression.argument_names,
+              [](const std::string& argument) { return !argument.empty(); })
           || !expression.referenced_name
           || !expression.referenced_name->selected) {
         continue;
@@ -1324,6 +1326,41 @@ class VhdlExecutableBuilder final {
       if (declaration == nullptr || !declaration->subtype
           || !indexed_object(declaration->form)) {
         continue;
+      }
+      if (expression.operands.size() > 1U) {
+        // Several actuals index a multidimensional array only when there is
+        // one per dimension; the character literal indices of an
+        // enumeration-indexed table (`t('1', '0')`) are converted here,
+        // while integer indices keep the call form that already lowers.
+        const auto character_index = std::ranges::any_of(
+            expression.operands, [&](const semantic::ExpressionId operand) {
+              const auto found = std::ranges::find_if(hir_.expressions(),
+                  [&](const vh::Expression& candidate) {
+                    return candidate.id == operand;
+                  });
+              return found != hir_.expressions().end()
+                  && found->kind == vh::ExpressionKind::logic_literal;
+            });
+        std::size_t dimensions { };
+        auto type_id = declaration->subtype->type_mark.target;
+        std::unordered_set<std::uint32_t> visiting;
+        while (type_id.valid() && visiting.insert(type_id.value()).second) {
+          const auto type = std::ranges::find_if(hir_.types(),
+              [&](const vh::TypeDefinition& candidate) {
+                return candidate.id == type_id;
+              });
+          if (type == hir_.types().end()) {
+            break;
+          }
+          if (type->form == vh::TypeForm::array) {
+            dimensions = type->array_dimensions.size();
+            break;
+          }
+          type_id = type->base.type_mark.target;
+        }
+        if (!character_index || dimensions != expression.operands.size()) {
+          continue;
+        }
       }
       auto designator = std::string_view { expression.text };
       if (const auto separator = designator.find_last_of(".:");

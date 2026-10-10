@@ -114,6 +114,10 @@ class VerilogParser final : private detail::ParserBase {
   ParseResult run();
 
  private:
+  // A statement label (`name: begin`) waiting for its block (IEEE
+  // 1800-2017 9.3.5).
+  std::string pending_block_label_;
+
   [[nodiscard]] bool keyword(
       const std::string_view text,
       const std::size_t lookahead = 0,

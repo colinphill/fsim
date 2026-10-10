@@ -195,6 +195,16 @@ void VerilogParser::prepend_hoisted_statements(
 
 std::optional<Statement> VerilogParser::parse_statement_unhoisted()
 {
+    // A statement label names the block it precedes (IEEE 1800-2017
+    // 9.3.5): `name: begin ... end: name`.
+    if (at(TokenKind::Identifier) && at(TokenKind::Colon, 1)
+        && (keyword("begin", 2) || keyword("fork", 2))) {
+        const auto label = advance();
+        advance();
+        (void)require_standard("a statement label",
+            StandardRevision::SystemVerilog2005, label, "FSIM-SV-PARSE-347");
+        pending_block_label_ = label.text;
+    }
     if (const auto required = verilog_system_service_standard(current().text)) {
         note_system_service_standard(current().text, *required, current());
     }
@@ -590,9 +600,14 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
     }
     if (match_keyword("begin")) {
         const auto start = previous();
-        std::string opening_label;
+        std::string opening_label = std::exchange(pending_block_label_, { });
         if (match(TokenKind::Colon)) {
-            opening_label = expect_identifier("block name").text;
+            const auto name = expect_identifier("block name");
+            if (!opening_label.empty()) {
+                error(name, "FSIM-SV-SEM-109",
+                    "a labeled block cannot also have a block name");
+            }
+            opening_label = name.text;
         }
         Statement block;
         block.kind = StatementKind::Block;
