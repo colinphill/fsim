@@ -376,7 +376,7 @@ std::optional<std::string> validate_string_method_metadata(
     const auto kind = operation.operation;
     if (!string_register(operation.source))
         return "StringMethod source string register is out of range";
-    if (kind > StringMethodOperator::format_time)
+    if (kind > StringMethodOperator::format_vhdl_time)
         return "StringMethod kind is invalid";
     const auto formatted_width = formatted_value_width(
         operation.format, operation.scalar_kind);
@@ -402,12 +402,15 @@ std::optional<std::string> validate_string_method_metadata(
     if (kind == StringMethodOperator::getc || kind == StringMethodOperator::putc
         || kind == StringMethodOperator::substr
         || kind == StringMethodOperator::format_packed
+        || kind == StringMethodOperator::format_vhdl_time
         || (kind >= StringMethodOperator::itoa
             && kind <= StringMethodOperator::realtoa))
         registers.push_back({ operation.first,
             kind == StringMethodOperator::format_packed
                 ? *formatted_width
-                : kind == StringMethodOperator::realtoa ? 64U
+                : kind == StringMethodOperator::realtoa
+                    || kind == StringMethodOperator::format_vhdl_time
+                ? 64U
                                                         : 32U,
             false });
     if (kind == StringMethodOperator::compare

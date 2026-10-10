@@ -120,6 +120,13 @@ std::optional<Expression> VhdlParser::parse_vhdl_bit_string_literal()
     if (specifier_token.span.end.offset != digits_token.span.begin.offset) {
         malformed = true;
     }
+    // Before VHDL-2008 a bit string literal has at least one digit
+    // (IEEE 1076-1993 13.7).
+    if (digits.empty() && vhdl_standard_ < VhdlStandard::Vhdl2008) {
+        error(digits_token, "FSIM-VHDL-PARSE-298",
+            "a VHDL bit string literal requires at least one digit before "
+            "VHDL-2008");
+    }
     std::string bits;
     try {
         std::size_t ring_start = 0;
@@ -474,11 +481,92 @@ Expression VhdlParser::parse_unary()
         return Expression { ExpressionKind::Unary, "??", { std::move(operand) },
             cover(operation.span, operand.span) };
     }
-    return parse_primary();
+    auto primary = parse_primary();
+    // An attribute name's prefix may be any name: an indexed or selected
+    // name, a dereference, or another attribute (IEEE 1076-2008 8.6).
+    while (at(TokenKind::Apostrophe) && at(TokenKind::Identifier, 1)
+        && (primary.kind == ExpressionKind::Call
+            || primary.kind == ExpressionKind::Index
+            || primary.kind == ExpressionKind::Slice)) {
+        advance();
+        const auto attribute = advance();
+        std::vector<Expression> operands;
+        operands.push_back(std::move(primary));
+        if (match(TokenKind::LeftParen)) {
+            operands.push_back(parse_expression());
+            expect(TokenKind::RightParen, "')' after attribute argument",
+                "FSIM-VHDL-PARSE-120");
+        }
+        const auto span = cover(operands.front().span, previous().span);
+        primary = Expression { ExpressionKind::Call,
+            "'" + vhdl_name(attribute.text), std::move(operands), span };
+    }
+    return primary;
 }
 
 Expression VhdlParser::parse_primary()
 {
+    // A function call whose name is an operator symbol, optionally selected
+    // ("and"(a, b), STD.STANDARD."<"(a, b)), is the operator applied to its
+    // actuals (IEEE 1076-2008 4.5.2, 9.3.4): overload resolution is that of
+    // the operator.
+    {
+        std::size_t lookahead { };
+        while (at(TokenKind::Identifier, lookahead)
+            && at(TokenKind::Dot, lookahead + 1U)) {
+            lookahead += 2U;
+        }
+        const auto symbol = at(TokenKind::StringLiteral, lookahead)
+                && at(TokenKind::LeftParen, lookahead + 1U)
+            ? detail::ascii_lower(
+                  string_literal_text(current(lookahead)))
+            : std::string { };
+        static constexpr std::array<std::string_view, 27> binary_symbols {
+            "and", "or", "nand", "nor", "xor", "xnor", "=", "/=", "<",
+            "<=", ">", ">=", "sll", "srl", "sla", "sra", "rol", "ror", "+",
+            "-", "&", "*", "/", "mod", "rem", "**", "?="
+        };
+        const bool binary_symbol
+            = std::ranges::find(binary_symbols, symbol)
+            != binary_symbols.end();
+        const bool unary_symbol = symbol == "not" || symbol == "abs";
+        if (binary_symbol || unary_symbol) {
+            const auto start = current();
+            for (std::size_t index { }; index <= lookahead; ++index) {
+                advance();
+            }
+            expect(TokenKind::LeftParen, "'(' after operator symbol",
+                "FSIM-VHDL-PARSE-034");
+            std::vector<Expression> actuals;
+            do {
+                if (at(TokenKind::Identifier) && at(TokenKind::Arrow, 1)) {
+                    advance();
+                    advance();
+                }
+                actuals.push_back(parse_expression());
+            } while (match(TokenKind::Comma));
+            expect(TokenKind::RightParen,
+                "')' after operator symbol actuals", "FSIM-VHDL-PARSE-034");
+            const auto span = cover(start.span, previous().span);
+            if (actuals.size() == 2U && binary_symbol) {
+                return Expression { ExpressionKind::Binary, symbol,
+                    std::move(actuals), span };
+            }
+            if (actuals.size() == 1U
+                && (unary_symbol || symbol == "+" || symbol == "-"
+                    || symbol == "and" || symbol == "or"
+                    || symbol == "nand" || symbol == "nor"
+                    || symbol == "xor" || symbol == "xnor")) {
+                return Expression { ExpressionKind::Unary, symbol,
+                    std::move(actuals), span };
+            }
+            error(start, "FSIM-VHDL-PARSE-300",
+                "an operator symbol function call requires the operator's "
+                "number of actuals");
+            return Expression { ExpressionKind::Unary, symbol,
+                std::move(actuals), span };
+        }
+    }
     if (match_keyword("new", true)) {
         const auto allocator = previous();
         const auto subtype_start = current();
@@ -526,6 +614,20 @@ Expression VhdlParser::parse_primary()
     }
     if (at(TokenKind::Number)) {
         const auto token = advance();
+        // The base of a based literal is 2 to 16 (IEEE 1076-2008 15.5.3).
+        if (const auto hash = token.text.find('#'); hash != std::string::npos) {
+            std::string base;
+            for (const auto character : token.text.substr(0U, hash)) {
+                if (character != '_') {
+                    base.push_back(character);
+                }
+            }
+            const auto value = detail::decimal_u64(base);
+            if (!value || *value < 2U || *value > 16U) {
+                error(token, "FSIM-VHDL-PARSE-299",
+                    "the base of a VHDL based literal must be 2 to 16");
+            }
+        }
         Expression literal {
             ExpressionKind::IntegerLiteral, token.text, { }, token.span
         };

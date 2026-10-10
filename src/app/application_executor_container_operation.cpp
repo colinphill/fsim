@@ -264,7 +264,10 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             if (method->operation
                 >= runtime::simir::StringMethodOperator::format_packed) {
                 const auto packed = method->operation
-                        == runtime::simir::StringMethodOperator::format_packed
+                            == runtime::simir::StringMethodOperator::format_packed
+                        || method->operation
+                            == runtime::simir::StringMethodOperator::
+                                format_vhdl_time
                     ? state.executor->read_register(
                           method->first,
                           runtime::simir::ProcessExecutor::native_register_width)

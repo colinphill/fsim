@@ -262,6 +262,58 @@ StringMethodResult execute_string_method(
     return { };
 }
 
+namespace {
+
+std::string vhdl_time_text(const PackedLogic4& value,
+    const std::uint32_t unit_index,
+    const std::uint64_t resolution_femtoseconds)
+{
+    constexpr std::array<std::pair<std::string_view, std::uint64_t>, 8U>
+        units { {
+            { "fs", 1U },
+            { "ps", 1'000U },
+            { "ns", 1'000'000U },
+            { "us", 1'000'000'000U },
+            { "ms", 1'000'000'000'000U },
+            { "sec", 1'000'000'000'000'000U },
+            { "min", 60'000'000'000'000'000U },
+            { "hr", 3'600'000'000'000'000'000U },
+        } };
+    const auto word = value.low_word();
+    if (word.bval != 0) {
+        throw std::runtime_error { "VHDL TIME value contains X or Z" };
+    }
+    const auto ticks = static_cast<std::int64_t>(word.aval);
+    const bool negative = ticks < 0;
+    const auto magnitude = static_cast<unsigned __int128>(
+        negative ? -static_cast<__int128>(ticks)
+                 : static_cast<__int128>(ticks))
+        * std::max<std::uint64_t>(resolution_femtoseconds, 1U);
+    const auto& unit = unit_index < units.size() ? units[unit_index]
+                                                 : units.front();
+    const auto whole = static_cast<std::uint64_t>(magnitude / unit.second);
+    auto remainder = static_cast<std::uint64_t>(magnitude % unit.second);
+    std::string text = negative ? "-" : "";
+    text += std::to_string(whole);
+    if (remainder != 0U) {
+        // A value that is not a multiple of the unit is written with the
+        // fraction it needs (IEEE 1076-2008 16.4).
+        std::string fraction;
+        for (auto scale = unit.second / 10U; scale != 0U && remainder != 0U;
+             scale /= 10U) {
+            fraction += static_cast<char>('0' + remainder / scale);
+            remainder %= scale;
+        }
+        text += '.';
+        text += fraction;
+    }
+    text += ' ';
+    text += unit.first;
+    return text;
+}
+
+} // namespace
+
 void execute_string_format(
     const StringMethod& operation,
     std::string& destination,
@@ -282,6 +334,10 @@ void execute_string_format(
                 formatted.insert(0U, padding, ' ');
             }
         }
+    } else if (operation.operation
+        == StringMethodOperator::format_vhdl_time) {
+        formatted = vhdl_time_text(packed_value, operation.precision,
+            time_format.resolution_femtoseconds);
     } else if (operation.operation == StringMethodOperator::format_time) {
         formatted = make_time_output(
             { }, { }, tick, time_format,
@@ -314,6 +370,8 @@ void Interpreter::Impl::execute_string(
     auto& source = get_string_register(process, operation.source);
     if (operation.operation >= StringMethodOperator::format_packed) {
         const auto packed = operation.operation == StringMethodOperator::format_packed
+                || operation.operation
+                    == StringMethodOperator::format_vhdl_time
             ? get_register(process, operation.first)
             : PackedLogic4 { 1, Logic4::zero };
         execute_string_format(

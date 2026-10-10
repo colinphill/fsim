@@ -2303,6 +2303,11 @@ Lowerer::hir_class_task_profile(
                       .unique();
             if (selected_declaration) {
                 interface_receiver = std::string { receiver };
+            } else if (const auto instance = hir_instance_callable(
+                           receiver, identity.substr(separator + 1U), false)) {
+                // `u.t(...)`: a task of a module instance (23.8).
+                selected_declaration = instance->first;
+                interface_receiver = instance->second;
             }
         }
     }
@@ -3915,6 +3920,118 @@ Lowerer::hir_callable_resolution(
         .unique();
 }
 
+std::optional<std::pair<semantic::DeclarationId, std::string>>
+Lowerer::hir_instance_callable(const std::string_view receiver,
+    const std::string_view member, const bool function) const
+{
+    if (specialized_hir_unit_ == nullptr || receiver.empty()) {
+        return std::nullopt;
+    }
+    const auto& scopes_view = specialized_hir_unit_->design().semantics.scopes();
+    const auto member_of_scope = [&](const auto& scope_matches)
+        -> std::optional<semantic::DeclarationId> {
+        std::optional<semantic::DeclarationId> selected;
+        for (const auto& declaration :
+            specialized_hir_unit_->design().systemverilog_hir.declarations()) {
+            if (declaration.name != member || !declaration.callable
+                || declaration.callable->function != function
+                || !declaration.nested_scope
+                || (declaration.form != semantic::sv::DeclarationForm::task
+                    && declaration.form != semantic::sv::DeclarationForm::function)
+                || !declaration.scope.valid()
+                || declaration.scope.value() >= scopes_view.size()
+                || !scope_matches(scopes_view[declaration.scope.value()])) {
+                continue;
+            }
+            if (selected) {
+                return std::nullopt;
+            }
+            selected = declaration.id;
+        }
+        return selected;
+    };
+    // A task of a generate block of this module (`gen.t`) is local; its
+    // variables are this instance's `gen.x` signals.
+    if (receiver.find('.') == std::string_view::npos) {
+        const auto unit = specialized_hir_unit_->unit();
+        if (const auto local = member_of_scope([&](const semantic::Scope& scope) {
+                return scope.unit == unit && scope.parent && scope.name == receiver;
+            })) {
+            return std::pair { *local, std::string { receiver } };
+        }
+    }
+    // The receiver names a module instance, searched upward from the
+    // calling scope (IEEE 1800-2017 23.8).
+    const SpecializationInfo* target = nullptr;
+    std::string lexical = hierarchy_;
+    for (;;) {
+        const auto candidate = lexical.empty()
+            ? std::string { receiver }
+            : lexical + "." + std::string { receiver };
+        const auto found = std::ranges::find_if(design_.specializations_,
+            [&](const SpecializationInfo& specialization) {
+                return specialization.instance == candidate;
+            });
+        if (found != design_.specializations_.end()) {
+            target = &*found;
+            break;
+        }
+        if (lexical.empty()) {
+            break;
+        }
+        const auto separator = lexical.rfind('.');
+        lexical = separator == std::string::npos ? std::string { }
+                                                 : lexical.substr(0U, separator);
+    }
+    const auto& design = specialized_hir_unit_->design();
+    std::optional<semantic::UnitId> target_unit;
+    std::string target_path;
+    if (target != nullptr && target->source_unit) {
+        target_unit = target->source_unit;
+        target_path = target->instance;
+    } else if (std::ranges::find(design_.roots_, receiver) != design_.roots_.end()) {
+        // Another top-level module, elaborated as its own root.
+        for (const auto& unit : design.systemverilog_hir.units()) {
+            if (unit.name == receiver) {
+                target_unit = unit.id;
+                target_path = std::string { receiver };
+                break;
+            }
+        }
+    }
+    if (!target_unit) {
+        // The instance may be elaborated after the calling process; the
+        // process is retried then.
+        hierarchical_reference_missed_ = true;
+        return std::nullopt;
+    }
+    const auto& scopes = design.semantics.scopes();
+    std::optional<semantic::DeclarationId> selected;
+    for (const auto& declaration : design.systemverilog_hir.declarations()) {
+        if (declaration.name != member || !declaration.callable
+            || declaration.callable->function != function
+            || !declaration.nested_scope
+            || (declaration.form != semantic::sv::DeclarationForm::task
+                && declaration.form != semantic::sv::DeclarationForm::function)
+            || !declaration.scope.valid()
+            || declaration.scope.value() >= scopes.size()) {
+            continue;
+        }
+        const auto& scope = scopes[declaration.scope.value()];
+        if (scope.unit != *target_unit || scope.parent) {
+            continue;
+        }
+        if (selected) {
+            return std::nullopt;
+        }
+        selected = declaration.id;
+    }
+    if (!selected) {
+        return std::nullopt;
+    }
+    return std::pair { *selected, "@instance:" + target_path };
+}
+
 std::optional<Lowerer::HirCallableType> Lowerer::hir_callable_type(
     const semantic::DeclarationId declaration_id,
     const std::size_t contextual_width) const
@@ -4288,11 +4405,17 @@ Lowerer::hir_interface_function_profile(
               process_scope, function,
               hir_generic_interface_type(receiver->systemverilog->text))
               .unique();
-    return declaration
-        ? std::optional<HirInterfaceFunctionProfile> {
-              HirInterfaceFunctionProfile {
-                  *declaration, receiver->systemverilog->text } }
-        : std::nullopt;
+    if (declaration) {
+        return HirInterfaceFunctionProfile {
+            *declaration, receiver->systemverilog->text };
+    }
+    // `u.f(...)`: a function of a module instance (23.8).
+    if (const auto instance = hir_instance_callable(
+            receiver->systemverilog->text,
+            std::string_view { call.text }.substr(1U), true)) {
+        return HirInterfaceFunctionProfile { instance->first, instance->second };
+    }
+    return std::nullopt;
 }
 
 std::optional<std::vector<semantic::ExpressionId>>
@@ -7029,9 +7152,13 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         const auto target_binding = target
             ? hir_runtime_binding(*target, hir_process_scope_, false)
             : std::nullopt;
-        const auto writable = target_binding
+        const auto string_target = target
+            ? hir_string_binding(*target, hir_process_scope_, true)
+            : std::nullopt;
+        const auto writable = (target_binding
             && (target_binding->kind == HirRuntimeBindingKind::local
-                || signal_binding_is_writable(*target_binding));
+                || signal_binding_is_writable(*target_binding)))
+            || (string_target && string_target->local);
         if (actual && actual->vhdl != nullptr && writable) {
             continue;
         }
@@ -7046,8 +7173,12 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         return true;
     }
 
-    // STRING formals are passed in a dynamic string register.
+    // STRING formals are passed in a dynamic string register. An out or
+    // inout string formal (a std.textio LINE) copies back to its actual's
+    // string variable.
     std::vector<bool> string_formals(formals.size());
+    std::vector<std::optional<StringRegisterId>> string_copy_out(
+        formals.size());
     for (std::size_t index { }; index < formals.size(); ++index) {
         if (signal_actuals[index]) {
             continue;
@@ -7063,6 +7194,16 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
             && subtype->domain == semantic::vhdl::ValueDomain::string) {
             if (callable_direction(*formal)
                 != frontend::PortDirection::Input) {
+                const auto target = hir_target_declaration(
+                    (*actuals)[index]);
+                const auto string_target = target
+                    ? hir_string_binding(*target, hir_process_scope_, true)
+                    : std::nullopt;
+                if (string_target && string_target->local) {
+                    string_copy_out[index] = *string_target->local;
+                    string_formals[index] = true;
+                    continue;
+                }
                 report(
                     "FSIM-ELAB-VHPROC-023",
                     "STRING procedure formal '" + formal->vhdl->name
@@ -7207,6 +7348,10 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         if (signal_actuals[index]) {
             continue;
         }
+        if (string_formals[index] && string_copy_out[index]) {
+            lowered_string_actuals[index] = *string_copy_out[index];
+            continue;
+        }
         if (string_formals[index]) {
             lowered_string_actuals[index] = lower_hir_string_expression(
                 (*actuals)[index]);
@@ -7321,12 +7466,33 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
             *copy_out_values[index], frame.arguments[index] });
         preserved_values.push_back(*copy_out_values[index]);
     }
+    std::vector<std::optional<StringRegisterId>> string_copy_values(
+        frame.arguments.size());
+    std::vector<StringRegisterId> preserved_strings;
+    for (std::size_t index { }; index < string_copy_out.size()
+         && index < frame.string_arguments.size();
+         ++index) {
+        if (!string_copy_out[index]) {
+            continue;
+        }
+        string_copy_values[index] = allocate_string_register();
+        process_.operations.emplace_back(CopyStringRegister {
+            *string_copy_values[index], frame.string_arguments[index] });
+        preserved_strings.push_back(*string_copy_values[index]);
+    }
     process_.operations.emplace_back(CallableFramePop {
         frame.invocation_identity,
         preserved_values,
-        { },
+        preserved_strings,
         { },
     });
+    for (std::size_t index { }; index < string_copy_values.size();
+         ++index) {
+        if (string_copy_values[index]) {
+            process_.operations.emplace_back(CopyStringRegister {
+                *string_copy_out[index], *string_copy_values[index] });
+        }
+    }
     for (std::size_t index { }; index < copy_out_values.size(); ++index) {
         if (!copy_out_values[index]) {
             continue;

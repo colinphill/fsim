@@ -83,6 +83,32 @@ public:
 
     [[nodiscard]] std::vector<VhdlHirTypeValidationIssue> run()
     {
+        // STD.ENV, IEEE.MATH_REAL/MATH_COMPLEX and the VHDL-2019 reflection
+        // API are compiler-supplied without retained declarations.
+        for (const auto* unit : { &entity_, &architecture_ }) {
+            if (unit->standard == "2019") {
+                name_check_ = false;
+            }
+            for (const auto& item : unit->context) {
+                for (const auto& name : item.selected_names) {
+                    for (const auto* spelling : { &name.spelling, &name.canonical }) {
+                        std::string lowered { *spelling };
+                        std::ranges::transform(lowered, lowered.begin(),
+                            [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                        if (lowered.find("std.env") != std::string::npos
+                            || lowered.find("math_real") != std::string::npos
+                            || lowered.find("math_complex") != std::string::npos) {
+                            name_check_ = false;
+                        }
+                        // MATH_REAL overloads "mod" and "**" for REAL.
+                        if (lowered.find("math_real") != std::string::npos
+                            || lowered.find("math_complex") != std::string::npos) {
+                            operator_check_ = false;
+                        }
+                    }
+                }
+            }
+        }
         // The VITAL packages' declarations are compiler-supplied and not
         // retained, so names in a design using VITAL cannot be checked.
         for (const auto& unit : specialization_.design().vhdl_hir.units()) {
@@ -826,6 +852,18 @@ private:
             }
             return;
         }
+        // STRING is an unbounded one-dimensional array of CHARACTER.
+        if (base.kind == ProfileKind::string) {
+            if (subtype.constraints.size() != 1U) {
+                report(
+                    "FSIM-ELAB-VHARRAY-008",
+                    "a VHDL array subtype constraint has "
+                        + std::to_string(subtype.constraints.size())
+                        + " dimensions but its base type has 1",
+                    source);
+            }
+            return;
+        }
         const auto array_constraint = std::ranges::any_of(
             subtype.constraints, [](const auto& constraint) {
                 return constraint.kind == RangeKind::array_index;
@@ -950,8 +988,62 @@ private:
         }
     }
 
+    // IEEE 1076-2008 5.5.1: the element of a file type is neither a file,
+    // access or protected type nor a composite containing one.
+    bool contains_indirect(const SubtypeIndication& subtype, std::size_t depth) const
+    {
+        const auto* definition = root_definition(subtype);
+        if (definition == nullptr || depth > 16U) {
+            return false;
+        }
+        switch (definition->form) {
+        case TypeForm::file:
+        case TypeForm::access:
+        case TypeForm::protected_type:
+        case TypeForm::protected_body:
+            return true;
+        case TypeForm::array:
+            return definition->element_subtype
+                && contains_indirect(*definition->element_subtype, depth + 1U);
+        case TypeForm::record:
+            return std::ranges::any_of(definition->record_elements,
+                [&](const semantic::vhdl::RecordElement& element) {
+                    return contains_indirect(element.subtype, depth + 1U);
+                });
+        default:
+            return false;
+        }
+    }
+
     void validate_type_bounds(const TypeDefinition& type)
     {
+        // IEEE 1076-2008 5.3.1: an element of a composite type is not of a
+        // file or protected type.
+        const auto file_or_protected = [&](const SubtypeIndication& element) {
+            const auto* definition = root_definition(element);
+            return definition != nullptr
+                && (definition->form == TypeForm::file
+                    || definition->form == TypeForm::protected_type);
+        };
+        if ((type.form == TypeForm::array && type.element_subtype
+                && file_or_protected(*type.element_subtype))
+            || (type.form == TypeForm::record
+                && std::ranges::any_of(type.record_elements,
+                    [&](const semantic::vhdl::RecordElement& element) {
+                        return file_or_protected(element.subtype);
+                    }))) {
+            report("FSIM-ELAB-VHFILE-014",
+                "an element of a VHDL composite type cannot be of a file or "
+                "protected type",
+                type.source);
+        }
+        if (type.form == TypeForm::file && type.element_subtype
+            && contains_indirect(*type.element_subtype, 0U)) {
+            report("FSIM-ELAB-VHFILE-013",
+                "the element of a VHDL file type cannot be a file, access or "
+                "protected type, or contain one",
+                type.source);
+        }
         if (type.form == TypeForm::scalar) {
             validate_range_bound_types(type.scalar_range, true, type.source);
         }
@@ -959,6 +1051,29 @@ private:
             && type.base.constraints.size() == 1U) {
             validate_range_bound_types(
                 type.base.constraints.front(), false, type.source);
+            // A range of an integer or floating base has numeric bounds
+            // (`type t is range false to true` is kept as an INTEGER
+            // subtype).
+            auto unconstrained = type.base;
+            unconstrained.constraints.clear();
+            const auto base = subtype_operand_type(unconstrained, 0U);
+            const auto& range = type.base.constraints.front();
+            const auto non_numeric = [&](const std::optional<semantic::ExpressionId> id) {
+                if (!id) {
+                    return false;
+                }
+                const auto kind = operand_type(*id).kind;
+                return kind == OperandClass::enumeration || kind == OperandClass::array
+                    || kind == OperandClass::record || kind == OperandClass::access;
+            };
+            if ((base.kind == OperandClass::integer || base.kind == OperandClass::floating)
+                && (non_numeric(range.left_expression)
+                    || non_numeric(range.right_expression))) {
+                report("FSIM-ELAB-VHRANGE-001",
+                    "the bounds of a VHDL range must have the same type, "
+                    "integer or floating point",
+                    range.source.valid() ? range.source : type.source);
+            }
         }
         if (type.form == TypeForm::array) {
             for (const auto& dimension : type.array_dimensions) {
@@ -1513,6 +1628,8 @@ private:
             return { OperandClass::floating, { } };
         case Kind::boolean_literal:
             return { OperandClass::enumeration, "boolean" };
+        case Kind::string_literal:
+            return { OperandClass::array, "@literal" };
         case Kind::logic_literal:
             if (value.text.starts_with('\'')) {
                 return { OperandClass::enumeration, { } };
@@ -1593,6 +1710,18 @@ private:
             if (value.text.find('\'') != std::string::npos) {
                 return { };
             }
+            // `q(1 to 8)` may be retained as an index whose argument is a
+            // range: a slice, not an element.
+            if (value.kind == Kind::index
+                && std::ranges::any_of(value.operands, [&](const semantic::ExpressionId id) {
+                       const auto operand = specialization_.find_expression(id);
+                       return operand && operand->vhdl != nullptr
+                           && operand->vhdl->kind == Kind::binary
+                           && (operand->vhdl->text == "to"
+                               || operand->vhdl->text == "downto");
+                   })) {
+                return { };
+            }
             // A loop parameter is retained as an INTEGER constant without a
             // value, whatever its discrete range's type.
             if (value.kind == Kind::name && value.referenced_name
@@ -1609,6 +1738,25 @@ private:
             break;
         default:
             return { };
+        }
+        // A selected object hides a type of the same name (`a` formal and
+        // type `A`); use the object's subtype.
+        if (value.kind == Kind::name && value.referenced_name
+            && value.referenced_name->selected
+            && value.text.find('.') == std::string::npos) {
+            const auto declaration = specialization_.find_declaration(
+                *value.referenced_name->selected);
+            using Form = semantic::vhdl::DeclarationForm;
+            if (declaration && declaration->vhdl != nullptr
+                && declaration->vhdl->subtype
+                && (declaration->vhdl->form == Form::variable
+                    || declaration->vhdl->form == Form::signal
+                    || declaration->vhdl->form == Form::constant
+                    || declaration->vhdl->form == Form::port
+                    || declaration->vhdl->form == Form::generic_constant)) {
+                return subtype_operand_type(
+                    specialized_subtype(*declaration->vhdl->subtype), depth);
+            }
         }
         const auto subtype = expression_subtype(id);
         if (!subtype) {
@@ -1701,8 +1849,21 @@ private:
             // ways the resolver does not model (compiler-supplied VITAL and
             // STD.ENV declarations, selected visibility); labels, design
             // units and record elements are not declarations.
+            const auto& scopes = specialization_.design().semantics.scopes();
             for (const auto& declaration :
                 specialization_.design().vhdl_hir.declarations()) {
+                // Formals and locals of the STD and IEEE packages (`l`, `r`)
+                // are never visible by their simple names.
+                const auto unit = declaration.scope.valid()
+                        && declaration.scope.value() < scopes.size()
+                    ? specialization_.design().find_unit(
+                          scopes[declaration.scope.value()].unit)
+                    : std::nullopt;
+                if (unit && unit->vhdl != nullptr
+                    && (name_equal(unit->vhdl->library, "ieee")
+                        || name_equal(unit->vhdl->library, "std"))) {
+                    continue;
+                }
                 add(declaration.name);
             }
             // STD.ENV directory and file status literals, provided by the
@@ -1742,6 +1903,153 @@ private:
         };
         return std::ranges::any_of(literals,
             [&](const char* literal) { return name_equal(name, literal); });
+    }
+
+    // IEEE 1076-2008 9.3.5: a qualified expression's operand has the type
+    // of its type mark; 9.3.6: a type conversion's operand is not a string
+    // literal, aggregate, allocator or null.
+    void validate_conversion_and_qualification(const semantic::vhdl::Expression& expression)
+    {
+        if (expression.kind != semantic::vhdl::ExpressionKind::call
+            || expression.operands.empty()) {
+            return;
+        }
+        constexpr std::string_view qualified_prefix { "@vhdl-qualified:" };
+        if (expression.text.starts_with(qualified_prefix)
+            && expression.operands.size() == 1U) {
+            const auto mark = std::string_view { expression.text }.substr(
+                qualified_prefix.size());
+            const auto type = named_type(mark, expression.scope);
+            SubtypeIndication subtype;
+            subtype.type_mark.spelling = std::string { mark };
+            if (type) {
+                subtype.type_mark.target = *type;
+            }
+            const auto expected = subtype_operand_type(subtype, 0U);
+            const auto actual = operand_type(expression.operands.front());
+            const auto scalar = [](const OperandClass kind) {
+                return kind == OperandClass::integer || kind == OperandClass::floating
+                    || kind == OperandClass::physical || kind == OperandClass::enumeration;
+            };
+            const auto comparable = scalar(expected.kind)
+                || expected.kind == OperandClass::record;
+            if (comparable && actual.kind != OperandClass::unknown
+                && actual.kind != OperandClass::null
+                && (actual.kind != expected.kind
+                    || roots_conflict(actual.root, expected.root))) {
+                report("FSIM-ELAB-VHQUAL-005",
+                    "the operand of a VHDL qualified expression does not have "
+                    "the type of its type mark",
+                    expression.source);
+            }
+            return;
+        }
+        if (expression.text.starts_with('@') || !expression.referenced_name) {
+            return;
+        }
+        const semantic::CompiledDeclarationPredicate type_declaration
+            = [](const semantic::CompiledDeclarationView& candidate) {
+                  using Form = semantic::vhdl::DeclarationForm;
+                  return candidate.vhdl != nullptr
+                      && (candidate.vhdl->form == Form::type
+                          || candidate.vhdl->form == Form::subtype);
+              };
+        if (!semantic::CompiledDesignResolver { specialization_ }
+                 .resolve_vhdl(*expression.referenced_name, expression.scope,
+                     type_declaration)
+                 .unique()) {
+            return;
+        }
+        const auto operand = specialization_.find_expression(expression.operands.front());
+        if (expression.operands.size() > 1U
+            || (operand && operand->vhdl != nullptr
+            && (operand->vhdl->kind == semantic::vhdl::ExpressionKind::string_literal
+                || operand->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
+                || operand->vhdl->text == "@vhdl-null"
+                || operand->vhdl->text.starts_with("@vhdl-new")))) {
+            report("FSIM-ELAB-VHCONV-005",
+                "the operand of a VHDL type conversion cannot be a string "
+                "literal, aggregate, allocator or null",
+                expression.source);
+        }
+    }
+
+    // IEEE 1076-2008 10.5.2.1: the target of a signal assignment denotes a
+    // signal.
+    void validate_signal_target(const semantic::ExpressionId target_id,
+        const semantic::SourceSpanId source)
+    {
+        const auto target = specialization_.find_expression(target_id);
+        if (!target || target->vhdl == nullptr
+            || target->vhdl->kind != semantic::vhdl::ExpressionKind::name
+            || !target->vhdl->referenced_name
+            || target->vhdl->text.find('.') != std::string::npos) {
+            return;
+        }
+        const auto selected = target->vhdl->referenced_name->selected
+            ? target->vhdl->referenced_name->selected
+            : semantic::CompiledDesignResolver { specialization_ }
+                  .resolve_vhdl(*target->vhdl->referenced_name, target->vhdl->scope)
+                  .unique();
+        const auto declaration = selected
+            ? specialization_.find_declaration(*selected)
+            : std::nullopt;
+        using Form = semantic::vhdl::DeclarationForm;
+        if (declaration && declaration->vhdl != nullptr
+            && declaration->vhdl->form != Form::alias
+            && declaration->vhdl->form != Form::signal
+            && (declaration->vhdl->object_class == semantic::vhdl::ObjectClass::variable
+                || declaration->vhdl->object_class == semantic::vhdl::ObjectClass::constant)) {
+            report("FSIM-ELAB-VHASSIGN-002",
+                "the target of a VHDL signal assignment must be a signal",
+                target->vhdl->source.valid() ? target->vhdl->source : source);
+        }
+    }
+
+    // IEEE 1076-2008 4.2.2.2: the attributes 'STABLE, 'QUIET, 'TRANSACTION
+    // and 'DELAYED of a formal signal parameter cannot be read.
+    void validate_formal_signal_attribute(const semantic::vhdl::Expression& expression)
+    {
+        if (expression.kind != semantic::vhdl::ExpressionKind::call
+            || expression.operands.empty()
+            || !(name_equal(expression.text, "'stable")
+                || name_equal(expression.text, "'quiet")
+                || name_equal(expression.text, "'transaction")
+                || name_equal(expression.text, "'delayed"))) {
+            return;
+        }
+        if (!signal_formals_) {
+            signal_formals_.emplace();
+            for (const auto& declaration :
+                specialization_.design().vhdl_hir.declarations()) {
+                if (!declaration.callable) {
+                    continue;
+                }
+                for (const auto formal : declaration.callable->formals) {
+                    const auto record = specialization_.find_declaration(formal);
+                    if (record && record->vhdl != nullptr
+                        && record->vhdl->object_class
+                            == semantic::vhdl::ObjectClass::signal) {
+                        signal_formals_->insert(formal.value());
+                    }
+                }
+            }
+        }
+        const auto prefix = specialization_.find_expression(expression.operands.front());
+        if (!prefix || prefix->vhdl == nullptr || !prefix->vhdl->referenced_name) {
+            return;
+        }
+        const auto selected = prefix->vhdl->referenced_name->selected
+            ? prefix->vhdl->referenced_name->selected
+            : semantic::CompiledDesignResolver { specialization_ }
+                  .resolve_vhdl(*prefix->vhdl->referenced_name, prefix->vhdl->scope)
+                  .unique();
+        if (selected && signal_formals_->contains(selected->value())) {
+            report("FSIM-ELAB-VHATTR-012",
+                "the attribute " + expression.text
+                    + " of a formal signal parameter cannot be read",
+                expression.source);
+        }
     }
 
     // IEEE 1076-2008 9.3.4, 4.2.2.1: each formal of the called function is
@@ -1885,6 +2193,74 @@ private:
         const auto expression = specialization_.find_expression(id);
         if (expression && expression->vhdl != nullptr) {
             validate_simple_name(*expression->vhdl);
+            validate_selected_element(*expression->vhdl);
+        }
+    }
+
+    // IEEE 1076-2008 8.3: a selected name whose prefix is an object denotes
+    // an element of a record (or the object an access value designates).
+    void validate_selected_element(const semantic::vhdl::Expression& expression)
+    {
+        if (expression.kind != semantic::vhdl::ExpressionKind::name
+            || expression.text.find('\'') != std::string::npos
+            || expression.text.starts_with('@')) {
+            return;
+        }
+        const std::string_view text { expression.text };
+        const auto separator = text.find('.');
+        if (separator == std::string_view::npos || separator == 0U) {
+            return;
+        }
+        semantic::vhdl::Name prefix;
+        prefix.spelling = std::string { text.substr(0U, separator) };
+        prefix.canonical = prefix.spelling;
+        const auto selected = semantic::CompiledDesignResolver { specialization_ }
+                                  .resolve_vhdl(prefix, expression.scope)
+                                  .unique();
+        const auto declaration = selected
+            ? specialization_.find_declaration(*selected)
+            : std::nullopt;
+        using Form = semantic::vhdl::DeclarationForm;
+        if (!declaration || declaration->vhdl == nullptr
+            || !declaration->vhdl->subtype
+            || (declaration->vhdl->form != Form::variable
+                && declaration->vhdl->form != Form::signal
+                && declaration->vhdl->form != Form::constant
+                && declaration->vhdl->form != Form::port)) {
+            return;
+        }
+        auto subtype = specialized_subtype(*declaration->vhdl->subtype);
+        auto remaining = text.substr(separator + 1U);
+        while (!remaining.empty()) {
+            const auto next = remaining.find('.');
+            const auto member = remaining.substr(0U, next);
+            const auto* definition = root_definition(subtype);
+            if (definition == nullptr
+                || (definition->form != TypeForm::record
+                    && definition->form != TypeForm::array
+                    && definition->form != TypeForm::scalar
+                    && definition->form != TypeForm::enumeration
+                    && definition->form != TypeForm::physical)) {
+                return;
+            }
+            const auto element = definition->form == TypeForm::record
+                ? std::ranges::find_if(definition->record_elements,
+                      [&](const semantic::vhdl::RecordElement& candidate) {
+                          return name_equal(candidate.name, member);
+                      })
+                : definition->record_elements.end();
+            if (element == definition->record_elements.end()) {
+                report("FSIM-ELAB-VHNAME-003",
+                    "'" + std::string { member }
+                        + "' is not an element of the selected VHDL object",
+                    expression.source);
+                return;
+            }
+            subtype = specialized_subtype(element->subtype);
+            if (next == std::string_view::npos) {
+                return;
+            }
+            remaining.remove_prefix(next + 1U);
         }
     }
 
@@ -2023,6 +2399,40 @@ private:
             || expression.operands.size() != 2U) {
             return;
         }
+        // IEEE 1076-2008 9.2.3: relational operands have the same type, and
+        // no relational operator is predefined for file or protected types.
+        if (operation == "=" || operation == "/=" || operation == "<"
+            || operation == "<=" || operation == ">" || operation == ">=") {
+            const auto left = operand_type(expression.operands[0]);
+            const auto right = operand_type(expression.operands[1]);
+            if (left.kind == OperandClass::other || right.kind == OperandClass::other) {
+                reject();
+                return;
+            }
+            if (!known(left.kind) || !known(right.kind)) {
+                return;
+            }
+            const auto library_array = [](const OperandType& operand) {
+                return operand.kind == OperandClass::array
+                    && !operand.root.starts_with('#');
+            };
+            const auto standard_vector = [](const OperandType& operand) {
+                return operand.kind == OperandClass::array
+                    && (operand.root == "string" || operand.root == "bit_vector");
+            };
+            if ((library_array(left) || library_array(right))
+                && !(standard_vector(left) && standard_vector(right))) {
+                return;
+            }
+            // A universal literal converts to any type of its class.
+            const auto mismatch = left.kind != right.kind
+                ? !(left.kind == OperandClass::null || right.kind == OperandClass::null)
+                : roots_conflict(left.root, right.root);
+            if (mismatch) {
+                reject();
+            }
+            return;
+        }
         const auto adding = operation == "+" || operation == "-";
         const auto multiplying = operation == "*" || operation == "/";
         const auto remainder = operation == "mod" || operation == "rem";
@@ -2039,6 +2449,26 @@ private:
             return operand.kind == OperandClass::array
                 && !operand.root.starts_with('#');
         };
+        // STRING has no arithmetic, and BIT_VECTOR has none before
+        // VHDL-2008 (NUMERIC_BIT_UNSIGNED); string and bit-string literals
+        // take their type from the other operand.
+        const auto pre_2008 = architecture_.standard == "1987"
+            || architecture_.standard == "1993" || architecture_.standard == "2000"
+            || architecture_.standard == "2002";
+        const auto no_arithmetic = [&](const OperandType& operand) {
+            return operand.kind == OperandClass::array
+                && (operand.root == "string"
+                    || (pre_2008 && operand.root == "bit_vector"));
+        };
+        const auto literal = [](const OperandType& operand) {
+            return operand.kind == OperandClass::array && operand.root == "@literal";
+        };
+        if ((no_arithmetic(left) && (no_arithmetic(right) || literal(right)))
+            || (no_arithmetic(right) && literal(left))
+            || (literal(left) && literal(right))) {
+            reject();
+            return;
+        }
         if (library_array(left) || library_array(right)) {
             return;
         }
@@ -3203,6 +3633,26 @@ private:
                     || scopes[scope.value()].unit == architecture_.id);
         };
         validate_subprogram_bodies(selected_scope);
+        // IEEE 1076-2008 6.4.2.1, 6.5.2: only variables are of access types.
+        for (const auto& stored :
+            specialization_.design().vhdl_hir.declarations()) {
+            using Form = semantic::vhdl::DeclarationForm;
+            // Subprogram formals are kept as ports of their object class;
+            // a variable-class formal may be of an access type.
+            if (!stored.subtype || !selected_scope(stored.scope)
+                || (stored.form != Form::signal && stored.form != Form::constant
+                    && !(stored.form == Form::port
+                        && stored.object_class == semantic::vhdl::ObjectClass::signal)
+                    && stored.form != Form::generic_constant)) {
+                continue;
+            }
+            const auto* definition = root_definition(*stored.subtype);
+            if (definition != nullptr && definition->form == TypeForm::access) {
+                report("FSIM-ELAB-VHACCESS-030",
+                    "only a VHDL variable can be of an access type",
+                    stored.source);
+            }
+        }
         if (name_check_) {
             using Form = semantic::vhdl::DeclarationForm;
             for (const auto& stored :
@@ -3359,6 +3809,24 @@ private:
             if (statement.kind
                     == semantic::vhdl::StatementKind::signal_assignment
                 && statement.target) {
+                validate_signal_target(*statement.target, statement.source);
+                if (name_check_) {
+                    validate_value_name(*statement.target);
+                }
+            }
+            if (statement.kind == semantic::vhdl::StatementKind::loop) {
+                for (const auto bound : { statement.loop_initial, statement.loop_limit }) {
+                    if (bound && operand_type(*bound).kind == OperandClass::floating) {
+                        report("FSIM-ELAB-VHLOOP-001",
+                            "a VHDL loop parameter range must be discrete",
+                            statement.source);
+                        break;
+                    }
+                }
+            }
+            if (statement.kind
+                    == semantic::vhdl::StatementKind::signal_assignment
+                && statement.target) {
                 for (const auto& element : statement.waveform) {
                     if (!element.disconnect && element.value.valid()) {
                         validate_assignment_type(
@@ -3492,7 +3960,11 @@ private:
                     validate_selection(expression.id);
                 }
             }
-            validate_predefined_operator(expression);
+            if (operator_check_) {
+                validate_predefined_operator(expression);
+            }
+            validate_formal_signal_attribute(expression);
+            validate_conversion_and_qualification(expression);
             validate_call_arity(expression);
             if (name_check_
                 && (expression.kind == semantic::vhdl::ExpressionKind::binary
@@ -3602,6 +4074,8 @@ private:
     const semantic::vhdl::Unit& architecture_;
     std::unordered_set<std::uint32_t> relevant_types_;
     bool name_check_ { true };
+    bool operator_check_ { true };
+    std::optional<std::unordered_set<std::uint32_t>> signal_formals_;
     std::optional<std::unordered_set<std::string>> exempt_names_;
     std::unordered_set<std::string> reported_;
     std::vector<VhdlHirTypeValidationIssue> issues_;

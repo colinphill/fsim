@@ -1993,6 +1993,7 @@ tests/fixtures/compliance/sv_enum_methods.sv
 tests/fixtures/compliance/sv_expression_widths.sv
 tests/fixtures/compliance/sv_function_statements.sv
 tests/fixtures/compliance/sv_generate_references.sv
+tests/fixtures/compliance/sv_hierarchical_calls.sv
 tests/fixtures/compliance/sv_hierarchical_references.sv
 tests/fixtures/compliance/sv_interface_ports_and_waits.sv
 tests/fixtures/compliance/sv_module_items.sv
@@ -2030,6 +2031,7 @@ tests/fixtures/compliance/vhdl_scalar_type_declarations.vhd
 tests/fixtures/compliance/vhdl_signal_formals.vhd
 tests/fixtures/compliance/vhdl_string_generics.vhd
 tests/fixtures/compliance/vhdl_subprogram_forms.vhd
+tests/fixtures/compliance/vhdl_textio_and_element_names.vhd
 tests/fixtures/compliance/vhdl_typed_files.vhd
 tests/fixtures/fst/complete_trace.tsv
 tests/fixtures/sdf/corpus/sdf21/mixed_resolution.sdf

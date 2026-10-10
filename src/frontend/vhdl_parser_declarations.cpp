@@ -810,6 +810,16 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
       }
       array.dimensions.push_back(std::move(dimension));
     } while (match(TokenKind::Comma));
+    // An array type definition is either unbounded (every index `<>`) or
+    // constrained (IEEE 1076-2008 5.3.2.1).
+    if (std::ranges::any_of(array.dimensions,
+            [](const VhdlArrayDimension& dimension) { return dimension.unconstrained; })
+        && !std::ranges::all_of(array.dimensions,
+            [](const VhdlArrayDimension& dimension) { return dimension.unconstrained; })) {
+      error(current(), "FSIM-VHDL-SEM-119",
+            "an array type definition cannot mix unbounded '<>' and "
+            "constrained index ranges");
+    }
     expect(TokenKind::RightParen, "')' after array index definition",
            "FSIM-VHDL-PARSE-146");
     expect_keyword("of", true, "FSIM-VHDL-PARSE-147");

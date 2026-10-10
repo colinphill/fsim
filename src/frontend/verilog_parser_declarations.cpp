@@ -203,6 +203,18 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
         }
         const bool explicit_variable = match_keyword("var");
         declared_here = true;
+        // In Verilog an input or inout port is a net (IEEE 1364-2005
+        // 12.3.4).
+        if ((spec.direction == PortDirection::Input
+                || spec.direction == PortDirection::Inout)
+            && (keyword("reg") || keyword("integer") || keyword("time")
+                || keyword("real") || keyword("realtime"))
+            && keyword_set_rank(keyword_set_for_standard_revision(standard_revision_))
+                < keyword_set_rank(keyword_set_for_standard_revision(
+                    StandardRevision::SystemVerilog2005))) {
+          error(current(), "FSIM-SV-SEM-410",
+              "a Verilog input or inout port must be a net, not a variable");
+        }
         const bool explicit_type =
             explicit_variable || is_net_type_keyword()
             || keyword("string") || keyword("chandle")
@@ -902,6 +914,17 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
         || keyword("process")
         || keyword("struct") || keyword("union") || keyword("enum")
         || is_named_type_reference_start();
+    // In Verilog an input or inout port is a net (IEEE 1364-2005 12.3.4).
+    if ((spec.direction == PortDirection::Input
+            || spec.direction == PortDirection::Inout)
+        && (keyword("reg") || keyword("integer") || keyword("time")
+            || keyword("real") || keyword("realtime"))
+        && keyword_set_rank(keyword_set_for_standard_revision(standard_revision_))
+            < keyword_set_rank(keyword_set_for_standard_revision(
+                StandardRevision::SystemVerilog2005))) {
+      error(current(), "FSIM-SV-SEM-410",
+          "a Verilog input or inout port must be a net, not a variable");
+    }
     if (keyword("string") || keyword("chandle")
         || keyword("process")
         || keyword("struct") || keyword("union") || keyword("enum")) {

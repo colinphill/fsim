@@ -1976,6 +1976,12 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_signal_attribute(
             1U, frontend::ValueDomain::Boolean);
         process_.operations.emplace_back(SignalEvent {
             destination, attribute->signal });
+        if (attribute->element) {
+            const auto changed = lower_hir_vhdl_element_event(
+                *attribute->element, attribute->signal, destination, span);
+            return changed ? std::optional { resize(*changed) }
+                           : std::nullopt;
+        }
         return resize(destination);
     }
     case HirVhdlSignalAttributeKind::last_value: {
@@ -5312,6 +5318,27 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_untraced(
     const std::size_t expected_width,
     const frontend::SystemVerilogScalarKind scalar_context)
 {
+    // IEEE 1800-2017 11.4.12: real operands are not allowed in a
+    // concatenation.
+    if (specialized_hir_unit_ != nullptr) {
+        if (const auto concatenation = specialized_hir_unit_->find_expression(expression_id);
+            concatenation && concatenation->systemverilog != nullptr
+            && concatenation->systemverilog->kind
+                == semantic::sv::ExpressionKind::concatenation) {
+            using ScalarKind = frontend::SystemVerilogScalarKind;
+            for (const auto operand : concatenation->systemverilog->operands) {
+                const auto kind = hir_systemverilog_scalar_kind(operand);
+                if (kind == ScalarKind::Real || kind == ScalarKind::ShortReal
+                    || kind == ScalarKind::Realtime) {
+                    report("FSIM-ELAB-SVCONCAT-002",
+                        "a real value cannot be an operand of a SystemVerilog "
+                        "concatenation",
+                        hir_source_span(concatenation->systemverilog->source));
+                    return std::nullopt;
+                }
+            }
+        }
+    }
     const auto unsigned_extension
         = std::exchange(hir_unsigned_extension_, false);
     const auto unsigned_expression = unsigned_extension
@@ -5861,8 +5888,19 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             return std::ranges::all_of(
                 *operand->vhdl->decoded_string, accepted);
         }();
+        // A character literal such as '0' takes its type from the type
+        // mark (IEEE 1076-2008 9.3.5).
+        const auto contextual_character = operand
+            && operand->vhdl != nullptr
+            && operand->vhdl->kind
+                == semantic::vhdl::ExpressionKind::logic_literal
+            && (qualified_profile->domain == frontend::ValueDomain::Bit2
+                || qualified_profile->domain
+                    == frontend::ValueDomain::Logic4
+                || qualified_profile->domain
+                    == frontend::ValueDomain::Logic9);
         const auto context_dependent_domain = aggregate_operand
-            || contextual_string_domain;
+            || contextual_string_domain || contextual_character;
         const auto layout_mismatch = operands.size() != 1U
             || (!aggregate_operand && operand_width
                 && *operand_width != qualified_profile->width)
@@ -13352,6 +13390,139 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     return result;
 }
 
+std::optional<RegisterId> Lowerer::lower_hir_vhdl_element_event(
+    const semantic::ExpressionId element, const SignalId signal,
+    const RegisterId signal_event, const frontend::SourceSpan& span,
+    const bool report_failure)
+{
+    // An element has an event when the signal has one and the element's
+    // value differs from its value before that event (IEEE 1076-2008
+    // 14.7.3.2).
+    const auto first = process_.operations.size();
+    const auto element_width = hir_expression_width(
+        element, hir_process_scope_);
+    const auto current = element_width
+        ? lower_hir_expression(element, *element_width)
+        : std::nullopt;
+    const auto* extract = current && process_.operations.size() > first
+        ? operation_get_if<Extract>(&process_.operations.back())
+        : nullptr;
+    bool from_signal { };
+    for (auto index = first;
+         extract != nullptr && index < process_.operations.size();
+         ++index) {
+        const auto* read = operation_get_if<ReadSignal>(
+            &process_.operations[index]);
+        from_signal = from_signal
+            || (read != nullptr && read->signal == signal
+                && read->kind == SignalReadKind::current
+                && read->destination == extract->source);
+    }
+    if (!from_signal) {
+        process_.operations.resize(first);
+        if (!report_failure) {
+            return std::nullopt;
+        }
+        report("FSIM-ELAB-VHATTR-013",
+            "'EVENT of a signal element requires a static index into a "
+            "whole signal",
+            span);
+        return std::nullopt;
+    }
+    const auto offset = extract->offset;
+    const auto width = extract->width;
+    const auto whole = allocate_register(
+        design_.signal_info_[signal].width,
+        register_domain(extract->source));
+    record_implicit_signal_dependency(signal);
+    process_.operations.emplace_back(SignalLastValue { whole, signal });
+    const auto previous = allocate_register(
+        width, register_domain(*current));
+    process_.operations.emplace_back(
+        Extract { previous, whole, offset, width });
+    const auto changed = allocate_register(
+        1U, frontend::ValueDomain::Boolean);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::not_equal, changed, *current, previous });
+    const auto result = allocate_register(
+        1U, frontend::ValueDomain::Boolean);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::bit_and, result, signal_event, changed });
+    return result;
+}
+
+bool Lowerer::hir_vhdl_time_expression(
+    const semantic::ExpressionId value) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return false;
+    }
+    const auto simple = [](std::string_view name) {
+        name.remove_prefix(name.find_last_of(".:") + 1U);
+        return name == "time" || name == "delay_length";
+    };
+    if (const auto subtype = hir_vhdl_expression_subtype(value);
+        subtype && !subtype->type_mark.spelling.empty()) {
+        if (simple(subtype->type_mark.spelling)) {
+            return true;
+        }
+        if (subtype->type_mark.target.valid()) {
+            std::set<std::uint32_t> visited;
+            auto type_id = subtype->type_mark.target;
+            while (type_id.valid() && visited.insert(type_id.value()).second) {
+                const auto type = specialized_hir_unit_->find_type(type_id);
+                if (!type || type->vhdl == nullptr) {
+                    break;
+                }
+                if (simple(type->vhdl->name)
+                    || simple(type->vhdl->base.type_mark.spelling)) {
+                    return true;
+                }
+                if (type->vhdl->form != semantic::vhdl::TypeForm::subtype
+                    && type->vhdl->form != semantic::vhdl::TypeForm::alias) {
+                    break;
+                }
+                type_id = type->vhdl->base.type_mark.target;
+            }
+        }
+        return false;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(value);
+    if (!expression || expression->vhdl == nullptr) {
+        return false;
+    }
+    const auto& source = *expression->vhdl;
+    if (!source.nominal_type.empty()) {
+        return simple(source.nominal_type);
+    }
+    constexpr auto physical = std::string_view { "@vhdl-physical:" };
+    if (source.text.starts_with(physical)) {
+        const auto unit = std::string_view { source.text }.substr(
+            physical.size());
+        constexpr std::array<std::string_view, 8U> time_units { "fs", "ps",
+            "ns", "us", "ms", "sec", "min", "hr" };
+        return std::ranges::find(time_units, unit) != time_units.end();
+    }
+    return source.kind == semantic::vhdl::ExpressionKind::name
+        && source.text == "now" && !hir_target_declaration(value);
+}
+
+bool Lowerer::append_hir_vhdl_time_text(const StringRegisterId target,
+    const semantic::ExpressionId value, const std::uint32_t unit_index)
+{
+    const auto lowered = lower_hir_expression(value, 64U);
+    if (!lowered) {
+        return false;
+    }
+    StringMethod operation;
+    operation.operation = StringMethodOperator::format_vhdl_time;
+    operation.source = target;
+    operation.first = *lowered;
+    operation.precision = unit_index;
+    process_.operations.emplace_back(operation);
+    return true;
+}
+
 std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_runtime_image(
     const semantic::ExpressionId value_id,
     const std::optional<semantic::ExpressionId> type_prefix,
@@ -13437,6 +13608,19 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_runtime_image(
         return std::string_view { terminal_spelling }.substr(
             separator == std::string::npos ? 0U : separator + 1U);
     }();
+    if (simple_type == "time" || simple_type == "delay_length"
+        || hir_vhdl_time_expression(value_id)) {
+        // A TIME image is the value in the primary unit fs (IEEE 1076-2008
+        // 16.2.2).
+        const auto destination = allocate_string_register();
+        process_.operations.emplace_back(LoadStringConstant {
+            destination, { } });
+        if (!append_hir_vhdl_time_text(destination, value_id,
+                std::numeric_limits<std::uint32_t>::max())) {
+            return std::nullopt;
+        }
+        return destination;
+    }
     const bool real_value = simple_type == "real"
         || hir_systemverilog_scalar_kind(value_id)
             == frontend::SystemVerilogScalarKind::Real;
@@ -14010,6 +14194,20 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
         if (is_hir_vhdl_reflection_string_expression(expression_id)) {
             return lower_hir_vhdl_reflection_string_expression(
                 expression_id);
+        }
+        if (source.kind == semantic::vhdl::ExpressionKind::call
+            && source.text.starts_with("@vhdl-qualified:")
+            && [&] {
+                   auto mark = std::string_view { source.text };
+                   mark.remove_prefix(mark.find_last_of(".:") + 1U);
+                   return mark == "string";
+               }()
+            && source.operands.size() == 1U
+            && hir_expression_is_string(
+                source.operands.front(), hir_process_scope_)) {
+            // T'(string expression) denotes the operand's value (IEEE
+            // 1076-2008 9.3.5).
+            return lower_hir_string_expression(source.operands.front());
         }
         if (source.kind == semantic::vhdl::ExpressionKind::string_literal
             && source.decoded_string) {

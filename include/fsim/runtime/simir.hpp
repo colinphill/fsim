@@ -184,7 +184,12 @@ enum class StringMethodOperator : std::uint8_t {
     realtoa,
     format_packed,
     format_string,
-    format_time
+    format_time,
+    // VHDL TIME value (register `first`, in simulation ticks) written in the
+    // unit whose index in fs, ps, ns, us, ms, sec, min, hr is `precision`
+    // (the primary unit fs when out of range), followed by the unit name
+    // (IEEE 1076-2008 5.2.4.2, 16.4 WRITE).
+    format_vhdl_time
 };
 struct StringMethod {
     StringMethodOperator operation { };

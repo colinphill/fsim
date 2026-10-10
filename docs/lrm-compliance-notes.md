@@ -422,3 +422,36 @@ gives fsim's result in each case checked.
   predefined. An operator that the design itself overloads (outside the STD
   and IEEE libraries) is now left as a call; `numeric_std` operators are
   still evaluated natively.
+
+## TextIO, operator symbols and element names (batch 26)
+
+- STD.TEXTIO is not analyzed from source before VHDL-2019; LINE, TEXT and
+  OUTPUT are recognized by name. A LINE is held as a runtime string, so
+  DEALLOCATE empties it, and an out or inout LINE formal is copied in and
+  back out around the call. OUTPUT is the runtime's standard-output channel
+  (multichannel descriptor 1). INPUT is not supported.
+- WRITE of a value other than INTEGER, BOOLEAN, BIT or STRING appends the
+  value's runtime image without quotes, as TO_STRING does. A value of a
+  user-declared enumeration type is rejected, because STD.TEXTIO declares no
+  WRITE for it. TIME values are counts of the resolution limit; a SimIR
+  string method converts them to the requested unit at run time using the
+  simulation's resolution, so the text does not depend on the project
+  resolution. TIME'IMAGE uses fs, the primary unit, as nvc does (xsim prints
+  in its own resolution unit).
+- A call by operator symbol (`"op"(a, b)`, also selected from a package) is
+  parsed as the operator expression. Overload resolution is then that of
+  the operator, which is equivalent for the predefined and visible
+  overloads. A selected operator from a package that is not otherwise
+  visible resolves as if visible.
+- A tick after a name, `)` or `]` is an attribute tick, never the start of a
+  character literal, so `bit'('0')` lexes as a qualified expression.
+- 'EVENT of a signal element is computed as the signal's 'EVENT and a
+  comparison of the element with the same bits of 'LAST_VALUE. This is
+  exact: in a delta cycle with an event, 'LAST_VALUE is the value before
+  that event. 'ACTIVE, 'LAST_VALUE and 'LAST_EVENT of an element need
+  per-element driver state and are still rejected.
+- A process sensitivity list subscribes to the exact bits of a statically
+  selected element or slice. An explicit `wait on` of an element waits on
+  the whole signal, then waits again unless a named signal or element had
+  an event. A `wait on` of a record field named by its selected name is
+  still unsupported.

@@ -756,6 +756,21 @@ Expression VerilogParser::parse_primary()
         const auto kind = token.text.find('\'') == std::string::npos
             ? ExpressionKind::IntegerLiteral
             : ExpressionKind::LogicLiteral;
+        // The size of a sized literal is a nonzero decimal (IEEE 1800-2017
+        // 5.7.1).
+        if (const auto quote = token.text.find('\''); quote != std::string::npos
+            && quote != 0U) {
+            std::string size;
+            for (const auto character : token.text.substr(0U, quote)) {
+                if (character != '_' && character != ' ' && character != '\t') {
+                    size.push_back(character);
+                }
+            }
+            if (const auto value = detail::decimal_i64(size); value && *value == 0) {
+                error(token, "FSIM-SV-SEM-409",
+                    "the size of a sized literal must be nonzero");
+            }
+        }
         auto expression = Expression {
             kind,
             token.text + (time_unit ? time_unit->text : std::string { }),

@@ -7436,10 +7436,26 @@ bool Lowerer::lower_hir_statement(
                         == frontend::ValueDomain::Logic4
                     || *condition_domain
                         == frontend::ValueDomain::Logic9);
-            if (!condition_domain) {
+            // A literal other than TRUE/FALSE is never BOOLEAN.
+            const auto condition_expression
+                = specialized_hir_unit_->find_expression(*condition);
+            const auto non_boolean_literal = condition_expression
+                && condition_expression->vhdl != nullptr
+                && (condition_expression->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::real_literal
+                    || condition_expression->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::string_literal
+                    || condition_expression->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::integer_literal);
+            if (!condition_domain && !non_boolean_literal) {
                 report("FSIM-ELAB-093",
                     "the type of a VHDL condition cannot be determined",
                     span);
+                return false;
+            }
+            if (!condition_domain) {
+                report("FSIM-ELAB-048",
+                    "a VHDL condition must have type boolean", span);
                 return false;
             }
             if (*condition_domain != frontend::ValueDomain::Boolean
@@ -14523,6 +14539,12 @@ bool Lowerer::lower_hir_statement(
         {
             std::vector<SignalId> waited_signals;
             waited_signals.reserve(input.sensitivities.size());
+            // A sensitivity to a part of a signal (an element or a record
+            // field) resumes only on an event on that part (IEEE 1076-2008
+            // 10.2): the wait rewaits until a named signal or part has one.
+            std::vector<SignalId> whole_signals;
+            std::vector<std::pair<semantic::ExpressionId, SignalId>> parts;
+            bool unfiltered_part { };
             for (const auto& sensitivity : input.sensitivities) {
                 std::optional<SignalId> signal;
                 if (sensitivity.expression) {
@@ -14539,6 +14561,12 @@ bool Lowerer::lower_hir_statement(
                         auto dependencies = hir_signal_dependencies(
                             *sensitivity.expression,
                             hir_process_scope_);
+                        if (dependencies.size() == 1U) {
+                            parts.emplace_back(*sensitivity.expression,
+                                dependencies.front());
+                        } else {
+                            unfiltered_part = true;
+                        }
                         waited_signals.insert(
                             waited_signals.end(),
                             dependencies.begin(),
@@ -14557,6 +14585,7 @@ bool Lowerer::lower_hir_statement(
                     return true;
                 }
                 waited_signals.push_back(*signal);
+                whole_signals.push_back(*signal);
             }
             if (waited_signals.empty() && input.condition) {
                 waited_signals = hir_signal_dependencies(
@@ -14586,6 +14615,56 @@ bool Lowerer::lower_hir_statement(
                 wait.timeout_result = timed_out;
             }
             process_.operations.emplace_back(std::move(wait));
+            if (!input.condition && !input.delay && !parts.empty()
+                && !unfiltered_part) {
+                const auto filter_start = process_.operations.size();
+                std::optional<RegisterId> any_event;
+                const auto accumulate = [&](const RegisterId event) {
+                    if (!any_event) {
+                        any_event = event;
+                        return;
+                    }
+                    const auto combined = allocate_register(
+                        1U, frontend::ValueDomain::Boolean);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::bit_or, combined, *any_event,
+                        event });
+                    any_event = combined;
+                };
+                const auto signal_event = [&](const SignalId signal) {
+                    const auto event = allocate_register(
+                        1U, frontend::ValueDomain::Boolean);
+                    process_.operations.emplace_back(
+                        SignalEvent { event, signal });
+                    return event;
+                };
+                bool filtered { true };
+                for (const auto signal : whole_signals) {
+                    accumulate(signal_event(signal));
+                }
+                for (const auto& [part, signal] : parts) {
+                    const auto event = lower_hir_vhdl_element_event(
+                        part, signal, signal_event(signal), span, false);
+                    if (!event) {
+                        filtered = false;
+                        break;
+                    }
+                    accumulate(*event);
+                }
+                if (!filtered || !any_event) {
+                    process_.operations.resize(filter_start);
+                    return true;
+                }
+                const auto branch = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations.emplace_back(Branch {
+                    *any_event,
+                    static_cast<InstructionIndex>(branch + 1U),
+                    wait_start,
+                    UnknownBranchPolicy::when_false,
+                });
+                return true;
+            }
             if (!input.condition) {
                 return true;
             }

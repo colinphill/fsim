@@ -10546,6 +10546,23 @@ SpecializedHirAssociationResult resolve_specialized_hir_associations_impl(
                     design, *parent, instance.systemverilog->scope,
                     formals[index].name);
                 if (!actual) {
+                    // `.*` requires a same-named object for each port
+                    // without a default (IEEE 1800-2017 23.3.2.4).
+                    const auto formal = design.find_declaration(
+                        formals[index].declaration);
+                    if (formal && formal->systemverilog != nullptr
+                        && formal->systemverilog->form
+                            == sv::DeclarationForm::port
+                        && !formal->systemverilog->initializer) {
+                        AssociationActual wildcard;
+                        wildcard.formal = "*";
+                        wildcard.source = *systemverilog_wildcard_source;
+                        reject(wildcard,
+                            SpecializedHirAssociationDiagnostic::invalid_actual,
+                            "SystemVerilog wildcard port association finds no "
+                            "object named '" + std::string { formals[index].name }
+                                + "'");
+                    }
                     continue;
                 }
                 bound[index] = true;

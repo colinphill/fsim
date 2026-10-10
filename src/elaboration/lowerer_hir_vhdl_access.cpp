@@ -816,6 +816,16 @@ bool Lowerer::lower_hir_vhdl_access_deallocation(
     }
     const auto actual = statement->vhdl->procedure_arguments.front().actual;
     const auto declaration_id = hir_target_declaration(actual);
+    if (const auto line = declaration_id
+            ? hir_string_binding(*declaration_id, hir_process_scope_, true)
+            : std::nullopt;
+        line && line->local) {
+        // DEALLOCATE of a std.textio LINE leaves it null (IEEE 1076-2008
+        // 5.4.3); a line is held as a runtime string, so it becomes empty.
+        process_.operations.emplace_back(
+            LoadStringConstant { *line->local, std::string { } });
+        return true;
+    }
     const auto binding = declaration_id
         ? hir_runtime_binding(*declaration_id, hir_process_scope_, true)
         : std::nullopt;

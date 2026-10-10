@@ -793,6 +793,8 @@ private:
         runtime::SimulationTick duration { };
         std::size_t width { };
         frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
+        // 'EVENT of an indexed element of the signal: the element read.
+        std::optional<semantic::ExpressionId> element;
     };
     [[nodiscard]] std::optional<HirVhdlSignalAttributeProfile>
     hir_vhdl_signal_attribute_profile(
@@ -1621,6 +1623,20 @@ private:
     // TO_HSTRING and TO_OSTRING of a runtime value (IEEE 1076-2008 5.7,
     // 16.2). `type_prefix` names T for 'IMAGE; vector_format selects the
     // digit grouping for an array value.
+    // 'EVENT of a statically indexed element of `signal`, given the
+    // signal's own 'EVENT register.
+    [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_element_event(
+        semantic::ExpressionId element, SignalId signal,
+        RegisterId signal_event, const frontend::SourceSpan& span,
+        bool report_failure = true);
+    // Whether a VHDL expression is of type TIME (or DELAY_LENGTH), including
+    // folded time literals and NOW.
+    [[nodiscard]] bool hir_vhdl_time_expression(
+        semantic::ExpressionId value) const;
+    // Append the runtime text of a TIME value written in the unit whose
+    // index in fs..hr is unit_index (fs for 'IMAGE) to `target`.
+    [[nodiscard]] bool append_hir_vhdl_time_text(StringRegisterId target,
+        semantic::ExpressionId value, std::uint32_t unit_index);
     [[nodiscard]] std::optional<StringRegisterId> lower_hir_vhdl_runtime_image(
         semantic::ExpressionId value,
         std::optional<semantic::ExpressionId> type_prefix,
@@ -1932,6 +1948,11 @@ private:
     mutable bool hierarchical_reference_missed_ { };
     bool hierarchical_reference_retry_ { };
     // `g[1].h[2].x` as a hierarchical name when every index is constant.
+    // A task or function of a module instance named by a hierarchical
+    // receiver (`u.t`): its declaration and the instance path.
+    [[nodiscard]] std::optional<std::pair<semantic::DeclarationId, std::string>>
+    hir_instance_callable(std::string_view receiver, std::string_view member,
+        bool function) const;
     [[nodiscard]] std::optional<std::string> hir_systemverilog_constant_path(
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<SignalId> hir_hierarchical_signal(

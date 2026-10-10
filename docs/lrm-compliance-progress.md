@@ -249,6 +249,59 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 26: TextIO, operator-symbol calls, element names, hierarchical calls
+
+Fixtures: `vhdl_textio_and_element_names.vhd` and `sv_hierarchical_calls.sv`
+(both pass on xsim).
+
+VHDL analysis-time checks (reported by `fsim compile`):
+- A selected name that names no element of its record prefix
+  (`FSIM-ELAB-VHNAME-003`); an expanded type mark that names nothing outside
+  STD and IEEE (`FSIM-ELAB-VHTYPE-005`).
+- A file whose element is a file, access or protected type, or a composite
+  containing one (`FSIM-ELAB-VHFILE-013`, `-014`, 5.5.1).
+- 'STABLE, 'QUIET, 'TRANSACTION or 'DELAYED of a formal signal parameter
+  (`FSIM-ELAB-VHATTR-012`, 4.2.2.2).
+- Qualified expressions and type conversions whose operand cannot have the
+  type (`FSIM-ELAB-VHQUAL-005`, `FSIM-ELAB-VHCONV-005`); a signal assignment
+  to a target that is not a signal (`FSIM-ELAB-VHASSIGN-002`); an access
+  object outside a variable (`FSIM-ELAB-VHACCESS-030`); floating loop
+  bounds (`FSIM-ELAB-VHLOOP-001`); relational operators on file and
+  protected values and on operands of different types.
+- Parse-time: an array type mixing `<>` and constrained index ranges
+  (`FSIM-VHDL-SEM-119`); an empty bit-string literal before VHDL-2008 and a
+  based literal base outside 2..16 (`FSIM-VHDL-PARSE-298`, `-299`).
+
+VHDL:
+- STD.TEXTIO: TEXT files, OUTPUT (`writeline(output, l)`, `write(output,
+  s)`), SWRITE, DEALLOCATE of a LINE, LINE formals of mode out and inout,
+  and WRITE of TIME (with UNIT), REAL (with DIGITS), CHARACTER, BIT_VECTOR
+  and other vectors (16.4).
+- `T'IMAGE` of TIME values at run time, in fs.
+- Function calls by operator symbol (`"and"(a, b)`, `STD.STANDARD."<"(a,
+  b)`) and qualified character literals (`bit'('0')`, `boolean'(true)`).
+- Attributes of indexed, sliced, selected and dereferenced names
+  (`v(1)'left`, `q(1).x'length`).
+- 'EVENT of a statically indexed signal element, and process sensitivity to
+  signal elements (`process (vec(0))`), resume only on that element's events.
+- STRING signal initial values from string literals and character
+  aggregates; predefined enumeration subtypes with character bounds.
+
+SystemVerilog:
+- Calls of functions and tasks of other module instances and of generate
+  blocks through hierarchical names (`u.bump(3)`, `blk.twice(5)`) (23.8).
+- Rejected: a real operand in a concatenation (`FSIM-ELAB-SVCONCAT-002`), a
+  zero-width sized literal (`FSIM-SV-SEM-409`), Verilog-mode input/inout
+  ports declared reg, integer, time or real (`FSIM-SV-SEM-410`), a defparam
+  value naming a variable, net or port (`FSIM-ELAB-DEFPARAM-005`), and a
+  `.*` port with no matching parent object.
+
+Corpus effect (interpreter, reruns of the Batch 25 baseline's failures
+with the final build): VESTs +148, ivtest +13, Verilator +12, nvc +12, VHDL
+Compliance-Tests +1, sv-tests unchanged; 186 closed. Per the batch rule, the full
+corpus and ctest were not run before the commit; the run from the archived
+Batch 26 binary is the next batch's baseline and regression check.
+
 ### Batch 25: VHDL names, calls and attributes, formal conversions, generate references
 
 Fixtures: `vhdl_attributes_and_conversions.vhd` and `sv_generate_references.sv`

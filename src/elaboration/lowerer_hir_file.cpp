@@ -169,7 +169,7 @@ namespace {
 {
     const auto simple = vhdl_simple_name(name);
     return simple == "file_open" || simple == "file_close"
-        || simple == "read" || simple == "write"
+        || simple == "read" || simple == "write" || simple == "swrite"
         || simple == "readline" || simple == "writeline";
 }
 
@@ -409,7 +409,7 @@ bool Lowerer::is_hir_vhdl_file_statement(
         statement->vhdl->procedure.canonical.empty()
             ? std::string_view { statement->vhdl->procedure.spelling }
             : std::string_view { statement->vhdl->procedure.canonical });
-    if (name != "read" && name != "write") {
+    if (name != "read" && name != "write" && name != "swrite") {
         return true;
     }
     if (statement->vhdl->procedure_arguments.empty()) {
@@ -417,6 +417,18 @@ bool Lowerer::is_hir_vhdl_file_statement(
     }
     const auto first = statement->vhdl->procedure_arguments.front().actual;
     const auto selected = hir_referenced_declaration(first);
+    if (!selected && name == "write") {
+        // std.textio.OUTPUT has no declaration in the design.
+        const auto expression = specialized_hir_unit_->find_expression(first);
+        if (expression && expression->vhdl != nullptr
+            && expression->vhdl->referenced_name) {
+            const auto& referenced = *expression->vhdl->referenced_name;
+            return vhdl_simple_name(referenced.canonical.empty()
+                           ? referenced.spelling
+                           : referenced.canonical)
+                == "output";
+        }
+    }
     const auto declaration = selected
         ? specialized_hir_unit_->find_declaration(*selected)
         : std::nullopt;
@@ -2400,13 +2412,16 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         return false;
     }
     const auto& call = *statement->vhdl;
-    const auto name = vhdl_simple_name(
+    const auto called = vhdl_simple_name(
         call.procedure.canonical.empty()
             ? std::string_view { call.procedure.spelling }
             : std::string_view { call.procedure.canonical });
-    if (!vhdl_file_procedure_name(name)) {
+    if (!vhdl_file_procedure_name(called)) {
         return false;
     }
+    // VHDL-2008 SWRITE(L, VALUE) is WRITE of a STRING (16.4).
+    const auto name = called == "swrite" ? std::string_view { "write" }
+                                         : called;
     const auto span = hir_source_span(call.source);
     const auto fail = [&](std::string code, std::string message) {
         report(std::move(code), std::move(message), span);
@@ -2488,6 +2503,13 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         }
         const auto subtype = hir_effective_vhdl_subtype(
             *declaration->vhdl->subtype);
+        if (subtype && !subtype->type_mark.target.valid()
+            && vhdl_simple_name(subtype->type_mark.spelling) == "text") {
+            // IEEE 1076-2008 16.4: std.textio.TEXT is a file of STRING.
+            semantic::vhdl::SubtypeIndication element;
+            element.domain = semantic::vhdl::ValueDomain::string;
+            return element;
+        }
         if (!subtype || !subtype->type_mark.target.valid()) {
             return std::nullopt;
         }
@@ -2500,6 +2522,22 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         }
         return hir_effective_vhdl_subtype(
             *type->vhdl->element_subtype);
+    };
+    const auto standard_output = [&](const semantic::ExpressionId value) {
+        if (hir_target_declaration(value)) {
+            return false;
+        }
+        const auto expression = specialized_hir_unit_->find_expression(
+            value);
+        if (!expression || expression->vhdl == nullptr
+            || !expression->vhdl->referenced_name) {
+            return false;
+        }
+        const auto& referenced = *expression->vhdl->referenced_name;
+        const auto spelling = referenced.canonical.empty()
+            ? referenced.spelling
+            : referenced.canonical;
+        return vhdl_simple_name(spelling) == "output";
     };
     enum class TextioScalarClass : std::uint8_t {
         unsupported,
@@ -2569,12 +2607,26 @@ bool Lowerer::lower_hir_vhdl_file_statement(
     };
 
     if (name == "readline" || name == "writeline") {
+        const auto line = actual("l", 1U);
+        const auto line_local = line ? string_binding(*line) : std::nullopt;
+        // IEEE 1076-2008 16.4: std.textio.OUTPUT is the host standard
+        // output, the runtime's multichannel stdout channel.
+        if (const auto target = actual("f", 0U);
+            name == "writeline" && target && standard_output(*target)
+            && call.procedure_arguments.size() == 2U && line_local
+            && line_local->local) {
+            const auto handle = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                LoadConstant { handle, unsigned_value(1U, 32U) });
+            process_.operations.emplace_back(FileWriteString {
+                handle, *line_local->local, { }, { }, true, true });
+            return true;
+        }
         const auto file = file_actual(0U);
         const auto element_subtype = file
             ? file_element_subtype(file->first)
             : std::nullopt;
-        const auto line = actual("l", 1U);
-        const auto line_local = line ? string_binding(*line) : std::nullopt;
         if (call.procedure_arguments.size() != 2U || !file
             || !element_subtype
             || element_subtype->domain
@@ -2778,8 +2830,25 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             return true;
         }
 
+        // IEEE 1076-2008 16.4: WRITE of TIME takes a UNIT and WRITE of
+        // REAL takes DIGITS as the fifth parameter.
+        const bool time_value = hir_vhdl_time_expression(*value);
+        const auto value_type_name = [&] {
+            const auto subtype = hir_vhdl_expression_subtype(*value);
+            if (!subtype) {
+                return std::string { };
+            }
+            auto name = std::string_view { subtype->type_mark.spelling };
+            name.remove_prefix(name.find_last_of(".:") + 1U);
+            return std::string { name };
+        }();
+        const bool real_value = value_type_name == "real"
+            || hir_systemverilog_scalar_kind(*value)
+                == frontend::SystemVerilogScalarKind::Real;
+        const auto fifth = actual(time_value ? "unit" : "digits", 4U);
         if (call.procedure_arguments.size() < 2U
-            || call.procedure_arguments.size() > 4U) {
+            || call.procedure_arguments.size()
+                > (time_value || real_value ? 5U : 4U)) {
             return fail("FSIM-ELAB-VHTEXTIO-003",
                 "TextIO write accepts line, value, justified, and field "
                 "actuals");
@@ -2827,6 +2896,85 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             }
             append_string(*lowered);
             return true;
+        }
+        if (time_value) {
+            // The value is written as an integer multiple of UNIT followed
+            // by the unit name; the default unit is NS.
+            std::string unit_name { "ns" };
+            if (fifth) {
+                const auto expression
+                    = specialized_hir_unit_->find_expression(*fifth);
+                auto text = expression && expression->vhdl != nullptr
+                    ? std::string_view { expression->vhdl->text }
+                    : std::string_view { };
+                constexpr auto physical
+                    = std::string_view { "@vhdl-physical:" };
+                if (text.starts_with(physical)) {
+                    text.remove_prefix(physical.size());
+                }
+                unit_name = std::string { vhdl_simple_name(text) };
+                std::ranges::transform(unit_name, unit_name.begin(),
+                    [](const unsigned char character) {
+                        return static_cast<char>(std::tolower(character));
+                    });
+            }
+            constexpr std::array<std::pair<std::string_view, std::uint64_t>,
+                8U> units { {
+                { "fs", 1U },
+                { "ps", 1'000U },
+                { "ns", 1'000'000U },
+                { "us", 1'000'000'000U },
+                { "ms", 1'000'000'000'000U },
+                { "sec", 1'000'000'000'000'000U },
+                { "min", 60'000'000'000'000'000U },
+                { "hr", 3'600'000'000'000'000'000U },
+            } };
+            const auto unit = std::ranges::find(units, unit_name,
+                &std::pair<std::string_view, std::uint64_t>::first);
+            if (unit == units.end()) {
+                return fail("FSIM-ELAB-VHTEXTIO-010",
+                    "TextIO write of TIME requires a static time unit");
+            }
+            const auto text = allocate_string_register();
+            process_.operations.emplace_back(
+                LoadStringConstant { text, std::string { } });
+            if (!append_hir_vhdl_time_text(text, *value,
+                    static_cast<std::uint32_t>(unit - units.begin()))) {
+                return false;
+            }
+            append_string(text);
+            return true;
+        }
+        if (real_value && fifth) {
+            const auto digits = hir_constant_integer(*fifth);
+            if (!digits || *digits < 0 || *digits > 64) {
+                return fail("FSIM-ELAB-VHTEXTIO-011",
+                    "TextIO write of REAL requires static DIGITS in 0..64");
+            }
+            if (*digits > 0) {
+                // Nonzero DIGITS selects fixed-point notation with that many
+                // digits after the point.
+                const auto lowered = lower_hir_expression(*value, 64U);
+                if (!lowered) {
+                    return false;
+                }
+                StringMethod operation;
+                operation.operation = StringMethodOperator::format_packed;
+                operation.source = *line->local;
+                operation.first = *lowered;
+                operation.second = allocate_register(
+                    32U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(LoadConstant {
+                    operation.second, unsigned_value(64U, 32U) });
+                operation.format = OutputFormat::real_fixed;
+                operation.scalar_kind
+                    = frontend::SystemVerilogScalarKind::Real;
+                operation.precision = static_cast<std::uint32_t>(*digits);
+                operation.minimum_width = minimum_width;
+                operation.left_justify = left_justify;
+                process_.operations.emplace_back(operation);
+                return true;
+            }
         }
         const auto domain = hir_expression_domain(
             *value, hir_process_scope_);
@@ -2893,11 +3041,80 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             process_.operations[skip_false] = Jump { end };
             return true;
         }
+        // STD.TEXTIO declares WRITE for the predefined scalar and vector
+        // types only; an enumeration type declared in the design has none
+        // (IEEE 1076-2008 16.4).
+        const auto user_enumeration = [&] {
+            const auto subtype = hir_vhdl_expression_subtype(*value);
+            auto type_id = subtype ? subtype->type_mark.target
+                                   : semantic::TypeId { };
+            std::unordered_set<std::uint32_t> visited;
+            while (type_id.valid() && visited.insert(type_id.value()).second) {
+                const auto type = specialized_hir_unit_->find_type(type_id);
+                if (!type || type->vhdl == nullptr) {
+                    return false;
+                }
+                if (type->vhdl->form
+                    == semantic::vhdl::TypeForm::enumeration) {
+                    const auto name = vhdl_simple_name(type->vhdl->name);
+                    return name != "std_ulogic" && name != "std_logic"
+                        && name != "bit" && name != "boolean"
+                        && name != "character";
+                }
+                if (type->vhdl->form != semantic::vhdl::TypeForm::subtype
+                    && type->vhdl->form
+                        != semantic::vhdl::TypeForm::alias) {
+                    return false;
+                }
+                type_id = type->vhdl->base.type_mark.target;
+            }
+            return false;
+        }();
+        // Other scalar and array values: WRITE appends the value's image
+        // without character-literal quotes (IEEE 1076-2008 16.4), as
+        // TO_STRING produces it.
+        if (user_enumeration) {
+            return fail("FSIM-ELAB-VHTEXTIO-009",
+                "STD.TEXTIO declares no WRITE for a value of a user-declared "
+                "enumeration type");
+        }
+        if (const auto image = lower_hir_vhdl_runtime_image(*value,
+                std::nullopt, OutputFormat::binary, false)) {
+            append_string(*image);
+            return true;
+        }
         return fail("FSIM-ELAB-VHTEXTIO-009",
             "bounded TextIO write supports integer, boolean, bit, and "
             "string values");
     }
 
+    // VHDL-2008 implicit WRITE(F, VALUE) of a STRING to a TEXT file such as
+    // OUTPUT appends the characters without a line terminator (5.5.2).
+    if (const auto target = actual("f", 0U), text = actual("value", 1U);
+        name == "write" && target && text
+        && call.procedure_arguments.size() == 2U
+        && hir_expression_is_string(*text, hir_process_scope_)) {
+        std::optional<RegisterId> handle;
+        if (standard_output(*target)) {
+            handle = allocate_register(32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                LoadConstant { *handle, unsigned_value(1U, 32U) });
+        } else if (const auto text_file = file_actual(0U);
+            text_file && file_element_subtype(text_file->first)
+            && file_element_subtype(text_file->first)->domain
+                == semantic::vhdl::ValueDomain::string) {
+            handle = *text_file->second.local;
+        }
+        if (handle) {
+            const auto lowered = lower_hir_string_expression(*text);
+            if (!lowered) {
+                return false;
+            }
+            process_.operations.emplace_back(FileWriteString {
+                *handle, *lowered, { }, { }, false, false });
+            return true;
+        }
+    }
     const auto direct_file = file_actual(0U);
     const auto value = actual("value", 1U);
     if (!direct_file || !value

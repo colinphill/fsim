@@ -5124,6 +5124,30 @@ namespace {
                 return std::nullopt;
             }
             const auto& source = *expression->vhdl;
+            // A string literal for the last dimension of an array of
+            // CHARACTER: one 8-bit position per character, left first.
+            if (source.kind == semantic::vhdl::ExpressionKind::string_literal
+                && dimension + 1U == array.dimensions.size()
+                && *element_width == 8U
+                && compiled_vhdl_name_equal(
+                    compiled_vhdl_simple_name(element_subtype->type_mark.spelling),
+                    "character")) {
+                std::string text = source.decoded_string.value_or(std::string { });
+                if (text.empty() && source.text.size() >= 2U
+                    && source.text.front() == '"' && source.text.back() == '"') {
+                    text = source.text.substr(1U, source.text.size() - 2U);
+                }
+                if (text.size() != slot_count[dimension]) {
+                    return std::nullopt;
+                }
+                std::string result;
+                result.reserve(text.size() * 8U);
+                for (const auto character : text) {
+                    result += PackedLogic4::from_aval_bval(8U,
+                        static_cast<unsigned char>(character), 0U).to_msb_string();
+                }
+                return result;
+            }
             if (source.kind != semantic::vhdl::ExpressionKind::aggregate) {
                 if (const auto initializer = constant_initializer(id)) {
                     return self(self, *initializer, dimension, depth + 1U);
@@ -15503,6 +15527,75 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                 *materialized_type,
                 width);
         }
+        // A STRING signal initialized by a string literal: one 8-bit
+        // character per position, left first.
+        const auto string_based = [&] {
+            auto spelling = std::string_view { declaration.subtype->type_mark.spelling };
+            auto target = declaration.subtype->type_mark.target;
+            std::unordered_set<std::uint32_t> visiting;
+            for (;;) {
+                if (compiled_vhdl_name_equal(compiled_vhdl_simple_name(spelling), "string")) {
+                    return true;
+                }
+                if (!target.valid() || !visiting.insert(target.value()).second) {
+                    return false;
+                }
+                const auto type = working_specialization.find_type(target);
+                if (!type || type->vhdl == nullptr) {
+                    return false;
+                }
+                if (compiled_vhdl_name_equal(compiled_vhdl_simple_name(type->vhdl->name), "string")) {
+                    return true;
+                }
+                spelling = type->vhdl->base.type_mark.spelling;
+                target = type->vhdl->base.type_mark.target;
+            }
+        };
+        if (!static_value && string_based()) {
+            const auto literal = working_specialization.find_expression(
+                *declaration.initializer);
+            std::optional<std::string> text;
+            if (literal && literal->vhdl != nullptr
+                && literal->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::string_literal) {
+                text = literal->vhdl->decoded_string.value_or(std::string { });
+                if (text->empty() && literal->vhdl->text.size() >= 2U) {
+                    text = literal->vhdl->text.substr(1U, literal->vhdl->text.size() - 2U);
+                }
+            }
+            // A positional aggregate of character literals.
+            if (literal && literal->vhdl != nullptr
+                && literal->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::aggregate
+                && !literal->vhdl->associations.empty()) {
+                text.emplace();
+                for (const auto& association : literal->vhdl->associations) {
+                    const auto element = association.choices.empty()
+                        ? working_specialization.find_expression(association.value)
+                        : std::nullopt;
+                    if (!element || element->vhdl == nullptr
+                        || element->vhdl->kind
+                            != semantic::vhdl::ExpressionKind::logic_literal
+                        || element->vhdl->text.size() != 3U
+                        || element->vhdl->text.front() != '\'') {
+                        text.reset();
+                        break;
+                    }
+                    text->push_back(element->vhdl->text[1]);
+                }
+            }
+            if (text) {
+                if (text->size() * 8U == width) {
+                    std::string bits;
+                    bits.reserve(width);
+                    for (const auto character : *text) {
+                        bits += PackedLogic4::from_aval_bval(8U,
+                            static_cast<unsigned char>(character), 0U).to_msb_string();
+                    }
+                    static_value = PackedLogic4::from_logic9_msb_string(bits);
+                }
+            }
+        }
         const auto real_subtype = [&] {
             const std::string_view mark
                 = declaration.subtype->type_mark.spelling;
@@ -17070,6 +17163,9 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
         const bool array
             = compiled_vhdl_name_equal(name, "bit_vector")
             || compiled_vhdl_name_equal(name, "boolean_vector")
+            || compiled_vhdl_name_equal(name, "integer_vector")
+            || compiled_vhdl_name_equal(name, "real_vector")
+            || compiled_vhdl_name_equal(name, "time_vector")
             || compiled_vhdl_name_equal(name, "string")
             || compiled_vhdl_name_equal(name, "std_logic_vector")
             || compiled_vhdl_name_equal(name, "std_ulogic_vector")
@@ -17115,7 +17211,8 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
         }
         const bool scalar
             = compiled_vhdl_name_equal(name, "real")
-            || compiled_vhdl_name_equal(name, "line");
+            || compiled_vhdl_name_equal(name, "line")
+            || compiled_vhdl_name_equal(name, "text");
         if (compiled_vhdl_name_equal(name, "severity_level")
             || compiled_vhdl_name_equal(name, "file_open_kind")
             || compiled_vhdl_name_equal(name, "file_open_status")
@@ -17445,8 +17542,16 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
             continue;
         }
         if (profile.type_class == SubtypeClass::unknown) {
+            // An expanded name outside the STD and IEEE libraries that
+            // denotes no type is an analysis error (8.3); other unresolved
+            // marks may name compiler-supplied types.
+            const std::string_view mark { type.base.type_mark.spelling };
+            const auto first = mark.substr(0U, mark.find('.'));
+            const auto expanded = mark.find('.') != std::string_view::npos
+                && !compiled_vhdl_name_equal(first, "std")
+                && !compiled_vhdl_name_equal(first, "ieee");
             report(
-                "FSIM-ELAB-VHTYPE-001",
+                expanded ? "FSIM-ELAB-VHTYPE-005" : "FSIM-ELAB-VHTYPE-001",
                 "VHDL type '" + type.base.type_mark.spelling
                     + "' is not visible in this unit",
                 compiled_source_span(*compiled_, type.source));

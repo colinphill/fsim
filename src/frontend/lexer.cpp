@@ -558,7 +558,24 @@ class Lexer {
 
   void lex_quote() {
     const auto begin = current_location();
-    if (is_vhdl() && !at_end(2) && peek(2) == '\'') {
+    // A tick after a name or a closing parenthesis or bracket begins an
+    // attribute name or qualified expression, as in T'('0') (IEEE
+    // 1076-2008 15.6: "a character literal cannot follow" such a prefix).
+    const bool attribute_tick = is_vhdl() && !result_.tokens.empty()
+        && [&] {
+               const auto& previous = result_.tokens.back();
+               if (previous.kind == TokenKind::RightParen
+                   || previous.kind == TokenKind::RightBracket) {
+                   return true;
+               }
+               if (previous.kind != TokenKind::Identifier) {
+                   return false;
+               }
+               const auto lower = detail::ctype_lower_copy(previous.text);
+               return lower == "all"
+                   || !vhdl_reserved_word_impl(lower, vhdl_standard_);
+           }();
+    if (is_vhdl() && !attribute_tick && !at_end(2) && peek(2) == '\'') {
       advance();
       advance();
       advance();

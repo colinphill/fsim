@@ -4450,15 +4450,29 @@ Lowerer::hir_runtime_binding(
             if (active_hir_callable_) {
                 const auto& frame
                     = hir_callable_frames_[*active_hir_callable_];
-                if (frame.interface_receiver) {
+                if (frame.interface_receiver
+                    && frame.interface_receiver->starts_with("@instance:")) {
+                    // A module-instance task's variable is that instance's.
+                    const auto path = frame.interface_receiver->substr(
+                        std::string_view { "@instance:" }.size())
+                        + "." + result.name;
+                    if (const auto global = design_.signal_by_name_.find(path);
+                        global != design_.signal_by_name_.end()) {
+                        signal_id = global->second;
+                        hierarchical_reference_used_ = true;
+                    } else {
+                        hierarchical_reference_missed_ = true;
+                        return std::nullopt;
+                    }
+                } else if (frame.interface_receiver) {
                     found = signals_.find(
                         *frame.interface_receiver + "." + result.name);
                 }
             }
-            if (found == signals_.end()) {
+            if (!signal_id && found == signals_.end()) {
                 found = signals_.find(result.name);
             }
-            if (found != signals_.end()) {
+            if (!signal_id && found != signals_.end()) {
                 signal_id = found->second;
             }
         }
@@ -6290,6 +6304,17 @@ bool Lowerer::hir_expression_is_string(
             return source.decoded_string.has_value();
         }
         if (source.kind == semantic::vhdl::ExpressionKind::call
+            && source.operands.size() == 1U
+            && [&] {
+                   auto mark = std::string_view { source.text };
+                   mark.remove_prefix(mark.find_last_of(".:") + 1U);
+                   return mark == "string";
+               }()
+            && source.text.starts_with("@vhdl-qualified:")) {
+            return hir_expression_is_string(
+                source.operands.front(), process_scope);
+        }
+        if (source.kind == semantic::vhdl::ExpressionKind::call
             && source.text == "'image" && !source.operands.empty()
             && source.operands.size() <= 2U) {
             return true;
@@ -6562,6 +6587,35 @@ Lowerer::hir_vhdl_attribute_profile(
             : std::nullopt;
         if (!prefix || prefix->vhdl == nullptr) {
             return std::nullopt;
+        }
+        // An indexed name, slice, selected element, or dereference prefix
+        // denotes an object of the expression's subtype (IEEE 1076-2008
+        // 16.2.3).
+        if (prefix->vhdl->kind == semantic::vhdl::ExpressionKind::index
+            || prefix->vhdl->kind == semantic::vhdl::ExpressionKind::slice
+            || (prefix->vhdl->kind == semantic::vhdl::ExpressionKind::call
+                && (prefix->vhdl->text.starts_with("@vhdl-member:")
+                    || prefix->vhdl->text == "@vhdl-dereference"))) {
+            auto subtype = hir_vhdl_expression_subtype(
+                source.operands.front());
+            if (subtype) {
+                if (auto effective = hir_effective_vhdl_subtype(*subtype)) {
+                    subtype = std::move(effective);
+                }
+            }
+            if (!subtype) {
+                return std::nullopt;
+            }
+            const auto type = subtype->type_mark.target.valid()
+                ? specialized_hir_unit_->find_type(
+                      subtype->type_mark.target)
+                : std::nullopt;
+            return AttributePrefix {
+                *subtype,
+                type && type->vhdl != nullptr ? type->vhdl : nullptr,
+                std::nullopt,
+                false,
+            };
         }
         if (!declaration || declaration->vhdl == nullptr) {
             const auto predefined = hir_vhdl_type_actual(
@@ -7356,8 +7410,18 @@ Lowerer::hir_vhdl_signal_attribute_profile(
         || (!timed && source.operands.size() != 1U)) {
         return std::nullopt;
     }
-    const auto declaration = hir_referenced_declaration(
-        source.operands.front());
+    std::optional<semantic::ExpressionId> element;
+    auto signal_prefix = source.operands.front();
+    if (const auto prefix = specialized_hir_unit_->find_expression(
+            signal_prefix);
+        source.text == "'event" && prefix && prefix->vhdl != nullptr
+        && prefix->vhdl->kind == semantic::vhdl::ExpressionKind::index
+        && prefix->vhdl->operands.size() == 2U
+        && hir_constant_integer(prefix->vhdl->operands.back())) {
+        element = signal_prefix;
+        signal_prefix = prefix->vhdl->operands.front();
+    }
+    const auto declaration = hir_referenced_declaration(signal_prefix);
     const auto binding = declaration
         ? hir_runtime_binding(*declaration, process_scope, false)
         : std::nullopt;
@@ -7388,6 +7452,7 @@ Lowerer::hir_vhdl_signal_attribute_profile(
 
     HirVhdlSignalAttributeProfile result;
     result.signal = *binding->signal;
+    result.element = element;
     result.duration = duration;
     result.width = 1U;
     result.domain = frontend::ValueDomain::Boolean;
@@ -10538,6 +10603,16 @@ Lowerer::hir_vhdl_conversion_profile(
     if (canonical == "real" || canonical == "std.standard.real") {
         return HirVhdlConversionProfile {
             64U, frontend::ValueDomain::Bit2, true, std::nullopt
+        };
+    }
+    if (canonical == "bit" || canonical == "std.standard.bit") {
+        return HirVhdlConversionProfile {
+            1U, frontend::ValueDomain::Bit2, false, std::nullopt
+        };
+    }
+    if (canonical == "boolean" || canonical == "std.standard.boolean") {
+        return HirVhdlConversionProfile {
+            1U, frontend::ValueDomain::Boolean, false, std::nullopt
         };
     }
     const auto predefined_array_domain = [&]()

@@ -449,6 +449,29 @@ void HierarchyBuilder::activate_compiled_systemverilog_defparams(
         ? std::string_view { owner->systemverilog->name }
         : std::string_view { };
     for (const auto& defparam : defparams) {
+        // A defparam value is a constant expression (IEEE 1800-2017 23.10.1).
+        if (const auto value = specialization.find_expression(defparam.value);
+            value && value->systemverilog != nullptr
+            && value->systemverilog->kind == semantic::sv::ExpressionKind::name) {
+            const auto selected = semantic::CompiledDesignResolver { specialization }
+                                      .resolve_expression_name(defparam.value)
+                                      .unique();
+            const auto declaration = selected
+                ? specialization.find_declaration(*selected)
+                : std::nullopt;
+            if (declaration && declaration->systemverilog != nullptr
+                && (declaration->systemverilog->form
+                        == semantic::sv::DeclarationForm::variable
+                    || declaration->systemverilog->form
+                        == semantic::sv::DeclarationForm::net
+                    || declaration->systemverilog->form
+                        == semantic::sv::DeclarationForm::port)) {
+                report("FSIM-ELAB-DEFPARAM-005",
+                    "a defparam value must be a constant expression",
+                    compiled_source_span(*compiled_, defparam.source));
+                continue;
+            }
+        }
         std::vector<std::string> segments;
         segments.reserve(defparam.path.size());
         bool valid = true;

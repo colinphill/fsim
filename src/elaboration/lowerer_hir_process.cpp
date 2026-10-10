@@ -1604,6 +1604,26 @@ std::optional<Process> Lowerer::lower_hir_process(
                     if (dependencies.empty()) {
                         return std::nullopt;
                     }
+                    // A statically selected element or slice of a signal
+                    // subscribes to its bits only (IEEE 1076-2008 11.3).
+                    if (const auto selection = dependencies.size() == 1U
+                            ? hir_root_constant_selection(
+                                  *sensitivity.expression, input.scope)
+                            : std::nullopt;
+                        selection && selection->width != 0U
+                        && dependencies.front()
+                            < design_.signal_info_.size()
+                        && selection->offset + selection->width
+                            <= design_.signal_info_[dependencies.front()]
+                                   .width) {
+                        description.sensitivities.push_back({
+                            dependencies.front(),
+                            runtime::simir::EdgeKind::any,
+                            static_cast<std::uint32_t>(selection->offset),
+                            static_cast<std::uint32_t>(selection->width),
+                        });
+                        continue;
+                    }
                     for (const auto dependency : dependencies) {
                         description.sensitivities.push_back({
                             dependency,
