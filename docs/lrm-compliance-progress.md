@@ -253,6 +253,28 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 37: forces, bidirectional connections, strengths and constructors
+
+Fixture: `sv_force_switches_and_strengths.sv` (passes on xsim without its
+`tran`, which xsim does not support; the `tran` family matches the ivtest
+golds exactly).
+
+- `force` keeps its expression applied and overrides procedural
+  `assign`; a release lets the assignment take effect again.
+- `inout` ports connected to bit-selects, part-selects and
+  concatenations join the selected nets through bidirectional switches.
+- `tran`/`rtran`/`tranif*` are solved only by the switch network (no
+  feedback drivers), at start-up as well, with forced nets, supply
+  reduction and ambiguous strengths per IEEE 1800-2017 28.12-28.13.
+- `%v` strength output.
+- Class constructors receive string arguments, also through
+  `super.new`, and `super.new` works across separate compilations.
+- Virtual function calls through pure virtual prototypes and interface
+  class methods.
+
+Corpus effect (interpreter; w111 plus targeted reruns): ivtest +34
+(2105), Verilator +5 (1014), sv-tests +1 (1329).
+
 ### Batch 36: analysis checks, STD.ENV imports and TEXTIO TEE and FLUSH
 
 Fixtures: `vhdl_environment_tee_and_flush.vhd` (passes on xsim) and seven
@@ -1681,6 +1703,9 @@ error, and each exposes an existing gap:
 | VHDL: a `for` loop over `'RANGE` of a runtime-sized STRING, and element writes to it | 5 VESTs cases (`FSIM-ELAB-071`) |
 | VHDL: signal initializers that do not fold at elaboration (function calls, composite constants of records and nested arrays) | ~22 VESTs/nvc cases (`FSIM-ELAB-HIR-001` "not a bounded integral value") |
 | VHDL: TEXTIO `SREAD`, `JUSTIFY`, and READ of STRING values from a line | nvc textio5, textio6 |
+| SV: string-returning class methods, and pure virtual tasks called through a base handle | ~10 Verilator/sv-tests class cases, UVM `get_name` |
+| SV: UVM classes whose methods have unresolved HIR references (`uvm_component`) fail specialization, so user components derived from them are unavailable | 16 sv-tests UVM cases (`FSIM-RUN-0002`) |
+| SV: MOS and CMOS switches with an unknown control (L and H outputs), switch and primitive delays on `tranif`, and `$countdrivers` | ivtest `cmos`, `pr1787394*`, `switch_primitives`, `pr2941939`, `countdrivers*` |
 | SV: `new` for a variable of a specialized class type (`box #(5) b; b = new;`) constructs the default specialization | testbenches using parameterized classes |
 | VHDL: user resolution functions other than a single OR/AND reduction (a runtime resolver calling the function on the driver values) | 28 VESTs cases (`FSIM-ELAB-VHRESOLVE-002`/`-004`), nvc |
 | VHDL: indexing and slicing an unconstrained constant (`constant c : bit_vector := "0101"; c(1)`); its attributes were done in batch 28 | VESTs |

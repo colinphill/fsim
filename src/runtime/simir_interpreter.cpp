@@ -2814,6 +2814,9 @@ void Interpreter::start()
     impl_->processes.freeze_initial_storage();
     impl_->started = true;
     impl_->initialize_vhdl_resolutions();
+    // Switch networks are solved when a member's drivers change; implicit
+    // drivers such as supply nets never change, so solve every network once.
+    impl_->refresh_switch_network();
     for (const auto& entry : impl_->startup_write_body_caches) {
         entry.second->release_registration_identity();
     }

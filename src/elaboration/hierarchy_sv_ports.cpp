@@ -1222,7 +1222,72 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                     || direction
                         == frontend::PortDirection::Inout;
                 bool adapted = true;
-                if (accepts_input) {
+                // An inout port whose actual is a constant select of a net
+                // (`bus[0]`) is a bidirectional connection: a switch joins
+                // the formal net to the selected bits, so drivers on either
+                // side resolve together (IEEE 1800-2017 23.3.3.3). Copying
+                // each way instead would hold an unknown value forever.
+                const auto inout_actual
+                    = direction == frontend::PortDirection::Inout
+                        && domain == frontend::ValueDomain::Logic4
+                    ? actual_lowerer.hir_inout_actual(*binding.expression)
+                    : std::nullopt;
+                const auto joinable = [&] {
+                    if (!inout_actual) {
+                        return false;
+                    }
+                    std::size_t total { };
+                    for (const auto& piece : *inout_actual) {
+                        if (piece.signal >= design_.signals_.size()
+                            || native_resolution(
+                                   design_.signal_info_[piece.signal])
+                                != ResolutionKind::sv_wire
+                            || piece.offset + piece.width
+                                > design_.signals_[piece.signal]
+                                      .initial_value.width()) {
+                            return false;
+                        }
+                        total += piece.width;
+                    }
+                    return total == *width;
+                }();
+                if (joinable) {
+                    design_.signal_info_[id].systemverilog_net_type
+                        = "wire";
+                    auto& formal_signal = design_.signals_[id];
+                    formal_signal.resolution = ResolutionKind::sv_wire;
+                    formal_signal.initial_value
+                        = PackedLogic4(*width, Logic4::z);
+                    std::size_t ordinal { };
+                    for (const auto& piece : *inout_actual) {
+                        const auto process_index = design_.process_count();
+                        const auto process_id
+                            = static_cast<ProcessId>(process_index);
+                        if (static_cast<std::size_t>(process_id)
+                            != process_index) {
+                            throw std::length_error {
+                                "too many SimIR processes" };
+                        }
+                        Process process;
+                        process.id = process_id;
+                        process.name = adapter_name + ".$inout_"
+                            + std::to_string(ordinal++);
+                        process.scheduling_domain
+                            = ProcessSchedulingDomain::systemverilog;
+                        process.switch_source = piece.signal;
+                        process.switch_target = id;
+                        process.switch_source_offset = piece.offset;
+                        process.switch_target_offset = piece.formal_offset;
+                        process.switch_width = piece.width;
+                        process.switch_bidirectional = true;
+                        process.initialize = false;
+                        process.operations.emplace_back(Halt { });
+                        child_boundary_processes.push_back(process.id);
+                        design_.append_process_record(std::move(process));
+                    }
+                    actual_signal = id;
+                    adapted = false;
+                } else if (accepts_input) {
                     adapted = append_adapter(
                         actual_lowerer.lower_hir_input_actual(
                             *binding.expression,
@@ -1231,7 +1296,7 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                             working_path,
                             concurrent_order++));
                 }
-                if (adapted && produces_output) {
+                if (adapted && produces_output && !actual_signal) {
                     adapted = append_adapter(
                         actual_lowerer.lower_hir_output_actual(
                             id,
@@ -1240,7 +1305,7 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                             working_path,
                             concurrent_order++));
                 }
-                if (adapted) {
+                if (adapted && !actual_signal) {
                     actual_signal = id;
                 }
             }

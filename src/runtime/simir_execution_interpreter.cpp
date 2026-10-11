@@ -2313,7 +2313,8 @@ void Interpreter::Impl::execute(ProcessId id)
                     || std::is_same_v<OperationType,
                         VhdlEnvironmentCallPath>
                     || std::is_same_v<OperationType,
-                        VhdlEnvironmentGetCallPath>) {
+                        VhdlEnvironmentGetCallPath>
+                    || std::is_same_v<OperationType, SignalStrengthText>) {
                     boundary = true;
                 } else if constexpr (
                     std::is_same_v<OperationType, ScopeRandomize>) {

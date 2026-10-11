@@ -1189,6 +1189,26 @@ inline auto archive_fields(VhdlEnvironmentGetenv& operation)
     return std::tie(operation.destination, operation.name);
 }
 
+/// The `%v` text of a net: each bit's strength and value
+/// (IEEE 1800-2017 21.2.1.5).
+struct SignalStrengthText {
+    StringRegisterId destination { };
+    SignalId signal { };
+
+    friend bool operator==(const SignalStrengthText&,
+        const SignalStrengthText&) = default;
+};
+
+inline auto archive_fields(const SignalStrengthText& operation)
+{
+    return std::tie(operation.destination, operation.signal);
+}
+
+inline auto archive_fields(SignalStrengthText& operation)
+{
+    return std::tie(operation.destination, operation.signal);
+}
+
 /// Materialize the VHDL-2019 call path visible at one exact source-level call
 /// as a CALL_PATH_VECTOR_PTR-compatible container value.
 struct VhdlEnvironmentGetCallPath {

@@ -4965,6 +4965,38 @@ struct Interpreter::Impl : SchedulerBatchTask {
 
     [[nodiscard]] PackedLogic4 resolved_driver_value(
         const SignalId signal_id) const;
+    // Whether a net's value is resolved over a bidirectional switch network.
+    [[nodiscard]] bool switch_network_member(SignalId signal_id) const;
+    // The strengths reaching one bit of a switch network: the strongest 0
+    // and 1 components of all contributions and of the known-valued ones,
+    // and whether an unknown value contributes (IEEE 1800-2017 28.12).
+    struct SwitchBitStrength {
+        DriveStrength total;
+        DriveStrength definite;
+        bool ambiguous { };
+
+        [[nodiscard]] Logic4 value() const noexcept
+        {
+            if (total.zero == StrengthRank::highz
+                && total.one == StrengthRank::highz) {
+                return Logic4::z;
+            }
+            // A known value wins when it is stronger than every opposing
+            // contribution, including the opposing part of unknown ones.
+            if (definite.zero > total.one) {
+                return Logic4::zero;
+            }
+            if (definite.one > total.zero) {
+                return Logic4::one;
+            }
+            return Logic4::x;
+        }
+    };
+    [[nodiscard]] SwitchBitStrength switch_network_bit_strength(
+        SignalId signal_id, std::size_t target_bit) const;
+    // `%v` text of a net: each bit's strength and value, most significant
+    // bit first (IEEE 1800-2017 21.2.1.5).
+    [[nodiscard]] std::string signal_strength_text(SignalId signal_id) const;
 
     [[nodiscard]] PackedLogic4 resolved_local_driver_value(
         SignalId signal_id,

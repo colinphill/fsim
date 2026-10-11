@@ -53,7 +53,7 @@ using StringOperationGroup = OperationGroup<LoadStringConstant, CopyStringRegist
     StringLength, StringIndex, StringReplaceByte,
     StringMethod, PlusArgSelect, SystemCommand, VcdControl,
     CoverageDatabaseControl, CoverageAccess, VhdlEnvironmentTimeToString,
-    VhdlEnvironmentGetenv, VhdlEnvironmentCallPath>;
+    VhdlEnvironmentGetenv, VhdlEnvironmentCallPath, SignalStrengthText>;
 
 using ContainerOperationGroup = OperationGroup<SystemVerilogScalarBinary, SystemVerilogMath, ResizeContainer,
     CopyContainerRegister,
@@ -328,7 +328,7 @@ static_assert(
         + std::variant_size_v<ControlOperationGroup::Storage>
         + std::variant_size_v<OutputOperationGroup::Storage>
         + std::variant_size_v<ClassOperationGroup::Storage>
-    == 193);
+    == 194);
 
 template <typename Alternative>
 [[nodiscard]] Alternative* operation_get_if(Operation* operation) noexcept

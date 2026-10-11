@@ -959,6 +959,8 @@ namespace {
                 return sv::OutputFormat::unformatted4;
             case frontend::OutputFormat::Pattern:
                 return sv::OutputFormat::pattern;
+            case frontend::OutputFormat::Strength:
+                return sv::OutputFormat::strength;
             }
             return sv::OutputFormat::decimal;
         }

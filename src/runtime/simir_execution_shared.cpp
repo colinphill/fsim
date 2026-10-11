@@ -157,6 +157,7 @@ namespace fsim::runtime::simir {
         || operation_holds<VhdlEnvironmentTimeToString>(operation)
         || operation_holds<VhdlEnvironmentDirectory>(operation)
         || operation_holds<VhdlEnvironmentGetenv>(operation)
+        || operation_holds<SignalStrengthText>(operation)
         || operation_holds<VhdlEnvironmentCallPath>(operation)
         || operation_holds<VhdlEnvironmentGetCallPath>(operation)
         || operation_holds<StochasticQueueOperation>(operation)

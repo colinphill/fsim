@@ -785,3 +785,57 @@ gives fsim's result in each case checked.
   value"). VHDL needs these values before the first delta, so a
   SystemVerilog-style initializer process writing at time 0 would add an
   event; about 22 VESTs and nvc cases are blocked.
+
+## Forces, bidirectional connections and strengths (batch 37)
+
+- A procedural `force` keeps its expression applied until the target is
+  released or forced again (IEEE 1800-2017 10.6.2). Before, the value was
+  forced once, so `force w = v` never followed later changes of `v`.
+  Forces now use the procedural-assign machinery: a per-target owner
+  signal names the active force, and a driver process re-forces the value
+  while it owns the target. A force of one element or slice still shares
+  the owner with other forces of the same signal.
+- A force overrides a procedural `assign` of the same variable: the
+  assignment neither applies nor re-applies while the force is active,
+  and takes effect again when the force is released.
+- An `inout` port whose actual is a constant bit- or part-select of a net
+  (`buffer u(bus[0], ...)`) joins the selected bits through a
+  bidirectional switch, as an SV `alias` slice does. Before, the formal
+  was a separate net connected by a copy in each direction; that loop
+  held an unknown value once both sides had seen one.
+- `tran`, `rtran`, `tranif0`, `tranif1`, `rtranif0` and `rtranif1` are
+  resolved only by the runtime switch network. Their directional
+  assignments used to run too and became drivers, so a terminal's own
+  value was fed back to it (a `tran` never returned to `z`). Every switch
+  network is solved once at the start of simulation, so supply nets reach
+  the network without a driver change. A forced net drives the network
+  with its forced value at strong strength. A non-resistive switch passes
+  strength unchanged except that supply becomes strong.
+- Strength resolution keeps unknown values apart from known ones: an `x`
+  driven with unequal 0 and 1 strengths (`assign (supply1, strong0) w =
+  x`) is an ambiguous `x`, not the stronger value, and a known value wins
+  only when it is stronger than every opposing component. A value that
+  passes a switch with an unknown control becomes L or H.
+- `%v` (21.2.1.5) prints each bit's strength and value, most significant
+  bit first and separated by `_`, using the mnemonics and the two-digit
+  ranges of the standard (`St0`, `HiZ`, `67X`, `StL`, `760`). MOS and CMOS
+  switches with an unknown control do not produce L or H values yet, and
+  a switch delay is not applied.
+- Class constructors receive their string arguments (`new("name")`): the
+  runtime passed only the packed actuals to the constructor body, so a
+  string formal read as empty. `super.new(...)` evaluates string actuals
+  as text for a string formal of the base constructor.
+- `super.new(...)` in a class compiled separately from its base class
+  (the base is in an earlier compilation or a mapped library) is a base
+  constructor call; it was resolved as an ordinary method call of `new`
+  and failed at run time with "formal has no actual or default".
+- A virtual function call through a pure virtual prototype
+  (`base_cls h; h.print();` with `pure virtual function void print();`)
+  dispatches to the object's override (8.21); before, the call was not
+  lowered. A pure virtual task called this way is still not supported.
+- A method of an implemented interface class (`courier.deliver()` with
+  `interface class Courier`, 8.26) dispatches to the method of the same
+  name in the object's class, which the base chain does not reach.
+- String-returning class methods (`c.get_name()` used as a string) are
+  not supported yet: the class executor and `ClassMethodCall` carry only
+  packed results.

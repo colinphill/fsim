@@ -1593,65 +1593,48 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
         auto result = PackedLogic4 {
             signal.initial_value.width(), Logic4::z
         };
-        const auto rank = [](const StrengthRank strength) {
-            return static_cast<std::underlying_type_t<StrengthRank>>(strength);
-        };
         for (std::size_t bit = 0; bit < result.width(); ++bit) {
-            auto zero = StrengthRank::highz;
-            auto one = StrengthRank::highz;
-            if (cold.implicit_driver == Logic4::zero) {
-                zero = cold.implicit_drive_strength.zero;
-            } else if (cold.implicit_driver == Logic4::one) {
-                one = cold.implicit_drive_strength.one;
-            } else if (cold.implicit_driver == Logic4::x) {
-                zero = cold.implicit_drive_strength.zero;
-                one = cold.implicit_drive_strength.one;
+            // Known-valued and unknown contributions are kept apart: an
+            // unknown value of unequal strengths stays unknown unless a
+            // known value is stronger than all of it (IEEE 1800-2017 28.12).
+            SwitchBitStrength solved {
+                DriveStrength { StrengthRank::highz, StrengthRank::highz },
+                DriveStrength { StrengthRank::highz, StrengthRank::highz },
+                false,
+            };
+            const auto include = [&](const Logic4 logic,
+                                     const StrengthRank zero,
+                                     const StrengthRank one) {
+                if (logic == Logic4::zero || logic == Logic4::x) {
+                    solved.total.zero = std::max(solved.total.zero, zero);
+                }
+                if (logic == Logic4::one || logic == Logic4::x) {
+                    solved.total.one = std::max(solved.total.one, one);
+                }
+                if (logic == Logic4::zero) {
+                    solved.definite.zero
+                        = std::max(solved.definite.zero, zero);
+                } else if (logic == Logic4::one) {
+                    solved.definite.one = std::max(solved.definite.one, one);
+                } else if (logic == Logic4::x) {
+                    solved.ambiguous = true;
+                }
+            };
+            if (cold.implicit_driver) {
+                include(*cold.implicit_driver,
+                    cold.implicit_drive_strength.zero,
+                    cold.implicit_drive_strength.one);
             }
             if (cold.charge_strength
                 && charge_values.at(signal_id)) {
-                const auto charge = charge_values.at(signal_id)->get(bit);
-                if (charge == Logic4::zero || charge == Logic4::x) {
-                    zero = std::max(zero, *cold.charge_strength);
-                }
-                if (charge == Logic4::one || charge == Logic4::x) {
-                    one = std::max(one, *cold.charge_strength);
-                }
+                include(charge_values.at(signal_id)->get(bit),
+                    *cold.charge_strength, *cold.charge_strength);
             }
             for (const auto& driver : strength_drivers) {
-                switch (driver.value->get(bit)) {
-                case Logic4::zero:
-                    if (rank(driver.strength.zero) > rank(zero)) {
-                        zero = driver.strength.zero;
-                    }
-                    break;
-                case Logic4::one:
-                    if (rank(driver.strength.one) > rank(one)) {
-                        one = driver.strength.one;
-                    }
-                    break;
-                case Logic4::x:
-                    if (rank(driver.strength.zero) > rank(zero)) {
-                        zero = driver.strength.zero;
-                    }
-                    if (rank(driver.strength.one) > rank(one)) {
-                        one = driver.strength.one;
-                    }
-                    break;
-                case Logic4::z:
-                    break;
-                }
+                include(driver.value->get(bit),
+                    driver.strength.zero, driver.strength.one);
             }
-            const auto zero_rank = rank(zero);
-            const auto one_rank = rank(one);
-            result.set(
-                bit,
-                zero_rank == 0 && one_rank == 0
-                    ? Logic4::z
-                    : zero_rank > one_rank
-                    ? Logic4::zero
-                    : one_rank > zero_rank
-                    ? Logic4::one
-                    : Logic4::x);
+            result.set(bit, solved.value());
         }
         return result;
     }
@@ -1734,15 +1717,36 @@ void Interpreter::Impl::refresh_direct_single_driver_route(
     return result;
 }
 
+bool Interpreter::Impl::switch_network_member(
+    const SignalId signal_id) const
+{
+    return has_bidirectional_switches
+        && get_signal(signal_id).resolution == ResolutionKind::sv_wire
+        && signal_id < switch_endpoint_adjacency.size()
+        && !switch_endpoint_adjacency[signal_id].empty();
+}
+
 PackedLogic4 Interpreter::Impl::resolved_driver_value(
     const SignalId signal_id) const
 {
-    if (!has_bidirectional_switches
-        || get_signal(signal_id).resolution != ResolutionKind::sv_wire
-        || signal_id >= switch_endpoint_adjacency.size()
-        || switch_endpoint_adjacency[signal_id].empty()) {
+    if (!switch_network_member(signal_id)) {
         return resolved_local_driver_value(signal_id);
     }
+    auto result = PackedLogic4 {
+        get_signal(signal_id).initial_value.width(), Logic4::z
+    };
+    for (std::size_t target_bit = 0;
+        target_bit < result.width(); ++target_bit) {
+        result.set(target_bit,
+            switch_network_bit_strength(signal_id, target_bit).value());
+    }
+    return result;
+}
+
+Interpreter::Impl::SwitchBitStrength
+Interpreter::Impl::switch_network_bit_strength(
+    const SignalId signal_id, const std::size_t target_bit) const
+{
     const auto reduce = [](StrengthRank rank, std::uint8_t count) {
         while (count-- != 0) {
             switch (rank) {
@@ -1772,16 +1776,17 @@ PackedLogic4 Interpreter::Impl::resolved_driver_value(
         std::size_t bit { };
         std::uint8_t resistance { };
         bool uncertain { };
+        bool crossed { };
     };
-    auto result = PackedLogic4 {
-        get_signal(signal_id).initial_value.width(), Logic4::z
-    };
-    for (std::size_t target_bit = 0;
-        target_bit < result.width(); ++target_bit) {
-        std::deque<Node> pending { { signal_id, target_bit, 0, false } };
+    {
+        std::deque<Node> pending {
+            { signal_id, target_bit, 0, false, false } };
         std::map<std::tuple<SignalId, std::size_t, bool>, std::uint8_t> visited;
         auto zero = StrengthRank::highz;
         auto one = StrengthRank::highz;
+        auto definite_zero = StrengthRank::highz;
+        auto definite_one = StrengthRank::highz;
+        bool ambiguous { };
         while (!pending.empty()) {
             const auto node = pending.front();
             pending.pop_front();
@@ -1794,13 +1799,32 @@ PackedLogic4 Interpreter::Impl::resolved_driver_value(
             const auto local = resolved_local_driver_value(node.signal);
             auto logic = local.get(node.bit);
             auto strength = resolved_signal_strength(node.signal);
+            // A forced bit drives the network with its forced value in
+            // place of its own drivers.
+            if (forced_values[node.signal]
+                && node.bit < forced_masks[node.signal]->width()
+                && forced_masks[node.signal]->get(node.bit) == Logic4::one) {
+                logic = forced_values[node.signal]->get(node.bit);
+                strength = DriveStrength {
+                    StrengthRank::strong, StrengthRank::strong };
+            }
             strength.zero = reduce(strength.zero, node.resistance);
             strength.one = reduce(strength.one, node.resistance);
+            // A tran passes strength unchanged except that supply becomes
+            // strong (IEEE 1800-2017 28.13).
+            if (node.crossed) {
+                strength.zero = std::min(strength.zero, StrengthRank::strong);
+                strength.one = std::min(strength.one, StrengthRank::strong);
+            }
+            // Through a switch whose control is unknown, a value may or may
+            // not arrive: a 0 becomes L and a 1 becomes H, ranges that reach
+            // down to high impedance (IEEE 1800-2017 28.12.2).
             if (node.uncertain && logic != Logic4::z) {
-                const auto uncertain_strength = std::max(strength.zero, strength.one);
-                strength = DriveStrength {
-                    uncertain_strength, uncertain_strength
-                };
+                if (logic == Logic4::zero) {
+                    strength.one = StrengthRank::highz;
+                } else if (logic == Logic4::one) {
+                    strength.zero = StrengthRank::highz;
+                }
                 logic = Logic4::x;
             }
             if (logic == Logic4::zero || logic == Logic4::x) {
@@ -1808,6 +1832,13 @@ PackedLogic4 Interpreter::Impl::resolved_driver_value(
             }
             if (logic == Logic4::one || logic == Logic4::x) {
                 one = std::max(one, strength.one);
+            }
+            if (logic == Logic4::zero) {
+                definite_zero = std::max(definite_zero, strength.zero);
+            } else if (logic == Logic4::one) {
+                definite_one = std::max(definite_one, strength.one);
+            } else if (logic == Logic4::x) {
+                ambiguous = true;
             }
             for (const auto connection_index
                 : switch_endpoint_adjacency[node.signal]) {
@@ -1874,8 +1905,8 @@ PackedLogic4 Interpreter::Impl::resolved_driver_value(
                             uncertain = true;
                         }
                     }
-                    pending.push_back(
-                        { other, other_bit, next_resistance, uncertain });
+                    pending.push_back({ other, other_bit, next_resistance,
+                        uncertain, !edge.resistive });
                 };
                 if (!selected_bits.empty()) {
                     for (const auto& [other_bit, lane] : selected_bits) {
@@ -1892,15 +1923,131 @@ PackedLogic4 Interpreter::Impl::resolved_driver_value(
                 }
             }
         }
-        result.set(
-            target_bit,
-            zero == StrengthRank::highz && one == StrengthRank::highz
-                ? Logic4::z
-                : zero > one ? Logic4::zero
-                : one > zero ? Logic4::one
-                             : Logic4::x);
+        return SwitchBitStrength {
+            DriveStrength { zero, one },
+            DriveStrength { definite_zero, definite_one },
+            ambiguous,
+        };
     }
-    return result;
+}
+
+std::string Interpreter::Impl::signal_strength_text(
+    const SignalId signal_id) const
+{
+    constexpr std::array<std::string_view, 8> names {
+        "Hi", "Sm", "Me", "We", "La", "Pu", "St", "Su"
+    };
+    const auto& signal = get_signal(signal_id);
+    const auto& value = signal.initial_value;
+    const auto width = value.width();
+    const bool network = switch_network_member(signal_id);
+    const bool driven = signal.resolution != ResolutionKind::none
+        && !owned_driver_active(signal_id);
+    const auto empty = DriveStrength { StrengthRank::highz, StrengthRank::highz };
+    std::vector<SwitchBitStrength> solved(width,
+        SwitchBitStrength { empty, empty, false });
+    const auto include = [&](const PackedLogic4& contribution,
+                             const DriveStrength strength) {
+        for (std::size_t bit = 0;
+            bit < width && bit < contribution.width(); ++bit) {
+            const auto logic = contribution.get(bit);
+            auto& total = solved[bit];
+            if (logic == Logic4::zero || logic == Logic4::x) {
+                total.total.zero = std::max(total.total.zero, strength.zero);
+            }
+            if (logic == Logic4::one || logic == Logic4::x) {
+                total.total.one = std::max(total.total.one, strength.one);
+            }
+            if (logic == Logic4::zero) {
+                total.definite.zero
+                    = std::max(total.definite.zero, strength.zero);
+            } else if (logic == Logic4::one) {
+                total.definite.one
+                    = std::max(total.definite.one, strength.one);
+            } else if (logic == Logic4::x) {
+                total.ambiguous = true;
+            }
+        }
+    };
+    if (network) {
+        for (std::size_t bit = 0; bit < width; ++bit) {
+            solved[bit] = switch_network_bit_strength(signal_id, bit);
+        }
+    } else if (driven) {
+        const auto& cold = get_signal_cold(signal_id);
+        if (cold.implicit_driver) {
+            include(PackedLogic4 { width, *cold.implicit_driver },
+                cold.implicit_drive_strength);
+        }
+        if (cold.charge_strength && charge_values.at(signal_id)) {
+            include(*charge_values.at(signal_id),
+                DriveStrength { *cold.charge_strength,
+                    *cold.charge_strength });
+        }
+        driver_values.at(signal_id).for_each_in_process_order(
+            [&](const DriverRecord& record) {
+                include(apply_driver_force(
+                            signal_id, record.process, record.value),
+                    record.strength);
+            });
+        if (external_driver_values.at(signal_id)) {
+            include(*external_driver_values.at(signal_id), DriveStrength { });
+        }
+    }
+    const auto name = [&](const StrengthRank rank) {
+        return std::string { names.at(static_cast<std::size_t>(rank)) };
+    };
+    const auto digit = [](const StrengthRank rank) {
+        return static_cast<char>('0' + static_cast<unsigned>(rank));
+    };
+    std::string text;
+    for (std::size_t index = width; index-- > 0U;) {
+        if (!text.empty()) {
+            text += '_';
+        }
+        const auto logic = value.get(index);
+        auto bit = solved[index];
+        // A variable, or a net whose value no driver explains (a force),
+        // holds its value at strong strength.
+        if (logic == Logic4::zero && bit.definite.zero == StrengthRank::highz) {
+            bit.total.zero = bit.definite.zero = StrengthRank::strong;
+        } else if (logic == Logic4::one
+            && bit.definite.one == StrengthRank::highz) {
+            bit.total.one = bit.definite.one = StrengthRank::strong;
+        } else if (logic == Logic4::x && bit.total.zero == StrengthRank::highz
+            && bit.total.one == StrengthRank::highz) {
+            bit.total.zero = bit.total.one = StrengthRank::strong;
+        }
+        const auto known = [&](const StrengthRank total,
+                               const StrengthRank definite,
+                               const char value_char) {
+            if (total == definite) {
+                text += name(total);
+            } else {
+                text += digit(total);
+                text += digit(definite);
+            }
+            text += value_char;
+        };
+        if (logic == Logic4::z) {
+            text += "HiZ";
+        } else if (logic == Logic4::zero) {
+            known(bit.total.zero, bit.definite.zero, '0');
+        } else if (logic == Logic4::one) {
+            known(bit.total.one, bit.definite.one, '1');
+        } else if (bit.total.zero == bit.total.one) {
+            text += name(bit.total.zero) + "X";
+        } else if (bit.total.one == StrengthRank::highz) {
+            text += name(bit.total.zero) + "L";
+        } else if (bit.total.zero == StrengthRank::highz) {
+            text += name(bit.total.one) + "H";
+        } else {
+            text += digit(bit.total.zero);
+            text += digit(bit.total.one);
+            text += 'X';
+        }
+    }
+    return text;
 }
 
 PackedLogic4& Interpreter::Impl::external_driver_slot(

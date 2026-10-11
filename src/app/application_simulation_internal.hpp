@@ -274,6 +274,7 @@ struct Simulation::Impl {
         const semantic::sv::ClassSpecialization& specialization,
         const runtime::SystemVerilogClassHandle handle,
         const std::span<const runtime::PackedLogic4> actuals,
+        const std::span<const std::string> string_actuals,
         const std::span<const std::string> actual_names);
 
     [[nodiscard]] runtime::SystemVerilogClassHandle allocate_class(

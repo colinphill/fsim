@@ -1463,6 +1463,8 @@ enum class OutputFormat {
     Unformatted4,
     // `%p`: an assignment pattern (IEEE 1800-2017 21.2.1.7).
     Pattern,
+    // `%v`: a net's strength (IEEE 1800-2017 21.2.1.5).
+    Strength,
 };
 
 struct OutputValue {

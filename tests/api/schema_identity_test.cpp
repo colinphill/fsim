@@ -24,7 +24,7 @@ static_assert(fsim::library::kFormatVersion == 6);
 static_assert(fsim::library::kPortableSchemaVersion == 15);
 static_assert(fsim::library::kCompiledHirSchemaVersion == 1);
 static_assert(fsim::artifact::kDesignFormatVersion == 14);
-static_assert(fsim::app::kRuntimeStateSchema == 77);
+static_assert(fsim::app::kRuntimeStateSchema == 78);
 static_assert(fsim::app::kSemanticStateSchema == 4);
 static_assert(fsim::app::kDesignIrStateSchema == 5);
 static_assert(fsim::app::kCompiledHirBundleSchema == 1);
@@ -33,7 +33,7 @@ static_assert(fsim::app::kSystemVerilogCoverageStateSchema == 7);
 static_assert(fsim::app::kSystemVerilogUvmStateSchema == 3);
 static_assert(fsim::app::kVhdlHirStateSchema == 6);
 static_assert(fsim::compiler::llvm_detail::kNativeObjectCacheSchema ==
-    std::string_view { "fsim-llvm-native-object-v272" });
+    std::string_view { "fsim-llvm-native-object-v273" });
 
 int main()
 {

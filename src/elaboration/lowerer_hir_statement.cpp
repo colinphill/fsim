@@ -790,6 +790,7 @@ namespace {
         using Target = runtime::simir::OutputFormat;
         switch (format) {
         case Source::pattern:
+        case Source::strength:
             return Target::decimal;
         case Source::binary:
             return Target::binary;
@@ -11074,6 +11075,17 @@ bool Lowerer::lower_hir_statement(
                                         const bool left_justify,
                                         const bool zero_pad,
                                         const std::uint32_t precision) -> bool {
+        if (format == semantic::sv::OutputFormat::strength && expression) {
+            const auto text = lower_hir_strength_text(*expression);
+            if (!text) {
+                return false;
+            }
+            emit_deferred_assertion_action_handoff();
+            process_.operations.emplace_back(StringDisplay {
+                *text, std::move(prefix), std::move(suffix), newline,
+                postponed });
+            return true;
+        }
         if (format != semantic::sv::OutputFormat::pattern || !expression) {
             return lower_output_value_impl(expression, format,
                 std::move(prefix), std::move(suffix), newline, postponed,
@@ -11233,21 +11245,9 @@ bool Lowerer::lower_hir_statement(
             return lowered;
         }
         case semantic::sv::StatementKind::force:
-            return input.target && input.value
-                && lower_hir_force_release(
-                    *input.target,
-                    input.value,
-                    std::nullopt,
-                    true,
-                    input.source);
         case semantic::sv::StatementKind::release:
             return input.target
-                && lower_hir_force_release(
-                    *input.target,
-                    std::nullopt,
-                    std::nullopt,
-                    false,
-                    input.source);
+                && lower_hir_procedural_force(statement_id);
         case semantic::sv::StatementKind::procedural_assign:
         case semantic::sv::StatementKind::deassign:
             return lower_hir_procedural_continuous_assignment(
@@ -14830,7 +14830,8 @@ std::string Lowerer::hir_procedural_target_key(
 }
 
 bool Lowerer::hir_procedural_target_is_visible(
-    const semantic::ExpressionId expression_id) const
+    const semantic::ExpressionId expression_id,
+    const bool allow_array_elements) const
 {
     if (specialized_hir_unit_ == nullptr) {
         return false;
@@ -14846,14 +14847,16 @@ bool Lowerer::hir_procedural_target_is_visible(
             && std::ranges::all_of(
                 source.operands,
                 [&](const semantic::ExpressionId operand) {
-                    return hir_procedural_target_is_visible(operand);
+                    return hir_procedural_target_is_visible(
+                        operand, allow_array_elements);
                 });
     }
     const auto declaration = hir_target_declaration(expression_id);
     // The target shall not be an array element (IEEE 1800-2017 10.6.1).
     // Bit- and part-selects of a packed variable stay accepted, as other
     // simulators allow them.
-    if (source.kind != semantic::sv::ExpressionKind::name && declaration) {
+    if (!allow_array_elements
+        && source.kind != semantic::sv::ExpressionKind::name && declaration) {
         const auto target
             = specialized_hir_unit_->find_declaration(*declaration);
         if (target && target->systemverilog != nullptr
@@ -14886,10 +14889,14 @@ void Lowerer::prepare_hir_procedural_continuous_assignments(
                 continue;
             }
             const auto& source = *statement->systemverilog;
-            if (source.kind
-                    == semantic::sv::StatementKind::procedural_assign
+            const bool force
+                = source.kind == semantic::sv::StatementKind::force;
+            if ((force
+                    || source.kind
+                        == semantic::sv::StatementKind::procedural_assign)
                 && source.target && source.value) {
                 ProceduralContinuousAssignment assignment;
+                assignment.force = force;
                 assignment.statement = statement_id;
                 assignment.target = *source.target;
                 assignment.value = *source.value;
@@ -14898,14 +14905,14 @@ void Lowerer::prepare_hir_procedural_continuous_assignments(
                     + std::to_string(statement_id.value());
                 assignment.target_key
                     = hir_procedural_target_key(*source.target);
-                assignment.valid
-                    = hir_procedural_target_is_visible(*source.target);
+                assignment.valid = hir_procedural_target_is_visible(
+                    *source.target, force);
                 const auto index
                     = procedural_continuous_assignments_.size();
                 assignment.owner = statement_id.value() + 1U;
                 if (assignment.valid) {
-                    const auto owner
-                        = hir_procedural_assign_owner(*source.target);
+                    const auto owner = hir_procedural_assign_owner(
+                        *source.target, force);
                     if (!owner) {
                         assignment.valid = false;
                     } else {
@@ -14930,6 +14937,88 @@ void Lowerer::prepare_hir_procedural_continuous_assignments(
         }
     };
     visit(visit, statements);
+}
+
+std::optional<StringRegisterId> Lowerer::lower_hir_strength_text(
+    const semantic::ExpressionId expression_id)
+{
+    const auto expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (!expression || expression->systemverilog == nullptr
+        || expression->systemverilog->kind
+            != semantic::sv::ExpressionKind::name) {
+        return std::nullopt;
+    }
+    const auto declaration = hir_target_declaration(expression_id);
+    const auto binding = declaration
+        ? hir_runtime_binding(*declaration, hir_process_scope_, false)
+        : std::nullopt;
+    if (!binding || !binding->signal) {
+        return std::nullopt;
+    }
+    const auto text = allocate_string_register();
+    process_.operations.emplace_back(
+        SignalStrengthText { text, *binding->signal });
+    return text;
+}
+
+bool Lowerer::lower_hir_procedural_force(
+    const semantic::StatementId statement_id)
+{
+    const auto statement = specialized_hir_unit_->find_statement(
+        statement_id);
+    if (!statement || statement->systemverilog == nullptr
+        || !statement->systemverilog->target) {
+        return false;
+    }
+    const auto& source = *statement->systemverilog;
+    const auto target = *source.target;
+    const bool force = source.kind == semantic::sv::StatementKind::force;
+    if (force && !source.value) {
+        return false;
+    }
+    // A force keeps its value expression applied until a release or a new
+    // force of the target (IEEE 1800-2017 10.6.2): its driver process
+    // re-forces the value while this force owns the target.
+    const auto found = force
+        ? procedural_continuous_assignment_by_statement_.find(
+              "hir:" + std::to_string(statement_id.value()))
+        : procedural_continuous_assignment_by_statement_.end();
+    const auto* assignment
+        = found != procedural_continuous_assignment_by_statement_.end()
+            && procedural_continuous_assignments_[found->second].valid
+        ? &procedural_continuous_assignments_[found->second]
+        : nullptr;
+    const auto owner = assignment
+        ? std::optional { assignment->active }
+        : (!force && hir_procedural_target_is_visible(target, true))
+        ? hir_procedural_assign_owner(target, true)
+        : std::nullopt;
+    if (owner) {
+        const auto zero = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(
+            LoadConstant { zero, unsigned_value(0U, 32U) });
+        process_.operations.emplace_back(WriteBlocking { *owner, zero });
+    }
+    if (!lower_hir_force_release(
+            target,
+            force ? source.value : std::nullopt,
+            std::nullopt,
+            force,
+            source.source)) {
+        return false;
+    }
+    if (assignment) {
+        const auto selected = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            selected, unsigned_value(assignment->owner, 32U) });
+        process_.operations.emplace_back(
+            WriteBlocking { assignment->active, selected });
+    }
+    return true;
 }
 
 bool Lowerer::lower_hir_procedural_continuous_assignment(
@@ -14995,9 +15084,36 @@ bool Lowerer::lower_hir_procedural_continuous_assignment(
             hir_source_span(source.source));
         return true;
     }
+    // An active force keeps the assignment from taking effect until it is
+    // released (IEEE 1800-2017 10.6.2).
+    std::optional<InstructionIndex> unforced_branch;
+    RegisterId unforced { };
+    if (const auto force_owner = hir_procedural_assign_owner(target, true)) {
+        const auto forced = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(
+            ReadSignal { forced, *force_owner });
+        unforced = allocate_register(1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::case_equal, unforced, forced, zero });
+        unforced_branch = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch {
+            unforced, 0U, 0U, UnknownBranchPolicy::when_false });
+    }
+    const auto apply = static_cast<InstructionIndex>(
+        process_.operations.size());
     if (!lower_hir_force_release(
             target, source.value, std::nullopt, true, source.source)) {
         return false;
+    }
+    if (unforced_branch) {
+        process_.operations[*unforced_branch] = Branch {
+            unforced,
+            apply,
+            static_cast<InstructionIndex>(process_.operations.size()),
+            UnknownBranchPolicy::when_false,
+        };
     }
     const auto selected = allocate_register(
         32U, frontend::ValueDomain::Bit2);
@@ -15011,7 +15127,7 @@ bool Lowerer::lower_hir_procedural_continuous_assignment(
 }
 
 std::optional<SignalId> Lowerer::hir_procedural_assign_owner(
-    const semantic::ExpressionId target)
+    const semantic::ExpressionId target, const bool force)
 {
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
@@ -15046,7 +15162,8 @@ std::optional<SignalId> Lowerer::hir_procedural_assign_owner(
     if (!collect(collect, target) || key.empty()) {
         return std::nullopt;
     }
-    const auto name = key + ".$procedural_assign_owner";
+    const auto name = key
+        + (force ? ".$force_owner" : ".$procedural_assign_owner");
     if (const auto found = design_.signal_by_name_.find(name);
         found != design_.signal_by_name_.end()) {
         return found->second;
@@ -15115,6 +15232,10 @@ void Lowerer::materialize_hir_procedural_continuous_assignments()
             + std::to_string(index);
         description.procedural_assignment_active = assignment.active;
         description.procedural_assignment_owner = assignment.owner;
+        if (!assignment.force) {
+            description.procedural_assignment_force_owner
+                = hir_procedural_assign_owner(assignment.target, true);
+        }
         description.procedural_assignment_target = assignment.target;
         description.procedural_assignment_value = assignment.value;
         description.kind

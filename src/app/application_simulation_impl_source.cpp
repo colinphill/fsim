@@ -250,6 +250,7 @@ void Simulation::Impl::invoke_source_constructor(
     const semantic::sv::ClassSpecialization& specialization,
     const runtime::SystemVerilogClassHandle handle,
     const std::span<const runtime::PackedLogic4> actuals,
+    const std::span<const std::string> string_actuals,
     const std::span<const std::string> actual_names)
 {
     // The unmodified UVM library constructors bootstrap their own singleton
@@ -265,7 +266,7 @@ void Simulation::Impl::invoke_source_constructor(
     }
     if (class_hir_execution.invoke_constructor(
             specialization.specialization_identity, handle, actuals,
-            actual_names)) {
+            string_actuals, actual_names)) {
         return;
     }
     throw std::invalid_argument {

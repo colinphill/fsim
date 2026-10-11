@@ -163,6 +163,7 @@ using runtime::simir::VhdlEnvironmentCallPath;
 using runtime::simir::VhdlEnvironmentDirectory;
 using runtime::simir::VhdlEnvironmentGetCallPath;
 using runtime::simir::VhdlEnvironmentGetenv;
+using runtime::simir::SignalStrengthText;
 using runtime::simir::VhdlEnvironmentTime;
 using runtime::simir::VhdlEnvironmentTimeToString;
 using runtime::simir::VhdlPslApi;

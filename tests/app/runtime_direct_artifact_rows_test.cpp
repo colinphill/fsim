@@ -12,7 +12,7 @@ using namespace fsim::app::direct_artifact_rows_test;
 
 void test_schema_and_direct_row_roundtrip()
 {
-    assert(fsim::app::kRuntimeStateSchema == 77U);
+    assert(fsim::app::kRuntimeStateSchema == 78U);
     const auto source_bytes = encode_source_design();
     assert(source_bytes.has_value());
 

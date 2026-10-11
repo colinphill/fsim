@@ -310,6 +310,8 @@ void validate_fork_operation(
         || fsim::runtime::simir::operation_holds<
             VhdlEnvironmentGetenv>(operation)
         || fsim::runtime::simir::operation_holds<
+            SignalStrengthText>(operation)
+        || fsim::runtime::simir::operation_holds<
             VhdlEnvironmentCallPath>(operation)
         || fsim::runtime::simir::operation_holds<
             VhdlEnvironmentGetCallPath>(operation)

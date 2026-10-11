@@ -1090,6 +1090,8 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::VhdlEnvironmentGetenv>(operation)
             || fsim::runtime::simir::operation_holds<
+                runtime::simir::SignalStrengthText>(operation)
+            || fsim::runtime::simir::operation_holds<
                 runtime::simir::VhdlEnvironmentCallPath>(operation)
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::VhdlEnvironmentGetCallPath>(operation)

@@ -2002,6 +2002,7 @@ tests/fixtures/compliance/sv_display_arguments.sv
 tests/fixtures/compliance/sv_enum_methods.sv
 tests/fixtures/compliance/sv_expression_widths.sv
 tests/fixtures/compliance/sv_final_procedure_termination.sv
+tests/fixtures/compliance/sv_force_switches_and_strengths.sv
 tests/fixtures/compliance/sv_function_statements.sv
 tests/fixtures/compliance/sv_generate_interfaces_and_upward_names.sv
 tests/fixtures/compliance/sv_generate_references.sv

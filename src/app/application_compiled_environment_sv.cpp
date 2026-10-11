@@ -826,8 +826,16 @@ private:
             error("FSIM-SV-CLASS-013", "instance task requires a class receiver", input.span);
             return;
         }
-        input.task_name = std::string { selected->static_method
-                ? "@sv-static-task:" : "@sv-task:" }
+        // `super.new(...)` calls the base class constructor (IEEE
+        // 1800-2017 8.15), which runs as part of the object's construction.
+        const bool base_constructor = !static_access
+            && receiver.text == "super"
+            && dot != std::string::npos
+            && std::string_view { input.task_name }.substr(dot + 1U) == "new";
+        input.task_name = std::string { base_constructor
+                ? "@sv-base-constructor:"
+                : selected->static_method ? "@sv-static-task:"
+                                          : "@sv-task:" }
             + selected->canonical_identity;
         if (!selected->static_method) {
             input.task_arguments.insert(input.task_arguments.begin(), std::move(receiver));

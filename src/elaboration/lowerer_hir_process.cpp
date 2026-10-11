@@ -2052,7 +2052,79 @@ std::optional<Process> Lowerer::lower_hir_concurrent_statement(
             : target.offset;
         result->switch_width = selected_source_width;
     }
+    if (result->switch_bidirectional && result->switch_target) {
+        // The runtime's switch network resolves a bidirectional switch from
+        // the drivers on both sides. Its directional assignments would
+        // become drivers that feed each terminal's value back to itself.
+        result->operations.clear();
+        result->operations.emplace_back(Halt { });
+        result->initialize = false;
+    }
     return result;
+}
+
+std::optional<std::vector<Lowerer::HirInoutActual>>
+Lowerer::hir_inout_actual(const semantic::ExpressionId expression) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto source = specialized_hir_unit_->find_expression(expression);
+    if (!source || source->systemverilog == nullptr) {
+        return std::nullopt;
+    }
+    const auto kind = source->systemverilog->kind;
+    if (kind == semantic::sv::ExpressionKind::concatenation) {
+        // The first operand holds the most significant bits.
+        std::vector<HirInoutActual> pieces;
+        for (const auto operand : source->systemverilog->operands) {
+            const auto operand_source
+                = specialized_hir_unit_->find_expression(operand);
+            std::optional<std::vector<HirInoutActual>> nested;
+            if (operand_source && operand_source->systemverilog != nullptr
+                && operand_source->systemverilog->kind
+                    == semantic::sv::ExpressionKind::name) {
+                const auto declaration = hir_target_declaration(operand);
+                const auto binding = declaration
+                    ? hir_runtime_binding(
+                          *declaration, semantic::ScopeId { }, false)
+                    : std::nullopt;
+                if (!binding || !binding->signal || binding->width == 0U) {
+                    return std::nullopt;
+                }
+                nested = std::vector<HirInoutActual> { HirInoutActual {
+                    *binding->signal, 0U, binding->width, 0U } };
+            } else {
+                nested = hir_inout_actual(operand);
+            }
+            if (!nested) {
+                return std::nullopt;
+            }
+            pieces.insert(pieces.begin(), nested->begin(), nested->end());
+        }
+        std::size_t formal_offset { };
+        for (auto& piece : pieces) {
+            piece.formal_offset += formal_offset;
+            formal_offset += piece.width;
+        }
+        return pieces.empty() ? std::nullopt : std::optional { pieces };
+    }
+    if (kind != semantic::sv::ExpressionKind::index
+        && kind != semantic::sv::ExpressionKind::slice) {
+        return std::nullopt;
+    }
+    const auto declaration = hir_target_declaration(expression);
+    const auto binding = declaration
+        ? hir_runtime_binding(*declaration, semantic::ScopeId { }, false)
+        : std::nullopt;
+    const auto selection = hir_constant_selection(
+        expression, semantic::ScopeId { });
+    if (!binding || !binding->signal || !selection
+        || selection->width == 0U) {
+        return std::nullopt;
+    }
+    return std::vector<HirInoutActual> { HirInoutActual {
+        *binding->signal, selection->offset, selection->width, 0U } };
 }
 
 std::optional<Process> Lowerer::lower_hir_input_actual(
@@ -2604,6 +2676,24 @@ std::optional<Process> Lowerer::lower_hir_process_body(
             1U, frontend::ValueDomain::Bit2);
         process_.operations.emplace_back(Binary {
             BinaryOperator::case_equal, active, owner, selected });
+        if (description.procedural_assignment_force_owner) {
+            const auto forced = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(ReadSignal {
+                forced, *description.procedural_assignment_force_owner });
+            record_implicit_signal_dependency(
+                *description.procedural_assignment_force_owner);
+            const auto zero = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                LoadConstant { zero, unsigned_value(0U, 32U) });
+            const auto unforced = allocate_register(
+                1U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::case_equal, unforced, forced, zero });
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::bit_and, active, active, unforced });
+        }
         const auto branch = static_cast<InstructionIndex>(
             process_.operations.size());
         process_.operations.emplace_back(Branch {

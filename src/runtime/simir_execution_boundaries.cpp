@@ -1658,6 +1658,22 @@ void Interpreter::Impl::handle_boundary(
         }
         return;
     }
+    if (const auto* strength
+        = fsim::runtime::simir::operation_get_if<
+            SignalStrengthText>(&operation)) {
+        (void)get_signal(strength->signal);
+        require_region_forwarding_role_journal_flushed_for_signal(
+            strength->signal);
+        auto text = signal_strength_text(strength->signal);
+        if (process.executor) {
+            process.executor->write_string_register(
+                strength->destination, text);
+        } else {
+            get_string_register(process, strength->destination)
+                = std::move(text);
+        }
+        return;
+    }
     if (const auto* environment
         = fsim::runtime::simir::operation_get_if<
             VhdlEnvironmentGetenv>(&operation)) {

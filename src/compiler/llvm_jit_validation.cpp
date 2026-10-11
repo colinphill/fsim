@@ -1040,6 +1040,13 @@ using namespace runtime::simir;
                     }
                 } else if constexpr (
                     std::is_same_v<OperationType,
+                        runtime::simir::SignalStrengthText>) {
+                    result.uses_strings = true;
+                    validate_string_register(
+                        operation.destination, index, "destination");
+                    (void)referenced_signal_width(operation.signal, index);
+                } else if constexpr (
+                    std::is_same_v<OperationType,
                         VhdlEnvironmentGetenv>) {
                     result.uses_strings = true;
                     validate_string_register(

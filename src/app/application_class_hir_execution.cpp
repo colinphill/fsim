@@ -267,10 +267,34 @@ SystemVerilogClassHirExecution::method(
             ? specialization(current->base->specialization_identity)
             : nullptr;
     }
-    if (requested == nullptr || requested->pure)
-        return nullptr;
-    if (!virtual_dispatch || !requested->virtual_slot)
+    if (requested == nullptr && virtual_dispatch) {
+        // A method of an implemented interface class (IEEE 1800-2017 8.26)
+        // is not inherited through the base chain; the object's class
+        // provides it under the same name.
+        const auto separator = canonical_identity.rfind("::");
+        const auto name = separator == std::string_view::npos
+            ? canonical_identity
+            : canonical_identity.substr(separator + 2U);
+        current = specialization(object.specialization_identity);
+        while (current != nullptr && requested == nullptr) {
+            for (const auto& candidate : current->methods) {
+                if (candidate.name == name && !candidate.pure
+                    && !candidate.static_method) {
+                    requested = &candidate;
+                    break;
+                }
+            }
+            current = current->base
+                ? specialization(current->base->specialization_identity)
+                : nullptr;
+        }
         return requested;
+    }
+    if (requested == nullptr)
+        return nullptr;
+    // A pure virtual prototype is reached only through its override.
+    if (!virtual_dispatch || !requested->virtual_slot)
+        return requested->pure ? nullptr : requested;
     const semantic::sv::SpecializedClassMethod* selected = requested;
     current = specialization(object.specialization_identity);
     while (current != nullptr) {
@@ -291,7 +315,7 @@ SystemVerilogClassHirExecution::method(
             ? specialization(current->base->specialization_identity)
             : nullptr;
     }
-    return selected;
+    return selected->pure ? nullptr : selected;
 }
 
 const semantic::sv::SpecializedClassMethod*
@@ -1439,6 +1463,7 @@ void SystemVerilogClassHirExecution::invoke_constructor_impl(
     const semantic::sv::ClassSpecialization& selected,
     const runtime::SystemVerilogClassHandle handle,
     const std::span<const runtime::PackedLogic4> actuals,
+    const std::span<const std::string> string_actuals,
     const std::span<const std::string> actual_names)
 {
     // A specialization also lists inherited methods; the class's own
@@ -1454,14 +1479,53 @@ void SystemVerilogClassHirExecution::invoke_constructor_impl(
             &semantic::sv::SpecializedClassMethod::kind);
     }
     PackedEnvironment environment;
+    StringEnvironment strings;
     if (constructor != selected.methods.end()) {
+        std::vector<std::size_t> actual_formals;
         environment = bind_actuals(
-            *constructor, handle, actuals, actual_names);
+            *constructor, handle, actuals, actual_names, &actual_formals);
+        std::vector<std::string> padded_strings(
+            string_actuals.begin(), string_actuals.end());
+        padded_strings.resize(actual_formals.size());
+        initialize_strings(
+            *constructor, actual_formals, padded_strings, strings);
     } else if (!actuals.empty()) {
         throw std::invalid_argument { "implicit HIR constructor has actuals" };
     }
     std::vector<runtime::PackedLogic4> base_actuals;
+    std::vector<std::string> base_strings;
     std::vector<std::string> base_names;
+    const auto* base = selected.base
+        ? specialization(selected.base->specialization_identity)
+        : nullptr;
+    // A base constructor formal of type string takes its actual as text.
+    const auto base_string_formal = [&](const std::size_t position,
+                                        const std::string_view name) {
+        if (base == nullptr) {
+            return false;
+        }
+        auto method = std::ranges::find_if(base->methods,
+            [&](const semantic::sv::SpecializedClassMethod& candidate) {
+                return candidate.kind
+                        == semantic::sv::ClassMethodKind::constructor
+                    && candidate.owner_identity == base->declaration_identity;
+            });
+        if (method == base->methods.end()) {
+            return false;
+        }
+        auto index = position;
+        if (!name.empty()) {
+            for (std::size_t formal = 0U; formal < method->formals.size();
+                 ++formal) {
+                const auto* item = declaration(method->formals[formal]);
+                if (item != nullptr && item->name == name) {
+                    index = formal;
+                }
+            }
+        }
+        return index < method->formal_types.size()
+            && is_string(method->formal_types[index]);
+    };
     constexpr std::string_view base_prefix { "@sv-base-constructor:" };
     if (constructor != selected.methods.end()) {
         for (const auto statement_id : constructor->statements) {
@@ -1484,21 +1548,34 @@ void SystemVerilogClassHirExecution::invoke_constructor_impl(
                 const auto& association = item->task_arguments[index];
                 if (!association.actual)
                     throw std::invalid_argument { "open base HIR constructor actual" };
+                const auto formal_name
+                    = association.formal.value_or(std::string { });
+                if (base_string_formal(index - first, formal_name)) {
+                    const auto text = evaluate_string(
+                        *association.actual, strings, handle);
+                    if (!text)
+                        throw std::invalid_argument { "base HIR constructor actual is not executable" };
+                    base_actuals.emplace_back(64U, runtime::Logic4::zero);
+                    base_strings.push_back(*text);
+                    base_names.push_back(formal_name);
+                    continue;
+                }
                 const auto value = evaluate_packed(
                     *association.actual, handle, environment);
                 if (!value)
                     throw std::invalid_argument { "base HIR constructor actual is not executable" };
                 base_actuals.push_back(*value);
+                base_strings.emplace_back();
                 base_names.push_back(association.formal.value_or(std::string { }));
             }
             break;
         }
     }
     if (selected.base) {
-        const auto* base = specialization(selected.base->specialization_identity);
         if (base == nullptr)
             throw std::invalid_argument { "base HIR class specialization is unavailable" };
-        invoke_constructor_impl(*base, handle, base_actuals, base_names);
+        invoke_constructor_impl(
+            *base, handle, base_actuals, base_strings, base_names);
     }
     // Property initializers other than literals (which the object's
     // descriptor already holds) run after the base class's constructor
@@ -1532,7 +1609,6 @@ void SystemVerilogClassHirExecution::invoke_constructor_impl(
         }
     }
     if (constructor != selected.methods.end()) {
-        StringEnvironment strings;
         const auto result = execute(
             constructor->statements, handle, environment, strings, true);
         if (result.returned)
@@ -1545,6 +1621,7 @@ bool SystemVerilogClassHirExecution::invoke_constructor(
     const std::string_view specialization_identity,
     const runtime::SystemVerilogClassHandle handle,
     const std::span<const runtime::PackedLogic4> actuals,
+    const std::span<const std::string> string_actuals,
     const std::span<const std::string> actual_names)
 {
     const auto* selected = specialization(specialization_identity);
@@ -1553,7 +1630,8 @@ bool SystemVerilogClassHirExecution::invoke_constructor(
     }
     if (selected == nullptr)
         return false;
-    invoke_constructor_impl(*selected, handle, actuals, actual_names);
+    invoke_constructor_impl(
+        *selected, handle, actuals, string_actuals, actual_names);
     return true;
 }
 

@@ -236,6 +236,7 @@ enum class OutputFormat : std::uint8_t {
     unformatted2,
     unformatted4,
     pattern,
+    strength,
 };
 
 enum class GeneratedTextKind : std::uint8_t {

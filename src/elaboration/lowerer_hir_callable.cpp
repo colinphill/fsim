@@ -2045,9 +2045,14 @@ Lowerer::hir_class_method_profile(
     const auto native_uvm = call.class_member_identity.starts_with("@uvm-")
         || call.class_member_identity.find("::uvm_")
             != std::string::npos;
+    // A virtual call dispatches to the object's override, so a pure
+    // virtual prototype supplies only the signature (IEEE 1800-2017 8.21).
+    const auto dispatched = instance_call
+        && !call.text.starts_with("@sv-base-method:");
     if (selected == nullptr
         || selected->kind != semantic::sv::ClassMethodKind::function
-        || ((selected->pure || !selected->defined) && !native_uvm)) {
+        || ((selected->pure || !selected->defined) && !native_uvm
+            && !(dispatched && selected->pure))) {
         return std::nullopt;
     }
     const auto declaration = specialized_hir_unit_->find_declaration(

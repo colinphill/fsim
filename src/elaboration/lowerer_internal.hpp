@@ -165,6 +165,17 @@ public:
         std::size_t order,
         std::optional<semantic::vhdl::SubtypeIndication>
             vhdl_context = std::nullopt);
+    // The nets and constant bit ranges that an inout port actual selects
+    // (`bus[0]`, `bus[3:2]`, `{a, b[1]}`), each with its offset in the
+    // formal, for bidirectional switch connections.
+    struct HirInoutActual {
+        SignalId signal { };
+        std::size_t offset { };
+        std::size_t width { };
+        std::size_t formal_offset { };
+    };
+    [[nodiscard]] std::optional<std::vector<HirInoutActual>>
+    hir_inout_actual(semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<Process> lower_hir_output_actual(
         SignalId source,
         semantic::ExpressionId expression,
@@ -305,6 +316,10 @@ private:
         std::optional<semantic::ExpressionId> output_actual;
         std::optional<SignalId> procedural_assignment_active;
         std::uint32_t procedural_assignment_owner { };
+        // The force owner of a procedural assign's target: a force
+        // overrides the assignment while it is active (IEEE 1800-2017
+        // 10.6.2).
+        std::optional<SignalId> procedural_assignment_force_owner;
         std::optional<semantic::ExpressionId> procedural_assignment_target;
         std::optional<semantic::ExpressionId> procedural_assignment_value;
         std::optional<semantic::ExpressionId> vhdl_guard;
@@ -1752,9 +1767,16 @@ private:
     [[nodiscard]] std::string hir_procedural_target_key(
         semantic::ExpressionId expression) const;
     [[nodiscard]] bool hir_procedural_target_is_visible(
-        semantic::ExpressionId expression) const;
+        semantic::ExpressionId expression,
+        bool allow_array_elements = false) const;
     [[nodiscard]] bool lower_hir_procedural_continuous_assignment(
         semantic::StatementId statement);
+    [[nodiscard]] bool lower_hir_procedural_force(
+        semantic::StatementId statement);
+    // `%v` (IEEE 1800-2017 21.2.1.5): the strength text of a named net or
+    // variable.
+    [[nodiscard]] std::optional<StringRegisterId> lower_hir_strength_text(
+        semantic::ExpressionId expression);
     [[nodiscard]] bool lower_hir_force_release(
         semantic::ExpressionId target,
         std::optional<semantic::ExpressionId> value,
@@ -1970,12 +1992,15 @@ private:
         bool valid { };
         // The owner value that selects this assignment's driver.
         std::uint32_t owner { };
+        // A procedural force, whose value is also continuously evaluated
+        // (IEEE 1800-2017 10.6.2) under its own owner signal.
+        bool force { };
     };
     // The shared owner signal of a procedural continuous assignment target:
     // zero, or the owner value of the assignment that currently drives it
     // (IEEE 1800-2017 10.6.1). Every process finds it by the target's name.
     [[nodiscard]] std::optional<SignalId> hir_procedural_assign_owner(
-        semantic::ExpressionId target);
+        semantic::ExpressionId target, bool force = false);
     std::vector<ProceduralContinuousAssignment>
         procedural_continuous_assignments_;
     struct PendingMonitorDriver {

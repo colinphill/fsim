@@ -107,6 +107,7 @@ struct OperationCacheTraits;
     X(VhdlEnvironmentTimeToString, "VhdlEnvironmentTimeToString") \
     X(VhdlEnvironmentGetenv, "VhdlEnvironmentGetenv") \
     X(VhdlEnvironmentCallPath, "VhdlEnvironmentCallPath") \
+    X(SignalStrengthText, "SignalStrengthText") \
     X(SystemVerilogScalarBinary, "SystemVerilogScalarBinary") \
     X(SystemVerilogMath, "SystemVerilogMath") \
     X(ResizeContainer, "ResizeContainer") \
@@ -273,7 +274,7 @@ consteval bool unique_operation_cache_tags()
     return true;
 }
 
-static_assert(operation_cache_tags.size() == 193U);
+static_assert(operation_cache_tags.size() == 194U);
 static_assert(unique_operation_cache_tags());
 #undef FSIM_CACHE_OPERATIONS
 

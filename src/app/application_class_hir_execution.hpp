@@ -107,6 +107,7 @@ public:
         std::string_view specialization_identity,
         runtime::SystemVerilogClassHandle handle,
         std::span<const runtime::PackedLogic4> actuals,
+        std::span<const std::string> string_actuals,
         std::span<const std::string> actual_names);
 
     // A static property initializer, evaluated outside any object.
@@ -184,6 +185,7 @@ private:
         const semantic::sv::ClassSpecialization& specialization,
         runtime::SystemVerilogClassHandle handle,
         std::span<const runtime::PackedLogic4> actuals,
+        std::span<const std::string> string_actuals,
         std::span<const std::string> actual_names);
 
     std::span<const semantic::sv::ClassSpecialization> specializations_;

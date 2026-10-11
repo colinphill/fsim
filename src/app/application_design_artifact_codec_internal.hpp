@@ -517,7 +517,7 @@ namespace codec_detail {
                 && value <= semantic::sv::CoverageScalarKind::chandle;
         } else if constexpr (std::same_as<T, semantic::sv::OutputFormat>) {
             return value >= semantic::sv::OutputFormat::binary
-                && value <= semantic::sv::OutputFormat::pattern;
+                && value <= semantic::sv::OutputFormat::strength;
         } else if constexpr (std::same_as<T, semantic::sv::TypeForm>) {
             return value >= semantic::sv::TypeForm::unresolved
                 && value <= semantic::sv::TypeForm::unpacked_union;

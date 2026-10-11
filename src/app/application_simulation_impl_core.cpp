@@ -510,7 +510,7 @@ Simulation::Impl::static_property_parts(const std::string_view identity)
     std::string automatic_root_identity;
     try {
         invoke_source_constructor(
-            specialization, handle, actuals, actual_names);
+            specialization, handle, actuals, string_actuals, actual_names);
         if (is_systemverilog_uvm_type(
                 built.compiled_systemverilog_class_specializations,
                 specialization,

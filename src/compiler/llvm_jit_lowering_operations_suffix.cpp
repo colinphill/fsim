@@ -1210,6 +1210,8 @@ void lower_suffix_operation(
                     || std::is_same_v<OperationType,
                         VhdlEnvironmentGetenv>
                     || std::is_same_v<OperationType,
+                        runtime::simir::SignalStrengthText>
+                    || std::is_same_v<OperationType,
                         VhdlEnvironmentCallPath>
                     || std::is_same_v<OperationType,
                         VhdlEnvironmentGetCallPath>

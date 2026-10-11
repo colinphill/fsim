@@ -105,6 +105,7 @@ namespace {
     case Source::unformatted4:
         return Target::unformatted4;
     case Source::pattern:
+    case Source::strength:
         return Target::decimal;
     }
     return Target::decimal;
@@ -139,6 +140,7 @@ namespace {
     case Source::Unformatted4:
         return Target::unformatted4;
     case Source::Pattern:
+    case Source::Strength:
         return Target::decimal;
     case Source::Hierarchy:
     case Source::Time:
@@ -649,13 +651,22 @@ Lowerer::lower_hir_formatted_string(
     // singular values as `%0d` or `%g`.
     const auto append_value = [&](const frontend::ParsedOutputConversion& conversion,
                                   const std::optional<semantic::ExpressionId> value) {
-        if (conversion.format != frontend::OutputFormat::Pattern || !value) {
-            return append_value_impl(conversion, value);
-        }
         const auto append_text = [&](const StringRegisterId text) {
             process_.operations.emplace_back(ConcatenateStrings {
                 destination, { destination, text } });
         };
+        if (conversion.format == frontend::OutputFormat::Strength && value) {
+            const auto text = lower_hir_strength_text(*value);
+            if (!text) {
+                return false;
+            }
+            append_literal(conversion.prefix);
+            append_text(*text);
+            return true;
+        }
+        if (conversion.format != frontend::OutputFormat::Pattern || !value) {
+            return append_value_impl(conversion, value);
+        }
         if (hir_static_container_expression_type(*value)) {
             const auto container = lower_hir_static_container_value(*value);
             if (!container) {
