@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "verilog_parser_internal.hpp"
+
+#include <algorithm>
 #include "fsim/frontend/systemverilog_standard_package.hpp"
 
 namespace fsim::frontend {
@@ -462,6 +464,11 @@ void VerilogParser::parse_timescale(const Token& directive) {
 }
 
 void VerilogParser::note_implicit_net_reference(const Token& name) {
+  // `new` (a dynamic array or class constructor) and `$` (an unbounded
+  // range end) are never nets.
+  if (name.text == "new" || name.text.starts_with('$')) {
+    return;
+  }
   for (const auto& import_item : active_package_imports_) {
     if ((!import_item.name.empty()
          && import_item.name == name.text)
@@ -478,7 +485,7 @@ void VerilogParser::note_implicit_net_reference(const Token& name) {
       && !current_loop_names_.contains(name.text)) {
     implicit_net_references_.push_back(
         {name.text, current_default_nettype_, name.span,
-         name.expansion_stack});
+         name.expansion_stack, implicit_net_context_});
   }
 }
 
@@ -527,8 +534,17 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
   for (const auto& declared : unit.systemverilog_classes) {
     known.insert(declared.name);
   }
+  for (const auto& block : unit.verilog_specify_blocks) {
+    for (const auto& specparam : block.specparams) {
+      known.insert(specparam.name);
+    }
+  }
   for (const auto& let : unit.systemverilog_lets) {
     known.insert(let.name);
+    // A let formal is referenced only within its let body.
+    for (const auto& port : let.ports) {
+      known.insert(port.name);
+    }
   }
   known.insert(known_class_names_.begin(), known_class_names_.end());
   // Compilation-unit declarations are visible in every module.
@@ -548,6 +564,11 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
     }
   }
   std::unordered_set<std::string> rejected;
+  // Implicitly declared nets first: a use elsewhere may precede the
+  // connection that declares the net.
+  std::stable_partition(implicit_net_references_.begin(),
+      implicit_net_references_.end(),
+      [](const ImplicitNetReference& reference) { return reference.declares; });
   for (const auto& reference : implicit_net_references_) {
     const auto member_separator = reference.name.find('.');
     if (member_separator != std::string::npos
@@ -564,6 +585,16 @@ void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
           "FSIM-SV-SEM-090",
           "container iterator '" + reference.name
               + "' is visible only inside its with-clause expression",
+          reference.span,
+          reference.expansion_stack});
+      rejected.insert(reference.name);
+      continue;
+    }
+    if (!reference.declares) {
+      diagnostics_.push_back({
+          DiagnosticSeverity::Error,
+          "FSIM-SV-SEM-411",
+          "identifier '" + reference.name + "' is not declared",
           reference.span,
           reference.expansion_stack});
       rejected.insert(reference.name);
@@ -768,6 +799,10 @@ DesignUnit VerilogParser::parse_module(
             (void)require_standard(
                 "a bind directive", StandardRevision::SystemVerilog2005,
                 previous(), "FSIM-SV-PARSE-348");
+            // A bind instance's actuals resolve in the target scope (IEEE
+            // 1800-2017 23.11), not this unit.
+            const ImplicitNetDiscard target_scope { implicit_net_references_,
+                implicit_net_references_.size(), true };
             unit.systemverilog_binds.push_back(
                 parse_systemverilog_bind(previous()));
         } else if (dpi_declaration_start("import")) {
@@ -890,6 +925,9 @@ DesignUnit VerilogParser::parse_module(
             const auto constraint_start = advance();
             const auto owner = advance();
             advance();
+            // The constraint's names are members of the class.
+            const ImplicitNetDiscard member_scope { implicit_net_references_,
+                implicit_net_references_.size(), true };
             auto definition = parse_class_constraint(
                 constraint_start, owner.text,
                 SystemVerilogClassVisibility::Public, false, false, false);
@@ -1349,6 +1387,22 @@ DesignUnit VerilogParser::parse_module(
           port.type = Type{ValueDomain::Unknown, "interface", std::nullopt,
               false};
         }
+      }
+    }
+    // Each port named in a non-ANSI port list is declared in the body
+    // (IEEE 1364-2005 12.3.3, IEEE 1800-2017 23.2.2.1).
+    for (const auto& port : unit.ports) {
+      if (port.direction == PortDirection::Unknown && port.interface_type.empty()
+          && !port.name.empty() && non_ansi_ports_.contains(port.name)
+          && !body_port_declarations_.contains(port.name)
+          && port.type.named_type.empty()) {
+        diagnostics_.push_back({
+            DiagnosticSeverity::Error,
+            "FSIM-SV-SEM-414",
+            "port '" + port.name + "' of the port list is not declared in the "
+                + std::string { unit_kind } + " body",
+            port.span,
+            {}});
       }
     }
     normalize_systemverilog_generate_names(unit);

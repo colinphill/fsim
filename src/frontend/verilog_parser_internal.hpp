@@ -234,7 +234,28 @@ class VerilogParser final : private detail::ParserBase {
     std::string net_type;
     SourceSpan span;
     std::vector<std::string> expansion_stack;
+    // Only a port or terminal connection or a continuous-assignment target
+    // implicitly declares a net (IEEE 1364-2005 4.5, 1800-2017 6.10).
+    bool declares { true };
   };
+  bool implicit_net_context_ { };
+  // Discards the implicit-net references noted while it lives: names in a
+  // class body or an out-of-block method (`C::m`) resolve to class members
+  // (IEEE 1800-2017 6.10, 8.24).
+  struct ImplicitNetDiscard {
+    std::vector<ImplicitNetReference>& references;
+    std::size_t count;
+    bool active;
+    ~ImplicitNetDiscard() {
+      if (active && references.size() > count) {
+        references.resize(count);
+      }
+    }
+  };
+  // Before SystemVerilog a primitive's output or bidirectional terminal is
+  // a net (IEEE 1364-2005 7.1); report one that names a variable.
+  void check_verilog_primitive_net_terminal(const Expression& terminal,
+      const std::vector<SignalDeclaration>& signals, const Token& instance_start);
   // Names of every class declared so far; a class name is never a net.
   std::unordered_set<std::string> known_class_names_;
 

@@ -268,6 +268,10 @@ namespace {
         for (const auto& clocking : unit.systemverilog_clocking_blocks) {
             names.insert(clocking.name);
         }
+        // An interface instance whose member is a clock (`dif.clk`).
+        for (const auto& instance : unit.instances) {
+            names.insert(instance.name);
+        }
         return names;
     }
 

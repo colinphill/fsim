@@ -253,6 +253,61 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 41: undeclared identifiers, VHDL analysis checks, interface members
+
+Fixtures: eleven `analysis_errors` cases (`case_variable_choice`,
+`procedure_in_expression`, `real_loop_bound`, `nonstatic_type_range`,
+`physical_unit_range`, `type_mark_bound`, `ambiguous_bit_literals`,
+`alias_of_type`, `loop_parameter_scope`, `nonstatic_port_actual`,
+`aggregate_choice_range`), `vhdl_unconstrained_constants.vhd` (passes on
+xsim) and `sv_interface_member_connections.sv` (passes on xsim).
+
+- SystemVerilog and Verilog:
+  - undeclared simple identifiers are rejected outside implicit-net
+    contexts (`FSIM-SV-SEM-411`);
+  - primitives drive nets only before SystemVerilog (`-412`);
+  - unsized constants in Verilog concatenations are rejected (`-413`);
+  - undeclared non-ANSI ports are rejected (`-414`);
+  - `$signed`/`$unsigned` of a real is rejected (`-415`);
+  - Verilog port and data ranges must match;
+  - `$` ends of `inside` ranges work;
+  - interface members can be named hierarchically in assertions, task
+    outputs and virtual-interface class properties.
+- VHDL:
+  - about twenty analysis checks from the VESTs `analyzer_failure` cases
+    (see the notes);
+  - two drivers on an unresolved INTEGER signal are reported;
+  - an unconstrained array constant can be indexed;
+  - literal actuals of unconstrained array formals have their index range.
+- Test sources fixed to legal SystemVerilog: an assignment to a task
+  formal from module scope, `$dimensions` of that formal, and an
+  undeclared type-generic actual (`int` now).
+
+The full run used wip29. Six VESTs cases it lost to the new checks are
+fixed after it and pass in a targeted rerun:
+- `ch_04_ch_04_01`: an ambiguous anonymous range now counts only types
+  visible from the array;
+- `tc2448` and `tc2501`: an anonymous range's placeholder INTEGER index
+  is no longer checked;
+- `tc740`, `tc759` and `tc760`: an aggregate initializer no longer sets
+  the constant's width.
+
+Out of scope: ivtest `br_gh788` needs Icarus's `-gno-io-range-error`
+extension; IEEE 1364-2005 12.3.3 forbids its declarations.
+
+Corpus (passed/total, unique case ids; b42 = wip29, against r1):
+
+| Suite | Regression 1 | Batch 41 |
+|---|---:|---:|
+| VESTs | 3266/3648 | 3297/3648 (3303 with the six fixes) |
+| nvc regress | 613/1482 | 617/1482 |
+| VHDL Compliance-Tests | 31/72 | 33/72 |
+| ivtest | 2129/2826 | 2144/2826 |
+| Verilator test_regress | 1022/2415 | 1028/2415 |
+| sv-tests | 1337/1497 | 1337/1497 |
+
+No other case that passed in r1 fails in b42.
+
 ### Regression batch 1: ctest regressions from the LRM batches
 
 Fixtures: `vhdl_record_defaults_and_resolution.vhd` and
@@ -2038,7 +2093,7 @@ them are not counted as gaps.
 | SV: MOS and CMOS switches with an unknown control (L and H outputs), switch and primitive delays on `tranif`, and `$countdrivers` | ivtest `cmos`, `pr1787394*`, `switch_primitives`, `pr2941939`, `countdrivers*` |
 | SV: `new` for a variable of a specialized class type (`box #(5) b; b = new;`) constructs the default specialization | testbenches using parameterized classes |
 | VHDL: user resolution functions other than a single OR/AND reduction (a runtime resolver calling the function on the driver values) | 28 VESTs cases (`FSIM-ELAB-VHRESOLVE-002`/`-004`), nvc |
-| VHDL: indexing and slicing an unconstrained constant (`constant c : bit_vector := "0101"; c(1)`); its attributes were done in batch 28 | VESTs |
+| VHDL: indexing a deferred unconstrained constant completed in a package body (`DC(5)` of `constant DC : STRING;`); local and architecture constants done in batch 41 | VESTs tc54 |
 | VHDL: library-qualified subprogram calls without a use clause (`work.pkg.f(x)`): the qualified lookup finds the package prototype but the call is not resolved to its body | VESTs dynamic_package_procedure_for_loop, generic package actuals |
 | Compiled engine: a procedure that reads a formal whose actual is a literal fails with "register has not been initialized" (the interpreter is correct) | default-engine users; the corpus runs the interpreter |
 | VHDL: generic packages with protected types, interface package generics (`package p is new g generic map (<>)`) and templates from other design files | ~15 nvc genpack/issue cases |

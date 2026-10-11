@@ -148,6 +148,10 @@ Expression VerilogParser::parse_postfix(Expression expression)
                 || expression.text.ends_with("::randomize"))
             && current().text == "with") {
             advance();
+            // Inline constraint names are members of the randomized object
+            // (IEEE 1800-2017 18.7).
+            const ImplicitNetDiscard member_scope { implicit_net_references_,
+                implicit_net_references_.size(), true };
             if (!match(TokenKind::LeftBrace)) {
                 error(
                     current(),
@@ -179,6 +183,10 @@ Expression VerilogParser::parse_postfix(Expression expression)
                 member = expect_identifier("member name");
             }
             const bool parenthesized_call = match(TokenKind::LeftParen);
+            // `obj.randomize(v)` names members of the object (IEEE 1800-2017
+            // 18.11).
+            const ImplicitNetDiscard randomize_arguments { implicit_net_references_,
+                implicit_net_references_.size(), member.text == "randomize" };
             const bool implicit_container_with = !parenthesized_call && current().text == "with"
                 && (member.text == "sum"
                     || member.text == "product"

@@ -1111,8 +1111,169 @@ private:
         return false;
     }
 
+    // Whether an expression reads an object that is not locally static (a
+    // port, signal, variable, file or generic).
+    bool reads_nonstatic_object(const semantic::ExpressionId id, const std::size_t depth = 0U) const
+    {
+        const auto found = specialization_.find_expression(id);
+        if (!found || found->vhdl == nullptr || depth > 16U) {
+            return false;
+        }
+        const auto& value = *found->vhdl;
+        if (value.kind == semantic::vhdl::ExpressionKind::name && value.referenced_name
+            && value.referenced_name->selected) {
+            const auto declaration = specialization_.find_declaration(
+                *value.referenced_name->selected);
+            using Form = semantic::vhdl::DeclarationForm;
+            if (declaration && declaration->vhdl != nullptr
+                && (declaration->vhdl->form == Form::port || declaration->vhdl->form == Form::signal
+                    || declaration->vhdl->form == Form::variable
+                    || declaration->vhdl->form == Form::file
+                    || declaration->vhdl->form == Form::generic_constant)) {
+                return true;
+            }
+        }
+        return std::ranges::any_of(value.operands, [&](const semantic::ExpressionId operand) {
+            return reads_nonstatic_object(operand, depth + 1U);
+        });
+    }
+
+    // Whether `candidate` is declared in the region of `from` or an
+    // enclosing one.
+    bool type_visible_from(const TypeDefinition& candidate, const TypeDefinition& from) const
+    {
+        const auto declaration = specialization_.find_declaration(candidate.declaration);
+        const auto user = specialization_.find_declaration(from.declaration);
+        if (!declaration || declaration->vhdl == nullptr || !user || user->vhdl == nullptr) {
+            return false;
+        }
+        const auto& scopes = specialization_.design().semantics.scopes();
+        auto scope = user->vhdl->scope;
+        for (std::size_t depth { }; depth < 64U && scope.valid() && scope.value() < scopes.size();
+             ++depth) {
+            if (scope == declaration->vhdl->scope) {
+                return true;
+            }
+            const auto parent = scopes[scope.value()].parent;
+            if (!parent) {
+                break;
+            }
+            scope = *parent;
+        }
+        return false;
+    }
+
+    // Whether an expression reads a port, signal or variable.
+    bool reads_signal_or_variable(const semantic::ExpressionId id, const std::size_t depth = 0U) const
+    {
+        const auto found = specialization_.find_expression(id);
+        if (!found || found->vhdl == nullptr || depth > 16U) {
+            return false;
+        }
+        const auto& value = *found->vhdl;
+        if (value.kind == semantic::vhdl::ExpressionKind::name && value.referenced_name
+            && value.referenced_name->selected) {
+            const auto declaration = specialization_.find_declaration(
+                *value.referenced_name->selected);
+            using Form = semantic::vhdl::DeclarationForm;
+            if (declaration && declaration->vhdl != nullptr
+                && (declaration->vhdl->form == Form::port || declaration->vhdl->form == Form::signal
+                    || declaration->vhdl->form == Form::variable)) {
+                return true;
+            }
+        }
+        return std::ranges::any_of(value.operands, [&](const semantic::ExpressionId operand) {
+            return reads_signal_or_variable(operand, depth + 1U);
+        });
+    }
+
+    // Whether a range bound is a type mark rather than an expression.
+    bool names_type(const semantic::ExpressionId id) const
+    {
+        const auto found = specialization_.find_expression(id);
+        if (!found || found->vhdl == nullptr
+            || found->vhdl->kind != semantic::vhdl::ExpressionKind::name) {
+            return false;
+        }
+        if (!found->vhdl->referenced_name || !found->vhdl->referenced_name->selected) {
+            // STD.STANDARD's scalar types are not retained as declarations.
+            for (const std::string_view predefined :
+                { "integer", "natural", "positive", "boolean", "bit", "character", "real",
+                    "time", "severity_level" }) {
+                if (equal_ignoring_ascii_case(found->vhdl->text, predefined)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        const auto declaration = specialization_.find_declaration(
+            *found->vhdl->referenced_name->selected);
+        return declaration && declaration->vhdl != nullptr
+            && (declaration->vhdl->form == semantic::vhdl::DeclarationForm::type
+                || declaration->vhdl->form == semantic::vhdl::DeclarationForm::subtype);
+    }
+
     void validate_type_bounds(const TypeDefinition& type)
     {
+        const auto static_bound = [&](const std::optional<std::int64_t> value,
+                                      const std::optional<semantic::ExpressionId> id)
+            -> std::optional<std::int64_t> {
+            return value ? value
+                : id     ? specialization_.evaluate_integral_expression(*id)
+                         : std::nullopt;
+        };
+        // IEEE 1076-1993 3.1.1, 3.1.2, 3.1.4: the range of an integer,
+        // floating or physical type definition is locally static.
+        {
+            const auto declaration = specialization_.find_declaration(type.declaration);
+            const auto* range = type.form == TypeForm::subtype && type.base.constraints.size() == 1U
+                ? &type.base.constraints.front()
+                : type.scalar_range ? &*type.scalar_range
+                                    : nullptr;
+            // `type T is range ...` is retained as a subtype declaration of
+            // a new semantic type.
+            const auto& semantic_types = specialization_.design().semantics.types();
+            const auto new_type = declaration && declaration->vhdl != nullptr
+                && (declaration->vhdl->form == semantic::vhdl::DeclarationForm::type
+                    || (declaration->vhdl->form == semantic::vhdl::DeclarationForm::subtype
+                        && type.id.valid() && type.id.value() < semantic_types.size()
+                        && semantic_types[type.id.value()].kind
+                            == semantic::TypeKind::declaration));
+            if (new_type
+                && (type.form == TypeForm::subtype || type.form == TypeForm::scalar
+                    || type.form == TypeForm::physical)
+                && range != nullptr
+                && ((range->left_expression && reads_nonstatic_object(*range->left_expression))
+                    || (range->right_expression
+                        && reads_nonstatic_object(*range->right_expression)))) {
+                report("FSIM-ELAB-VHRANGE-004",
+                    "the range of a VHDL integer, floating or physical type definition must "
+                    "be locally static",
+                    range->source.valid() ? range->source : type.source);
+            }
+        }
+        // IEEE 1076-1993 3.1.3: each unit's position number lies in the range
+        // of its physical type.
+        if (type.form == TypeForm::physical && type.scalar_range) {
+            const auto left = static_bound(type.scalar_range->left, type.scalar_range->left_expression);
+            const auto right = static_bound(type.scalar_range->right, type.scalar_range->right_expression);
+            if (left && right) {
+                const auto low = std::min(*left, *right);
+                const auto high = std::max(*left, *right);
+                for (const auto& unit : type.physical_units) {
+                    const auto position = unit.scale_factor ? unit.scale_factor
+                        : unit.scale ? specialization_.evaluate_integral_expression(*unit.scale)
+                                     : std::nullopt;
+                    if (position && (*position < low || *position > high)) {
+                        report("FSIM-ELAB-VHPHYSICAL-004",
+                            "the position number of VHDL physical unit '" + unit.name
+                                + "' lies outside the range of its type",
+                            unit.source.valid() ? unit.source : type.source);
+                        break;
+                    }
+                }
+            }
+        }
         // IEEE 1076-2008 5.3.1: an element of a composite type is not of a
         // file or protected type.
         const auto file_or_protected = [&](const SubtypeIndication& element) {
@@ -1197,8 +1358,21 @@ private:
                     return false;
                 }
                 const auto kind = operand_type(*id).kind;
-                return kind == OperandClass::enumeration || kind == OperandClass::array
-                    || kind == OperandClass::record || kind == OperandClass::access;
+                if (kind == OperandClass::enumeration || kind == OperandClass::array
+                    || kind == OperandClass::record || kind == OperandClass::access) {
+                    return true;
+                }
+                // A relational or logical operation yields BOOLEAN or BIT.
+                const auto found = specialization_.find_expression(*id);
+                if (!found || found->vhdl == nullptr
+                    || found->vhdl->kind != semantic::vhdl::ExpressionKind::binary) {
+                    return false;
+                }
+                const auto& operation = found->vhdl->text;
+                return operation == "=" || operation == "/=" || operation == "<"
+                    || operation == "<=" || operation == ">" || operation == ">="
+                    || operation == "and" || operation == "or" || operation == "nand"
+                    || operation == "nor" || operation == "xor" || operation == "xnor";
             };
             if ((base.kind == OperandClass::integer || base.kind == OperandClass::floating)
                 && (non_numeric(range.left_expression)
@@ -1213,6 +1387,109 @@ private:
             for (const auto& dimension : type.array_dimensions) {
                 validate_range_bound_types(
                     dimension.constraint, false, dimension.source);
+                if (dimension.constraint) {
+                    const auto& range = *dimension.constraint;
+                    // An anonymous discrete range (`array (a to b)`) carries a
+                    // placeholder index subtype spanning its left bound.
+                    const auto implicit_index = [&] {
+                        const auto left = range.left_expression
+                            ? specialization_.find_expression(*range.left_expression)
+                            : std::nullopt;
+                        const auto& spans = specialization_.design().semantics.source_spans();
+                        const auto index_source = dimension.index_subtype.source;
+                        if (!left || left->vhdl == nullptr || !index_source.valid()
+                            || !left->vhdl->source.valid() || index_source.value() >= spans.size()
+                            || left->vhdl->source.value() >= spans.size()) {
+                            return !range.left_expression;
+                        }
+                        const auto& a = spans[index_source.value()];
+                        const auto& b = spans[left->vhdl->source.value()];
+                        return a.begin.line == b.begin.line && a.begin.column == b.begin.column
+                            && a.end.line == b.end.line && a.end.column == b.end.column;
+                    }();
+                    // IEEE 1076-2008 5.3.2.2: the type of an anonymous
+                    // discrete range is determined from its bounds alone.
+                    const auto literal = [&](const std::optional<semantic::ExpressionId> id)
+                        -> std::string {
+                        const auto found = id ? specialization_.find_expression(*id) : std::nullopt;
+                        return found && found->vhdl != nullptr
+                                && found->vhdl->kind == semantic::vhdl::ExpressionKind::name
+                            ? found->vhdl->text
+                            : std::string { };
+                    };
+                    const auto left_literal = literal(range.left_expression);
+                    const auto right_literal = literal(range.right_expression);
+                    if (implicit_index && !left_literal.empty()
+                        && !right_literal.empty()) {
+                        std::size_t owners { };
+                        for (const auto& candidate : specialization_.design().vhdl_hir.types()) {
+                            const auto has = [&](const std::string& spelling) {
+                                return std::ranges::any_of(candidate.enumeration_literals,
+                                    [&](const auto& entry) {
+                                        return equal_ignoring_ascii_case(entry.spelling, spelling);
+                                    });
+                            };
+                            if (has(left_literal) && has(right_literal)
+                                && type_visible_from(candidate, type)) {
+                                ++owners;
+                            }
+                        }
+                        if (owners > 1U) {
+                            report("FSIM-ELAB-VHRANGE-001",
+                                "the type of a VHDL discrete range is ambiguous",
+                                range.source.valid() ? range.source : type.source);
+                        }
+                    }
+                    const auto source = range.source.valid() ? range.source
+                        : dimension.source.valid()          ? dimension.source
+                                                            : type.source;
+                    if ((range.left_expression && names_type(*range.left_expression))
+                        || (range.right_expression && names_type(*range.right_expression))) {
+                        report("FSIM-ELAB-VHRANGE-005",
+                            "a VHDL range bound is an expression, not a type mark", source);
+                    }
+                    // The bounds of an index constraint have the index type.
+                    auto index_name = implicit_index
+                        ? std::string_view { }
+                        : std::string_view { dimension.index_subtype.spelling };
+                    index_name.remove_prefix(std::min(index_name.size(),
+                        index_name.find_last_of(".:") + 1U));
+                    // (An anonymous range's placeholder index is INTEGER, so
+                    // INTEGER itself is not checked.)
+                    const auto integer_index = equal_ignoring_ascii_case(index_name, "natural")
+                        || equal_ignoring_ascii_case(index_name, "positive");
+                    const auto enumeration_index = equal_ignoring_ascii_case(index_name, "character")
+                        || equal_ignoring_ascii_case(index_name, "boolean")
+                        || equal_ignoring_ascii_case(index_name, "bit");
+                    const auto bound_kind = [&](const std::optional<semantic::ExpressionId> id) {
+                        return id ? operand_type(*id).kind : OperandClass::unknown;
+                    };
+                    for (const auto kind :
+                        { bound_kind(range.left_expression), bound_kind(range.right_expression) }) {
+                        if ((integer_index && kind == OperandClass::enumeration)
+                            || (enumeration_index && kind == OperandClass::integer)) {
+                            report("FSIM-ELAB-VHRANGE-001",
+                                "the bounds of a VHDL index constraint must have the index type",
+                                source);
+                            break;
+                        }
+                    }
+                    const std::optional<std::int64_t> minimum
+                        = equal_ignoring_ascii_case(index_name, "natural") ? std::optional<std::int64_t> { 0 }
+                        : equal_ignoring_ascii_case(index_name, "positive")
+                        ? std::optional<std::int64_t> { 1 }
+                        : std::nullopt;
+                    const auto left = static_bound(range.left, range.left_expression);
+                    const auto right = static_bound(range.right, range.right_expression);
+                    if (minimum && left && right
+                        && !(range.descending ? *left < *right : *left > *right)
+                        && std::min(*left, *right) < *minimum) {
+                        report("FSIM-ELAB-VHARRAY-011",
+                            "an index constraint bound of VHDL array type '" + type.name
+                                + "' is outside the index subtype",
+                            source);
+                    }
+                }
                 // An index subtype is discrete (IEEE 1076-1993 3.2.1).
                 const auto index_declaration = dimension.index_subtype.selected
                     ? specialization_.find_declaration(*dimension.index_subtype.selected)
@@ -1453,10 +1730,29 @@ private:
                     continue;
                 }
                 bool declared_here { };
+                bool declared_later { };
                 bool class_match { };
                 bool visible { };
+                const auto& spans = specialization_.design().semantics.source_spans();
+                const auto follows = [&](const semantic::SourceSpanId later,
+                                         const semantic::SourceSpanId earlier) {
+                    if (!later.valid() || !earlier.valid() || later.value() >= spans.size()
+                        || earlier.value() >= spans.size()
+                        || spans[later.value()].file != spans[earlier.value()].file) {
+                        return false;
+                    }
+                    const auto& a = spans[later.value()].begin;
+                    const auto& b = spans[earlier.value()].begin;
+                    return a.line > b.line || (a.line == b.line && a.column > b.column);
+                };
                 for (const auto& candidate : declarations) {
                     if (!equal_ignoring_ascii_case(candidate.name, spelling)) {
+                        continue;
+                    }
+                    if (candidate.scope == declaration.scope
+                        && candidate.form != Form::attribute_specification
+                        && follows(candidate.source, declaration.source)) {
+                        declared_later = true;
                         continue;
                     }
                     if (candidate.scope == declaration.scope) {
@@ -1471,7 +1767,14 @@ private:
                     visible = visible
                         || visible_in(declaration.scope, candidate.scope);
                 }
-                if (declared_here && !class_match) {
+                if (!declared_here && declared_later) {
+                    // IEEE 1076-1993 5.1: the named entity is declared
+                    // before the attribute specification.
+                    report("FSIM-ELAB-VHATTR-016",
+                        "attribute specification names '" + spelling
+                            + "' before its declaration",
+                        declaration.source);
+                } else if (declared_here && !class_match) {
                     report("FSIM-ELAB-VHATTR-016",
                         "'" + spelling + "' is not of entity class "
                             + entity_class,
@@ -2299,6 +2602,47 @@ private:
     // Names the resolver does not model as declarations at every use:
     // generate parameters, the unit's own declarations, and physical unit
     // names (`x := sec;`).
+    // Whether a generate statement of the units under check iterates a
+    // parameter of this name.
+    bool generate_iterator(const std::string_view name) const
+    {
+        const auto search = [&](const auto& self,
+                                const std::vector<semantic::vhdl::GenerateRegion>& regions)
+            -> bool {
+            return std::ranges::any_of(regions, [&](const semantic::vhdl::GenerateRegion& region) {
+                return equal_ignoring_ascii_case(region.iterator, name)
+                    || self(self, region.nested);
+            });
+        };
+        return search(search, entity_.generates) || search(search, architecture_.generates);
+    }
+
+    // Whether a scope lies within a subprogram body or declaration.
+    bool within_subprogram(semantic::ScopeId scope)
+    {
+        if (!callable_scopes_) {
+            callable_scopes_.emplace();
+            for (const auto& candidate : specialization_.design().vhdl_hir.declarations()) {
+                if (candidate.callable && candidate.nested_scope) {
+                    callable_scopes_->insert(candidate.nested_scope->value());
+                }
+            }
+        }
+        const auto& scopes = specialization_.design().semantics.scopes();
+        for (std::size_t depth { }; depth < 64U && scope.valid() && scope.value() < scopes.size();
+             ++depth) {
+            if (callable_scopes_->contains(scope.value())) {
+                return true;
+            }
+            const auto parent = scopes[scope.value()].parent;
+            if (!parent) {
+                break;
+            }
+            scope = *parent;
+        }
+        return false;
+    }
+
     bool name_exempt(const std::string_view name)
     {
         if (!exempt_names_) {
@@ -2358,6 +2702,13 @@ private:
                 }
                 // Block and generate labels are not values.
                 if (declaration.form == semantic::vhdl::DeclarationForm::generated) {
+                    continue;
+                }
+                // A formal or local of a subprogram in another design unit
+                // is visible only within that subprogram.
+                if (unit && unit->vhdl != nullptr && unit->vhdl->id != entity_.id
+                    && unit->vhdl->id != architecture_.id
+                    && within_subprogram(declaration.scope)) {
                     continue;
                 }
                 add(declaration.name);
@@ -3088,6 +3439,20 @@ private:
         const semantic::CompiledDesignResolver resolver { specialization_ };
         const auto visible = resolver.resolve_vhdl(
             *expression.referenced_name, expression.scope);
+        // IEEE 1076-2008 4.2: a procedure call is a statement, never an
+        // expression.
+        if (!visible.candidates.empty()
+            && std::ranges::all_of(visible.candidates, [&](const auto id) {
+                   const auto declaration = specialization_.find_declaration(id);
+                   return declaration && declaration->vhdl != nullptr
+                       && declaration->vhdl->callable
+                       && !declaration->vhdl->callable->function;
+               })) {
+            report("FSIM-ELAB-VHCALL-004",
+                "a VHDL procedure cannot be called in an expression",
+                expression.source);
+            return;
+        }
         // An indexed object, a type conversion or anything not a function
         // leaves the call to other rules.
         if (visible.candidates.empty()
@@ -3210,11 +3575,28 @@ private:
                     ? std::optional { scopes[scope.value()].unit }
                     : std::nullopt;
             };
+            // A body in a nested region (a block or process inside the
+            // declaring architecture) declares a different subprogram.
+            const auto nested_in_declaring_region = [&](semantic::ScopeId scope) {
+                for (std::size_t depth { }; depth < 64U && scope.valid()
+                     && scope.value() < scopes.size(); ++depth) {
+                    const auto parent = scopes[scope.value()].parent;
+                    if (!parent) {
+                        return false;
+                    }
+                    if (*parent == declaration.scope) {
+                        return true;
+                    }
+                    scope = *parent;
+                }
+                return false;
+            };
             const auto has_body = std::ranges::any_of(declarations, [&](const auto& other) {
                 return other.callable && other.callable->defined
                     && equal_ignoring_ascii_case(other.name, declaration.name)
                     && (other.scope == declaration.scope
-                        || unit_of(other.scope) == unit_of(declaration.scope));
+                        || (unit_of(other.scope) == unit_of(declaration.scope)
+                            && !nested_in_declaring_region(other.scope)));
             });
             if (!has_body) {
                 report("FSIM-ELAB-VHBODY-001",
@@ -3426,6 +3808,29 @@ private:
             expression->vhdl->source);
     }
 
+    // IEEE 1076-2008 12.2: a loop parameter is visible only within its loop
+    // statement; it is retained as a constant without a value.
+    bool loop_parameter_outside_loop(const semantic::DeclarationId id,
+        const semantic::vhdl::Expression& expression) const
+    {
+        const auto declaration = specialization_.find_declaration(id);
+        if (!declaration || declaration->vhdl == nullptr
+            || declaration->vhdl->form != semantic::vhdl::DeclarationForm::constant
+            || declaration->vhdl->initializer || !declaration->vhdl->source.valid()
+            || !expression.source.valid()) {
+            return false;
+        }
+        for (const auto& statement : specialization_.design().vhdl_hir.statements()) {
+            if (statement.kind == semantic::vhdl::StatementKind::loop
+                && equal_ignoring_ascii_case(statement.loop_variable, declaration->vhdl->name)
+                && statement.source.valid()
+                && source_is_within(declaration->vhdl->source, statement.source)) {
+                return !source_is_within(expression.source, statement.source);
+            }
+        }
+        return false;
+    }
+
     void validate_simple_name(const semantic::vhdl::Expression& expression,
         const bool allow_type_mark = false)
     {
@@ -3454,6 +3859,12 @@ private:
                         + "' denotes a type, subtype or design unit, not a value",
                     expression.source);
             }
+            if (loop_parameter_outside_loop(*reference.selected, expression)) {
+                report("FSIM-ELAB-VHNAME-002",
+                    "VHDL loop parameter '" + expression.text
+                        + "' is not visible outside its loop",
+                    expression.source);
+            }
             return;
         }
         if (!reference.overloads.empty()) {
@@ -3476,10 +3887,34 @@ private:
             || vhdl_character_control_literal(expression.text)) {
             return;
         }
+        const semantic::CompiledDesignResolver resolver { specialization_ };
+        // Every declaration of the name is a loop parameter whose loop does
+        // not enclose this use (a generate parameter is not retained as a
+        // declaration).
+        if (!generate_iterator(expression.text)) {
+            bool loop_parameters_only { };
+            for (const auto& declaration : specialization_.design().vhdl_hir.declarations()) {
+                if (!equal_ignoring_ascii_case(declaration.name, expression.text)) {
+                    continue;
+                }
+                if (!loop_parameter_outside_loop(declaration.id, expression)) {
+                    loop_parameters_only = false;
+                    break;
+                }
+                loop_parameters_only = true;
+            }
+            if (loop_parameters_only
+                && resolver.resolve_vhdl(reference, expression.scope).candidates.empty()) {
+                report("FSIM-ELAB-VHNAME-002",
+                    "VHDL loop parameter '" + expression.text
+                        + "' is not visible outside its loop",
+                    expression.source);
+                return;
+            }
+        }
         if (name_exempt(expression.text)) {
             return;
         }
-        const semantic::CompiledDesignResolver resolver { specialization_ };
         if (!resolver.resolve_vhdl(reference, expression.scope).candidates.empty()
             || !resolver.resolve_vhdl_callables(reference, expression.scope)
                     .candidates.empty()) {
@@ -3597,6 +4032,44 @@ private:
         }
         if (expression.kind != semantic::vhdl::ExpressionKind::aggregate) {
             return;
+        }
+        // IEEE 1076-2008 9.3.3.3: a named choice of a one-dimensional array
+        // aggregate is given once and lies in the contextual index range.
+        {
+            std::unordered_set<std::uint32_t> visiting;
+            const auto shape = profile(context, visiting);
+            if (shape.kind == ProfileKind::array && shape.dimensions.size() == 1U) {
+                const auto& range = shape.dimensions.front();
+                std::set<std::int64_t> chosen;
+                for (const auto& association : expression.associations) {
+                    for (const auto choice : association.choices) {
+                        const auto found = specialization_.find_expression(choice);
+                        if (!found || found->vhdl == nullptr
+                            || found->vhdl->kind
+                                != semantic::vhdl::ExpressionKind::integer_literal) {
+                            continue;
+                        }
+                        const auto value = specialization_.evaluate_integral_expression(choice);
+                        if (!value) {
+                            continue;
+                        }
+                        if (!chosen.insert(*value).second) {
+                            report("FSIM-ELAB-VHAGG-013",
+                                "a VHDL aggregate choice is given more than once",
+                                expression.source);
+                            return;
+                        }
+                        if (range.constrained && range.minimum && range.maximum
+                            && *range.minimum <= *range.maximum
+                            && (*value < *range.minimum || *value > *range.maximum)) {
+                            report("FSIM-ELAB-VHARRAYAGG-003",
+                                "VHDL array aggregate index is outside the contextual range",
+                                found->vhdl->source);
+                            return;
+                        }
+                    }
+                }
+            }
         }
         const auto* definition = root_definition(context);
         if (definition == nullptr
@@ -4093,6 +4566,21 @@ private:
                 }
                 return true;
             }
+            if (found->vhdl->kind == semantic::vhdl::ExpressionKind::name
+                && found->vhdl->referenced_name && found->vhdl->referenced_name->selected) {
+                const auto declaration = specialization_.find_declaration(
+                    *found->vhdl->referenced_name->selected);
+                if (declaration && declaration->vhdl != nullptr
+                    && (declaration->vhdl->form == semantic::vhdl::DeclarationForm::variable
+                        || declaration->vhdl->form == semantic::vhdl::DeclarationForm::signal
+                        || declaration->vhdl->form == semantic::vhdl::DeclarationForm::port)) {
+                    report("FSIM-ELAB-VHDLCASE-011",
+                        "a VHDL case choice must be locally static; it names a "
+                        "variable or signal",
+                        found->vhdl->source);
+                    return false;
+                }
+            }
             const auto type = operand_type(choice);
             if (type.kind != OperandClass::unknown && selector_type.kind != OperandClass::unknown
                 && types_conflict(type, selector_type)) {
@@ -4217,6 +4705,15 @@ private:
         for (std::size_t level { }; level < 8U && position < indices.size(); ++level) {
             const auto* definition = root_definition(subtype);
             if (definition == nullptr) {
+                // A predefined scalar type (INTEGER, REAL, TIME, BOOLEAN,
+                // CHARACTER) has no retained definition.
+                const auto type = subtype_operand_type(subtype, 0U);
+                if (type.kind == OperandClass::integer || type.kind == OperandClass::floating
+                    || type.kind == OperandClass::physical) {
+                    report("FSIM-ELAB-VHARRAYSEL-005",
+                        "a VHDL indexed name requires an array prefix",
+                        source->vhdl->source);
+                }
                 return;
             }
             if (definition->form != TypeForm::array) {
@@ -4264,6 +4761,15 @@ private:
         }
         const auto target = specialization_.find_declaration(*alias.alias_target->selected);
         using Form = semantic::vhdl::DeclarationForm;
+        // IEEE 1076-1993 4.3.3: only an object alias has a subtype
+        // indication; a type cannot be aliased as an object.
+        if (target && target->vhdl != nullptr
+            && (target->vhdl->form == Form::type || target->vhdl->form == Form::subtype)) {
+            report("FSIM-ELAB-VHALIAS-004",
+                "a VHDL alias with a subtype indication must denote an object, not a type",
+                alias.source);
+            return;
+        }
         if (!target || target->vhdl == nullptr || !target->vhdl->subtype
             || (target->vhdl->form != Form::signal && target->vhdl->form != Form::variable
                 && target->vhdl->form != Form::constant && target->vhdl->form != Form::port
@@ -4498,6 +5004,71 @@ private:
 
     // IEEE 1076-1993 6.5: the bounds of a slice's discrete range have one
     // type, the index type of the prefix.
+    // The type of an array dimension's explicitly named index subtype.
+    OperandType index_operand_type(const semantic::vhdl::ArrayDimension& dimension) const
+    {
+        const auto& index_name = dimension.index_subtype;
+        if (index_name.selected) {
+            const auto index_declaration = specialization_.find_declaration(*index_name.selected);
+            if (index_declaration && index_declaration->vhdl != nullptr
+                && index_declaration->vhdl->declared_type) {
+                SubtypeIndication index;
+                index.type_mark.spelling = index_name.spelling;
+                index.type_mark.target = *index_declaration->vhdl->declared_type;
+                return subtype_operand_type(index, 0U);
+            }
+            return { };
+        }
+        auto spelling = std::string_view { index_name.spelling };
+        spelling.remove_prefix(std::min(spelling.size(), spelling.find_last_of(".:") + 1U));
+        for (const std::string_view name : { "character", "boolean", "bit" }) {
+            if (equal_ignoring_ascii_case(spelling, name)) {
+                return { OperandClass::enumeration, std::string { name } };
+            }
+        }
+        return { };
+    }
+
+    // IEEE 1076-2008 5.3.2.2: each discrete range of an index constraint
+    // has the type of the corresponding index.
+    void validate_index_constraint_types(const semantic::vhdl::Declaration& declaration)
+    {
+        if (!declaration.subtype) {
+            return;
+        }
+        const auto* array = root_definition(*declaration.subtype);
+        if (array == nullptr || array->form != TypeForm::array
+            || declaration.subtype->constraints.size() != array->array_dimensions.size()) {
+            return;
+        }
+        for (std::size_t index { }; index < array->array_dimensions.size(); ++index) {
+            const auto index_type = index_operand_type(array->array_dimensions[index]);
+            const auto& range = declaration.subtype->constraints[index];
+            if (index_type.kind != OperandClass::integer
+                && index_type.kind != OperandClass::enumeration) {
+                continue;
+            }
+            bool conflict { };
+            const auto bound_type = [&](const std::optional<std::int64_t> value,
+                                        const std::optional<semantic::ExpressionId> id) {
+                return id ? operand_type(*id)
+                    : value ? OperandType { OperandClass::integer, { } }
+                            : OperandType { };
+            };
+            for (const auto& type : { bound_type(range.left, range.left_expression),
+                     bound_type(range.right, range.right_expression) }) {
+                conflict = conflict
+                    || (type.kind != OperandClass::unknown && types_conflict(type, index_type));
+            }
+            if (conflict) {
+                report("FSIM-ELAB-VHRANGE-001",
+                    "the bounds of a VHDL index constraint must have the index type",
+                    range.source.valid() ? range.source : declaration.source);
+                return;
+            }
+        }
+    }
+
     void validate_slice_bounds(const semantic::ExpressionId prefix_id,
         const semantic::ExpressionId left_id, const semantic::ExpressionId right_id,
         const semantic::SourceSpanId source)
@@ -5966,6 +6537,10 @@ private:
             if (!stored.subtype || !selected_scope(stored.scope)) {
                 continue;
             }
+            if (stored.form == Form::constant || stored.form == Form::variable
+                || stored.form == Form::signal) {
+                validate_index_constraint_types(stored);
+            }
             // IEEE 1076-2008 6.4.2.3, 6.4.2.4: a signal or variable has a
             // constrained (fully bounded) array subtype. VHDL-2019 takes the
             // constraints of one with an initial value from that value.
@@ -6241,6 +6816,9 @@ private:
                     if (!element.disconnect && element.value.valid()) {
                         validate_value_name(element.value);
                     }
+                    if (element.delay && element.delay->primary.expression) {
+                        validate_value_name(*element.delay->primary.expression);
+                    }
                 }
                 // Case and selected-assignment choices are values too.
                 for (const auto& alternative : statement.alternatives) {
@@ -6320,8 +6898,72 @@ private:
                 }
             }
             if (statement.kind == semantic::vhdl::StatementKind::loop) {
+                // A floating or physical bound, or arithmetic on a floating
+                // operand, is not discrete.
+                // Inside arithmetic only a floating operand decides (a
+                // physical quotient is an integer).
+                const auto nondiscrete = [&](const auto& self,
+                                             const semantic::ExpressionId bound,
+                                             const std::size_t depth) -> bool {
+                    const auto kind = operand_type(bound).kind;
+                    if (kind == OperandClass::floating
+                        || (depth == 0U && kind == OperandClass::physical)) {
+                        return true;
+                    }
+                    const auto found = specialization_.find_expression(bound);
+                    if (!found || found->vhdl == nullptr || depth > 4U) {
+                        return false;
+                    }
+                    const auto& value = *found->vhdl;
+                    using Kind = semantic::vhdl::ExpressionKind;
+                    // A conversion to a floating or physical type (`real(i)`).
+                    if (value.kind == Kind::call && value.operands.size() == 1U
+                        && !value.text.starts_with('@')
+                        && value.text.find('\'') == std::string::npos) {
+                        // STD.STANDARD's REAL and TIME are not retained.
+                        if (equal_ignoring_ascii_case(value.text, "real")) {
+                            return true;
+                        }
+                        if (equal_ignoring_ascii_case(value.text, "time")) {
+                            return depth == 0U;
+                        }
+                        if (const auto type = named_type(value.text, value.scope)) {
+                            SubtypeIndication subtype;
+                            subtype.type_mark.spelling = value.text;
+                            subtype.type_mark.target = *type;
+                            const auto converted = subtype_operand_type(subtype, 1U).kind;
+                            return converted == OperandClass::floating
+                                || (depth == 0U && converted == OperandClass::physical);
+                        }
+                    }
+                    // A bare unit name of a physical type (`ps`).
+                    if (depth == 0U && value.kind == Kind::name
+                        && value.text.find('.') == std::string::npos
+                        && (!value.referenced_name || !value.referenced_name->selected)) {
+                        for (const std::string_view unit :
+                            { "fs", "ps", "ns", "us", "ms", "sec", "min", "hr" }) {
+                            if (equal_ignoring_ascii_case(unit, value.text)) {
+                                return true;
+                            }
+                        }
+                        for (const auto& type : specialization_.design().vhdl_hir.types()) {
+                            if (std::ranges::any_of(type.physical_units, [&](const auto& unit) {
+                                    return equal_ignoring_ascii_case(unit.name, value.text);
+                                })) {
+                                return true;
+                            }
+                        }
+                    }
+                    return value.kind == Kind::binary
+                        && (value.text == "+" || value.text == "-" || value.text == "*"
+                            || value.text == "/" || value.text == "**")
+                        && std::ranges::any_of(value.operands,
+                            [&](const semantic::ExpressionId operand) {
+                                return self(self, operand, depth + 1U);
+                            });
+                };
                 for (const auto bound : { statement.loop_initial, statement.loop_limit }) {
-                    if (bound && operand_type(*bound).kind == OperandClass::floating) {
+                    if (bound && nondiscrete(nondiscrete, *bound, 0U)) {
                         report("FSIM-ELAB-VHLOOP-001",
                             "a VHDL loop parameter range must be discrete",
                             statement.source);
@@ -6576,6 +7218,24 @@ private:
                         expression.source);
                 }
             }
+            // IEEE 1076-2008 9.2.3: `'0' = '1'` compares two literals that are
+            // both BIT and CHARACTER values, so the operator is ambiguous.
+            if (expression.kind == semantic::vhdl::ExpressionKind::binary
+                && expression.operands.size() == 2U && predefined_operator(expression)
+                && (expression.text == "=" || expression.text == "/=" || expression.text == "<"
+                    || expression.text == "<=" || expression.text == ">"
+                    || expression.text == ">=")
+                && std::ranges::all_of(expression.operands, [&](const semantic::ExpressionId id) {
+                       const auto operand = specialization_.find_expression(id);
+                       return operand && operand->vhdl != nullptr
+                           && operand->vhdl->kind == semantic::vhdl::ExpressionKind::logic_literal
+                           && (operand->vhdl->text == "'0'" || operand->vhdl->text == "'1'");
+                   })) {
+                report("FSIM-ELAB-VHOPER-003",
+                    "the operand type of a VHDL comparison of two character literals is "
+                    "ambiguous",
+                    expression.source);
+            }
             validate_conversion_and_qualification(expression);
             validate_allocator(expression);
             validate_call_arity(expression);
@@ -6684,6 +7344,34 @@ private:
                     "VHDL component '" + instance.target.spelling + "' is not declared",
                     instance.source);
             }
+            // IEEE 1076-1993 1.1.1.2: a port actual that is a name is a static
+            // name; its index expressions do not read signals or variables.
+            // (VHDL-2008 admits an expression as the actual of an input.)
+            for (const auto& association : instance.port_map) {
+                if (architecture_.standard >= std::string_view { "2008" }
+                    || association.kind != semantic::vhdl::AssociationKind::expression
+                    || !association.expression) {
+                    continue;
+                }
+                auto current = specialization_.find_expression(*association.expression);
+                for (std::size_t depth { }; depth < 8U && current && current->vhdl != nullptr
+                     && (current->vhdl->kind == semantic::vhdl::ExpressionKind::index
+                         || current->vhdl->kind == semantic::vhdl::ExpressionKind::slice)
+                     && !current->vhdl->operands.empty();
+                     ++depth) {
+                    const auto& operands = current->vhdl->operands;
+                    if (std::any_of(operands.begin() + 1, operands.end(),
+                            [&](const semantic::ExpressionId index) {
+                                return reads_signal_or_variable(index);
+                            })) {
+                        report("FSIM-ELAB-VHPORT-005",
+                            "the actual of a VHDL port association must be a static name",
+                            current->vhdl->source);
+                        break;
+                    }
+                    current = specialization_.find_expression(operands.front());
+                }
+            }
             if (name_check_) {
                 // The actual of a type or package generic is a subtype
                 // indication or a package (IEEE 1076-2008 6.5.7.2).
@@ -6775,6 +7463,7 @@ private:
     bool name_check_ { true };
     bool operator_check_ { true };
     bool names_only_ { };
+    std::optional<std::unordered_set<std::uint32_t>> callable_scopes_;
     std::optional<std::unordered_set<std::uint32_t>> signal_formals_;
     std::optional<std::unordered_set<std::string>> exempt_names_;
     std::unordered_set<std::string> reported_;
@@ -6824,7 +7513,11 @@ std::vector<Diagnostic> validate_vhdl_architecture_names(
         // Without generic values only name rules are decidable here.
         if (issue.code != "FSIM-ELAB-VHNAME-002"
             && issue.code != "FSIM-ELAB-VHNAME-004"
-            && issue.code != "FSIM-ELAB-VHNAME-015") {
+            && issue.code != "FSIM-ELAB-VHNAME-015"
+            && issue.code != "FSIM-ELAB-VHCOMP-016"
+            && issue.code != "FSIM-ELAB-VHCALL-004"
+            && issue.code != "FSIM-ELAB-VHDLCASE-011"
+            && issue.code != "FSIM-ELAB-VHPORT-005") {
             continue;
         }
         Diagnostic diagnostic;

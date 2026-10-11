@@ -405,16 +405,25 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                       substituted_sequence_clock_tokens };
         }
         if (assertion_clock) {
+            // A clock object may be a member of an interface instance
+            // (`dif.clk`); its first segment names the design object.
             std::vector<std::string_view> clock_objects;
+            bool after_dot { };
             for (const auto& token : assertion_clock_tokens) {
+                if (token.kind == TokenKind::Dot) {
+                    after_dot = true;
+                    continue;
+                }
                 if (token.kind == TokenKind::Identifier
                     && token.text != "posedge"
                     && token.text != "negedge"
                     && token.text != "edge"
                     && token.text != "or"
-                    && token.text != "iff") {
+                    && token.text != "iff"
+                    && !after_dot) {
                     clock_objects.push_back(token.text);
                 }
+                after_dot = false;
             }
             if (clock_objects.size() != 1U
                 || !design_names.contains(
@@ -1322,7 +1331,17 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 });
             if (signal != event.rend()) {
                 Sensitivity sensitivity;
+                // A dotted clock (`dif.clk`) names an interface member.
+                auto position = static_cast<std::size_t>(
+                    std::distance(signal, event.rend()) - 1);
                 sensitivity.signal = signal->text;
+                while (position >= 2U
+                    && event[position - 1U].kind == TokenKind::Dot
+                    && event[position - 2U].kind == TokenKind::Identifier) {
+                    sensitivity.signal = event[position - 2U].text + "."
+                        + sensitivity.signal;
+                    position -= 2U;
+                }
                 sensitivity.span = assertion_clock->span;
                 sensitivity.edge = std::ranges::any_of(event, [](const Token& token) {
                     return token.text == "posedge";

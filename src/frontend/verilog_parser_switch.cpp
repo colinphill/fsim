@@ -183,6 +183,7 @@ void VerilogParser::parse_switch_primitive(
         "'(' after switch primitive name",
         "FSIM-SV-PARSE-248");
     std::vector<Expression> terminals;
+    const auto saved_context = std::exchange(implicit_net_context_, true);
     if (!at(TokenKind::RightParen)) {
       terminals.push_back(parse_lvalue());
       while (match(TokenKind::Comma)) {
@@ -190,6 +191,11 @@ void VerilogParser::parse_switch_primitive(
             bidirectional && terminals.size() == 1
                 ? parse_lvalue() : parse_expression());
       }
+    }
+    implicit_net_context_ = saved_context;
+    for (std::size_t index = 0; index < terminals.size()
+         && index < (bidirectional ? std::size_t { 2 } : std::size_t { 1 }); ++index) {
+      check_verilog_primitive_net_terminal(terminals[index], signals, start);
     }
     expect(
         TokenKind::RightParen,

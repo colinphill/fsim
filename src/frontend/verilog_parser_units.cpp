@@ -2013,6 +2013,7 @@ std::vector<Instance> VerilogParser::parse_instances() {
   // An empty positional entry, as in `m u(a, , b);` or `m u(,);`, leaves
   // that port unconnected (IEEE 1800-2017 23.3.2.1).
   bool after_comma = false;
+  const auto saved_context = std::exchange(implicit_net_context_, true);
   while (!at_end() && (after_comma || !at(TokenKind::RightParen))) {
     PortConnection connection;
     if (verilog_attribute_instance_start()) {
@@ -2056,6 +2057,7 @@ std::vector<Instance> VerilogParser::parse_instances() {
     }
     after_comma = true;
   }
+  implicit_net_context_ = saved_context;
   expect(
       TokenKind::RightParen, "')' after instance connections",
       "FSIM-SV-PARSE-037");

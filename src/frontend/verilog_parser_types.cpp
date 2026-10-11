@@ -911,6 +911,7 @@ void VerilogParser::parse_let_declaration(
     const Token& start)
 {
     SystemVerilogLetDeclaration declaration;
+    const auto reference_count = implicit_net_references_.size();
     const auto name = expect_identifier("let declaration name");
     declaration.name = name.text;
     if (match(TokenKind::LeftParen)) {
@@ -981,6 +982,16 @@ void VerilogParser::parse_let_declaration(
             "duplicate or conflicting let declaration '"
                 + declaration.name + "'");
         return;
+    }
+    // A let formal is referenced only within its let body.
+    if (implicit_net_references_.size() > reference_count) {
+        std::erase_if(implicit_net_references_, [&](const ImplicitNetReference& reference) {
+            return &reference - implicit_net_references_.data()
+                    >= static_cast<std::ptrdiff_t>(reference_count)
+                && std::ranges::any_of(declaration.ports, [&](const SystemVerilogLetPort& port) {
+                       return port.name == reference.name;
+                   });
+        });
     }
     unit.systemverilog_lets.push_back(std::move(declaration));
 }
@@ -1169,6 +1180,7 @@ bool VerilogParser::parse_optional_container_dimension(Type& type)
                 ValueDomain::Bit2, "bit", PackedRange { 63, 0, true },
                 false);
         } else {
+            const auto references_before = implicit_net_references_.size();
             auto left = parse_expression();
             if (match(TokenKind::Colon)) {
                 auto right = parse_expression();
@@ -1220,6 +1232,10 @@ bool VerilogParser::parse_optional_container_dimension(Type& type)
                             cover(start.span, previous().span),
                             std::nullopt });
                 } else if (left.kind == ExpressionKind::Identifier) {
+                    // `[key_t]` names an index type, not a net.
+                    if (implicit_net_references_.size() > references_before) {
+                        implicit_net_references_.resize(references_before);
+                    }
                     container.kind = SystemVerilogContainerKind::AssociativeArray;
                     Type index_type {
                         ValueDomain::Unknown,

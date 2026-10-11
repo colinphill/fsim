@@ -411,6 +411,10 @@ private:
         bool signed_value { };
         std::vector<HirVhdlArrayIndex> dynamic_indices;
     };
+    [[nodiscard]] std::optional<HirPackedRange>
+    hir_vhdl_unconstrained_constant_range(
+        const semantic::vhdl::Declaration& declaration, std::size_t width,
+        semantic::ScopeId process_scope) const;
     [[nodiscard]] std::optional<HirPackedRange> hir_expression_range(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;

@@ -3951,14 +3951,25 @@ std::optional<RegisterId> Lowerer::lower_hir_membership_expression(
                     hir_source_span(candidate.source));
                 return std::nullopt;
             }
-            auto low = integral_operand(
-                candidate.operands.front(),
-                "FSIM-ELAB-SVMEMBER-004",
-                "inside range bounds must be integral expressions");
-            auto high = integral_operand(
-                candidate.operands.back(),
-                "FSIM-ELAB-SVMEMBER-004",
-                "inside range bounds must be integral expressions");
+            // `$` leaves that end of the range unbounded (IEEE 1800-2017
+            // 11.4.13); the left operand itself satisfies it.
+            const auto unbounded = [&](const semantic::ExpressionId bound) {
+                const auto found = specialized_hir_unit_->find_expression(bound);
+                return found && found->systemverilog != nullptr
+                    && found->systemverilog->text == "$";
+            };
+            auto low = unbounded(candidate.operands.front())
+                ? lhs
+                : integral_operand(
+                      candidate.operands.front(),
+                      "FSIM-ELAB-SVMEMBER-004",
+                      "inside range bounds must be integral expressions");
+            auto high = unbounded(candidate.operands.back())
+                ? lhs
+                : integral_operand(
+                      candidate.operands.back(),
+                      "FSIM-ELAB-SVMEMBER-004",
+                      "inside range bounds must be integral expressions");
             if (!low || !high) {
                 return std::nullopt;
             }
@@ -5856,6 +5867,33 @@ std::optional<RegisterId> Lowerer::lower_hir_virtual_interface_handle(
 {
     const auto binding = hir_runtime_binding(
         receiver, hir_process_scope_, false);
+    if (!binding && specialized_hir_unit_ != nullptr) {
+        // A virtual interface held by a class property (`vif.clk` in a
+        // method): read the handle through the object (IEEE 1800-2017
+        // 25.9, 8.4).
+        for (const auto& declaration :
+            specialized_hir_unit_->design().systemverilog_hir.classes()) {
+            for (const auto& property : declaration.properties) {
+                if (property.declaration != receiver) {
+                    continue;
+                }
+                const auto handle
+                    = allocate_register(64U, frontend::ValueDomain::Bit2);
+                if (property.static_storage) {
+                    process_.operations.emplace_back(ClassStaticPropertyRead {
+                        handle, property.canonical_identity, 64U });
+                    return handle;
+                }
+                if (!hir_class_receiver_register_) {
+                    return std::nullopt;
+                }
+                process_.operations.emplace_back(ClassPropertyRead {
+                    handle, *hir_class_receiver_register_,
+                    property.canonical_identity, 64U });
+                return handle;
+            }
+        }
+    }
     if (!binding || binding->width != 64U) {
         return std::nullopt;
     }

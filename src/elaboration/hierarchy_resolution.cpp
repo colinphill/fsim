@@ -2470,10 +2470,12 @@ void HierarchyBuilder::validate_process_drivers()
                 && boundary_drivers->second.size() > 1U)
             || vhdl_unprotected_shared_signals_.contains(signal)
             || info.resolution != ResolutionKind::none
-            || (info.type_name == "reg"
-                && !variable_container_signals.contains(signal))
-            || (info.type_name == "integer"
-                && !variable_container_signals.contains(signal))
+            || ((info.type_name == "reg" || info.type_name == "integer")
+                && !variable_container_signals.contains(signal)
+                // A VHDL INTEGER signal is an unresolved signal, not a
+                // Verilog variable.
+                && std::ranges::none_of(process_drivers,
+                    [](const auto& driver) { return driver.vhdl; }))
             || info.name.ends_with(".$container_storage")) {
             continue;
         }

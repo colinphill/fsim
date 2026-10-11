@@ -24,7 +24,10 @@ std::vector<Sensitivity> VerilogParser::parse_sensitivity() {
           expect_identifier("selected sensitivity signal").text;
     }
     if (signal_name.find('.') == std::string::npos) {
+      // An event control may name a sequence (`@seq`), resolved later.
+      const auto saved_context = std::exchange(implicit_net_context_, true);
       note_implicit_net_reference(signal);
+      implicit_net_context_ = saved_context;
     }
     sensitivities.push_back(
         Sensitivity{
@@ -84,11 +87,13 @@ std::vector<Sensitivity> VerilogParser::parse_sensitivity() {
     if (expression.kind == ExpressionKind::Identifier) {
       sensitivity.signal = expression.text;
       if (sensitivity.signal.find('.') == std::string::npos) {
+        const auto saved_context = std::exchange(implicit_net_context_, true);
         note_implicit_net_reference(Token{
             TokenKind::Identifier,
             sensitivity.signal,
             sensitivity.span,
             {}});
+        implicit_net_context_ = saved_context;
       }
     } else {
       sensitivity.expression = std::move(expression);

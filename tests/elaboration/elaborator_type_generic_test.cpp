@@ -733,7 +733,7 @@ end architecture;
         "type-generic-host.sv",
         R"(
 module type_generic_host;
-  required_type #(.Data_T(TYPE_MARK)) child();
+  required_type #(.Data_T(int)) child();
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);

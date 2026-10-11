@@ -741,7 +741,11 @@ void VerilogParser::parse_virtual_interface_declaration(
         expect_identifier("virtual-interface variable name");
     std::optional<Expression> initializer;
     if (match(TokenKind::Assign)) {
+      // An interface instance initializer is resolved, and an unknown one
+      // reported, when the virtual interface is bound.
+      const auto saved_context = std::exchange(implicit_net_context_, true);
       initializer = parse_expression();
+      implicit_net_context_ = saved_context;
     }
     const bool duplicate = std::ranges::any_of(
         unit.variables,
@@ -1491,6 +1495,13 @@ void VerilogParser::check_port_redeclaration(
     // An unranged port declaration takes the data declaration's range, as
     // xsim and Verilator accept.
     mismatch = true;
+  } else if (!ranged(port_type) && ranged(data_type)
+      && keyword_set_rank(keyword_set_for_standard_revision(standard_revision_))
+          < keyword_set_rank(keyword_set_for_standard_revision(
+              StandardRevision::SystemVerilog2005))) {
+    // Verilog requires identical ranges in both declarations (IEEE
+    // 1364-2005 12.3.3).
+    mismatch = true;
   } else if (port_type.packed_range && data_type.packed_range) {
     mismatch = port_type.packed_range->left != data_type.packed_range->left
         || port_type.packed_range->right != data_type.packed_range->right;
@@ -1535,7 +1546,9 @@ std::vector<Statement> VerilogParser::parse_continuous_assignments(
             skip_to_semicolon();
             return statements;
         }
+        const auto saved_context = std::exchange(implicit_net_context_, true);
         Expression target = parse_lvalue();
+        implicit_net_context_ = saved_context;
         expect(
             TokenKind::Assign, "'=' in continuous assignment",
             "FSIM-SV-PARSE-010");
@@ -1562,6 +1575,43 @@ std::vector<Statement> VerilogParser::parse_continuous_assignments(
       || keyword("xor") || keyword("xnor")
       || keyword("bufif0") || keyword("bufif1")
       || keyword("notif0") || keyword("notif1");
+}
+
+void VerilogParser::check_verilog_primitive_net_terminal(const Expression& terminal,
+    const std::vector<SignalDeclaration>& signals, const Token& instance_start)
+{
+  if (keyword_set_rank(keyword_set_for_standard_revision(standard_revision_))
+      >= keyword_set_rank(keyword_set_for_standard_revision(
+          StandardRevision::SystemVerilog2005))) {
+    return;
+  }
+  if (terminal.kind == ExpressionKind::Concatenation) {
+    for (const auto& operand : terminal.operands) {
+      check_verilog_primitive_net_terminal(operand, signals, instance_start);
+    }
+    return;
+  }
+  const Expression* root = &terminal;
+  while ((root->kind == ExpressionKind::Index || root->kind == ExpressionKind::Slice)
+      && !root->operands.empty()) {
+    root = &root->operands.front();
+  }
+  if (root->kind != ExpressionKind::Identifier) {
+    return;
+  }
+  const auto signal = std::ranges::find_if(signals, [&](const SignalDeclaration& candidate) {
+    return candidate.name == root->text;
+  });
+  if (signal == signals.end()) {
+    return;
+  }
+  const auto spelling = detail::ascii_lower(signal->type.spelling);
+  if (spelling == "reg" || spelling == "integer" || spelling == "time"
+      || spelling == "real" || spelling == "realtime") {
+    error(instance_start, "FSIM-SV-SEM-412",
+        "a Verilog primitive output or bidirectional terminal must be a net, "
+        "not variable '" + root->text + "'");
+  }
 }
 
 void VerilogParser::parse_gate_primitive(
@@ -1685,11 +1735,13 @@ void VerilogParser::parse_gate_primitive(
       skip_to_semicolon();
       return;
     }
+    const auto saved_context = std::exchange(implicit_net_context_, true);
     auto target = parse_lvalue();
     std::vector<Expression> inputs;
     while (match(TokenKind::Comma)) {
       inputs.push_back(parse_expression());
     }
+    implicit_net_context_ = saved_context;
     expect(
         TokenKind::RightParen,
         "')' after gate primitive terminals",
@@ -1711,6 +1763,12 @@ void VerilogParser::parse_gate_primitive(
       continue;
     }
 
+    check_verilog_primitive_net_terminal(target, signals, instance_start);
+    if (unary) {
+      for (std::size_t index = 0; index + 1 < inputs.size(); ++index) {
+        check_verilog_primitive_net_terminal(inputs[index], signals, instance_start);
+      }
+    }
     std::vector<Expression> targets;
     targets.push_back(std::move(target));
     if (unary) {

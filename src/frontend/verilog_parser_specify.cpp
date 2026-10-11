@@ -464,6 +464,14 @@ VerilogTimingCheckDeclaration VerilogParser::parse_verilog_timing_check(
 }
 
 VerilogSpecifyBlock VerilogParser::parse_specify_block(const Token& start) {
+  // Specify terminals are checked against the module's ports when the
+  // specify block is elaborated.
+  struct ContextRestore {
+    bool& flag;
+    bool saved;
+    ~ContextRestore() { flag = saved; }
+  } const specify_context { implicit_net_context_, implicit_net_context_ };
+  implicit_net_context_ = true;
   VerilogSpecifyBlock block;
   while (!at_end() && !keyword("endspecify")) {
     if (match_keyword("specparam")) {

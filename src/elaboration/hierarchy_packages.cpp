@@ -18916,6 +18916,47 @@ bool HierarchyBuilder::validate_compiled_vhdl_selected_package_names(
                         || scope->unit == entity->id);
             });
     };
+    // A signal, variable, constant, port, generic, alias or file of the
+    // unit: its name selects record elements, not declarations.
+    const auto locally_declared_object = [&](const std::string_view name) {
+        using Form = semantic::vhdl::DeclarationForm;
+        return std::ranges::any_of(
+            compiled_->vhdl_hir.declarations(),
+            [&](const semantic::vhdl::Declaration& declaration) {
+                if (!compiled_vhdl_name_equal(declaration.name, name)
+                    || (declaration.form != Form::signal
+                        && declaration.form != Form::variable
+                        && declaration.form != Form::constant
+                        && declaration.form != Form::port
+                        && declaration.form != Form::generic_constant
+                        && declaration.form != Form::alias
+                        && declaration.form != Form::file)) {
+                    return false;
+                }
+                const auto* scope = compiled_semantic_scope(
+                    *compiled_, declaration.scope);
+                return scope != nullptr
+                    && (scope->unit == architecture.id
+                        || scope->unit == entity->id);
+            });
+    };
+    // Labels of the design unit's blocks, processes, generate statements,
+    // loops and subprograms: an expanded name prefixed by one must select
+    // a declaration of that construct (IEEE 1076-2008 8.3).
+    std::unordered_set<std::string> construct_labels;
+    for (const auto& scope : compiled_->semantics.scopes()) {
+        if ((scope.unit == architecture.id || scope.unit == entity->id)
+            && !scope.name.empty() && !scope.name.starts_with('<')) {
+            construct_labels.insert(lowercase_ascii_copy(scope.name));
+        }
+    }
+    for (const auto& statement : compiled_->vhdl_hir.statements()) {
+        for (const auto* label : { &statement.label, &statement.loop_label }) {
+            if (!label->empty()) {
+                construct_labels.insert(lowercase_ascii_copy(*label));
+            }
+        }
+    }
     for (const auto& expression :
         compiled_->vhdl_hir.expressions()) {
         if (expression.kind
@@ -18946,7 +18987,11 @@ bool HierarchyBuilder::validate_compiled_vhdl_selected_package_names(
             && (compiled_vhdl_name_equal(
                     parts.front(), entity->name)
                 || compiled_vhdl_name_equal(
-                    parts.front(), architecture.primary_name));
+                    parts.front(), architecture.primary_name)
+                || (parts.size() == 2U
+                    && construct_labels.contains(
+                        lowercase_ascii_copy(parts.front()))
+                    && !locally_declared_object(parts.front())));
         // An expanded name prefixed by the design unit must denote a
         // declaration of that unit (IEEE 1076-2008 8.3).
         if (hierarchy_root_name && parts.size() == 2U

@@ -2256,6 +2256,29 @@ bool Lowerer::lower_hir_output_actual_write(
     const auto binding = declaration
         ? hir_runtime_binding(*declaration, hir_process_scope_, true)
         : std::nullopt;
+    // An output port connected to a member of an interface instance
+    // (`.dout(dif.dout)`, IEEE 1800-2017 23.3.3).
+    if (expression && !binding && expression->systemverilog != nullptr
+        && expression->systemverilog->kind == semantic::sv::ExpressionKind::name
+        && expression->systemverilog->text.find('.') != std::string::npos) {
+        const auto signal = hir_named_signal(
+            expression->systemverilog->text, hir_process_scope_);
+        if (!signal || *signal >= design_.signals_.size()) {
+            return false;
+        }
+        const auto width = design_.signals_[*signal].initial_value.width();
+        if (register_width(source) != width) {
+            source = resize_register(source, width, false);
+        }
+        process_.operations.emplace_back(WriteUpdate {
+            *signal,
+            source,
+            process_.scheduling_domain == ProcessSchedulingDomain::systemverilog
+                ? SignalUpdateDomain::systemverilog_active
+                : SignalUpdateDomain::generic,
+        });
+        return true;
+    }
     if (!expression || !binding
         || !signal_binding_is_writable(*binding)) {
         return false;

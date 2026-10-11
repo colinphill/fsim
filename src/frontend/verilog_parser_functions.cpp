@@ -105,6 +105,9 @@ FunctionDeclaration VerilogParser::parse_function(
       function.name += expect_identifier("selected function name").text;
     }
   }
+  const ImplicitNetDiscard method_scope { implicit_net_references_,
+      implicit_net_references_.size(),
+      function.name.find("::") != std::string::npos };
   (void)parse_optional_container_dimension(
       function.return_type);
 
@@ -652,6 +655,9 @@ TaskDeclaration VerilogParser::parse_task(
     task.name += "::";
     task.name += expect_identifier("selected task name").text;
   }
+  const ImplicitNetDiscard method_scope { implicit_net_references_,
+      implicit_net_references_.size(),
+      task.name.find("::") != std::string::npos };
 
   auto saved_names = std::move(current_procedural_names_);
   auto saved_types = std::move(current_procedural_types_);

@@ -308,7 +308,8 @@ gives fsim's result in each case checked.
   continuous-assignment targets (6.10) was tried and withdrawn: system task
   arguments, `randomize` variable lists, specify blocks, `matches` pattern
   variables, `let` and constraint bodies all name things the unit does not
-  declare, and it rejected valid designs. Names of classes, `$unit`
+  declare, and it rejected valid designs. (Batch 41 adds the check, with
+  each of these contexts handled.) Names of classes, `$unit`
   declarations, DPI imports, modports, covergroups and imported package
   types no longer become implicit nets.
 - A SystemVerilog variable's constant declaration initializer takes effect
@@ -1015,3 +1016,90 @@ gives fsim's result in each case checked.
   instantiate other units are not elaborated at compile time, so their
   name checks (`VHNAME-002`, `-004`, `-015`) now run on their own at
   compile.
+
+## Undeclared identifiers and VHDL analysis checks (batch 41)
+
+- An undeclared simple identifier is an error (`FSIM-SV-SEM-411`) unless
+  its context declares an implicit net: a port or terminal connection or
+  a continuous-assignment target (IEEE 1364-2005 4.5, IEEE 1800-2017 6.10).
+  The contexts that made batch 23 withdraw the check are handled
+  separately:
+  - system task statement arguments may name scopes (`$dumpvars(1, top)`,
+    `$printtimescale(top)`), so they keep the old implicit-net behaviour;
+  - `obj.randomize(v)` lists and `with` constraints, out-of-block
+    constraints, and out-of-block method bodies (`C::m`) name class
+    members, so their references are dropped;
+  - specify blocks keep implicit nets, and their terminals are checked by
+    the specify elaboration;
+  - `matches` pattern variables and `let` formals are names of the item
+    and the `let` body;
+  - an identifier in an associative-array dimension (`[key_t]`) is an
+    index type; specparams are declarations;
+  - event controls keep implicit nets, so `@seq` on a named sequence still
+    elaborates as before;
+  - `bind` actuals resolve in the target scope;
+  - a virtual interface initializer is checked when it is bound.
+  `new` and `$` (an unbounded range end) are never identifiers. `$` in an
+  `inside` range now leaves that end unbounded (11.4.13).
+- Before SystemVerilog:
+  - a gate or switch primitive's output or bidirectional terminal must be
+    a net (`FSIM-SV-SEM-412`, IEEE 1364-2005 7.1);
+  - a concatenation cannot hold an unsized constant (`FSIM-SV-SEM-413`,
+    5.1.14);
+  - a non-ANSI port and its data declaration have identical ranges, so a
+    scalar port cannot become a vector (12.3.3).
+- Every port named in a non-ANSI port list is declared in the body
+  (`FSIM-SV-SEM-414`); `$signed` and `$unsigned` of a real literal are
+  rejected (`FSIM-SV-SEM-415`).
+- VHDL analysis checks, mostly from the VESTs `analyzer_failure` cases:
+  - a case choice that names a variable or signal (`VHDLCASE-011`);
+  - a procedure called in an expression (`VHCALL-004`);
+  - a loop range with REAL, TIME or physical-unit bounds, or real
+    arithmetic (`VHLOOP-001`);
+  - a type definition range that reads a port, signal, variable or
+    generic (`VHRANGE-004`). `type T is range ...` is kept as a subtype
+    declaration of a new semantic type, which tells it from `subtype S is
+    integer range ...`;
+  - a type mark as a range bound (`VHRANGE-005`);
+  - index constraints whose bounds are not of the index type, an
+    anonymous enumeration range with literals of two visible types, and
+    NATURAL- or POSITIVE-indexed array types with out-of-range bounds. An
+    anonymous index range carries a placeholder INTEGER index subtype
+    whose span is its left bound, which identifies it;
+  - a physical unit whose position lies outside its type's range;
+  - `'0' = '0'` (BIT or CHARACTER, `VHOPER-003`);
+  - an alias with a subtype indication naming a type (`VHALIAS-004`);
+  - a loop parameter used after its loop;
+  - a local of another unit's subprogram, which is no longer treated as
+    possibly visible;
+  - an attribute specification before its entity's declaration;
+  - duplicate and out-of-range integer choices of a one-dimensional
+    aggregate;
+  - a pre-2008 port actual indexed by a signal (`VHPORT-005`);
+  - a procedure declared without a body in its region when a nested block
+    has a body of the same name;
+  - an undeclared name in a waveform delay.
+
+  Name-independent codes (`VHCOMP-016`, `VHCALL-004`, `VHDLCASE-011`,
+  `VHPORT-005`) are also reported for architectures that instantiate
+  other units.
+- An unresolved VHDL INTEGER signal with two drivers is reported
+  (`FSIM-ELAB-DRV-001`); the exemption for Verilog `integer` variables no
+  longer covers VHDL signals.
+- An unconstrained array constant takes its length from its value: its
+  width was the element width, so only `c(0)` lowered. Its index range
+  starts at the index subtype's left bound.
+- Interface members by hierarchical name:
+  - a concurrent assertion clocked by an interface member
+    (`@(posedge dif.clk)`) takes that member as its clock;
+  - assertions may name instance members;
+  - a name such as `dif.data` that is not a local binding resolves as a
+    hierarchical signal (retried once later instances exist), also as a
+    task output actual;
+  - a virtual interface held in a class property is read from the
+    property.
+- A selected name whose prefix is a block, process or generate label of
+  the architecture is not an expanded package name; an indexed name with
+  a scalar prefix is rejected (`VHARRAYSEL-005`).
+- A string literal or positional aggregate actual of an unconstrained
+  array formal has the index range of the formal's index subtype.

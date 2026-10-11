@@ -206,6 +206,18 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
     if (const auto required = verilog_system_service_standard(current().text)) {
         note_system_service_standard(current().text, *required, current());
     }
+    // A system task argument may name a hierarchical scope
+    // (`$printtimescale(top)`, `$dumpvars(1, top)`) rather than an object of
+    // this unit; it is resolved when the task runs, so it is not reported
+    // as undeclared here.
+    struct ContextRestore {
+        bool& flag;
+        bool saved;
+        ~ContextRestore() { flag = saved; }
+    } const system_task_context { implicit_net_context_, implicit_net_context_ };
+    if (at(TokenKind::Identifier) && current().text.starts_with('$')) {
+        implicit_net_context_ = true;
+    }
     const auto require_sv2005 = [&](const std::string_view feature,
                                     const Token& token) {
         (void)require_standard(feature, StandardRevision::SystemVerilog2005,

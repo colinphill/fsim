@@ -1157,6 +1157,14 @@ Expression VerilogParser::parse_primary()
             } else if (canonical == "$signed" || canonical == "$unsigned") {
                 require_file_call(1, "one packed expression");
                 expression.call_result_signed = canonical == "$signed";
+                // IEEE 1800-2017 11.7: the argument is integral.
+                if (expression.operands.size() == 1U
+                    && expression.operands.front().kind == ExpressionKind::IntegerLiteral
+                    && expression.operands.front().systemverilog_scalar_kind
+                        == SystemVerilogScalarKind::Real) {
+                    error(name, "FSIM-SV-SEM-415",
+                        canonical + " requires an integral argument, not a real value");
+                }
             } else if (contains_word(
                            { "$bits", "$clog2", "$countones", "$dimensions",
                                "$unpacked_dimensions" },
@@ -1618,6 +1626,24 @@ Expression VerilogParser::parse_primary()
         }
         expect(TokenKind::RightBrace, "'}' after concatenation",
             "FSIM-SV-PARSE-030");
+        // IEEE 1364-2005 5.1.14: an unsized constant number is not allowed
+        // in a concatenation. (A SystemVerilog unpacked array concatenation
+        // takes unsized items.)
+        if (keyword_set_rank(keyword_set_for_standard_revision(standard_revision_))
+            < keyword_set_rank(keyword_set_for_standard_revision(
+                StandardRevision::SystemVerilog2005))) {
+            for (const auto& element : elements) {
+                if ((element.kind == ExpressionKind::IntegerLiteral
+                        || element.kind == ExpressionKind::LogicLiteral)
+                    && (element.text.find('\'') == std::string::npos
+                        || element.text.starts_with('\''))) {
+                    error(open, "FSIM-SV-SEM-413",
+                        "an unsized constant number cannot be an operand of a "
+                        "Verilog concatenation");
+                    break;
+                }
+            }
+        }
         return Expression { ExpressionKind::Concatenation, "concat",
             std::move(elements), span_from(open, previous()) };
     }

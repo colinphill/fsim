@@ -1723,7 +1723,21 @@ std::optional<SignalId> Lowerer::hir_named_signal(
     const auto binding = declaration
         ? hir_runtime_binding(*declaration, scope, false)
         : std::nullopt;
-    return binding ? binding->signal : std::nullopt;
+    if (binding && binding->signal) {
+        return binding->signal;
+    }
+    // A member of an instance (`@(posedge dif.clk)`), which may be
+    // elaborated after this process: resolve it in the second pass.
+    if (name.find('.') != std::string::npos) {
+        if (const auto signal = hir_hierarchical_signal(name)) {
+            hierarchical_reference_used_ = true;
+            return signal;
+        }
+        if (hierarchical_reference_retry_) {
+            hierarchical_reference_missed_ = true;
+        }
+    }
+    return std::nullopt;
 }
 
 std::optional<StringRegisterId> Lowerer::lower_hir_class_string_property_read(
@@ -6015,6 +6029,44 @@ Lowerer::lower_hir_function_call_value(
                     && !actual_effective->element_constraints.empty()) {
                     vhdl_actual_element_constraints.emplace_back(
                         index, actual_effective->element_constraints);
+                }
+            }
+            // A string or bit string literal, or a positional aggregate, has
+            // the index range S'LEFT to S'LEFT + N - 1 of the formal's index
+            // subtype S (IEEE 1076-2008 9.3.2, 9.3.3.3).
+            if (!actual_range && actual_width && element_width != 0U
+                && *actual_width % element_width == 0U
+                && *actual_width != 0U) {
+                const auto literal = specialized_hir_unit_->find_expression(
+                    (*actuals)[index]);
+                const bool context_typed = literal && literal->vhdl != nullptr
+                    && (literal->vhdl->kind
+                            == semantic::vhdl::ExpressionKind::string_literal
+                        || (literal->vhdl->kind
+                                == semantic::vhdl::ExpressionKind::aggregate
+                            && std::ranges::all_of(literal->vhdl->associations,
+                                [](const semantic::vhdl::AggregateAssociation& association) {
+                                    return association.choices.empty()
+                                        && association.choice_spelling.empty();
+                                })));
+                std::optional<std::int64_t> index_left;
+                if (formal_predefined_vector) {
+                    index_left = 0;
+                } else if (formal_array) {
+                    const auto array_type = specialized_hir_unit_->find_type(
+                        formal_array->first);
+                    if (array_type && array_type->vhdl != nullptr
+                        && !array_type->vhdl->array_dimensions.empty()
+                        && array_type->vhdl->array_dimensions.front().constraint) {
+                        index_left = hir_range_left(
+                            *array_type->vhdl->array_dimensions.front().constraint);
+                    }
+                }
+                if (context_typed && index_left) {
+                    const auto count = static_cast<std::int64_t>(
+                        *actual_width / element_width);
+                    actual_range = HirPackedRange { *index_left, *index_left + count - 1,
+                        false };
                 }
             }
             vhdl_actual_ranges.emplace_back(index, actual_range);

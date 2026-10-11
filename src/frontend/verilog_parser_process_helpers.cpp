@@ -98,6 +98,9 @@ Statement VerilogParser::parse_case_statement(
             }
             if (at(TokenKind::Identifier)) {
                 const auto variable = advance();
+                // The pattern variable is visible in the matched item's
+                // statement (IEEE 1800-2017 12.6).
+                current_procedural_names_.insert(variable.text);
                 return Expression {
                     ExpressionKind::Call,
                     "@match-bind:" + variable.text,
