@@ -253,6 +253,26 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 36: analysis checks, STD.ENV imports and TEXTIO TEE and FLUSH
+
+Fixtures: `vhdl_environment_tee_and_flush.vhd` (passes on xsim) and seven
+analysis-error fixtures (`undeclared_procedure`, `guard_assignment`,
+`integer_guard`, `character_to_bit`, `undeclared_choice`,
+`scalar_to_record_element`, `reserved_unit_name`; xsim rejects each).
+
+- Procedure calls that name no visible procedure are rejected at analysis
+  (`FSIM-ELAB-VHPROC-014`, naming the procedure).
+- STD.ENV `stop` and `finish` called by simple name after a use clause.
+- Guard checks: assignments to the implicit GUARD signal and integer
+  guard expressions.
+- `all` as a design unit name; CHARACTER control literal names typed as
+  CHARACTER; case choices checked as names; selected element names typed
+  from their prefix object.
+- TEXTIO `TEE` and `FLUSH`.
+
+Corpus effect (interpreter; w108 plus targeted nvc reruns): VESTs +10
+(3198), nvc +3 (`stop1`, `issue718`, `file6`).
+
 ### Batch 35: tables, case choices, 'SUBTYPE and final procedures
 
 Fixtures: `vhdl_tables_cases_and_subtypes.vhd` and
@@ -1659,6 +1679,8 @@ error, and each exposes an existing gap:
 | VHDL: element constraints of ports taken from the actual, `'element`, and element constraints in protected types (syntax and layouts done in batch 33, formals in batch 34) | ~35 nvc cases |
 | VHDL: `'subtype` of an object as a subtype indication (VHDL-2008) | 14 nvc cases |
 | VHDL: a `for` loop over `'RANGE` of a runtime-sized STRING, and element writes to it | 5 VESTs cases (`FSIM-ELAB-071`) |
+| VHDL: signal initializers that do not fold at elaboration (function calls, composite constants of records and nested arrays) | ~22 VESTs/nvc cases (`FSIM-ELAB-HIR-001` "not a bounded integral value") |
+| VHDL: TEXTIO `SREAD`, `JUSTIFY`, and READ of STRING values from a line | nvc textio5, textio6 |
 | SV: `new` for a variable of a specialized class type (`box #(5) b; b = new;`) constructs the default specialization | testbenches using parameterized classes |
 | VHDL: user resolution functions other than a single OR/AND reduction (a runtime resolver calling the function on the driver values) | 28 VESTs cases (`FSIM-ELAB-VHRESOLVE-002`/`-004`), nvc |
 | VHDL: indexing and slicing an unconstrained constant (`constant c : bit_vector := "0101"; c(1)`); its attributes were done in batch 28 | VESTs |

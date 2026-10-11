@@ -1661,10 +1661,36 @@ private:
             }
             return specialized_subtype(std::move(subtype));
         }
-        if (value.referenced_name
-            && value.referenced_name->selected) {
+        // A selected element name (`v.f`) whose object the reference did not
+        // select: resolve the object by the name's prefix.
+        auto selected_object = value.referenced_name
+            ? value.referenced_name->selected
+            : std::nullopt;
+        if (!selected_object && value.kind == semantic::vhdl::ExpressionKind::name
+            && value.text.find('.') != std::string::npos
+            && value.text.find('\'') == std::string::npos) {
+            semantic::vhdl::Name prefix;
+            prefix.spelling = value.text.substr(0U, value.text.find('.'));
+            prefix.canonical = prefix.spelling;
+            const semantic::CompiledDeclarationPredicate object
+                = [](const semantic::CompiledDeclarationView& candidate) {
+                      using Form = semantic::vhdl::DeclarationForm;
+                      return candidate.vhdl != nullptr
+                          && (candidate.vhdl->form == Form::variable
+                              || candidate.vhdl->form == Form::signal
+                              || candidate.vhdl->form == Form::constant
+                              || candidate.vhdl->form == Form::port
+                              || candidate.vhdl->form
+                                  == Form::generic_constant);
+                  };
+            selected_object = semantic::CompiledDesignResolver {
+                specialization_ }
+                                  .resolve_vhdl(prefix, value.scope, object)
+                                  .unique();
+        }
+        if (selected_object) {
             const auto declaration = specialization_.find_declaration(
-                *value.referenced_name->selected);
+                *selected_object);
             if (declaration && declaration->vhdl != nullptr
                 && declaration->vhdl->subtype) {
                 auto subtype = specialized_subtype(
@@ -2119,6 +2145,14 @@ private:
                                || operand->vhdl->text == "downto");
                    })) {
                 return { };
+            }
+            // A CHARACTER control literal (NUL, ESC, ...) of STD.STANDARD,
+            // which is not retained as a declaration.
+            if (value.kind == Kind::name
+                && (!value.referenced_name
+                    || !value.referenced_name->selected)
+                && vhdl_character_control_literal(value.text)) {
+                return { OperandClass::enumeration, "character" };
             }
             // A loop parameter is retained as an INTEGER constant without a
             // value, whatever its discrete range's type.
@@ -6036,6 +6070,12 @@ private:
                 for (const auto& element : statement.waveform) {
                     if (!element.disconnect && element.value.valid()) {
                         validate_value_name(element.value);
+                    }
+                }
+                // Case and selected-assignment choices are values too.
+                for (const auto& alternative : statement.alternatives) {
+                    for (const auto choice : alternative.choices) {
+                        validate_value_name(choice);
                     }
                 }
             }

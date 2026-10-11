@@ -7289,6 +7289,33 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
     return destination;
 }
 
+std::string Lowerer::hir_vhdl_std_env_procedure_spelling(
+    const semantic::vhdl::Name& name,
+    const semantic::ScopeId use_scope) const
+{
+    // Without VHDL-2019 the STD.ENV package has no declarations, so a
+    // procedure imported by `use std.env.all` resolves to nothing; name it
+    // by its selected spelling for the simulator API checks.
+    if (specialized_hir_unit_ == nullptr || name.spelling.empty()
+        || name.spelling.find_first_of(".:") != std::string::npos
+        || !hir_vhdl_callable_candidates(name, use_scope).empty()) {
+        return name.spelling;
+    }
+    std::string member;
+    member.reserve(name.spelling.size());
+    for (const auto character : name.spelling) {
+        member.push_back(static_cast<char>(
+            std::tolower(static_cast<unsigned char>(character))));
+    }
+    if (!semantic::CompiledDesignResolver {
+            *specialized_hir_unit_, hir_generic_binding_frames_ }
+            .vhdl_builtin_package_member_imported(
+                "std", "env", member, use_scope)) {
+        return name.spelling;
+    }
+    return "std.env." + member;
+}
+
 bool Lowerer::lower_hir_vhdl_procedure_call(
     const semantic::StatementId statement_id)
 {
@@ -7325,15 +7352,16 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
     if (is_hir_vhdl_assert_statement(statement_id)) {
         return lower_hir_vhdl_assert_statement(statement_id);
     }
-    const auto& procedure = statement->vhdl->procedure;
+    const auto procedure_spelling = hir_vhdl_std_env_procedure_spelling(
+        statement->vhdl->procedure, statement->vhdl->scope);
     const auto set_psl_cover_assert = same_callable_name(
-        procedure.spelling, "std.env.setpslcoverassert", true);
+        procedure_spelling, "std.env.setpslcoverassert", true);
     const auto clear_psl_state = same_callable_name(
-        procedure.spelling, "std.env.clearpslstate", true);
+        procedure_spelling, "std.env.clearpslstate", true);
     const auto stop = same_callable_name(
-        procedure.spelling, "std.env.stop", true);
+        procedure_spelling, "std.env.stop", true);
     const auto finish = same_callable_name(
-        procedure.spelling, "std.env.finish", true);
+        procedure_spelling, "std.env.finish", true);
     if (set_psl_cover_assert || clear_psl_state || stop || finish) {
         const auto& associations = statement->vhdl->procedure_arguments;
         // STOP and FINISH are VHDL-2008 (IEEE 1076-2008 16.5); the PSL
@@ -7480,7 +7508,13 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
                 hir_source_span(statement->vhdl->source));
             return true;
         }
-        return false;
+        // No visible subprogram has this name (IEEE 1076-2008 10.7).
+        report(
+            "FSIM-ELAB-VHPROC-014",
+            "VHDL procedure call names no visible procedure '"
+                + statement->vhdl->procedure.spelling + "'",
+            hir_source_span(statement->vhdl->source));
+        return true;
     }
     hir_generic_binding_frames_.push_back(
         resolution->generic_bindings);

@@ -963,6 +963,8 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-SEM-124` | error | A VHDL function designator string is not an operator symbol, or an operator function has the wrong number of parameters (IEEE 1076-2008 4.5.2). |
 | `FSIM-VHDL-SEM-125` | error | Before VHDL-2008, a subprogram body's specification does not repeat the lexical elements of its earlier declaration in the same declarative region (IEEE 1076-1993 2.7). |
 | `FSIM-VHDL-SEM-126` | error | An indexed name or slice has a scalar attribute value as its prefix (IEEE 1076-1993 6.4). |
+| `FSIM-VHDL-SEM-127` | error | A signal assignment in a guarded block targets the block's implicit GUARD signal, which has no sources (IEEE 1076-1993 9.1). |
+| `FSIM-VHDL-SEM-128` | error | A block guard expression is an integer expression, not BOOLEAN (IEEE 1076-1993 9.1). |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |

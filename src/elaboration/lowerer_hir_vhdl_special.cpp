@@ -1677,7 +1677,8 @@ bool Lowerer::is_hir_vhdl_environment_directory_statement(
     }
     using Api = frontend::VhdlSimulatorApi;
     const auto api = frontend::vhdl_simulator_api(
-        statement->vhdl->procedure.spelling);
+        hir_vhdl_std_env_procedure_spelling(
+            statement->vhdl->procedure, statement->vhdl->scope));
     return api == Api::dir_open || api == Api::dir_close
         || api == Api::dir_workingdir || api == Api::dir_createdir
         || api == Api::dir_deletedir || api == Api::dir_deletefile;
@@ -1695,7 +1696,8 @@ bool Lowerer::lower_hir_vhdl_environment_directory_statement(
     const auto span = hir_source_span(source.source);
     using Api = frontend::VhdlSimulatorApi;
     const auto api = frontend::vhdl_simulator_api(
-        source.procedure.spelling);
+        hir_vhdl_std_env_procedure_spelling(
+            source.procedure, source.scope));
     if (vhdl_standard_ < frontend::VhdlStandard::Vhdl2019) {
         report(
             "FSIM-ELAB-VHENV-003",

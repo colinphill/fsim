@@ -748,3 +748,40 @@ gives fsim's result in each case checked.
   generate-block item made the parser report the same error forever
   without consuming input (ivtest `scoped_events` used 12 GB at compile);
   the generate declaration parser now always advances.
+
+## Analysis checks, STD.ENV imports and TEXTIO TEE and FLUSH (batch 36)
+
+- A procedure call that names no visible subprogram is rejected at
+  analysis with `FSIM-ELAB-VHPROC-014`, which names the procedure (IEEE
+  1076-2008 10.7). Before, the lowerer gave up silently and the case
+  failed later with the generic `FSIM-ELAB-HIR-001`.
+- `use std.env.all` (or `use std.env.stop`) makes `stop` and `finish`
+  callable by their simple names. Under VHDL-2008 the STD.ENV package has
+  no declarations in the design, so a simple name that a use clause
+  imports from STD.ENV, and that no declaration overloads, takes its
+  selected spelling for the simulator API checks. The STD.ENV directory
+  procedures use the same mapping.
+- A guarded block's implicit GUARD signal has no sources: a concurrent
+  assignment to `guard` in a block without its own GUARD declaration is
+  `FSIM-VHDL-SEM-127`. A guard expression made only of integer literals
+  and arithmetic is not BOOLEAN (`FSIM-VHDL-SEM-128`).
+- The reserved word `all` is not an entity, architecture or package name.
+- Unresolved CHARACTER control literal names (`nul`) have type CHARACTER,
+  so assigning one to a BIT is a type error. Case and selected-assignment
+  choices that name nothing visible are `FSIM-ELAB-VHNAME-002`.
+- A selected element name whose object the reference did not select
+  (`v.item`) takes its subtype from the prefix object, so assigning an
+  integer to a record element of record type is rejected.
+- TEXTIO `TEE` (VHDL-2008 16.4) writes the line to the file and to
+  OUTPUT and empties it. `FLUSH` (VHDL-2008 5.5.2) flushes an open file
+  or OUTPUT; a second file object opened on the same path then reads what
+  was written. `READ` and `WRITE`, `TEE` and `FLUSH` count as file
+  operations only when their first actual is a file object or line.
+  `SREAD`, `JUSTIFY` and reads of STRING values from a line are not
+  supported yet.
+- A signal initializer that does not fold at elaboration (a function
+  call, or a composite constant that the static evaluator cannot read)
+  is still rejected with `FSIM-ELAB-HIR-001` ("is not a bounded integral
+  value"). VHDL needs these values before the first delta, so a
+  SystemVerilog-style initializer process writing at time 0 would add an
+  event; about 22 VESTs and nvc cases are blocked.

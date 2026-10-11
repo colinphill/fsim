@@ -170,7 +170,8 @@ namespace {
     const auto simple = vhdl_simple_name(name);
     return simple == "file_open" || simple == "file_close"
         || simple == "read" || simple == "write" || simple == "swrite"
-        || simple == "readline" || simple == "writeline";
+        || simple == "readline" || simple == "writeline"
+        || simple == "tee" || simple == "flush";
 }
 
 } // namespace
@@ -409,15 +410,18 @@ bool Lowerer::is_hir_vhdl_file_statement(
         statement->vhdl->procedure.canonical.empty()
             ? std::string_view { statement->vhdl->procedure.spelling }
             : std::string_view { statement->vhdl->procedure.canonical });
-    if (name != "read" && name != "write" && name != "swrite") {
+    // READ, WRITE, TEE and FLUSH are file operations only when their first
+    // actual is a file object or line; other procedures share these names.
+    if (name != "read" && name != "write" && name != "swrite"
+        && name != "tee" && name != "flush") {
         return true;
     }
     if (statement->vhdl->procedure_arguments.empty()) {
-        return true;
+        return name != "tee" && name != "flush";
     }
     const auto first = statement->vhdl->procedure_arguments.front().actual;
     const auto selected = hir_referenced_declaration(first);
-    if (!selected && name == "write") {
+    if (!selected && name != "read" && name != "swrite") {
         // std.textio.OUTPUT has no declaration in the design.
         const auto expression = specialized_hir_unit_->find_expression(first);
         if (expression && expression->vhdl != nullptr
@@ -2606,21 +2610,47 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             : TextioScalarClass::unsupported;
     };
 
-    if (name == "readline" || name == "writeline") {
+    const auto output_handle = [&] {
+        const auto handle = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(
+            LoadConstant { handle, unsigned_value(1U, 32U) });
+        return handle;
+    };
+    // VHDL-2008 FLUSH (5.5.2) writes out buffered data of an open file.
+    if (name == "flush") {
+        const auto target = actual("f", 0U);
+        if (call.procedure_arguments.size() == 1U && target
+            && standard_output(*target)) {
+            process_.operations.emplace_back(
+                FileFlush { output_handle(), false });
+            return true;
+        }
+        const auto file = file_actual(0U);
+        if (call.procedure_arguments.size() != 1U || !file) {
+            return fail("FSIM-ELAB-VHFILE-005",
+                "VHDL file operation requires a whole file object");
+        }
+        process_.operations.emplace_back(
+            FileFlush { *file->second.local, false });
+        return true;
+    }
+    if (name == "readline" || name == "writeline" || name == "tee") {
         const auto line = actual("l", 1U);
         const auto line_local = line ? string_binding(*line) : std::nullopt;
         // IEEE 1076-2008 16.4: std.textio.OUTPUT is the host standard
         // output, the runtime's multichannel stdout channel.
         if (const auto target = actual("f", 0U);
-            name == "writeline" && target && standard_output(*target)
+            name != "readline" && target && standard_output(*target)
             && call.procedure_arguments.size() == 2U && line_local
             && line_local->local) {
-            const auto handle = allocate_register(
-                32U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(
-                LoadConstant { handle, unsigned_value(1U, 32U) });
+            if (name == "tee") {
+                process_.operations.emplace_back(FileWriteString {
+                    output_handle(), *line_local->local, { }, { }, true,
+                    false });
+            }
             process_.operations.emplace_back(FileWriteString {
-                handle, *line_local->local, { }, { }, true, true });
+                output_handle(), *line_local->local, { }, { }, true, true });
             return true;
         }
         const auto file = file_actual(0U);
@@ -2642,6 +2672,15 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             process_.operations.emplace_back(FileReadLine {
                 count, *file->second.local, *line_local->local, 0U,
                 FileReadKind::line, true });
+        } else if (name == "tee") {
+            // VHDL-2008 TEE (16.4) writes the line to the file and to
+            // OUTPUT, then empties it like WRITELINE.
+            process_.operations.emplace_back(FileWriteString {
+                *file->second.local, *line_local->local,
+                { }, { }, true, false });
+            process_.operations.emplace_back(FileWriteString {
+                output_handle(), *line_local->local,
+                { }, { }, true, true });
         } else {
             process_.operations.emplace_back(FileWriteString {
                 *file->second.local, *line_local->local,

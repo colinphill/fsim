@@ -1719,6 +1719,11 @@ private:
     bind_hir_vhdl_procedure_actuals(
         semantic::StatementId statement,
         semantic::DeclarationId declaration) const;
+    /// The STD.ENV spelling (`std.env.stop`) of a simple procedure name
+    /// that a use clause imports from STD.ENV and no declaration overloads.
+    [[nodiscard]] std::string hir_vhdl_std_env_procedure_spelling(
+        const semantic::vhdl::Name& name,
+        semantic::ScopeId use_scope) const;
     [[nodiscard]] bool lower_hir_vhdl_procedure_call(
         semantic::StatementId statement);
     [[nodiscard]] bool lower_pending_hir_callables();

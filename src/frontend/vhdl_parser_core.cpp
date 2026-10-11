@@ -242,7 +242,13 @@ Token VhdlParser::expect_identifier(std::string_view description)
     if (at(TokenKind::Identifier) && is_vhdl_reserved_word(current().text, vhdl_standard_)) {
         // `all` is a reserved-word designator in selected names and sensitivity
         // lists, both of which intentionally reuse this identifier helper.
-        if (detail::iequals(current().text, "all") || description == "attribute designator" || description == "attribute entity class") {
+        // A design unit may not be named `all` (IEEE 1076-1993 13.9).
+        const bool unit_name = description == "entity name"
+            || description == "package name"
+            || description == "architecture name";
+        if ((detail::iequals(current().text, "all") && !unit_name)
+            || description == "attribute designator"
+            || description == "attribute entity class") {
             return advance();
         }
         const auto reserved = advance();

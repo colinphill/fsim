@@ -266,7 +266,32 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
   result.kind = GenerateKind::StaticBlock;
   result.then_scope = vhdl_name(label.text);
   if (match(TokenKind::LeftParen)) {
+    const auto guard_start = current();
     result.condition = parse_expression();
+    // A guard expression is BOOLEAN (IEEE 1076-1993 9.1); an arithmetic
+    // expression of integer literals is not.
+    const auto integer_expression = [](const auto& self,
+                                       const Expression& expression) -> bool {
+      if (expression.kind == ExpressionKind::IntegerLiteral) {
+        return true;
+      }
+      if ((expression.kind == ExpressionKind::Binary
+              && (expression.text == "+" || expression.text == "-"
+                  || expression.text == "*" || expression.text == "/"))
+          || (expression.kind == ExpressionKind::Unary
+              && (expression.text == "+" || expression.text == "-"))) {
+        return !expression.operands.empty()
+            && std::ranges::all_of(expression.operands,
+                [&](const Expression& operand) {
+                  return self(self, operand);
+                });
+      }
+      return false;
+    };
+    if (integer_expression(integer_expression, result.condition)) {
+      error(guard_start, "FSIM-VHDL-SEM-128",
+          "a VHDL block guard expression must be BOOLEAN");
+    }
     expect(
         TokenKind::RightParen,
         "')' after a VHDL block guard expression",
@@ -305,6 +330,27 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
       VhdlComponentDeclarationRegion::Block);
   expect_keyword("begin", true, "FSIM-VHDL-PARSE-078");
   parse_vhdl_generate_branch(result.then_body);
+  // The implicit GUARD signal of a guarded block has no sources (IEEE
+  // 1076-1993 9.1).
+  if (result.condition.valid()
+      && std::ranges::none_of(result.then_body.signals,
+          [](const SignalDeclaration& signal) {
+            return vhdl_name(signal.name) == "guard";
+          })) {
+    for (const auto& statement : result.then_body.concurrent_statements) {
+      if (statement.kind == StatementKind::Assignment
+          && statement.target.kind == ExpressionKind::Identifier
+          && vhdl_name(statement.target.text) == "guard") {
+        diagnostics_.push_back(Diagnostic {
+            DiagnosticSeverity::Error,
+            "FSIM-VHDL-SEM-127",
+            "the implicit GUARD signal of a guarded block cannot be "
+            "assigned",
+            statement.span,
+            { } });
+      }
+    }
+  }
   expect_keyword("end", true, "FSIM-VHDL-PARSE-079");
   expect_keyword("block", true, "FSIM-VHDL-PARSE-080");
   if (at(TokenKind::Identifier)) {
