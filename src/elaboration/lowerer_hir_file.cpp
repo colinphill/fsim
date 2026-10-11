@@ -697,9 +697,7 @@ Lowerer::lower_hir_formatted_string(
         }
         auto singular = conversion;
         const auto kind = hir_systemverilog_scalar_kind(*value);
-        singular.format = kind == frontend::SystemVerilogScalarKind::Real
-                || kind == frontend::SystemVerilogScalarKind::Realtime
-                || kind == frontend::SystemVerilogScalarKind::ShortReal
+        singular.format = frontend::is_real_scalar_kind(kind)
             ? frontend::OutputFormat::RealGeneral
             : frontend::OutputFormat::Decimal;
         singular.suppress_leading_zero = conversion.minimum_width == 0U
@@ -1044,9 +1042,7 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                 return false;
             }
             const auto kind = expression_scalar_kind(expression);
-            if (kind == frontend::SystemVerilogScalarKind::ShortReal
-                || kind == frontend::SystemVerilogScalarKind::Real
-                || kind == frontend::SystemVerilogScalarKind::Realtime
+            if (frontend::is_real_scalar_kind(kind)
                 || kind == frontend::SystemVerilogScalarKind::Chandle) {
                 return false;
             }
@@ -1132,9 +1128,7 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
             }
             const auto kind = expression_scalar_kind(expression);
             const auto real_target
-                = kind == frontend::SystemVerilogScalarKind::ShortReal
-                || kind == frontend::SystemVerilogScalarKind::Real
-                || kind == frontend::SystemVerilogScalarKind::Realtime;
+                = frontend::is_real_scalar_kind(kind);
             if (kind == frontend::SystemVerilogScalarKind::None) {
                 return format != frontend::InputScanFormat::Real;
             }
@@ -1443,15 +1437,7 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                                 const auto kind
                                     = expression_scalar_kind(value);
                                 const auto real_scalar
-                                    = kind
-                                        == frontend::SystemVerilogScalarKind::
-                                            ShortReal
-                                    || kind
-                                        == frontend::SystemVerilogScalarKind::
-                                            Real
-                                    || kind
-                                        == frontend::SystemVerilogScalarKind::
-                                            Realtime;
+                                    = frontend::is_real_scalar_kind(kind);
                                 const auto real_format
                                     = output
                                         == frontend::OutputFormat::
@@ -1976,9 +1962,7 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
             }
             const auto kind = hir_systemverilog_scalar_kind(target_id);
             const auto real_target
-                = kind == frontend::SystemVerilogScalarKind::ShortReal
-                || kind == frontend::SystemVerilogScalarKind::Real
-                || kind == frontend::SystemVerilogScalarKind::Realtime;
+                = frontend::is_real_scalar_kind(kind);
             const auto format_matches
                 = kind == frontend::SystemVerilogScalarKind::None
                 ? parsed_conversion.format
@@ -2963,25 +2947,11 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                     text.remove_prefix(physical.size());
                 }
                 unit_name = std::string { vhdl_simple_name(text) };
-                std::ranges::transform(unit_name, unit_name.begin(),
-                    [](const unsigned char character) {
-                        return static_cast<char>(std::tolower(character));
-                    });
+                lowercase_ascii(unit_name);
             }
-            constexpr std::array<std::pair<std::string_view, std::uint64_t>,
-                8U> units { {
-                { "fs", 1U },
-                { "ps", 1'000U },
-                { "ns", 1'000'000U },
-                { "us", 1'000'000'000U },
-                { "ms", 1'000'000'000'000U },
-                { "sec", 1'000'000'000'000'000U },
-                { "min", 60'000'000'000'000'000U },
-                { "hr", 3'600'000'000'000'000'000U },
-            } };
-            const auto unit = std::ranges::find(units, unit_name,
+            const auto unit = std::ranges::find(vhdl_time_units, unit_name,
                 &std::pair<std::string_view, std::uint64_t>::first);
-            if (unit == units.end()) {
+            if (unit == vhdl_time_units.end()) {
                 return fail("FSIM-ELAB-VHTEXTIO-010",
                     "TextIO write of TIME requires a static time unit");
             }
@@ -2989,7 +2959,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             process_.operations.emplace_back(
                 LoadStringConstant { text, std::string { } });
             if (!append_hir_vhdl_time_text(text, *value,
-                    static_cast<std::uint32_t>(unit - units.begin()))) {
+                    static_cast<std::uint32_t>(unit - vhdl_time_units.begin()))) {
                 return false;
             }
             append_string(text);
@@ -3242,9 +3212,7 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
              const semantic::sv::OutputFormat format) {
                 const auto kind = expression_scalar_kind(expression);
                 const auto real_kind
-                    = kind == frontend::SystemVerilogScalarKind::ShortReal
-                    || kind == frontend::SystemVerilogScalarKind::Real
-                    || kind == frontend::SystemVerilogScalarKind::Realtime;
+                    = frontend::is_real_scalar_kind(kind);
                 const auto real_format
                     = format == semantic::sv::OutputFormat::real_scientific
                     || format == semantic::sv::OutputFormat::real_fixed
@@ -3468,11 +3436,7 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                     ? hir_systemverilog_scalar_kind(*output.value)
                     : expression_scalar_kind(*output.value);
                 const auto format = pattern
-                        && (kind == frontend::SystemVerilogScalarKind::Real
-                            || kind
-                                == frontend::SystemVerilogScalarKind::Realtime
-                            || kind
-                                == frontend::SystemVerilogScalarKind::ShortReal)
+                        && (frontend::is_real_scalar_kind(kind))
                     ? runtime::simir::OutputFormat::real_general
                     : runtime_output_format(output.format);
                 const bool suppress_leading_zero

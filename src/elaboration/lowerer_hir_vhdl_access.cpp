@@ -8,11 +8,7 @@ bool same_vhdl_name(
     const std::string_view left,
     const std::string_view right)
 {
-    return std::ranges::equal(
-        left, right, [](const char lhs, const char rhs) {
-            return std::tolower(static_cast<unsigned char>(lhs))
-                == std::tolower(static_cast<unsigned char>(rhs));
-        });
+    return equal_ignoring_ascii_case(left, right);
 }
 
 SourceLocation hir_vhdl_source_location(

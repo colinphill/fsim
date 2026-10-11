@@ -253,6 +253,45 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Cleanup batch 2: shared helpers
+
+No behaviour change is intended. Repeated code is replaced by shared
+helpers:
+
+- `frontend::is_real_scalar_kind` (shortreal, real, realtime) for 39
+  three-way comparisons and two file-local helpers, across the frontend,
+  elaboration, runtime and application.
+- One `compiled_source_span` in elaboration for twelve file-local
+  copies, two inline conversions and `Lowerer::hir_source_span`. All
+  elaboration diagnostics now carry the macro expansion stack, which
+  only four of the copies did.
+- One table of STD.STANDARD TIME units for six copies.
+- `lowercase_ascii`, `lowercase_ascii_copy` and
+  `equal_ignoring_ascii_case` for 34 in-place lowercase transforms,
+  eight file-local identifier comparisons and nine inline comparisons.
+- `simple_name_of` for four file-local functions and five lambdas that
+  strip a name to its last `.` or `:` segment.
+- `Lowerer::hir_vhdl_range_left` and `hir_vhdl_range_right` for 38
+  copies that fold a range bound that is still an expression.
+- The SystemVerilog coverage parser and randsequence use the shared
+  `split_top_level` and `find_top_level`.
+- The VHDL parser parses local package instantiations with one member
+  (five copies) and skips balanced parentheses in lookahead with one
+  member (three copies).
+
+Corpus (passed/total, unique case ids; c2 = wip23, against c1):
+
+| Suite | Cleanup 1 | Cleanup 2 |
+|---|---:|---:|
+| VESTs | 3261/3648 | 3261/3648 |
+| nvc regress | 611/1482 | 611/1482 |
+| VHDL Compliance-Tests | 31/72 | 31/72 |
+| ivtest | 2124/2826 | 2124/2826 |
+| Verilator test_regress | 1022/2415 | 1022/2415 |
+| sv-tests | 1337/1497 | 1337/1497 |
+
+No case that passed in c1 fails in c2.
+
 ### Cleanup batch 1: drifted copies and dead code
 
 Fixture: `sv_pattern_files_and_production_defaults.sv` (xsim does not

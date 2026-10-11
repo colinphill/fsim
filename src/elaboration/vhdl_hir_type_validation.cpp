@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_hir_type_validation.hpp"
 
+#include "elaborator_internal.hpp"
+
 #include "fsim/elaboration/elaborator.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 
@@ -24,28 +26,15 @@
 namespace fsim::elaboration {
 namespace {
 
+using elaboration_detail::equal_ignoring_ascii_case;
+using elaboration_detail::lowercase_ascii;
+using elaboration_detail::lowercase_ascii_copy;
+using elaboration_detail::simple_name_of;
 using semantic::vhdl::RangeConstraint;
 using semantic::vhdl::RangeKind;
 using semantic::vhdl::SubtypeIndication;
 using semantic::vhdl::TypeDefinition;
 using semantic::vhdl::TypeForm;
-
-bool name_equal(const std::string_view left, const std::string_view right)
-{
-    return std::ranges::equal(
-        left, right, [](const char lhs, const char rhs) {
-            return std::tolower(static_cast<unsigned char>(lhs))
-                == std::tolower(static_cast<unsigned char>(rhs));
-        });
-}
-
-std::string_view simple_name(const std::string_view spelling)
-{
-    const auto separator = spelling.find_last_of(".:");
-    return spelling.substr(separator == std::string_view::npos
-            ? 0U
-            : separator + 1U);
-}
 
 enum class ProfileKind : std::uint8_t {
     unknown,
@@ -96,8 +85,7 @@ public:
                 for (const auto& name : item.selected_names) {
                     for (const auto* spelling : { &name.spelling, &name.canonical }) {
                         std::string lowered { *spelling };
-                        std::ranges::transform(lowered, lowered.begin(),
-                            [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                        lowercase_ascii(lowered);
                         if (lowered.find("std.env") != std::string::npos
                             || lowered.find("math_real") != std::string::npos
                             || lowered.find("math_complex") != std::string::npos) {
@@ -116,9 +104,8 @@ public:
         // retained, so names in a design using VITAL cannot be checked.
         for (const auto& unit : specialization_.design().vhdl_hir.units()) {
             std::string lowered { unit.name };
-            std::ranges::transform(lowered, lowered.begin(),
-                [](const unsigned char c) { return static_cast<char>(std::tolower(c)); });
-            if (lowered.starts_with("vital_") && name_equal(unit.library, "ieee")) {
+            lowercase_ascii(lowered);
+            if (lowered.starts_with("vital_") && equal_ignoring_ascii_case(unit.library, "ieee")) {
                 name_check_ = false;
                 break;
             }
@@ -175,7 +162,7 @@ private:
                 }
             }
         }
-        const auto name = simple_name(spelling);
+        const auto name = simple_name_of(spelling);
         const auto last_colon = spelling.rfind(':');
         if (last_colon != std::string_view::npos && last_colon != 0U) {
             const auto offset_colon = spelling.rfind(':', last_colon - 1U);
@@ -203,7 +190,7 @@ private:
                         const auto type = specialization_.find_type(
                             stored.id);
                         if (!type || type->vhdl == nullptr
-                            || !name_equal(type->vhdl->name, name)
+                            || !equal_ignoring_ascii_case(type->vhdl->name, name)
                             || !type->vhdl->source.valid()
                             || type->vhdl->source.value() >= spans.size()) {
                             continue;
@@ -230,7 +217,7 @@ private:
             specialization_.design().vhdl_hir.types()) {
             const auto type = specialization_.find_type(stored.id);
             if (!type || type->vhdl == nullptr
-                || !name_equal(type->vhdl->name, name)) {
+                || !equal_ignoring_ascii_case(type->vhdl->name, name)) {
                 continue;
             }
             if (selected && *selected != type->vhdl->id) {
@@ -576,12 +563,12 @@ private:
     static ArrayDimensionProfile index_profile(
         const std::string_view spelling)
     {
-        const auto name = simple_name(spelling);
-        if (name_equal(name, "natural")) {
+        const auto name = simple_name_of(spelling);
+        if (equal_ignoring_ascii_case(name, "natural")) {
             return { 0, std::numeric_limits<std::int64_t>::max(), false,
                 false };
         }
-        if (name_equal(name, "positive")) {
+        if (equal_ignoring_ascii_case(name, "positive")) {
             return { 1, std::numeric_limits<std::int64_t>::max(), false,
                 false };
         }
@@ -595,20 +582,20 @@ private:
 
     TypeProfile builtin_profile(const std::string_view spelling) const
     {
-        const auto name = simple_name(spelling);
-        if (name_equal(name, "integer")) {
+        const auto name = simple_name_of(spelling);
+        if (equal_ignoring_ascii_case(name, "integer")) {
             return { ProfileKind::integer, std::nullopt, std::nullopt,
                 { }, false };
         }
-        if (name_equal(name, "natural")) {
+        if (equal_ignoring_ascii_case(name, "natural")) {
             return { ProfileKind::integer, 0,
                 std::numeric_limits<std::int64_t>::max(), { }, false };
         }
-        if (name_equal(name, "positive")) {
+        if (equal_ignoring_ascii_case(name, "positive")) {
             return { ProfileKind::integer, 1,
                 std::numeric_limits<std::int64_t>::max(), { }, false };
         }
-        if (name_equal(name, "string")) {
+        if (equal_ignoring_ascii_case(name, "string")) {
             return { ProfileKind::string, std::nullopt, std::nullopt,
                 { }, false };
         }
@@ -632,7 +619,7 @@ private:
         };
         if (std::ranges::any_of(array_names,
                 [&](const auto candidate) {
-                    return name_equal(name, candidate);
+                    return equal_ignoring_ascii_case(name, candidate);
                 })) {
             TypeProfile result { ProfileKind::array, std::nullopt,
                 std::nullopt, { }, false };
@@ -653,7 +640,7 @@ private:
         };
         if (std::ranges::any_of(scalar_names,
                 [&](const auto candidate) {
-                    return name_equal(name, candidate);
+                    return equal_ignoring_ascii_case(name, candidate);
                 })) {
             return { ProfileKind::scalar, std::nullopt, std::nullopt,
                 { }, false };
@@ -1088,7 +1075,7 @@ private:
         if (!type) {
             auto name = std::string_view { subtype.type_mark.spelling };
             name.remove_prefix(name.find_last_of(".:") + 1U);
-            return name_equal(name, "string") || name_equal(name, "bit_vector");
+            return equal_ignoring_ascii_case(name, "string") || equal_ignoring_ascii_case(name, "bit_vector");
         }
         std::unordered_set<std::uint32_t> visiting;
         while (type && visiting.insert(type->value()).second) {
@@ -1223,7 +1210,7 @@ private:
                     spelling.remove_prefix(spelling.find_last_of(".:") + 1U);
                     for (const auto predefined : { "bit_vector", "string", "real", "time",
                              "std_logic_vector", "std_ulogic_vector" }) {
-                        if (name_equal(spelling, predefined)) {
+                        if (equal_ignoring_ascii_case(spelling, predefined)) {
                             report("FSIM-ELAB-VHARRAY-012",
                                 "a VHDL array index subtype must be discrete",
                                 dimension.source.valid() ? dimension.source : type.source);
@@ -1265,7 +1252,7 @@ private:
                     continue;
                 }
                 for (std::size_t earlier = 0; earlier < index; ++earlier) {
-                    if (name_equal(type.record_elements[earlier].name, mark.spelling)) {
+                    if (equal_ignoring_ascii_case(type.record_elements[earlier].name, mark.spelling)) {
                         report("FSIM-ELAB-VHRECORD-003",
                             "record element name '" + mark.spelling
                                 + "' cannot be used within the record type definition",
@@ -1388,19 +1375,19 @@ private:
         };
         const auto class_forms = [](const std::string_view entity_class)
             -> std::vector<Form> {
-            if (name_equal(entity_class, "signal")) {
+            if (equal_ignoring_ascii_case(entity_class, "signal")) {
                 return { Form::signal, Form::port };
             }
-            if (name_equal(entity_class, "variable")) {
+            if (equal_ignoring_ascii_case(entity_class, "variable")) {
                 return { Form::variable };
             }
-            if (name_equal(entity_class, "constant")) {
+            if (equal_ignoring_ascii_case(entity_class, "constant")) {
                 return { Form::constant, Form::generic_constant };
             }
-            if (name_equal(entity_class, "type")) {
+            if (equal_ignoring_ascii_case(entity_class, "type")) {
                 return { Form::type };
             }
-            if (name_equal(entity_class, "subtype")) {
+            if (equal_ignoring_ascii_case(entity_class, "subtype")) {
                 return { Form::subtype };
             }
             return { };
@@ -1431,8 +1418,8 @@ private:
             const auto forms = class_forms(entity_class);
             for (const auto& entity : profile.entity_names) {
                 const auto& spelling = entity.spelling;
-                if (name_equal(spelling, "others")
-                    || name_equal(spelling, "all")) {
+                if (equal_ignoring_ascii_case(spelling, "others")
+                    || equal_ignoring_ascii_case(spelling, "all")) {
                     closed.insert(key);
                     continue;
                 }
@@ -1457,7 +1444,7 @@ private:
                 bool class_match { };
                 bool visible { };
                 for (const auto& candidate : declarations) {
-                    if (!name_equal(candidate.name, spelling)) {
+                    if (!equal_ignoring_ascii_case(candidate.name, spelling)) {
                         continue;
                     }
                     if (candidate.scope == declaration.scope) {
@@ -1493,7 +1480,7 @@ private:
                     return candidate.form == Form::attribute_declaration
                         && candidate.attribute
                         && candidate.attribute->subtype
-                        && name_equal(candidate.name, declaration.name)
+                        && equal_ignoring_ascii_case(candidate.name, declaration.name)
                         && visible_in(declaration.scope, candidate.scope);
                 });
             if (!value || value->vhdl == nullptr
@@ -1617,8 +1604,8 @@ private:
                 return selector && selector->vhdl != nullptr
                     && ((selector->vhdl->kind
                                 == semantic::vhdl::ExpressionKind::binary
-                            && (name_equal(selector->vhdl->text, "to")
-                                || name_equal(selector->vhdl->text, "downto")))
+                            && (equal_ignoring_ascii_case(selector->vhdl->text, "to")
+                                || equal_ignoring_ascii_case(selector->vhdl->text, "downto")))
                         || selector->vhdl->text.ends_with("'range")
                         || selector->vhdl->text.ends_with("'reverse_range"));
             });
@@ -1758,7 +1745,7 @@ private:
                     const auto member = std::ranges::find_if(
                         record->record_elements,
                         [&](const semantic::vhdl::RecordElement& element) {
-                            return name_equal(element.name, member_name);
+                            return equal_ignoring_ascii_case(element.name, member_name);
                         });
                     if (member == record->record_elements.end()) {
                         return std::nullopt;
@@ -1909,10 +1896,10 @@ private:
 
     static OperandClass builtin_operand_class(const std::string_view spelling)
     {
-        const auto name = simple_name(spelling);
+        const auto name = simple_name_of(spelling);
         const auto any = [&](const std::initializer_list<std::string_view> names) {
             return std::ranges::any_of(names,
-                [&](const auto candidate) { return name_equal(name, candidate); });
+                [&](const auto candidate) { return equal_ignoring_ascii_case(name, candidate); });
         };
         if (any({ "integer", "natural", "positive" })) {
             return OperandClass::integer;
@@ -1945,20 +1932,18 @@ private:
 
     static std::string builtin_root(const std::string_view spelling)
     {
-        const auto name = simple_name(spelling);
-        if (name_equal(name, "natural") || name_equal(name, "positive")) {
+        const auto name = simple_name_of(spelling);
+        if (equal_ignoring_ascii_case(name, "natural") || equal_ignoring_ascii_case(name, "positive")) {
             return "integer";
         }
-        if (name_equal(name, "delay_length")) {
+        if (equal_ignoring_ascii_case(name, "delay_length")) {
             return "time";
         }
-        if (name_equal(name, "std_logic")) {
+        if (equal_ignoring_ascii_case(name, "std_logic")) {
             return "std_ulogic";
         }
         std::string result { name };
-        std::ranges::transform(result, result.begin(), [](const unsigned char c) {
-            return static_cast<char>(std::tolower(c));
-        });
+        lowercase_ascii(result);
         return result;
     }
 
@@ -2271,8 +2256,8 @@ private:
         if (!unit || unit->vhdl == nullptr) {
             return true;
         }
-        return name_equal(unit->vhdl->library, "ieee")
-            || name_equal(unit->vhdl->library, "std")
+        return equal_ignoring_ascii_case(unit->vhdl->library, "ieee")
+            || equal_ignoring_ascii_case(unit->vhdl->library, "std")
             || !unit->vhdl->standard_package_revision.empty();
     }
 
@@ -2302,9 +2287,7 @@ private:
             exempt_names_.emplace();
             const auto add = [&](const std::string_view value) {
                 std::string lowered { value };
-                std::ranges::transform(lowered, lowered.begin(), [](const unsigned char c) {
-                    return static_cast<char>(std::tolower(c));
-                });
+                lowercase_ascii(lowered);
                 exempt_names_->insert(std::move(lowered));
             };
             const auto add_generates = [&](const auto& self,
@@ -2333,8 +2316,8 @@ private:
                     add(unit.name);
                 }
             }
-            for (const auto unit : { "fs", "ps", "ns", "us", "ms", "sec", "min", "hr" }) {
-                add(unit);
+            for (const auto& unit : elaboration_detail::vhdl_time_units) {
+                add(unit.first);
             }
             // A name declared anywhere in the design may be made visible in
             // ways the resolver does not model (compiler-supplied VITAL and
@@ -2351,8 +2334,8 @@ private:
                           scopes[declaration.scope.value()].unit)
                     : std::nullopt;
                 if (unit && unit->vhdl != nullptr
-                    && (name_equal(unit->vhdl->library, "ieee")
-                        || name_equal(unit->vhdl->library, "std"))) {
+                    && (equal_ignoring_ascii_case(unit->vhdl->library, "ieee")
+                        || equal_ignoring_ascii_case(unit->vhdl->library, "std"))) {
                     continue;
                 }
                 // Block and generate labels are not values.
@@ -2378,9 +2361,7 @@ private:
             }
         }
         std::string lowered { name };
-        std::ranges::transform(lowered, lowered.begin(), [](const unsigned char c) {
-            return static_cast<char>(std::tolower(c));
-        });
+        lowercase_ascii(lowered);
         return exempt_names_->contains(lowered);
     }
 
@@ -2397,7 +2378,7 @@ private:
             "c158", "c159",
         };
         return std::ranges::any_of(literals,
-            [&](const char* literal) { return name_equal(name, literal); });
+            [&](const char* literal) { return equal_ignoring_ascii_case(name, literal); });
     }
 
     // IEEE 1076-2008 9.3.7: the subtype indication of an allocator denotes a
@@ -2433,7 +2414,7 @@ private:
                 "real_vector", "time_vector"
             };
             unconstrained = std::ranges::any_of(predefined,
-                [&](const std::string_view name) { return name_equal(simple, name); });
+                [&](const std::string_view name) { return equal_ignoring_ascii_case(simple, name); });
         }
         if (unconstrained) {
             report("FSIM-ELAB-VHACCESS-031",
@@ -2577,7 +2558,7 @@ private:
                 // 9.3.3.3: OTHERS needs the bounds of a constrained context.
                 const bool others = std::ranges::any_of(operand->vhdl->associations,
                     [&](const semantic::vhdl::AggregateAssociation& association) {
-                        return name_equal(association.choice_spelling, "others")
+                        return equal_ignoring_ascii_case(association.choice_spelling, "others")
                             || std::ranges::any_of(association.choices,
                                 [&](const semantic::ExpressionId choice) {
                                     const auto found = specialization_.find_expression(choice);
@@ -2611,8 +2592,8 @@ private:
                     return literal.size() == 1U
                         && literals.find(literal.front()) != std::string_view::npos;
                 };
-                if ((name_equal(simple, "bit") && !in("01"))
-                    || ((name_equal(simple, "std_ulogic") || name_equal(simple, "std_logic"))
+                if ((equal_ignoring_ascii_case(simple, "bit") && !in("01"))
+                    || ((equal_ignoring_ascii_case(simple, "std_ulogic") || equal_ignoring_ascii_case(simple, "std_logic"))
                         && !in("UX01ZWLH-"))) {
                     report("FSIM-ELAB-VHQUAL-005",
                         "the operand of a VHDL qualified expression does not have "
@@ -2770,7 +2751,7 @@ private:
             "'delayed", "'transaction", "'event", "'active", "'last_event", "'last_active",
             "'last_value" };
         if (std::ranges::none_of(attributes, [&](const std::string_view attribute) {
-                return name_equal(expression.text, attribute);
+                return equal_ignoring_ascii_case(expression.text, attribute);
             })) {
             return;
         }
@@ -2856,10 +2837,10 @@ private:
     {
         if (expression.kind != semantic::vhdl::ExpressionKind::call
             || expression.operands.empty()
-            || !(name_equal(expression.text, "'stable")
-                || name_equal(expression.text, "'quiet")
-                || name_equal(expression.text, "'transaction")
-                || name_equal(expression.text, "'delayed"))) {
+            || !(equal_ignoring_ascii_case(expression.text, "'stable")
+                || equal_ignoring_ascii_case(expression.text, "'quiet")
+                || equal_ignoring_ascii_case(expression.text, "'transaction")
+                || equal_ignoring_ascii_case(expression.text, "'delayed"))) {
             return;
         }
         if (!signal_formals_) {
@@ -2952,7 +2933,7 @@ private:
                 && unconstrained_array_subtype(*formal_declaration->vhdl->subtype)
                 && std::ranges::any_of(aggregate->vhdl->associations,
                     [&](const semantic::vhdl::AggregateAssociation& association) {
-                        return name_equal(association.choice_spelling, "others")
+                        return equal_ignoring_ascii_case(association.choice_spelling, "others")
                             || std::ranges::any_of(association.choices,
                                 [&](const semantic::ExpressionId choice) {
                                     const auto found = specialization_.find_expression(choice);
@@ -2991,7 +2972,7 @@ private:
                 const auto base = std::string_view { name }.substr(
                     0U, std::string_view { name }.find_first_of(".("));
                 return formal_declaration && formal_declaration->vhdl != nullptr
-                    && name_equal(formal_declaration->vhdl->name, base);
+                    && equal_ignoring_ascii_case(formal_declaration->vhdl->name, base);
             });
             if (formal == formals.end()) {
                 return false;
@@ -3055,8 +3036,8 @@ private:
                 const auto unit = specialization_.design().find_unit(
                     scopes[declaration->vhdl->scope.value()].unit);
                 return unit && unit->vhdl != nullptr
-                    && (name_equal(unit->vhdl->library, "ieee")
-                        || name_equal(unit->vhdl->library, "std"));
+                    && (equal_ignoring_ascii_case(unit->vhdl->library, "ieee")
+                        || equal_ignoring_ascii_case(unit->vhdl->library, "std"));
             })) {
             return;
         }
@@ -3215,7 +3196,7 @@ private:
             };
             const auto has_body = std::ranges::any_of(declarations, [&](const auto& other) {
                 return other.callable && other.callable->defined
-                    && name_equal(other.name, declaration.name)
+                    && equal_ignoring_ascii_case(other.name, declaration.name)
                     && (other.scope == declaration.scope
                         || unit_of(other.scope) == unit_of(declaration.scope));
             });
@@ -3289,7 +3270,7 @@ private:
             const auto element = definition->form == TypeForm::record
                 ? std::ranges::find_if(definition->record_elements,
                       [&](const semantic::vhdl::RecordElement& candidate) {
-                          return name_equal(candidate.name, member);
+                          return equal_ignoring_ascii_case(candidate.name, member);
                       })
                 : definition->record_elements.end();
             if (element == definition->record_elements.end()) {
@@ -3328,34 +3309,34 @@ private:
                 && (scopes[scope.value()].unit == entity_.id
                     || scopes[scope.value()].unit == architecture_.id);
         };
-        bool label = name_equal(text, architecture_.name)
-            || name_equal(text, entity_.name);
+        bool label = equal_ignoring_ascii_case(text, architecture_.name)
+            || equal_ignoring_ascii_case(text, entity_.name);
         for (const auto& statement : design.vhdl_hir.statements()) {
             if (label) {
                 break;
             }
             label = !statement.label.empty() && in_design_unit(statement.scope)
-                && name_equal(statement.label, text);
+                && equal_ignoring_ascii_case(statement.label, text);
         }
         for (const auto& process : design.vhdl_hir.processes()) {
             if (label) {
                 break;
             }
             label = in_design_unit(process.scope)
-                && name_equal(process.name, text);
+                && equal_ignoring_ascii_case(process.name, text);
         }
         for (const auto& candidate : design.vhdl_hir.instances()) {
             if (label) {
                 break;
             }
             label = in_design_unit(candidate.scope)
-                && name_equal(candidate.name, text);
+                && equal_ignoring_ascii_case(candidate.name, text);
         }
         const auto generate_label = [&](const auto& self,
                                         const std::vector<semantic::vhdl::GenerateRegion>& regions)
             -> bool {
             return std::ranges::any_of(regions, [&](const auto& region) {
-                return name_equal(region.label, text)
+                return equal_ignoring_ascii_case(region.label, text)
                     || self(self, region.nested);
             });
         };
@@ -3421,7 +3402,7 @@ private:
             std::string_view { "true" }, std::string_view { "false" },
         };
         if (std::ranges::any_of(predefined_literals, [&](const auto literal) {
-                return name_equal(expression.text, literal);
+                return equal_ignoring_ascii_case(expression.text, literal);
             })
             || builtin_operand_class(expression.text) != OperandClass::unknown
             || vhdl_character_control_literal(expression.text)) {
@@ -3530,8 +3511,8 @@ private:
             if (array != nullptr && array->form == TypeForm::array && array->element_subtype) {
                 auto element = std::string_view { array->element_subtype->type_mark.spelling };
                 element.remove_prefix(element.find_last_of(".:") + 1U);
-                const std::string_view allowed = name_equal(element, "bit") ? "01"
-                    : (name_equal(element, "std_ulogic") || name_equal(element, "std_logic"))
+                const std::string_view allowed = equal_ignoring_ascii_case(element, "bit") ? "01"
+                    : (equal_ignoring_ascii_case(element, "std_ulogic") || equal_ignoring_ascii_case(element, "std_logic"))
                         ? "UX01ZWLH-"
                         : std::string_view { };
                 if (!allowed.empty()
@@ -3556,14 +3537,14 @@ private:
             return;
         }
         const auto is_others = [&](const semantic::vhdl::AggregateAssociation& association) {
-            if (name_equal(association.choice_spelling, "others")) {
+            if (equal_ignoring_ascii_case(association.choice_spelling, "others")) {
                 return true;
             }
             return std::ranges::any_of(association.choices, [&](const semantic::ExpressionId choice) {
                 const auto found = specialization_.find_expression(choice);
                 return found && found->vhdl != nullptr
                     && (found->vhdl->kind == semantic::vhdl::ExpressionKind::default_choice
-                        || name_equal(found->vhdl->text, "others"));
+                        || equal_ignoring_ascii_case(found->vhdl->text, "others"));
             });
         };
         const auto positional = [&](const semantic::vhdl::AggregateAssociation& association) {
@@ -3696,7 +3677,7 @@ private:
                         ? found->vhdl->text
                         : association.choice_spelling;
                     for (std::size_t index { }; index < covered.size(); ++index) {
-                        if (name_equal(definition->record_elements[index].name, spelling)) {
+                        if (equal_ignoring_ascii_case(definition->record_elements[index].name, spelling)) {
                             covered[index] = true;
                             named.push_back(&definition->record_elements[index]);
                         }
@@ -3750,7 +3731,7 @@ private:
             } else if (!is_others(association)) {
                 const auto found = std::ranges::find_if(definition->record_elements,
                     [&](const semantic::vhdl::RecordElement& candidate) {
-                        return name_equal(candidate.name, association.choice_spelling);
+                        return equal_ignoring_ascii_case(candidate.name, association.choice_spelling);
                     });
                 if (found != definition->record_elements.end()) {
                     element = &*found;
@@ -3783,7 +3764,7 @@ private:
                                const std::vector<semantic::vhdl::GenerateRegion>& regions)
             -> void {
             for (const auto& region : regions) {
-                found = found || (!region.iterator.empty() && name_equal(region.iterator, name));
+                found = found || (!region.iterator.empty() && equal_ignoring_ascii_case(region.iterator, name));
                 self(self, region.nested);
             }
         };
@@ -3793,8 +3774,8 @@ private:
 
     bool physical_unit_name(const std::string_view name) const
     {
-        for (const auto unit : { "fs", "ps", "ns", "us", "ms", "sec", "min", "hr" }) {
-            if (name_equal(name, unit)) {
+        for (const auto& unit : elaboration_detail::vhdl_time_units) {
+            if (equal_ignoring_ascii_case(name, unit.first)) {
                 return true;
             }
         }
@@ -3802,7 +3783,7 @@ private:
             [&](const TypeDefinition& type) {
                 return std::ranges::any_of(type.physical_units,
                     [&](const semantic::vhdl::PhysicalUnit& unit) {
-                        return name_equal(unit.name, name);
+                        return equal_ignoring_ascii_case(unit.name, name);
                     });
             });
     }
@@ -3920,8 +3901,8 @@ private:
         auto mark = std::string_view { subtype.type_mark.spelling };
         mark.remove_prefix(mark.find_last_of(".:") + 1U);
         const std::optional<std::int64_t> minimum
-            = name_equal(mark, "bit_vector") ? std::optional<std::int64_t> { 0 }
-            : name_equal(mark, "string")     ? std::optional<std::int64_t> { 1 }
+            = equal_ignoring_ascii_case(mark, "bit_vector") ? std::optional<std::int64_t> { 0 }
+            : equal_ignoring_ascii_case(mark, "string")     ? std::optional<std::int64_t> { 1 }
                                              : std::nullopt;
         if (minimum && subtype.constraints.size() == 1U) {
             const auto& range = subtype.constraints.front();
@@ -3995,12 +3976,12 @@ private:
                 }
                 auto name = std::string_view { current.type_mark.spelling };
                 name.remove_prefix(name.find_last_of(".:") + 1U);
-                if (name_equal(name, "natural")) {
+                if (equal_ignoring_ascii_case(name, "natural")) {
                     range = std::pair { std::int64_t { 0 },
                         std::int64_t { std::numeric_limits<std::int32_t>::max() } };
                     break;
                 }
-                if (name_equal(name, "positive")) {
+                if (equal_ignoring_ascii_case(name, "positive")) {
                     range = std::pair { std::int64_t { 1 },
                         std::int64_t { std::numeric_limits<std::int32_t>::max() } };
                     break;
@@ -4790,7 +4771,7 @@ private:
     bool choice_is_others(
         const semantic::vhdl::AggregateAssociation& association) const
     {
-        if (name_equal(simple_name(association.choice_spelling),
+        if (equal_ignoring_ascii_case(simple_name_of(association.choice_spelling),
                 "others")) {
             return true;
         }
@@ -4801,7 +4782,7 @@ private:
                    return choice && choice->vhdl != nullptr
                        && choice->vhdl->kind
                            == semantic::vhdl::ExpressionKind::name
-                       && name_equal(choice->vhdl->text, "others");
+                       && equal_ignoring_ascii_case(choice->vhdl->text, "others");
                }();
     }
 
@@ -4940,7 +4921,7 @@ private:
                     && std::ranges::any_of(
                         record.record_elements,
                         [&](const auto& element) {
-                            return name_equal(
+                            return equal_ignoring_ascii_case(
                                 element.name, choice->vhdl->text);
                         });
                 if (!named) {
@@ -5825,7 +5806,7 @@ private:
                             continue;
                         }
                         const auto selected = association.formal
-                            ? name_equal(
+                            ? equal_ignoring_ascii_case(
                                   declaration->vhdl->name,
                                   association.formal->spelling)
                             : port_index == positional;
@@ -5941,7 +5922,7 @@ private:
                 && ((root != nullptr && root->form == TypeForm::file)
                     // STD.TEXTIO's TEXT has no HIR type definition.
                     || (root == nullptr && !stored.subtype->type_mark.target.valid()
-                        && name_equal(simple_name(stored.subtype->type_mark.spelling),
+                        && equal_ignoring_ascii_case(simple_name_of(stored.subtype->type_mark.spelling),
                             "text")))) {
                 report("FSIM-ELAB-VHFILE-016",
                     "VHDL interface object '" + stored.name
@@ -6091,7 +6072,7 @@ private:
                         const auto alternative = std::ranges::find_if(
                             region.nested,
                             [&](const semantic::vhdl::GenerateRegion& child) {
-                                return name_equal(child.label, else_label);
+                                return equal_ignoring_ascii_case(child.label, else_label);
                             });
                         if (alternative != region.nested.end()) {
                             else_scope = alternative->scope;
@@ -6159,13 +6140,10 @@ private:
                     }
                     const auto& value = element.delay->primary;
                     long double scale { };
-                    for (const auto& [unit, factor] : std::initializer_list<
-                             std::pair<std::string_view, long double>> {
-                             { "fs", 1.0L }, { "ps", 1e3L }, { "ns", 1e6L }, { "us", 1e9L },
-                             { "ms", 1e12L }, { "sec", 1e15L }, { "min", 6e16L },
-                             { "hr", 3.6e18L } }) {
-                        if (name_equal(value.unit, unit)) {
-                            scale = factor;
+                    for (const auto& [unit, factor] :
+                        elaboration_detail::vhdl_time_units) {
+                        if (equal_ignoring_ascii_case(value.unit, unit)) {
+                            scale = static_cast<long double>(factor);
                         }
                     }
                     if (scale == 0.0L || value.divisor == 0U) {
@@ -6442,8 +6420,8 @@ private:
                     == semantic::vhdl::ExpressionKind::integer_literal
                 && !negated_integer_minimum_literals.contains(
                     expression.id.value())
-                && !name_equal(
-                    simple_name(expression.nominal_type), "time")) {
+                && !equal_ignoring_ascii_case(
+                    simple_name_of(expression.nominal_type), "time")) {
                 const auto value = bound(
                     std::nullopt, expression.id);
                 if (value
@@ -6637,7 +6615,7 @@ private:
                 && std::ranges::none_of(specialization_.design().vhdl_hir.declarations(),
                     [&](const semantic::vhdl::Declaration& candidate) {
                         return candidate.form == semantic::vhdl::DeclarationForm::component
-                            && name_equal(candidate.name, simple_name(instance.target.spelling));
+                            && equal_ignoring_ascii_case(candidate.name, simple_name_of(instance.target.spelling));
                     })) {
                 report("FSIM-ELAB-VHCOMP-016",
                     "VHDL component '" + instance.target.spelling + "' is not declared",
@@ -6761,7 +6739,7 @@ std::vector<Diagnostic> validate_vhdl_architecture_names(
         [&](const semantic::vhdl::Unit& candidate) {
             return candidate.kind == semantic::vhdl::UnitKind::entity
                 && candidate.library == architecture->library
-                && name_equal(candidate.name, architecture->primary_name);
+                && equal_ignoring_ascii_case(candidate.name, architecture->primary_name);
         });
     if (entity == units.end()) {
         return result;
@@ -6772,7 +6750,6 @@ std::vector<Diagnostic> validate_vhdl_architecture_names(
     if (!specialization) {
         return result;
     }
-    const auto& spans = compiled.semantics.source_spans();
     for (const auto& issue :
         Validator { *specialization, *entity, *architecture }.run()) {
         // Without generic values only name rules are decidable here.
@@ -6784,14 +6761,8 @@ std::vector<Diagnostic> validate_vhdl_architecture_names(
         Diagnostic diagnostic;
         diagnostic.code = issue.code;
         diagnostic.message = issue.message;
-        if (issue.source.valid() && issue.source.value() < spans.size()) {
-            const auto& span = spans[issue.source.value()];
-            diagnostic.span.source_name = span.logical_name;
-            diagnostic.span.begin = { static_cast<std::size_t>(span.begin.offset),
-                span.begin.line, span.begin.column };
-            diagnostic.span.end = { static_cast<std::size_t>(span.end.offset),
-                span.end.line, span.end.column };
-        }
+        diagnostic.span = elaboration_detail::compiled_source_span(
+            compiled, issue.source);
         result.push_back(std::move(diagnostic));
     }
     return result;

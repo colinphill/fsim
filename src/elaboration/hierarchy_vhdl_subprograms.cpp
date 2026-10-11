@@ -30,12 +30,6 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
         return vhdl_configuration_detail::configuration_name_equal(
             left, right);
     };
-    const auto simple_name = [](const std::string_view spelling) {
-        const auto separator = spelling.find_last_of(".:");
-        return spelling.substr(separator == std::string_view::npos
-                ? 0U
-                : separator + 1U);
-    };
     const auto name_part_count = [](const std::string_view spelling) {
         std::size_t count { };
         std::size_t begin { };
@@ -313,11 +307,11 @@ HierarchyBuilder::validate_compiled_vhdl_subprograms(
                   }
                   if (left->vhdl->subtype || right->vhdl->subtype) {
                       const auto left_name = left->vhdl->subtype
-                          ? simple_name(
+                          ? simple_name_of(
                                 left->vhdl->subtype->type_mark.spelling)
                           : std::string_view { };
                       const auto right_name = right->vhdl->subtype
-                          ? simple_name(
+                          ? simple_name_of(
                                 right->vhdl->subtype->type_mark.spelling)
                           : std::string_view { };
                       if (!left->vhdl->subtype

@@ -291,10 +291,7 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_math_call(
     }
 
     using Function = runtime::SystemVerilogMathFunction;
-    const bool first_real = first->kind
-            == frontend::SystemVerilogScalarKind::ShortReal
-        || first->kind == frontend::SystemVerilogScalarKind::Real
-        || first->kind == frontend::SystemVerilogScalarKind::Realtime;
+    const bool first_real = frontend::is_real_scalar_kind(first->kind);
     const bool valid_profile = *function == Function::Rtoi
         ? first_real
         // $itor converts an integral value of any width (20.5).

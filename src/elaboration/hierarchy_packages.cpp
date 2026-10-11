@@ -222,34 +222,6 @@ namespace {
         return &files[file.value()].physical_name;
     }
 
-    frontend::SourceSpan compiled_source_span(
-        const semantic::CompiledDesign& compiled,
-        const semantic::SourceSpanId source)
-    {
-        frontend::SourceSpan result;
-        const auto& spans = compiled.semantics.source_spans();
-        if (!source.valid() || source.value() >= spans.size()) {
-            return result;
-        }
-        const auto& span = spans[source.value()];
-        result.source_name = span.logical_name;
-        result.begin = {
-            static_cast<std::size_t>(span.begin.offset),
-            span.begin.line,
-            span.begin.column,
-        };
-        result.end = {
-            static_cast<std::size_t>(span.end.offset),
-            span.end.line,
-            span.end.column,
-        };
-        if (const auto* physical = compiled_physical_source(
-                compiled, source)) {
-            result.physical_source_name = *physical;
-        }
-        return result;
-    }
-
     frontend::PortDirection compiled_port_direction(
         const semantic::sv::Direction direction) noexcept
     {
@@ -583,10 +555,7 @@ namespace {
                    })) {
                 return std::nullopt;
             }
-            std::ranges::transform(bits, bits.begin(), [](const char bit) {
-                return static_cast<char>(std::tolower(
-                    static_cast<unsigned char>(bit)));
-            });
+            lowercase_ascii(bits);
             return bits;
         }
 
@@ -937,15 +906,6 @@ namespace {
         return candidate.id == id ? &candidate : nullptr;
     }
 
-    std::string_view compiled_vhdl_simple_name(
-        const std::string_view spelling)
-    {
-        const auto separator = spelling.find_last_of(".:");
-        return spelling.substr(separator == std::string_view::npos
-                ? 0U
-                : separator + 1U);
-    }
-
     std::string compiled_vhdl_shape_name(const std::string_view input)
     {
         std::string result;
@@ -1202,15 +1162,9 @@ namespace {
     {
         std::unordered_set<std::uint32_t> visiting;
         std::unordered_set<std::uint32_t> element_visiting;
-        const auto simple_name = [](const std::string_view spelling) {
-            const auto separator = spelling.find_last_of(".:");
-            return spelling.substr(separator == std::string_view::npos
-                    ? 0U
-                    : separator + 1U);
-        };
         const auto builtin_scalar_layout = [&](const std::string_view spelling)
             -> std::optional<CompiledVhdlSignalLayout> {
-            const auto name = simple_name(spelling);
+            const auto name = simple_name_of(spelling);
             if (compiled_vhdl_name_equal(name, "bit")) {
                 return CompiledVhdlSignalLayout {
                     1U, frontend::ValueDomain::Bit2
@@ -1251,7 +1205,7 @@ namespace {
         };
         const auto builtin_element_layout = [&](const std::string_view spelling)
             -> std::optional<CompiledVhdlSignalLayout> {
-            const auto name = simple_name(spelling);
+            const auto name = simple_name_of(spelling);
             if (compiled_vhdl_name_equal(name, "bit_vector")) {
                 return CompiledVhdlSignalLayout {
                     1U, frontend::ValueDomain::Bit2
@@ -1399,7 +1353,7 @@ namespace {
             if (name.empty()) {
                 return nullptr;
             }
-            const auto generic_name = simple_name(name);
+            const auto generic_name = simple_name_of(name);
             for (const auto& actual : actuals) {
                 const auto declaration = specialization.find_declaration(
                     actual.declaration);
@@ -2723,12 +2677,6 @@ namespace {
         const semantic::CompiledDesignResolver type_resolver {
             specialization
         };
-        const auto simple_name = [](const std::string_view spelling) {
-            const auto separator = spelling.find_last_of(".:");
-            return spelling.substr(separator == std::string_view::npos
-                    ? 0U
-                    : separator + 1U);
-        };
         const auto boundary = [&](const std::optional<std::int64_t> value,
                                   const std::optional<semantic::ExpressionId>
                                       expression) {
@@ -2737,10 +2685,7 @@ namespace {
                 : value;
         };
         const auto canonical_name = [](std::string value) {
-            std::ranges::transform(value, value.begin(), [](const char byte) {
-                return static_cast<char>(std::tolower(
-                    static_cast<unsigned char>(byte)));
-            });
+            lowercase_ascii(value);
             return value;
         };
         const auto nominal_identity = [&](const semantic::vhdl::TypeDefinition&
@@ -2833,7 +2778,7 @@ namespace {
         };
         const auto generic_actual_subtype = [&](const std::string_view name)
             -> std::optional<semantic::vhdl::SubtypeIndication> {
-            const auto generic_name = simple_name(name);
+            const auto generic_name = simple_name_of(name);
             if (generic_name.empty()) {
                 return std::nullopt;
             }
@@ -2881,8 +2826,8 @@ namespace {
                     actual
                     && (actual->type_mark.target.valid()
                         || !compiled_vhdl_name_equal(
-                            simple_name(actual->type_mark.spelling),
-                            simple_name(subtype.type_mark.spelling)))) {
+                            simple_name_of(actual->type_mark.spelling),
+                            simple_name_of(subtype.type_mark.spelling)))) {
                     auto specialized_type = *actual;
                     if (!subtype.constraints.empty()) {
                         specialized_type.constraints = subtype.constraints;
@@ -2929,7 +2874,7 @@ namespace {
                 }
             }
             if (!subtype.type_mark.target.valid()) {
-                const auto name = simple_name(
+                const auto name = simple_name_of(
                     subtype.type_mark.spelling);
                 const auto builtin_array
                     = compiled_vhdl_name_equal(name, "bit_vector")
@@ -4339,7 +4284,7 @@ namespace {
         std::unordered_set<std::uint32_t> visited;
         for (;;) {
             if (compiled_vhdl_name_equal(
-                    compiled_vhdl_simple_name(current.type_mark.spelling), "real")) {
+                    simple_name_of(current.type_mark.spelling), "real")) {
                 return true;
             }
             const auto type_id = current.type_mark.target;
@@ -4351,7 +4296,7 @@ namespace {
                 return false;
             }
             const auto& definition = *type->vhdl;
-            if (compiled_vhdl_name_equal(compiled_vhdl_simple_name(definition.name), "real")) {
+            if (compiled_vhdl_name_equal(simple_name_of(definition.name), "real")) {
                 return true;
             }
             if (definition.form != semantic::vhdl::TypeForm::subtype
@@ -4424,7 +4369,7 @@ namespace {
         // A conversion to REAL of a static numeric value (9.3.6).
         if (source.kind == Kind::call && source.operands.size() == 1U
             && compiled_vhdl_name_equal(
-                compiled_vhdl_simple_name(source.referenced_name
+                simple_name_of(source.referenced_name
                         ? source.referenced_name->spelling
                         : source.text),
                 "real")) {
@@ -4707,7 +4652,7 @@ namespace {
             -> const semantic::vhdl::TypeDefinition* {
             auto type_id = effective_subtype.type_mark.target;
             if (!type_id.valid()) {
-                const auto type_name = compiled_vhdl_simple_name(
+                const auto type_name = simple_name_of(
                     effective_subtype.type_mark.spelling);
                 const auto found = std::ranges::find_if(
                     specialization.vhdl_types(),
@@ -4811,7 +4756,7 @@ namespace {
                 // A CHARACTER element holds its literal's position.
                 if (layout->width == 8U
                     && compiled_vhdl_name_equal(
-                        compiled_vhdl_simple_name(elements[index].subtype.type_mark.spelling),
+                        simple_name_of(elements[index].subtype.type_mark.spelling),
                         "character")) {
                     auto current = value;
                     for (std::size_t depth { }; depth < 16U; ++depth) {
@@ -4857,11 +4802,7 @@ namespace {
             };
             for (const auto& association : source.associations) {
                 auto choice = association.choice_spelling;
-                std::ranges::transform(
-                    choice, choice.begin(), [](const char character) {
-                        return static_cast<char>(std::tolower(
-                            static_cast<unsigned char>(character)));
-                    });
+                lowercase_ascii(choice);
                 if (choice == "others") {
                     if (others) {
                         return std::nullopt;
@@ -5006,12 +4947,7 @@ namespace {
                 return std::nullopt;
             }
             auto choice_spelling = association.choice_spelling;
-            std::ranges::transform(
-                choice_spelling, choice_spelling.begin(),
-                [](const char character) {
-                    return static_cast<char>(std::tolower(
-                        static_cast<unsigned char>(character)));
-                });
+            lowercase_ascii(choice_spelling);
             if (choice_spelling == "others") {
                 if (others) {
                     return std::nullopt;
@@ -5499,7 +5435,7 @@ namespace {
                 return std::nullopt;
             }
             const auto& choice = *expression->vhdl;
-            const auto index_type = compiled_vhdl_simple_name(
+            const auto index_type = simple_name_of(
                 dimension.index_subtype);
             // Character literals denote the ordinal of the index type's
             // literal, which differs between CHARACTER, BIT and STD_ULOGIC.
@@ -5565,10 +5501,7 @@ namespace {
             return found;
         };
         const auto lowered = [](std::string text) {
-            std::ranges::transform(text, text.begin(), [](const char value) {
-                return static_cast<char>(
-                    std::tolower(static_cast<unsigned char>(value)));
-            });
+            lowercase_ascii(text);
             return text;
         };
 
@@ -5579,7 +5512,7 @@ namespace {
             const auto real_element = element.systemverilog_scalar
                     == frontend::SystemVerilogScalarKind::Real
                 || compiled_vhdl_name_equal(
-                    compiled_vhdl_simple_name(element_subtype->type_mark.spelling),
+                    simple_name_of(element_subtype->type_mark.spelling),
                     "real");
             if (real_element && *element_width == 64U) {
                 if (const auto real = compiled_vhdl_static_real(specialization, id)) {
@@ -5589,7 +5522,7 @@ namespace {
             }
             if (!value && *element_width == 8U
                 && compiled_vhdl_name_equal(
-                    compiled_vhdl_simple_name(element_subtype->type_mark.spelling),
+                    simple_name_of(element_subtype->type_mark.spelling),
                     "character")) {
                 // A CHARACTER element holds its literal's position.
                 const auto literal = specialization.find_expression(strip_qualified(id));
@@ -5639,7 +5572,7 @@ namespace {
                 && dimension + 1U == array.dimensions.size()
                 && *element_width == 8U
                 && compiled_vhdl_name_equal(
-                    compiled_vhdl_simple_name(element_subtype->type_mark.spelling),
+                    simple_name_of(element_subtype->type_mark.spelling),
                     "character")) {
                 std::string text = source.decoded_string.value_or(std::string { });
                 if (text.empty() && source.text.size() >= 2U
@@ -6058,7 +5991,7 @@ namespace {
                     *definition->element_subtype, use_scope);
         }
         if (!element) {
-            auto name = compiled_vhdl_simple_name(
+            auto name = simple_name_of(
                 effective->type_mark.spelling);
             const bool bit_vector = compiled_vhdl_name_equal(
                 name, "bit_vector");
@@ -6151,11 +6084,7 @@ namespace {
         };
         for (const auto& association : expression->vhdl->associations) {
             auto spelling = association.choice_spelling;
-            std::ranges::transform(
-                spelling, spelling.begin(), [](const char character) {
-                    return static_cast<char>(std::tolower(
-                        static_cast<unsigned char>(character)));
-                });
+            lowercase_ascii(spelling);
             spelling.erase(std::remove_if(
                 spelling.begin(), spelling.end(), [](const char character) {
                     return std::isspace(
@@ -14540,11 +14469,11 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                 }
             }
             const auto formal_name
-                = compiled_vhdl_simple_name(
+                = simple_name_of(
                     formal_declaration.subtype
                         ->type_mark.spelling);
             const auto actual_name
-                = compiled_vhdl_simple_name(qualified_name);
+                = simple_name_of(qualified_name);
             const auto compatible
                 = (!formal_name.empty() && !actual_name.empty()
                       && compiled_vhdl_name_equal(
@@ -16150,7 +16079,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                 std::unordered_set<std::uint32_t> visiting;
                 for (;;) {
                     if (compiled_vhdl_name_equal(
-                            compiled_vhdl_simple_name(spelling), "character")) {
+                            simple_name_of(spelling), "character")) {
                         return true;
                     }
                     if (!target.valid()
@@ -16214,7 +16143,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             auto target = declaration.subtype->type_mark.target;
             std::unordered_set<std::uint32_t> visiting;
             for (;;) {
-                if (compiled_vhdl_name_equal(compiled_vhdl_simple_name(spelling), "string")) {
+                if (compiled_vhdl_name_equal(simple_name_of(spelling), "string")) {
                     return true;
                 }
                 if (!target.valid() || !visiting.insert(target.value()).second) {
@@ -16224,7 +16153,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                 if (!type || type->vhdl == nullptr) {
                     return false;
                 }
-                if (compiled_vhdl_name_equal(compiled_vhdl_simple_name(type->vhdl->name), "string")) {
+                if (compiled_vhdl_name_equal(simple_name_of(type->vhdl->name), "string")) {
                     return true;
                 }
                 spelling = type->vhdl->base.type_mark.spelling;
@@ -16292,7 +16221,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
             std::unordered_set<std::uint32_t> visiting;
             for (;;) {
                 if (compiled_vhdl_name_equal(
-                        compiled_vhdl_simple_name(spelling), "real")) {
+                        simple_name_of(spelling), "real")) {
                     return true;
                 }
                 if (!target.valid()
@@ -17714,11 +17643,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_physical_type_units(
     const std::optional<semantic::SpecializedHirUnit>& specialized)
 {
     const auto physical_name = [](std::string value) {
-        std::ranges::transform(
-            value, value.begin(), [](const char character) {
-                return static_cast<char>(std::tolower(
-                    static_cast<unsigned char>(character)));
-            });
+        lowercase_ascii(value);
         return value;
     };
     bool valid = true;
@@ -17898,15 +17823,8 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
         // REAL or a floating type derived from it.
         bool floating { };
     };
-    const auto simple_name = [](const std::string_view spelling) {
-        const auto separator = spelling.find_last_of(".:");
-        return spelling.substr(
-            separator == std::string_view::npos
-                ? 0U
-                : separator + 1U);
-    };
     const auto builtin_profile = [&](const std::string_view spelling) {
-        const auto name = simple_name(spelling);
+        const auto name = simple_name_of(spelling);
         if (compiled_vhdl_name_equal(name, "integer")
             || compiled_vhdl_name_equal(name, "natural")
             || compiled_vhdl_name_equal(name, "positive")
@@ -18146,7 +18064,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
             && semantic::CompiledDesignResolver {
                 *compiled_, architecture.id, &*specialized }
                 .vhdl_builtin_type_visible(linked_subtype.type_mark.spelling, *scope)) {
-            const auto name = simple_name(
+            const auto name = simple_name_of(
                 linked_subtype.type_mark.spelling);
             const auto array
                 = compiled_vhdl_name_equal(name, "directory_items")
@@ -18222,9 +18140,9 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                     ? SubtypeClass::integer
                     : SubtypeClass::scalar;
                 profile.floating = compiled_vhdl_name_equal(
-                                       simple_name(definition.name), "real")
+                                       simple_name_of(definition.name), "real")
                     || compiled_vhdl_name_equal(
-                        simple_name(definition.base.type_mark.spelling),
+                        simple_name_of(definition.base.type_mark.spelling),
                         "real");
             } else if (definition.form == Form::unresolved) {
                 profile.type_class = SubtypeClass::unknown;
@@ -18782,7 +18700,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_subtype_declarations(
                     [&](const semantic::vhdl::Declaration& candidate) {
                         return candidate.form == semantic::vhdl::DeclarationForm::alias
                             && compiled_vhdl_name_equal(candidate.name,
-                                compiled_vhdl_simple_name(reference.spelling));
+                                simple_name_of(reference.spelling));
                     });
                 if (profile.type_class == SubtypeClass::unknown
                     && linked_subtype.unspecified_class
@@ -19740,7 +19658,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_port_actual_compatibility(
         if (type.vhdl_array) {
             return true;
         }
-        const auto name = compiled_vhdl_simple_name(
+        const auto name = simple_name_of(
             type.spelling);
         return compiled_vhdl_name_equal(name, "bit_vector")
             || compiled_vhdl_name_equal(
@@ -20884,11 +20802,11 @@ bool HierarchyBuilder::compiled_vhdl_component_subtype_compatible(
                 == *entity_template.selected;
         }
         return compiled_vhdl_name_equal(
-            compiled_vhdl_simple_name(
+            simple_name_of(
                 candidate_template.canonical.empty()
                     ? candidate_template.spelling
                     : candidate_template.canonical),
-            compiled_vhdl_simple_name(
+            simple_name_of(
                 entity_template.canonical.empty()
                     ? entity_template.spelling
                     : entity_template.canonical));
@@ -20954,7 +20872,7 @@ bool HierarchyBuilder::compiled_vhdl_component_subtype_compatible(
         return true;
     }
     const auto predefined_type = [](const auto& name) {
-        const auto simple = compiled_vhdl_simple_name(
+        const auto simple = simple_name_of(
             name.spelling);
         constexpr std::array builtins {
             std::string_view { "bit" },
@@ -20992,9 +20910,9 @@ bool HierarchyBuilder::compiled_vhdl_component_subtype_compatible(
     const auto same_predefined_type
         = candidate_predefined && entity_predefined
         && compiled_vhdl_name_equal(
-            compiled_vhdl_simple_name(
+            simple_name_of(
                 candidate_subtype.type_mark.spelling),
-            compiled_vhdl_simple_name(
+            simple_name_of(
                 entity_subtype.type_mark.spelling));
     const auto visible_type_target = [&](
                                          const semantic::vhdl::SubtypeIndication& subtype,

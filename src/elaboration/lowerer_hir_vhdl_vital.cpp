@@ -18,10 +18,7 @@ std::string canonical_vital_name(const std::string_view spelling)
     const auto separator = spelling.find_last_of('.');
     auto result = std::string { spelling.substr(
         separator == std::string_view::npos ? 0U : separator + 1U) };
-    std::ranges::transform(result, result.begin(), [](const char value) {
-        return static_cast<char>(
-            std::tolower(static_cast<unsigned char>(value)));
-    });
+    lowercase_ascii(result);
     return result;
 }
 

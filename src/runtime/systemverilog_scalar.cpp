@@ -20,9 +20,7 @@ namespace {
 
     bool real_kind(const SystemVerilogScalarKind kind) noexcept
     {
-        return kind == SystemVerilogScalarKind::ShortReal
-            || kind == SystemVerilogScalarKind::Real
-            || kind == SystemVerilogScalarKind::Realtime;
+        return frontend::is_real_scalar_kind(kind);
     }
 
     SystemVerilogScalarKind promoted_kind(
@@ -600,9 +598,7 @@ SystemVerilogPackedScalarResult systemverilog_scalar_binary_payload(
     const SystemVerilogScalarKind result_kind) noexcept
 {
     const auto real_kind = [](const SystemVerilogScalarKind kind) {
-        return kind == SystemVerilogScalarKind::Real
-            || kind == SystemVerilogScalarKind::Realtime
-            || kind == SystemVerilogScalarKind::ShortReal;
+        return frontend::is_real_scalar_kind(kind);
     };
     // IEEE 1800-2017 6.12.2: x and z bits of a time value convert to zero
     // when the value takes part in a real operation.

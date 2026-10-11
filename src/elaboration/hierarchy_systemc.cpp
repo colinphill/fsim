@@ -37,39 +37,7 @@ bool systemc_construction_name_equal(
         return left == right;
     }
     return left.size() == right.size()
-        && std::ranges::equal(left, right, [](const char lhs,
-                                             const char rhs) {
-               return std::tolower(static_cast<unsigned char>(lhs))
-                   == std::tolower(static_cast<unsigned char>(rhs));
-           });
-}
-
-frontend::SourceSpan compiled_systemc_source_span(
-    const semantic::CompiledDesign& compiled,
-    const semantic::SourceSpanId source)
-{
-    frontend::SourceSpan result;
-    const auto& spans = compiled.semantics.source_spans();
-    if (!source.valid() || source.value() >= spans.size()) {
-        return result;
-    }
-    const auto& span = spans[source.value()];
-    result.source_name = span.logical_name;
-    result.begin = {
-        static_cast<std::size_t>(span.begin.offset),
-        span.begin.line,
-        span.begin.column,
-    };
-    result.end = {
-        static_cast<std::size_t>(span.end.offset),
-        span.end.line,
-        span.end.column,
-    };
-    const auto& files = compiled.semantics.source_files();
-    if (span.file.valid() && span.file.value() < files.size()) {
-        result.physical_source_name = files[span.file.value()].physical_name;
-    }
-    return result;
+        && equal_ignoring_ascii_case(left, right);
 }
 
 } // namespace
@@ -113,7 +81,7 @@ frontend::SourceSpan compiled_systemc_source_span(
         const std::string_view target)
     {
         const auto instance_source = compiled_ != nullptr
-            ? compiled_systemc_source_span(*compiled_, instance.source)
+            ? compiled_source_span(*compiled_, instance.source)
             : frontend::SourceSpan { };
         if (systemc_provider_ == nullptr) {
             if (!instance.parameters.empty()) {
@@ -145,7 +113,7 @@ frontend::SourceSpan compiled_systemc_source_span(
         const auto diagnostics_before = diagnostics_.size();
         for (const auto& association : instance.parameters) {
             const auto source = compiled_ != nullptr
-                ? compiled_systemc_source_span(
+                ? compiled_source_span(
                     *compiled_, association.source)
                 : instance_source;
             if (association.kind
@@ -295,7 +263,7 @@ HierarchyBuilder::construct_systemc_description(
     const std::string_view target)
 {
     const auto instance_source = compiled_ != nullptr
-        ? compiled_systemc_source_span(*compiled_, instance.source)
+        ? compiled_source_span(*compiled_, instance.source)
         : frontend::SourceSpan { };
     if (systemc_provider_ == nullptr) {
         if (!instance.generic_map.empty()) {
@@ -304,7 +272,7 @@ HierarchyBuilder::construct_systemc_description(
                 "HDL generic actuals require a live SystemC factory "
                 "schema provider",
                 compiled_ != nullptr
-                    ? compiled_systemc_source_span(
+                    ? compiled_source_span(
                           *compiled_, instance.generic_map.front().source)
                     : instance_source);
             return nullptr;
@@ -330,7 +298,7 @@ HierarchyBuilder::construct_systemc_description(
     const auto diagnostics_before = diagnostics_.size();
     for (const auto& association : instance.generic_map) {
         const auto source = compiled_ != nullptr
-            ? compiled_systemc_source_span(
+            ? compiled_source_span(
                   *compiled_, association.source)
             : instance_source;
         if (association.kind

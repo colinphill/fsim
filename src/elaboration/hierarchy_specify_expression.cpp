@@ -149,37 +149,6 @@ runtime::PackedLogic4 compiled_integral_constant(
         width, aval, bval);
 }
 
-frontend::SourceSpan compiled_expression_source_span(
-    const semantic::CompiledDesign& compiled,
-    const semantic::SourceSpanId source)
-{
-    frontend::SourceSpan result;
-    const auto& spans = compiled.semantics.source_spans();
-    if (!source.valid() || source.value() >= spans.size()) {
-        return result;
-    }
-    const auto& span = spans[source.value()];
-    result.source_name = span.logical_name;
-    result.begin = { static_cast<std::size_t>(span.begin.offset),
-        span.begin.line, span.begin.column };
-    result.end = { static_cast<std::size_t>(span.end.offset),
-        span.end.line, span.end.column };
-    const auto& files = compiled.semantics.source_files();
-    if (span.file.valid() && span.file.value() < files.size()) {
-        result.physical_source_name = files[span.file.value()].physical_name;
-    }
-    const auto& expansions = compiled.semantics.expansions();
-    auto expansion = span.expansion;
-    while (expansion && expansion->valid()
-        && expansion->value() < expansions.size()) {
-        const auto& record = expansions[expansion->value()];
-        result.expansion_stack.push_back(record.description);
-        expansion = record.parent;
-    }
-    std::ranges::reverse(result.expansion_stack);
-    return result;
-}
-
 }  // namespace
 
 std::optional<runtime::simir::ModulePathExpression>
@@ -680,7 +649,7 @@ HierarchyBuilder::compile_verilog_specify_expression(
             ? source->systemverilog->source
             : semantic::SourceSpanId { };
         const auto location = compiled_ != nullptr
-            ? compiled_expression_source_span(*compiled_, span)
+            ? compiled_source_span(*compiled_, span)
             : frontend::SourceSpan { };
         report("FSIM-ELAB-SVSPEC-008",
             "specify " + std::string { role }

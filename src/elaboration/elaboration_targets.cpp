@@ -27,21 +27,9 @@ std::string_view normalized_library(
     return normalized_library(udp.library);
 }
 
-bool vhdl_name_equal(
-    const std::string_view left, const std::string_view right) {
-    if (left.size() != right.size()) {
-        return false;
-    }
-    return std::equal(
-        left.begin(), left.end(), right.begin(), right.end(),
-        [](const unsigned char lhs, const unsigned char rhs) {
-            return std::tolower(lhs) == std::tolower(rhs);
-        });
-}
-
 bool vhdl_library_equal(
     const std::string_view left, const std::string_view right) {
-    return vhdl_name_equal(
+    return equal_ignoring_ascii_case(
         normalized_library(left), normalized_library(right));
 }
 
@@ -372,13 +360,13 @@ std::optional<semantic::CompiledUnitView> choose_unit(
     }
     for (const auto& unit : compiled.vhdl_units()) {
         if (unit.kind == semantic::vhdl::UnitKind::configuration
-            && vhdl_name_equal(unit.name, requested)) {
+            && equal_ignoring_ascii_case(unit.name, requested)) {
             return unit_view(compiled, unit);
         }
     }
     for (const auto& unit : compiled.vhdl_units()) {
         if (unit.kind == semantic::vhdl::UnitKind::architecture
-            && vhdl_name_equal(unit.primary_name, requested)) {
+            && equal_ignoring_ascii_case(unit.primary_name, requested)) {
             return unit_view(compiled, unit);
         }
     }
@@ -479,7 +467,7 @@ std::optional<std::vector<CompiledPortView>> unit_ports(
 
     for (const auto& entity : compiled.vhdl_units()) {
         if (entity.kind != semantic::vhdl::UnitKind::entity
-            || !vhdl_name_equal(entity.name, unit.vhdl->primary_name)
+            || !equal_ignoring_ascii_case(entity.name, unit.vhdl->primary_name)
             || !vhdl_library_equal(entity.library, unit.vhdl->library)) {
             continue;
         }
@@ -532,11 +520,11 @@ std::optional<semantic::CompiledUnitView> choose_bound_unit(
     if (target.language == "vhdl") {
         for (const auto& unit : compiled.vhdl_units()) {
             if (unit.kind == semantic::vhdl::UnitKind::architecture
-                && vhdl_name_equal(unit.primary_name, target.unit)
+                && equal_ignoring_ascii_case(unit.primary_name, target.unit)
                 && (target.library.empty() || unit.library.empty()
-                    || vhdl_name_equal(unit.library, target.library))
+                    || equal_ignoring_ascii_case(unit.library, target.library))
                 && (!target.architecture
-                    || vhdl_name_equal(
+                    || equal_ignoring_ascii_case(
                         unit.name, *target.architecture))) {
                 return unit_view(compiled, unit);
             }
@@ -558,7 +546,7 @@ std::optional<semantic::CompiledUnitView> choose_top_unit(
         if (target->language == "vhdl" && !target->architecture) {
             for (const auto& unit : compiled.vhdl_units()) {
                 if (unit.kind == semantic::vhdl::UnitKind::configuration
-                    && vhdl_name_equal(unit.name, target->unit)
+                    && equal_ignoring_ascii_case(unit.name, target->unit)
                     && (target->library.empty()
                         || vhdl_library_equal(
                             unit.library, target->library))) {
@@ -640,11 +628,11 @@ std::vector<UnitResolutionCandidate> resolve_unit_candidates(
         }
         const bool vhdl_architecture =
             unit.kind == semantic::vhdl::UnitKind::architecture
-            && vhdl_name_equal(unit.primary_name, name);
+            && equal_ignoring_ascii_case(unit.primary_name, name);
         const bool vhdl_configuration =
             include_vhdl_configurations
             && unit.kind == semantic::vhdl::UnitKind::configuration
-            && vhdl_name_equal(unit.name, name);
+            && equal_ignoring_ascii_case(unit.name, name);
         if (!vhdl_architecture && !vhdl_configuration) {
             continue;
         }
@@ -760,11 +748,11 @@ std::optional<semantic::CompiledUnitView> choose_same_language_instance(
             std::string_view{parent.vhdl->library});
         for (const auto& unit : compiled.vhdl_units()) {
             if (unit.kind == semantic::vhdl::UnitKind::architecture
-                && vhdl_name_equal(unit.primary_name, primary)
+                && equal_ignoring_ascii_case(unit.primary_name, primary)
                 && (desired_library.empty() || unit.library.empty()
-                    || vhdl_name_equal(unit.library, desired_library))
+                    || equal_ignoring_ascii_case(unit.library, desired_library))
                 && (!architecture
-                    || vhdl_name_equal(unit.name, *architecture))) {
+                    || equal_ignoring_ascii_case(unit.name, *architecture))) {
                 return unit_view(compiled, unit);
             }
         }

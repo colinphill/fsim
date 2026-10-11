@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_compiled_occurrence.hpp"
 
+#include "elaborator_internal.hpp"
+
 #include <algorithm>
 #include <ranges>
 
@@ -70,21 +72,6 @@ std::string_view unqualified_target(std::string_view target) noexcept
         : target.substr(separator + 1U);
 }
 
-bool ascii_name_equal(
-    const std::string_view left,
-    const std::string_view right) noexcept
-{
-    return left.size() == right.size()
-        && std::ranges::equal(left, right, [](const char lhs, const char rhs) {
-            const auto lower = [](const char value) {
-                return value >= 'A' && value <= 'Z'
-                    ? static_cast<char>(value - 'A' + 'a')
-                    : value;
-            };
-            return lower(lhs) == lower(rhs);
-        });
-}
-
 const semantic::CompiledReference* find_instance_reference(
     const semantic::CompiledDesign& design,
     const HirInstanceIdentity& instance,
@@ -107,7 +94,7 @@ const semantic::CompiledReference* find_instance_reference(
         } else if (source_match == nullptr) {
             source_match = &reference;
         }
-        if (!ascii_name_equal(reference.name, target)) {
+        if (!equal_ignoring_ascii_case(reference.name, target)) {
             continue;
         }
         if (named_match != nullptr

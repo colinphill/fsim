@@ -215,10 +215,7 @@ struct VcdWriter::Impl {
 
     for (const auto index : scope.declarations) {
       const auto &declaration = declarations[index];
-      const bool real = declaration.scalar_kind
-                  == SystemVerilogScalarKind::ShortReal
-          || declaration.scalar_kind == SystemVerilogScalarKind::Real
-          || declaration.scalar_kind == SystemVerilogScalarKind::Realtime;
+      const bool real = frontend::is_real_scalar_kind(declaration.scalar_kind);
       append(real ? "$var real " : "$var wire ");
       append(std::to_string(declaration.width));
       append(" ");
@@ -239,9 +236,7 @@ struct VcdWriter::Impl {
     if (!started) {
       throw std::logic_error("VCD writer has not begun");
     }
-    if (declaration.scalar_kind == SystemVerilogScalarKind::ShortReal
-        || declaration.scalar_kind == SystemVerilogScalarKind::Real
-        || declaration.scalar_kind == SystemVerilogScalarKind::Realtime) {
+    if (frontend::is_real_scalar_kind(declaration.scalar_kind)) {
       throw std::invalid_argument(
           "VCD real declarations require typed scalar changes");
     }
@@ -360,9 +355,7 @@ VcdSignal VcdWriter::declare_signal(std::string_view hierarchical_name,
 VcdSignal VcdWriter::declare_systemverilog_scalar(
     const std::string_view hierarchical_name,
     const SystemVerilogScalarKind kind) {
-  const bool real = kind == SystemVerilogScalarKind::ShortReal
-      || kind == SystemVerilogScalarKind::Real
-      || kind == SystemVerilogScalarKind::Realtime;
+  const bool real = frontend::is_real_scalar_kind(kind);
   if (!real && kind != SystemVerilogScalarKind::Time
       && kind != SystemVerilogScalarKind::Chandle) {
     throw std::invalid_argument("unsupported SystemVerilog VCD scalar kind");
@@ -546,9 +539,7 @@ void VcdWriter::end_checkpoint() {
 
 void VcdWriter::change_unknown(const VcdSignal signal) {
   auto& declaration = impl_->get(signal);
-  if (declaration.scalar_kind == SystemVerilogScalarKind::ShortReal
-      || declaration.scalar_kind == SystemVerilogScalarKind::Real
-      || declaration.scalar_kind == SystemVerilogScalarKind::Realtime) {
+  if (frontend::is_real_scalar_kind(declaration.scalar_kind)) {
     impl_->write_real(declaration, "NaN");
     return;
   }

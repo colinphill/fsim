@@ -34,9 +34,7 @@ namespace fsim::runtime::simir {
             "runtime WaitFor has invalid dynamic-delay metadata"
         };
     }
-    if (wait.source_kind == SystemVerilogScalarKind::ShortReal
-        || wait.source_kind == SystemVerilogScalarKind::Real
-        || wait.source_kind == SystemVerilogScalarKind::Realtime) {
+    if (frontend::is_real_scalar_kind(wait.source_kind)) {
         const auto decoded = decode_systemverilog_scalar_payload(
             payload, wait.source_kind);
         const auto number = decoded ? decoded.value.as_real() : std::nullopt;

@@ -135,72 +135,6 @@ namespace coverage_parser_detail {
         return std::nullopt;
     }
 
-    [[nodiscard]] std::vector<std::vector<Token>> split_top_level(
-        const std::span<const Token> tokens,
-        const TokenKind separator)
-    {
-        std::vector<std::vector<Token>> items;
-        std::size_t begin { };
-        int parentheses { };
-        int brackets { };
-        int braces { };
-        for (std::size_t index = 0; index < tokens.size(); ++index) {
-            const auto kind = tokens[index].kind;
-            if (kind == TokenKind::LeftParen) {
-                ++parentheses;
-            } else if (kind == TokenKind::RightParen) {
-                --parentheses;
-            } else if (kind == TokenKind::LeftBracket) {
-                ++brackets;
-            } else if (kind == TokenKind::RightBracket) {
-                --brackets;
-            } else if (kind == TokenKind::LeftBrace) {
-                ++braces;
-            } else if (kind == TokenKind::RightBrace) {
-                --braces;
-            } else if (
-                kind == separator && parentheses == 0 && brackets == 0
-                && braces == 0) {
-                items.emplace_back(
-                    tokens.begin() + static_cast<std::ptrdiff_t>(begin),
-                    tokens.begin() + static_cast<std::ptrdiff_t>(index));
-                begin = index + 1U;
-            }
-        }
-        items.emplace_back(
-            tokens.begin() + static_cast<std::ptrdiff_t>(begin), tokens.end());
-        return items;
-    }
-
-    [[nodiscard]] std::optional<std::size_t> find_top_level(
-        const std::span<const Token> tokens,
-        const TokenKind sought)
-    {
-        int parentheses { };
-        int brackets { };
-        int braces { };
-        for (std::size_t index = 0; index < tokens.size(); ++index) {
-            const auto kind = tokens[index].kind;
-            if (kind == TokenKind::LeftParen) {
-                ++parentheses;
-            } else if (kind == TokenKind::RightParen) {
-                --parentheses;
-            } else if (kind == TokenKind::LeftBracket) {
-                ++brackets;
-            } else if (kind == TokenKind::RightBracket) {
-                --brackets;
-            } else if (kind == TokenKind::LeftBrace) {
-                ++braces;
-            } else if (kind == TokenKind::RightBrace) {
-                --braces;
-            } else if (
-                kind == sought && parentheses == 0 && brackets == 0 && braces == 0) {
-                return index;
-            }
-        }
-        return std::nullopt;
-    }
-
     [[nodiscard]] std::optional<std::size_t> find_top_level_keyword(
         const std::span<const Token> tokens,
         const std::string_view keyword)
@@ -1653,11 +1587,7 @@ void VerilogParser::structure_covergroup_declarations(
                         });
                 });
             if ((has_real_bins
-                    || item.sampled_scalar_kind
-                        == SystemVerilogScalarKind::ShortReal
-                    || item.sampled_scalar_kind == SystemVerilogScalarKind::Real
-                    || item.sampled_scalar_kind
-                        == SystemVerilogScalarKind::Realtime)
+                    || frontend::is_real_scalar_kind(item.sampled_scalar_kind))
                 && standard_revision_
                     != StandardRevision::SystemVerilog2023) {
                 error(

@@ -280,13 +280,7 @@ namespace {
         if (!vhdl) {
             return left == right;
         }
-        return std::ranges::equal(
-            left,
-            right,
-            [](const char lhs, const char rhs) {
-                return std::tolower(static_cast<unsigned char>(lhs))
-                    == std::tolower(static_cast<unsigned char>(rhs));
-            });
+        return equal_ignoring_ascii_case(left, right);
     }
 
     PackedLogic4 callable_default_value(
@@ -3468,10 +3462,7 @@ Lowerer::hir_vhdl_type_actual(
     }
 
     auto name = expression->vhdl->text;
-    std::ranges::transform(name, name.begin(), [](const char value) {
-        return static_cast<char>(
-            std::tolower(static_cast<unsigned char>(value)));
-    });
+    lowercase_ascii(name);
     semantic::vhdl::SubtypeIndication result;
     result.type_mark.source = expression->vhdl->source;
     result.type_mark.spelling = name;
@@ -5118,10 +5109,7 @@ Lowerer::resolve_hir_vhdl_procedure_call(
                     mark.remove_prefix(separator + 1U);
                 }
                 std::string lowered { mark };
-                std::ranges::transform(lowered, lowered.begin(),
-                    [](const unsigned char character) {
-                        return static_cast<char>(std::tolower(character));
-                    });
+                lowercase_ascii(lowered);
                 if (lowered == "time" || lowered == "delay_length") {
                     compatible = false;
                     break;
@@ -6054,14 +6042,8 @@ Lowerer::lower_hir_function_call_value(
                         if (constraint.kind != semantic::vhdl::RangeKind::array_index) {
                             continue;
                         }
-                        const auto left = constraint.left ? constraint.left
-                            : constraint.left_expression
-                            ? hir_constant_integer(*constraint.left_expression)
-                            : std::nullopt;
-                        const auto right = constraint.right ? constraint.right
-                            : constraint.right_expression
-                            ? hir_constant_integer(*constraint.right_expression)
-                            : std::nullopt;
+                        const auto left = hir_range_left(constraint);
+                        const auto right = hir_range_right(constraint);
                         if (left && right) {
                             string_range = HirPackedRange { *left, *right, constraint.descending };
                         }

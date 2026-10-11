@@ -23,23 +23,10 @@ std::string_view vital_state_name(const semantic::vhdl::Name& name)
         : std::string_view { name.canonical };
 }
 
-bool same_vital_state_identifier(
-    const std::string_view left, const std::string_view right)
-{
-    return left.size() == right.size()
-        && std::ranges::equal(left, right, [](const char lhs, const char rhs) {
-               return std::tolower(static_cast<unsigned char>(lhs))
-                   == std::tolower(static_cast<unsigned char>(rhs));
-           });
-}
-
 std::string canonical_vital_state_identifier(const std::string_view name)
 {
     auto result = std::string { name };
-    std::ranges::transform(result, result.begin(), [](const char value) {
-        return static_cast<char>(
-            std::tolower(static_cast<unsigned char>(value)));
-    });
+    lowercase_ascii(result);
     return result;
 }
 
@@ -52,11 +39,11 @@ bool has_vital_primitives_qualification(const std::string_view name)
     const auto owner = name.substr(0U, member_separator);
     const auto package_separator = owner.find_last_of('.');
     if (package_separator == std::string_view::npos) {
-        return same_vital_state_identifier(owner, "vital_primitives");
+        return equal_ignoring_ascii_case(owner, "vital_primitives");
     }
-    return same_vital_state_identifier(
+    return equal_ignoring_ascii_case(
                owner.substr(package_separator + 1U), "vital_primitives")
-        && same_vital_state_identifier(
+        && equal_ignoring_ascii_case(
             owner.substr(0U, package_separator), "ieee");
 }
 
@@ -97,7 +84,7 @@ bool Lowerer::is_hir_vhdl_vital_state_table_call(
     }
     const auto& procedure = statement->vhdl->procedure;
     const auto qualified_name = vital_state_name(procedure);
-    if (!same_vital_state_identifier(
+    if (!equal_ignoring_ascii_case(
             vital_state_simple_name(qualified_name), "vitalstatetable")
         || !has_vital_primitives_qualification(qualified_name)) {
         return false;

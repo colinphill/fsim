@@ -15,6 +15,14 @@ enum class SystemVerilogScalarKind {
   Chandle,
 };
 
+// shortreal, real and realtime (IEEE 1800-2017 6.12).
+[[nodiscard]] constexpr bool is_real_scalar_kind(
+    const SystemVerilogScalarKind kind) noexcept {
+  return kind == SystemVerilogScalarKind::ShortReal
+      || kind == SystemVerilogScalarKind::Real
+      || kind == SystemVerilogScalarKind::Realtime;
+}
+
 enum class SystemVerilogDecimalLiteralKind {
   Real,
   Time,

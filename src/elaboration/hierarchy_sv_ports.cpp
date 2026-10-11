@@ -131,34 +131,6 @@ using namespace hierarchy_sv_parameters_detail;
 
 namespace {
 
-    frontend::SourceSpan compiled_source_span(
-        const semantic::CompiledDesign& compiled,
-        const semantic::SourceSpanId source)
-    {
-        frontend::SourceSpan result;
-        const auto& spans = compiled.semantics.source_spans();
-        if (!source.valid() || source.value() >= spans.size()) {
-            return result;
-        }
-        const auto& span = spans[source.value()];
-        result.source_name = span.logical_name;
-        result.begin = {
-            static_cast<std::size_t>(span.begin.offset),
-            span.begin.line,
-            span.begin.column,
-        };
-        result.end = {
-            static_cast<std::size_t>(span.end.offset),
-            span.end.line,
-            span.end.column,
-        };
-        const auto& files = compiled.semantics.source_files();
-        if (span.file.valid() && span.file.value() < files.size()) {
-            result.physical_source_name = files[span.file.value()].physical_name;
-        }
-        return result;
-    }
-
     frontend::PortDirection compiled_port_direction(
         const semantic::sv::Declaration& declaration) noexcept
     {

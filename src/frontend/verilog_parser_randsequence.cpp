@@ -3,6 +3,7 @@
 // into ordinary procedural statements: weighted alternatives select with
 // `$urandom`, productions expand inline in named blocks, and `break` and
 // `return` in a code block disable the randsequence or production block.
+#include "verilog_parser_assertion_support.hpp"
 #include "verilog_parser_internal.hpp"
 
 #include <algorithm>
@@ -392,31 +393,9 @@ std::optional<Statement> VerilogParser::parse_randsequence(const Token& start) {
     // Formals become block variables initialized from the actuals.
     // Formals and actuals are comma lists; a default value or an actual
     // may contain nested commas.
-    const auto split_top_level = [](const std::vector<Token>& tokens) {
-      std::vector<std::vector<Token>> items(1);
-      std::size_t depth{};
-      for (const auto& token : tokens) {
-        if (token.kind == TokenKind::LeftParen
-            || token.kind == TokenKind::LeftBracket
-            || token.kind == TokenKind::LeftBrace) {
-          ++depth;
-        } else if ((token.kind == TokenKind::RightParen
-                       || token.kind == TokenKind::RightBracket
-                       || token.kind == TokenKind::RightBrace)
-            && depth != 0U) {
-          --depth;
-        }
-        if (depth == 0U && token.kind == TokenKind::Comma) {
-          items.emplace_back();
-        } else {
-          items.back().push_back(token);
-        }
-      }
-      return items;
-    };
-    const auto formals = split_top_level(production.formals);
+    const auto formals = split_top_level(production.formals, TokenKind::Comma);
     const auto actuals = call != nullptr
-        ? split_top_level(call->arguments)
+        ? split_top_level(call->arguments, TokenKind::Comma)
         : std::vector<std::vector<Token>>(1);
     std::map<std::string, std::string> local;
     for (std::size_t index = 0; index < formals.size(); ++index) {

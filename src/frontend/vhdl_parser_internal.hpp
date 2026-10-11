@@ -86,7 +86,26 @@ private:
 
   ParameterDeclaration parse_vhdl_interface_package(const Token &start);
 
+  // The lookahead just past the parenthesis matching the one at
+  // `lookahead`, or nothing when the file ends first.
+  [[nodiscard]] std::optional<std::size_t>
+  skip_vhdl_parentheses(std::size_t lookahead) const;
   PackageInstantiation parse_vhdl_package_instantiation(const Token &start);
+  // Parses a package instantiation in a declarative region from its
+  // `package` token and appends it, rejecting a duplicate name.
+  template <typename Instances>
+  void parse_local_vhdl_package_instantiation(Instances &instances,
+                                              const Token &start) {
+    auto instance = parse_vhdl_package_instantiation(start);
+    if (std::ranges::any_of(instances, [&](const auto &existing) {
+          return existing.name == instance.name;
+        })) {
+      error(start, "FSIM-VHDL-SEM-059",
+            "duplicate local package instance '" + instance.name + "'");
+    } else {
+      instances.push_back(std::move(instance));
+    }
+  }
   // Expands a design-unit-level `package p is new g generic map (...)` whose
   // template is declared in the same design file into an ordinary package
   // and body (IEEE 1076-2008 4.9): constant and type generics become

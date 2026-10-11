@@ -17,10 +17,7 @@ std::string fixed_canonical_name(std::string_view name)
         name.remove_prefix(separator + 1U);
     }
     std::string result { name };
-    std::ranges::transform(result, result.begin(), [](const char value) {
-        return static_cast<char>(
-            std::tolower(static_cast<unsigned char>(value)));
-    });
+    lowercase_ascii(result);
     return result;
 }
 
@@ -228,16 +225,8 @@ bool Lowerer::validate_hir_vhdl_fixed_context(
     if (constraint == effective.constraints.end()) {
         return true;
     }
-    const auto context_left = constraint->left
-        ? constraint->left
-        : constraint->left_expression
-        ? hir_constant_integer(*constraint->left_expression)
-        : std::nullopt;
-    const auto context_right = constraint->right
-        ? constraint->right
-        : constraint->right_expression
-        ? hir_constant_integer(*constraint->right_expression)
-        : std::nullopt;
+    const auto context_left = hir_range_left(*constraint);
+    const auto context_right = hir_range_right(*constraint);
     if (context_left && context_right
         && *context_left == *left && *context_right == *right
         && constraint->descending) {
@@ -376,16 +365,8 @@ Lowerer::HirVhdlIntrinsicAttempt Lowerer::lower_hir_vhdl_fixed_function(
             operand_span(source.operands.front()));
         return { true, std::nullopt };
     }
-    const auto source_left = source_constraint->left
-        ? source_constraint->left
-        : source_constraint->left_expression
-        ? hir_constant_integer(*source_constraint->left_expression)
-        : std::nullopt;
-    const auto source_right = source_constraint->right
-        ? source_constraint->right
-        : source_constraint->right_expression
-        ? hir_constant_integer(*source_constraint->right_expression)
-        : std::nullopt;
+    const auto source_left = hir_range_left(*source_constraint);
+    const auto source_right = hir_range_right(*source_constraint);
     if (!source_left || !source_right || *source_left < *source_right) {
         report(
             "FSIM-ELAB-VHFIX-001",

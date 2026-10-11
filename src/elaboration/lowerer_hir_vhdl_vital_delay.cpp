@@ -23,33 +23,20 @@ std::string_view vital_name(const semantic::vhdl::Name& name)
         : std::string_view { name.canonical };
 }
 
-bool same_vital_identifier(
-    const std::string_view left, const std::string_view right)
-{
-    return left.size() == right.size()
-        && std::ranges::equal(left, right, [](const char lhs, const char rhs) {
-               return std::tolower(static_cast<unsigned char>(lhs))
-                   == std::tolower(static_cast<unsigned char>(rhs));
-           });
-}
-
 std::string canonical_vital_identifier(const std::string_view name)
 {
     auto result = std::string { name };
-    std::ranges::transform(result, result.begin(), [](const char value) {
-        return static_cast<char>(
-            std::tolower(static_cast<unsigned char>(value)));
-    });
+    lowercase_ascii(result);
     return result;
 }
 
 bool is_vital_delay_name(const std::string_view name)
 {
-    return same_vital_identifier(name, "vitalsignaldelay")
-        || same_vital_identifier(name, "vitalwiredelay")
-        || same_vital_identifier(name, "vitalpathdelay")
-        || same_vital_identifier(name, "vitalpathdelay01")
-        || same_vital_identifier(name, "vitalpathdelay01z");
+    return equal_ignoring_ascii_case(name, "vitalsignaldelay")
+        || equal_ignoring_ascii_case(name, "vitalwiredelay")
+        || equal_ignoring_ascii_case(name, "vitalpathdelay")
+        || equal_ignoring_ascii_case(name, "vitalpathdelay01")
+        || equal_ignoring_ascii_case(name, "vitalpathdelay01z");
 }
 
 bool has_vital_timing_qualification(const std::string_view name)
@@ -61,11 +48,11 @@ bool has_vital_timing_qualification(const std::string_view name)
     const auto owner = name.substr(0U, member_separator);
     const auto package_separator = owner.find_last_of('.');
     if (package_separator == std::string_view::npos) {
-        return same_vital_identifier(owner, "vital_timing");
+        return equal_ignoring_ascii_case(owner, "vital_timing");
     }
-    return same_vital_identifier(
+    return equal_ignoring_ascii_case(
                owner.substr(package_separator + 1U), "vital_timing")
-        && same_vital_identifier(
+        && equal_ignoring_ascii_case(
             owner.substr(0U, package_separator), "ieee");
 }
 
@@ -81,16 +68,16 @@ std::optional<AssertionSeverity> vital_delay_severity(
         name.remove_prefix(prefix.size());
     }
     name = vital_simple_name(name);
-    if (same_vital_identifier(name, "note")) {
+    if (equal_ignoring_ascii_case(name, "note")) {
         return AssertionSeverity::note;
     }
-    if (same_vital_identifier(name, "warning")) {
+    if (equal_ignoring_ascii_case(name, "warning")) {
         return AssertionSeverity::warning;
     }
-    if (same_vital_identifier(name, "error")) {
+    if (equal_ignoring_ascii_case(name, "error")) {
         return AssertionSeverity::error;
     }
-    if (same_vital_identifier(name, "failure")) {
+    if (equal_ignoring_ascii_case(name, "failure")) {
         return AssertionSeverity::failure;
     }
     return std::nullopt;
@@ -108,16 +95,16 @@ std::optional<VitalGlitchMode> vital_glitch_mode(
         name.remove_prefix(prefix.size());
     }
     name = vital_simple_name(name);
-    if (same_vital_identifier(name, "onevent")) {
+    if (equal_ignoring_ascii_case(name, "onevent")) {
         return VitalGlitchMode::on_event;
     }
-    if (same_vital_identifier(name, "ondetect")) {
+    if (equal_ignoring_ascii_case(name, "ondetect")) {
         return VitalGlitchMode::on_detect;
     }
-    if (same_vital_identifier(name, "vitalinertial")) {
+    if (equal_ignoring_ascii_case(name, "vitalinertial")) {
         return VitalGlitchMode::inertial;
     }
-    if (same_vital_identifier(name, "vitaltransport")) {
+    if (equal_ignoring_ascii_case(name, "vitaltransport")) {
         return VitalGlitchMode::transport;
     }
     return std::nullopt;
@@ -174,12 +161,12 @@ bool Lowerer::lower_hir_vhdl_vital_delay_call(
     const auto& source = *statement->vhdl;
     const auto statement_span = hir_source_span(source.source);
     const auto name = vital_simple_name(vital_name(source.procedure));
-    const bool signal_delay = same_vital_identifier(
+    const bool signal_delay = equal_ignoring_ascii_case(
         name, "vitalsignaldelay");
-    const bool wire_delay = same_vital_identifier(name, "vitalwiredelay");
-    const bool path_single = same_vital_identifier(name, "vitalpathdelay");
-    const bool path_01 = same_vital_identifier(name, "vitalpathdelay01");
-    const bool path_01z = same_vital_identifier(name, "vitalpathdelay01z");
+    const bool wire_delay = equal_ignoring_ascii_case(name, "vitalwiredelay");
+    const bool path_single = equal_ignoring_ascii_case(name, "vitalpathdelay");
+    const bool path_01 = equal_ignoring_ascii_case(name, "vitalpathdelay01");
+    const bool path_01z = equal_ignoring_ascii_case(name, "vitalpathdelay01z");
     const bool path_delay = path_single || path_01 || path_01z;
 
     std::vector<semantic::ExpressionId> positional;
@@ -596,7 +583,7 @@ bool Lowerer::lower_hir_vhdl_vital_delay_call(
         : std::nullopt;
     if (!glitch || !glitch_binding || !glitch_binding->local
         || !glitch_subtype
-        || !same_vital_identifier(
+        || !equal_ignoring_ascii_case(
             vital_simple_name(glitch_subtype->type_mark.spelling),
             "vitalglitchdatatype")) {
         report(

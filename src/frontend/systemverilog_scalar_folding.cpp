@@ -15,12 +15,6 @@ namespace {
 static_assert(std::numeric_limits<float>::is_iec559);
 static_assert(std::numeric_limits<double>::is_iec559);
 
-bool real_kind(const SystemVerilogScalarKind kind) noexcept {
-  return kind == SystemVerilogScalarKind::ShortReal
-      || kind == SystemVerilogScalarKind::Real
-      || kind == SystemVerilogScalarKind::Realtime;
-}
-
 SystemVerilogScalarKind promote(
     const SystemVerilogScalarKind left,
     const SystemVerilogScalarKind right) noexcept {
@@ -319,7 +313,7 @@ std::optional<SystemVerilogScalarConstant> evaluate(
   }
   const auto kind = promote(left->kind, right->kind);
   if (left_integer && right_integer
-      && !real_kind(kind)) {
+      && !is_real_scalar_kind(kind)) {
     if ((expression.text == "/" || expression.text == "%")
         && *right_integer == 0) {
       error = "scalar constant division by zero";
@@ -360,7 +354,7 @@ std::optional<SystemVerilogScalarConstant> evaluate(
     error = "scalar constant operation produced a nonfinite result";
     return std::nullopt;
   }
-  if (real_kind(kind)) return real_constant(result, kind);
+  if (is_real_scalar_kind(kind)) return real_constant(result, kind);
   if (result > static_cast<double>(std::numeric_limits<std::int64_t>::max())
       || result < static_cast<double>(std::numeric_limits<std::int64_t>::min())
       || std::trunc(result) != result) {
@@ -473,7 +467,7 @@ convert_systemverilog_scalar_constant(
     error = "scalar value is not finite and convertible";
     return std::nullopt;
   }
-  if (real_kind(target)) return real_constant(*number, target);
+  if (is_real_scalar_kind(target)) return real_constant(*number, target);
   if (*number > static_cast<double>(std::numeric_limits<std::int64_t>::max())
       || *number < static_cast<double>(std::numeric_limits<std::int64_t>::min())) {
     error = "real-family conversion exceeds the signed 64-bit range";

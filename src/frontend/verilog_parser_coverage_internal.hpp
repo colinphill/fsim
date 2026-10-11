@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
+#include "verilog_parser_assertion_support.hpp"
 #include "verilog_parser_internal.hpp"
 
 #include <cstdint>
@@ -33,13 +34,6 @@ struct CoverageLiteral {
     std::span<const Token> tokens,
     std::size_t left);
 
-[[nodiscard]] std::vector<std::vector<Token>> split_top_level(
-    std::span<const Token> tokens,
-    TokenKind separator);
-
-[[nodiscard]] std::optional<std::size_t> find_top_level(
-    std::span<const Token> tokens,
-    TokenKind sought);
 
 [[nodiscard]] std::optional<std::size_t> find_top_level_keyword(
     std::span<const Token> tokens,

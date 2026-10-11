@@ -24,34 +24,21 @@ std::string_view vital_timing_name(const semantic::vhdl::Name& name)
         : std::string_view { name.canonical };
 }
 
-bool same_vital_timing_identifier(
-    const std::string_view left, const std::string_view right)
-{
-    return left.size() == right.size()
-        && std::ranges::equal(left, right, [](const char lhs, const char rhs) {
-               return std::tolower(static_cast<unsigned char>(lhs))
-                   == std::tolower(static_cast<unsigned char>(rhs));
-           });
-}
-
 std::string canonical_vital_timing_identifier(const std::string_view name)
 {
     auto result = std::string { name };
-    std::ranges::transform(result, result.begin(), [](const char value) {
-        return static_cast<char>(
-            std::tolower(static_cast<unsigned char>(value)));
-    });
+    lowercase_ascii(result);
     return result;
 }
 
 bool vital_timing_procedure_name(const std::string_view name)
 {
-    return same_vital_timing_identifier(name, "vitalsetupholdcheck")
-        || same_vital_timing_identifier(
+    return equal_ignoring_ascii_case(name, "vitalsetupholdcheck")
+        || equal_ignoring_ascii_case(
             name, "vitalrecoveryremovalcheck")
-        || same_vital_timing_identifier(name, "vitalperiodpulsecheck")
-        || same_vital_timing_identifier(name, "vitalinphaseskewcheck")
-        || same_vital_timing_identifier(name, "vitaloutphaseskewcheck");
+        || equal_ignoring_ascii_case(name, "vitalperiodpulsecheck")
+        || equal_ignoring_ascii_case(name, "vitalinphaseskewcheck")
+        || equal_ignoring_ascii_case(name, "vitaloutphaseskewcheck");
 }
 
 bool has_vital_timing_qualification(const std::string_view name)
@@ -63,11 +50,11 @@ bool has_vital_timing_qualification(const std::string_view name)
     const auto owner = name.substr(0U, member_separator);
     const auto package_separator = owner.find_last_of('.');
     if (package_separator == std::string_view::npos) {
-        return same_vital_timing_identifier(owner, "vital_timing");
+        return equal_ignoring_ascii_case(owner, "vital_timing");
     }
-    return same_vital_timing_identifier(
+    return equal_ignoring_ascii_case(
                owner.substr(package_separator + 1U), "vital_timing")
-        && same_vital_timing_identifier(
+        && equal_ignoring_ascii_case(
             owner.substr(0U, package_separator), "ieee");
 }
 
@@ -83,16 +70,16 @@ std::optional<AssertionSeverity> vital_timing_severity(
         name.remove_prefix(prefix.size());
     }
     name = vital_timing_simple_name(name);
-    if (same_vital_timing_identifier(name, "note")) {
+    if (equal_ignoring_ascii_case(name, "note")) {
         return AssertionSeverity::note;
     }
-    if (same_vital_timing_identifier(name, "warning")) {
+    if (equal_ignoring_ascii_case(name, "warning")) {
         return AssertionSeverity::warning;
     }
-    if (same_vital_timing_identifier(name, "error")) {
+    if (equal_ignoring_ascii_case(name, "error")) {
         return AssertionSeverity::error;
     }
-    if (same_vital_timing_identifier(name, "failure")) {
+    if (equal_ignoring_ascii_case(name, "failure")) {
         return AssertionSeverity::failure;
     }
     return std::nullopt;
@@ -172,15 +159,15 @@ bool Lowerer::lower_hir_vhdl_vital_timing_call(
     const auto statement_span = hir_source_span(source.source);
     const auto name = vital_timing_simple_name(
         vital_timing_name(source.procedure));
-    const bool setup_hold = same_vital_timing_identifier(
+    const bool setup_hold = equal_ignoring_ascii_case(
         name, "vitalsetupholdcheck");
-    const bool recovery_removal = same_vital_timing_identifier(
+    const bool recovery_removal = equal_ignoring_ascii_case(
         name, "vitalrecoveryremovalcheck");
-    const bool period_pulse = same_vital_timing_identifier(
+    const bool period_pulse = equal_ignoring_ascii_case(
         name, "vitalperiodpulsecheck");
-    const bool in_phase = same_vital_timing_identifier(
+    const bool in_phase = equal_ignoring_ascii_case(
         name, "vitalinphaseskewcheck");
-    const bool out_phase = same_vital_timing_identifier(
+    const bool out_phase = equal_ignoring_ascii_case(
         name, "vitaloutphaseskewcheck");
     const bool skew = in_phase || out_phase;
 
@@ -372,7 +359,7 @@ bool Lowerer::lower_hir_vhdl_vital_timing_call(
         } else if (compatible) {
             const auto subtype = hir_vhdl_expression_subtype(*expression);
             compatible = subtype
-                && same_vital_timing_identifier(
+                && equal_ignoring_ascii_case(
                     vital_timing_simple_name(subtype->type_mark.spelling),
                     type_name);
         }

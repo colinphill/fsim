@@ -21,34 +21,6 @@ using namespace elaboration_detail;
 
 namespace {
 
-frontend::SourceSpan compiled_resolution_source_span(
-    const semantic::CompiledDesign& compiled,
-    const semantic::SourceSpanId source)
-{
-    frontend::SourceSpan result;
-    const auto& spans = compiled.semantics.source_spans();
-    if (!source.valid() || source.value() >= spans.size()) {
-        return result;
-    }
-    const auto& span = spans[source.value()];
-    result.source_name = span.logical_name;
-    result.begin = {
-        static_cast<std::size_t>(span.begin.offset),
-        span.begin.line,
-        span.begin.column,
-    };
-    result.end = {
-        static_cast<std::size_t>(span.end.offset),
-        span.end.line,
-        span.end.column,
-    };
-    const auto& files = compiled.semantics.source_files();
-    if (span.file.valid() && span.file.value() < files.size()) {
-        result.physical_source_name = files[span.file.value()].physical_name;
-    }
-    return result;
-}
-
 const semantic::sv::Declaration* compiled_systemverilog_declaration(
     const semantic::CompiledDesign& compiled,
     const semantic::DeclarationId id)
@@ -2214,7 +2186,7 @@ void HierarchyBuilder::register_systemverilog_resolution_functions(
                 matches.push_back(candidate);
             }
         }
-        const auto source = compiled_resolution_source_span(
+        const auto source = compiled_source_span(
             *compiled_, type->source);
         if (matches.size() != 1U) {
             report(
@@ -2253,7 +2225,7 @@ void HierarchyBuilder::register_systemverilog_resolution_functions(
                 "SystemVerilog nettype resolution function '" + resolver
                     + "' must take one dynamic array of the net base type "
                       "and return that base type",
-                compiled_resolution_source_span(
+                compiled_source_span(
                     *compiled_, function.source));
             continue;
         }
@@ -2263,7 +2235,7 @@ void HierarchyBuilder::register_systemverilog_resolution_functions(
                 "the executable SystemVerilog nettype resolver '" + resolver
                     + "' is outside the retained deterministic resolution "
                       "forms",
-                compiled_resolution_source_span(
+                compiled_source_span(
                     *compiled_, function.source));
             continue;
         }

@@ -15,9 +15,7 @@ namespace {
 constexpr std::uint32_t maximum_text_precision = 64;
 
 bool real_kind(const SystemVerilogScalarKind kind) noexcept {
-  return kind == SystemVerilogScalarKind::ShortReal
-      || kind == SystemVerilogScalarKind::Real
-      || kind == SystemVerilogScalarKind::Realtime;
+  return frontend::is_real_scalar_kind(kind);
 }
 
 bool numeric_kind(const SystemVerilogScalarKind kind) noexcept {

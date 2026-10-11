@@ -668,9 +668,7 @@ private:
         return 0U;
     }
     if (value.type_kind == TraceTypeKind::SystemVerilogScalar
-        && (value.scalar_kind == SystemVerilogScalarKind::ShortReal
-            || value.scalar_kind == SystemVerilogScalarKind::Real
-            || value.scalar_kind == SystemVerilogScalarKind::Realtime)) {
+        && (frontend::is_real_scalar_kind(value.scalar_kind))) {
         return 8U;
     }
     if (value.type_kind == TraceTypeKind::VhdlLogic9) {
@@ -1131,9 +1129,7 @@ void account_decoded_bytes(const std::size_t bytes,
     const FstReaderDeclaration& declaration) noexcept
 {
     return declaration.type_kind == TraceTypeKind::SystemVerilogScalar
-        && (declaration.scalar_kind == SystemVerilogScalarKind::ShortReal
-            || declaration.scalar_kind == SystemVerilogScalarKind::Real
-            || declaration.scalar_kind == SystemVerilogScalarKind::Realtime);
+        && (frontend::is_real_scalar_kind(declaration.scalar_kind));
 }
 
 [[nodiscard]] std::size_t read_scalar_wave(const std::uint64_t code,

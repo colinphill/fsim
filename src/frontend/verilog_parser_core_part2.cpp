@@ -1213,9 +1213,7 @@ DesignUnit VerilogParser::parse_module(
                     unit.signals, [&](const SignalDeclaration& signal) {
                         const auto scalar = signal.type.systemverilog_scalar;
                         return signal.name == sensitivity.signal
-                            && (scalar == SystemVerilogScalarKind::Real
-                                || scalar == SystemVerilogScalarKind::ShortReal
-                                || scalar == SystemVerilogScalarKind::Realtime);
+                            && (frontend::is_real_scalar_kind(scalar));
                     });
                 if (real_signal != unit.signals.end()) {
                     error(always_start, "FSIM-SV-SEM-406",

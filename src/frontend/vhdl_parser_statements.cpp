@@ -617,17 +617,11 @@ std::optional<Statement> VhdlParser::parse_sequential_statement(
         if (!at(TokenKind::LeftParen, lookahead)) {
           return false;
         }
-        std::size_t depth = 0;
-        do {
-          if (at(TokenKind::LeftParen, lookahead)) {
-            ++depth;
-          } else if (at(TokenKind::RightParen, lookahead)) {
-            --depth;
-          } else if (at(TokenKind::EndOfFile, lookahead)) {
-            return false;
-          }
-          ++lookahead;
-        } while (depth != 0);
+        const auto closed = skip_vhdl_parentheses(lookahead);
+        if (!closed) {
+          return false;
+        }
+        lookahead = *closed;
         return at(TokenKind::Semicolon, lookahead);
       };
   if (procedure_call_ahead()) {
@@ -696,17 +690,11 @@ VhdlParser::parse_vhdl_procedure_call() {
         if (!at(TokenKind::LeftParen, lookahead)) {
           break;
         }
-        std::size_t depth = 0;
-        do {
-          if (at(TokenKind::LeftParen, lookahead)) {
-            ++depth;
-          } else if (at(TokenKind::RightParen, lookahead)) {
-            --depth;
-          } else if (at(TokenKind::EndOfFile, lookahead)) {
-            return false;
-          }
-          ++lookahead;
-        } while (depth != 0);
+        const auto closed = skip_vhdl_parentheses(lookahead);
+        if (!closed) {
+          return false;
+        }
+        lookahead = *closed;
         selected = true;
       }
       return selected && at(TokenKind::Arrow, lookahead);

@@ -1313,9 +1313,7 @@ bool Lowerer::lower_hir_force_release(
         ? design_.signal_info_.at(*binding->signal).systemverilog_scalar
         : frontend::SystemVerilogScalarKind::None;
     const auto real_kind = [](const frontend::SystemVerilogScalarKind kind) {
-        return kind == frontend::SystemVerilogScalarKind::Real
-            || kind == frontend::SystemVerilogScalarKind::Realtime
-            || kind == frontend::SystemVerilogScalarKind::ShortReal;
+        return frontend::is_real_scalar_kind(kind);
     };
     if (!force_value && value) {
         const auto value_kind = hir_systemverilog_scalar_kind(*value);
@@ -4269,11 +4267,7 @@ bool Lowerer::lower_hir_statement(
             trace_generated("fixed-net-entry");
             // A real element update writes its normalized real operation.
             const bool real_element_update
-                = update_target_kind == frontend::SystemVerilogScalarKind::Real
-                || update_target_kind
-                    == frontend::SystemVerilogScalarKind::Realtime
-                || update_target_kind
-                    == frontend::SystemVerilogScalarKind::ShortReal;
+                = frontend::is_real_scalar_kind(update_target_kind);
             // A nonblocking assignment with an intra-assignment delay
             // evaluates now and updates the element after the delay
             // (IEEE 1800-2017 10.4.2).
@@ -4741,10 +4735,7 @@ bool Lowerer::lower_hir_statement(
                 : hir_systemverilog_scalar_kind(*value);
             const auto real_kind
                 = [](const frontend::SystemVerilogScalarKind kind) {
-                      return kind == frontend::SystemVerilogScalarKind::Real
-                          || kind == frontend::SystemVerilogScalarKind::Realtime
-                          || kind
-                          == frontend::SystemVerilogScalarKind::ShortReal;
+                      return frontend::is_real_scalar_kind(kind);
                   };
             const auto element_real = real_kind(element_scalar_kind);
             const auto value_real = real_kind(value_scalar_kind);
@@ -5474,12 +5465,7 @@ bool Lowerer::lower_hir_statement(
                             != semantic::vhdl::RangeKind::array_index) {
                             continue;
                         }
-                        const auto left = constraint.left
-                            ? constraint.left
-                            : constraint.left_expression
-                            ? hir_constant_integer(
-                                  *constraint.left_expression)
-                            : std::nullopt;
+                        const auto left = hir_range_left(constraint);
                         if (!left) {
                             return false;
                         }
@@ -6245,14 +6231,7 @@ bool Lowerer::lower_hir_statement(
                         if (spelling.starts_with('\'')) {
                             return literal.spelling == spelling;
                         }
-                        return std::ranges::equal(
-                            literal.spelling, spelling,
-                            [](const char left, const char right) {
-                                return std::tolower(
-                                           static_cast<unsigned char>(left))
-                                    == std::tolower(
-                                        static_cast<unsigned char>(right));
-                            });
+                        return equal_ignoring_ascii_case(literal.spelling, spelling);
                     });
             }();
             const auto unresolved_literal
@@ -6448,14 +6427,7 @@ bool Lowerer::lower_hir_statement(
                 }
                 const auto same_name = [](const std::string_view left,
                                           const std::string_view right) {
-                    return std::ranges::equal(
-                        left, right,
-                        [](const char lhs, const char rhs) {
-                            return std::tolower(
-                                       static_cast<unsigned char>(lhs))
-                                == std::tolower(
-                                    static_cast<unsigned char>(rhs));
-                        });
+                    return equal_ignoring_ascii_case(left, right);
                 };
                 if (same_name(spelling, "natural")) {
                     return frontend::IntegerRange {
@@ -6681,16 +6653,8 @@ bool Lowerer::lower_hir_statement(
                 return std::nullopt;
             }
             const auto& inherited = target_subtype->constraints.front();
-            const auto inherited_left = inherited.left
-                ? inherited.left
-                : inherited.left_expression
-                ? hir_constant_integer(*inherited.left_expression)
-                : std::nullopt;
-            const auto inherited_right = inherited.right
-                ? inherited.right
-                : inherited.right_expression
-                ? hir_constant_integer(*inherited.right_expression)
-                : std::nullopt;
+            const auto inherited_left = hir_range_left(inherited);
+            const auto inherited_right = hir_range_right(inherited);
             if (inherited.kind != semantic::vhdl::RangeKind::array_index
                 || inherited.null
                 || !inherited_left || !inherited_right
@@ -9980,12 +9944,7 @@ bool Lowerer::lower_hir_statement(
                     // 12.7.2, 6.12.2).
                     const auto limit_kind = hir_systemverilog_scalar_kind(
                         *loop_statement.loop_limit);
-                    const bool real_limit = limit_kind
-                            == frontend::SystemVerilogScalarKind::Real
-                        || limit_kind
-                            == frontend::SystemVerilogScalarKind::ShortReal
-                        || limit_kind
-                            == frontend::SystemVerilogScalarKind::Realtime;
+                    const bool real_limit = frontend::is_real_scalar_kind(limit_kind);
                     auto limit = real_limit
                         ? lower_hir_expression(*loop_statement.loop_limit,
                               limit_kind
@@ -11194,9 +11153,7 @@ bool Lowerer::lower_hir_statement(
             return true;
         }
         const auto kind = hir_systemverilog_scalar_kind(*expression);
-        const bool real_value = kind == frontend::SystemVerilogScalarKind::Real
-            || kind == frontend::SystemVerilogScalarKind::Realtime
-            || kind == frontend::SystemVerilogScalarKind::ShortReal;
+        const bool real_value = frontend::is_real_scalar_kind(kind);
         return lower_output_value_impl(expression,
             real_value ? semantic::sv::OutputFormat::real_general
                        : semantic::sv::OutputFormat::decimal,
@@ -15421,9 +15378,7 @@ std::optional<SignalId> Lowerer::hir_monitor_expression_signal(
 {
     const auto scalar_kind = hir_systemverilog_scalar_kind(expression);
     const bool real_value
-        = scalar_kind == frontend::SystemVerilogScalarKind::Real
-        || scalar_kind == frontend::SystemVerilogScalarKind::Realtime
-        || scalar_kind == frontend::SystemVerilogScalarKind::ShortReal;
+        = frontend::is_real_scalar_kind(scalar_kind);
     const auto width = real_value
         ? std::optional<std::size_t> {
               scalar_kind == frontend::SystemVerilogScalarKind::ShortReal

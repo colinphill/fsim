@@ -571,22 +571,8 @@ bool VhdlParser::parse_vhdl_generate_declarations(
         && keyword("new", 3, true)) {
       parsed = true;
       const auto package_start = advance();
-      auto instance =
-          parse_vhdl_package_instantiation(package_start);
-      if (std::ranges::any_of(
-              body.package_instances,
-              [&](const auto& existing) {
-                return existing.name == instance.name;
-              })) {
-        error(
-            package_start,
-            "FSIM-VHDL-SEM-059",
-            "duplicate local package instance '"
-                + instance.name + "'");
-      } else {
-        body.package_instances.push_back(
-            std::move(instance));
-      }
+      parse_local_vhdl_package_instantiation(
+          body.package_instances, package_start);
       continue;
     }
     if (match_keyword("component", true)) {

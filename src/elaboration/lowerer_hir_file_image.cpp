@@ -44,9 +44,7 @@ struct FileImageLeaf {
 [[nodiscard]] std::string lower_case(const std::string_view text)
 {
     std::string result { text };
-    std::ranges::transform(result, result.begin(), [](const unsigned char character) {
-        return static_cast<char>(std::tolower(character));
-    });
+    lowercase_ascii(result);
     return result;
 }
 
@@ -389,17 +387,6 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
             process_.operations[exit] = Jump { done };
         }
     };
-    const auto time_units = std::array<std::pair<std::string_view, std::uint64_t>, 8U> { {
-        { "fs", 1U },
-        { "ps", 1'000U },
-        { "ns", 1'000'000U },
-        { "us", 1'000'000'000U },
-        { "ms", 1'000'000'000'000U },
-        { "sec", 1'000'000'000'000'000U },
-        { "min", 60'000'000'000'000'000U },
-        { "hr", 3'600'000'000'000'000'000U },
-    } };
-
     const bool string_element = leaves.size() == 1U
         && leaves.front().kind == Kind::characters;
     if (write && string_element && hir_expression_is_string(value, hir_process_scope_)) {
@@ -828,7 +815,7 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
             std::vector<std::string> names;
             std::vector<std::uint64_t> scales;
             if (leaf.kind == Kind::time) {
-                for (const auto& [name, factor] : time_units) {
+                for (const auto& [name, factor] : vhdl_time_units) {
                     names.emplace_back(name);
                     scales.push_back(factor);
                 }

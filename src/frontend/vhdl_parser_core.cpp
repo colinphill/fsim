@@ -459,16 +459,8 @@ DesignUnit VhdlParser::parse_package(const Token& start, const bool body)
             // A package instantiation in a package declarative region
             // (IEEE 1076-2008 4.7, 4.9).
             const auto package_start = advance();
-            auto instance = parse_vhdl_package_instantiation(package_start);
-            if (std::ranges::any_of(unit.package_instances,
-                    [&](const auto& existing) {
-                        return existing.name == instance.name;
-                    })) {
-                error(package_start, "FSIM-VHDL-SEM-059",
-                    "duplicate local package instance '" + instance.name + "'");
-            } else {
-                unit.package_instances.push_back(std::move(instance));
-            }
+            parse_local_vhdl_package_instantiation(
+                unit.package_instances, package_start);
         } else if (match(TokenKind::PslDirective)) {
             error(previous(), "FSIM-VHDL-PSL-009",
                 "a PSL directive is not legal in a package declarative region");
@@ -613,16 +605,8 @@ DesignUnit VhdlParser::parse_entity(const Token& start)
             parse_signal_declaration(unit.signals, &unit.parameters);
         } else if (match_keyword("package", true)) {
             const auto package_start = previous();
-            auto instance = parse_vhdl_package_instantiation(package_start);
-            if (std::ranges::any_of(unit.package_instances,
-                    [&](const auto& existing) {
-                        return existing.name == instance.name;
-                    })) {
-                error(package_start, "FSIM-VHDL-SEM-059",
-                    "duplicate local package instance '" + instance.name + "'");
-            } else {
-                unit.package_instances.push_back(std::move(instance));
-            }
+            parse_local_vhdl_package_instantiation(
+                unit.package_instances, package_start);
         } else if (match_keyword("view", true)) {
             parse_vhdl_mode_view_declaration(
                 unit.type_aliases, previous());
@@ -1486,6 +1470,23 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
     return type;
 }
 
+std::optional<std::size_t> VhdlParser::skip_vhdl_parentheses(
+    std::size_t lookahead) const
+{
+    std::size_t depth = 0;
+    do {
+        if (at(TokenKind::LeftParen, lookahead)) {
+            ++depth;
+        } else if (at(TokenKind::RightParen, lookahead)) {
+            --depth;
+        } else if (at(TokenKind::EndOfFile, lookahead)) {
+            return std::nullopt;
+        }
+        ++lookahead;
+    } while (depth != 0);
+    return lookahead;
+}
+
 bool VhdlParser::vhdl_record_constraint_ahead()
 {
     // `(name(...)` or `(name(...)(...)` followed by ',' or ')': a record
@@ -1496,17 +1497,11 @@ bool VhdlParser::vhdl_record_constraint_ahead()
     }
     std::size_t lookahead = 2;
     while (at(TokenKind::LeftParen, lookahead)) {
-        std::size_t depth = 0;
-        do {
-            if (at(TokenKind::LeftParen, lookahead)) {
-                ++depth;
-            } else if (at(TokenKind::RightParen, lookahead)) {
-                --depth;
-            } else if (at(TokenKind::EndOfFile, lookahead)) {
-                return false;
-            }
-            ++lookahead;
-        } while (depth != 0);
+        const auto closed = skip_vhdl_parentheses(lookahead);
+        if (!closed) {
+            return false;
+        }
+        lookahead = *closed;
     }
     return at(TokenKind::Comma, lookahead)
         || at(TokenKind::RightParen, lookahead);
@@ -1708,16 +1703,8 @@ DesignUnit VhdlParser::parse_architecture(const Token& start)
             parse_vhdl_procedure_item(unit, previous(), true);
         } else if (match_keyword("package", true)) {
             const auto package_start = previous();
-            auto instance = parse_vhdl_package_instantiation(package_start);
-            if (std::ranges::any_of(unit.package_instances,
-                    [&](const auto& existing) {
-                        return existing.name == instance.name;
-                    })) {
-                error(package_start, "FSIM-VHDL-SEM-059",
-                    "duplicate local package instance '" + instance.name + "'");
-            } else {
-                unit.package_instances.push_back(std::move(instance));
-            }
+            parse_local_vhdl_package_instantiation(
+                unit.package_instances, package_start);
         } else if (match_keyword("view", true)) {
             parse_vhdl_mode_view_declaration(
                 unit.type_aliases, previous());

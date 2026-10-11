@@ -188,16 +188,7 @@ std::vector<std::int64_t> HierarchyBuilder::compiled_instance_array_indices(
     if (!left || !right
         || (*left > *right ? *left - *right : *right - *left)
             >= std::int64_t { 1 } << 20) {
-        frontend::SourceSpan span;
-        const auto& spans = compiled_->semantics.source_spans();
-        if (instance.source.valid() && instance.source.value() < spans.size()) {
-            const auto& source = spans[instance.source.value()];
-            span.source_name = source.logical_name;
-            span.begin = { static_cast<std::size_t>(source.begin.offset),
-                source.begin.line, source.begin.column };
-            span.end = { static_cast<std::size_t>(source.end.offset),
-                source.end.line, source.end.column };
-        }
+        auto span = compiled_source_span(*compiled_, instance.source);
         report("FSIM-SV-SEM-120",
             "instance-array bounds of '" + instance.name
                 + "' must be constant integers",

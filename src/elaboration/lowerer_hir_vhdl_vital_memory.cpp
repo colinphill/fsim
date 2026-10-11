@@ -12,13 +12,6 @@ using namespace runtime::simir;
 
 namespace {
 
-std::string_view memory_simple_name(const std::string_view name)
-{
-    const auto separator = name.find_last_of(".:");
-    return name.substr(
-        separator == std::string_view::npos ? 0U : separator + 1U);
-}
-
 std::string_view memory_name(const semantic::vhdl::Name& name)
 {
     return name.canonical.empty()
@@ -26,23 +19,10 @@ std::string_view memory_name(const semantic::vhdl::Name& name)
         : std::string_view { name.canonical };
 }
 
-bool same_memory_identifier(
-    const std::string_view left, const std::string_view right)
-{
-    return left.size() == right.size()
-        && std::ranges::equal(left, right, [](const char lhs, const char rhs) {
-               return std::tolower(static_cast<unsigned char>(lhs))
-                   == std::tolower(static_cast<unsigned char>(rhs));
-           });
-}
-
 std::string canonical_memory_identifier(const std::string_view name)
 {
     auto result = std::string { name };
-    std::ranges::transform(result, result.begin(), [](const char value) {
-        return static_cast<char>(
-            std::tolower(static_cast<unsigned char>(value)));
-    });
+    lowercase_ascii(result);
     return result;
 }
 
@@ -55,11 +35,11 @@ bool has_vital_memory_qualification(const std::string_view name)
     const auto owner = name.substr(0U, member_separator);
     const auto package_separator = owner.find_last_of('.');
     if (package_separator == std::string_view::npos) {
-        return same_memory_identifier(owner, "vital_memory");
+        return equal_ignoring_ascii_case(owner, "vital_memory");
     }
-    return same_memory_identifier(
+    return equal_ignoring_ascii_case(
                owner.substr(package_separator + 1U), "vital_memory")
-        && same_memory_identifier(
+        && equal_ignoring_ascii_case(
             owner.substr(0U, package_separator), "ieee");
 }
 
@@ -99,8 +79,8 @@ bool Lowerer::is_hir_vhdl_vital_memory_expression(
     const auto& source = *expression->vhdl;
     const auto& reference = *source.referenced_name;
     const auto qualified_name = memory_name(reference);
-    if (!same_memory_identifier(
-            memory_simple_name(qualified_name), "vitaldeclarememory")
+    if (!equal_ignoring_ascii_case(
+            simple_name_of(qualified_name), "vitaldeclarememory")
         || !has_vital_memory_qualification(qualified_name)) {
         return false;
     }
@@ -130,10 +110,10 @@ Lowerer::lower_hir_vhdl_vital_memory_expression(
     }
     const auto& source = *expression->vhdl;
     const auto span = hir_source_span(source.source);
-    const auto declared_result = memory_simple_name(source.nominal_type);
+    const auto declared_result = simple_name_of(source.nominal_type);
     if (expected_width != 32U
         || (!declared_result.empty()
-            && !same_memory_identifier(
+            && !equal_ignoring_ascii_case(
                 declared_result, "vitalmemorydatatype"))) {
         report(
             "FSIM-ELAB-VITALMEM-001",
@@ -154,7 +134,7 @@ Lowerer::lower_hir_vhdl_vital_memory_expression(
 
     bool subword_profile { };
     for (const auto& argument_name : source.argument_names) {
-        if (same_memory_identifier(
+        if (equal_ignoring_ascii_case(
                 argument_name, "noofbitspersubword")) {
             subword_profile = true;
         }

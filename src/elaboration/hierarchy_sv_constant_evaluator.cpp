@@ -3451,12 +3451,6 @@ private:
     std::uint64_t work_units_used_ { };
 };
 
-[[nodiscard]] bool real_scalar_kind(const ScalarKind kind) noexcept
-{
-    return kind == ScalarKind::ShortReal || kind == ScalarKind::Real
-        || kind == ScalarKind::Realtime;
-}
-
 [[nodiscard]] ScalarKind scalar_kind(
     const semantic::sv::ScalarKind kind) noexcept
 {
@@ -3989,7 +3983,7 @@ private:
             return result;
         }
         const auto kind = promote_scalar_kind(left->kind, right->kind);
-        if (left_integer && right_integer && !real_scalar_kind(kind)) {
+        if (left_integer && right_integer && !frontend::is_real_scalar_kind(kind)) {
             if ((record.text == "/" || record.text == "%")
                 && *right_integer == 0) {
                 error_ = "scalar constant division by zero";
@@ -4040,7 +4034,7 @@ private:
             error_ = "scalar constant operation produced a nonfinite result";
             return std::nullopt;
         }
-        if (real_scalar_kind(kind)) {
+        if (frontend::is_real_scalar_kind(kind)) {
             return scalar_real(result, kind);
         }
         if (result

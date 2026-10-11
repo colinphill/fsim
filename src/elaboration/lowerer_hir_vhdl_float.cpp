@@ -19,10 +19,7 @@ std::string float_canonical_name(std::string_view name)
         name.remove_prefix(separator + 1U);
     }
     std::string result { name };
-    std::ranges::transform(result, result.begin(), [](const char value) {
-        return static_cast<char>(
-            std::tolower(static_cast<unsigned char>(value)));
-    });
+    lowercase_ascii(result);
     return result;
 }
 
@@ -150,16 +147,8 @@ bool Lowerer::validate_hir_vhdl_float_context(
     auto valid = float_subtype_name(effective);
     if (valid && !effective.constraints.empty()) {
         const auto& range = effective.constraints.front();
-        const auto left = range.left
-            ? range.left
-            : range.left_expression
-            ? hir_constant_integer(*range.left_expression)
-            : std::nullopt;
-        const auto right = range.right
-            ? range.right
-            : range.right_expression
-            ? hir_constant_integer(*range.right_expression)
-            : std::nullopt;
+        const auto left = hir_range_left(range);
+        const auto right = hir_range_right(range);
         valid = left == std::optional<std::int64_t> { 8 }
             && right == std::optional<std::int64_t> { -23 }
             && range.descending;

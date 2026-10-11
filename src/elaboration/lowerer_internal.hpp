@@ -361,6 +361,26 @@ private:
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<std::int64_t> hir_constant_integer(
         semantic::ExpressionId expression) const;
+    // A range bound (a VHDL range constraint or a SystemVerilog packed
+    // range), folding a bound that is still an expression.
+    template <typename Range>
+    [[nodiscard]] std::optional<std::int64_t> hir_range_left(
+        const Range& range) const
+    {
+        return range.left ? range.left
+            : range.left_expression
+            ? hir_constant_integer(*range.left_expression)
+            : std::nullopt;
+    }
+    template <typename Range>
+    [[nodiscard]] std::optional<std::int64_t> hir_range_right(
+        const Range& range) const
+    {
+        return range.right ? range.right
+            : range.right_expression
+            ? hir_constant_integer(*range.right_expression)
+            : std::nullopt;
+    }
     // Append a callable-cache key fragment for an actual's VHDL element
     // constraints: each constraint's path, folded bounds and direction.
     void append_vhdl_element_constraint_key(std::string& key,

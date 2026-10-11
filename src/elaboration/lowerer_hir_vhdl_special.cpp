@@ -24,25 +24,6 @@ std::optional<SelectedVhdlName> selected_vhdl_name(
     };
 }
 
-std::string_view unqualified_vhdl_name(const std::string_view spelling)
-{
-    const auto separator = spelling.find_last_of(".:");
-    return separator == std::string_view::npos
-        ? spelling
-        : spelling.substr(separator + 1U);
-}
-
-bool vhdl_name_equal(
-    const std::string_view left,
-    const std::string_view right)
-{
-    return std::ranges::equal(
-        left, right, [](const char lhs, const char rhs) {
-            return std::tolower(static_cast<unsigned char>(lhs))
-                == std::tolower(static_cast<unsigned char>(rhs));
-        });
-}
-
 frontend::VhdlSimulatorApi vhdl_environment_type_api(
     std::string_view spelling)
 {
@@ -83,15 +64,15 @@ bool vhdl_assert_procedure_api(const frontend::VhdlSimulatorApi api)
 
 bool vhdl_environment_status_literal_name(const std::string_view spelling)
 {
-    const auto name = unqualified_vhdl_name(spelling);
-    return vhdl_name_equal(name, "status_ok")
-        || vhdl_name_equal(name, "status_not_found")
-        || vhdl_name_equal(name, "status_no_directory")
-        || vhdl_name_equal(name, "status_item_exists")
-        || vhdl_name_equal(name, "status_not_empty")
-        || vhdl_name_equal(name, "status_no_file")
-        || vhdl_name_equal(name, "status_access_denied")
-        || vhdl_name_equal(name, "status_error");
+    const auto name = simple_name_of(spelling);
+    return equal_ignoring_ascii_case(name, "status_ok")
+        || equal_ignoring_ascii_case(name, "status_not_found")
+        || equal_ignoring_ascii_case(name, "status_no_directory")
+        || equal_ignoring_ascii_case(name, "status_item_exists")
+        || equal_ignoring_ascii_case(name, "status_not_empty")
+        || equal_ignoring_ascii_case(name, "status_no_file")
+        || equal_ignoring_ascii_case(name, "status_access_denied")
+        || equal_ignoring_ascii_case(name, "status_error");
 }
 
 std::optional<std::uint64_t> vhdl_environment_status_ordinal(
@@ -99,60 +80,60 @@ std::optional<std::uint64_t> vhdl_environment_status_ordinal(
     const std::string_view spelling)
 {
     using Api = frontend::VhdlSimulatorApi;
-    const auto name = unqualified_vhdl_name(spelling);
-    if (vhdl_name_equal(name, "status_ok")) {
+    const auto name = simple_name_of(spelling);
+    if (equal_ignoring_ascii_case(name, "status_ok")) {
         return 0U;
     }
     if (api == Api::dir_open_status) {
-        if (vhdl_name_equal(name, "status_not_found")) {
+        if (equal_ignoring_ascii_case(name, "status_not_found")) {
             return 1U;
         }
-        if (vhdl_name_equal(name, "status_no_directory")) {
+        if (equal_ignoring_ascii_case(name, "status_no_directory")) {
             return 2U;
         }
-        if (vhdl_name_equal(name, "status_access_denied")) {
+        if (equal_ignoring_ascii_case(name, "status_access_denied")) {
             return 3U;
         }
-        if (vhdl_name_equal(name, "status_error")) {
+        if (equal_ignoring_ascii_case(name, "status_error")) {
             return 4U;
         }
         return std::nullopt;
     }
     if (api == Api::dir_create_status) {
-        if (vhdl_name_equal(name, "status_item_exists")) {
+        if (equal_ignoring_ascii_case(name, "status_item_exists")) {
             return 1U;
         }
-        if (vhdl_name_equal(name, "status_access_denied")) {
+        if (equal_ignoring_ascii_case(name, "status_access_denied")) {
             return 2U;
         }
-        if (vhdl_name_equal(name, "status_error")) {
+        if (equal_ignoring_ascii_case(name, "status_error")) {
             return 3U;
         }
         return std::nullopt;
     }
     if (api == Api::dir_delete_status) {
-        if (vhdl_name_equal(name, "status_no_directory")) {
+        if (equal_ignoring_ascii_case(name, "status_no_directory")) {
             return 1U;
         }
-        if (vhdl_name_equal(name, "status_not_empty")) {
+        if (equal_ignoring_ascii_case(name, "status_not_empty")) {
             return 2U;
         }
-        if (vhdl_name_equal(name, "status_access_denied")) {
+        if (equal_ignoring_ascii_case(name, "status_access_denied")) {
             return 3U;
         }
-        if (vhdl_name_equal(name, "status_error")) {
+        if (equal_ignoring_ascii_case(name, "status_error")) {
             return 4U;
         }
         return std::nullopt;
     }
     if (api == Api::file_delete_status) {
-        if (vhdl_name_equal(name, "status_no_file")) {
+        if (equal_ignoring_ascii_case(name, "status_no_file")) {
             return 1U;
         }
-        if (vhdl_name_equal(name, "status_access_denied")) {
+        if (equal_ignoring_ascii_case(name, "status_access_denied")) {
             return 2U;
         }
-        if (vhdl_name_equal(name, "status_error")) {
+        if (equal_ignoring_ascii_case(name, "status_error")) {
             return 3U;
         }
     }
@@ -161,13 +142,13 @@ std::optional<std::uint64_t> vhdl_environment_status_ordinal(
 
 bool reflection_mirror_type(const std::string_view spelling)
 {
-    const auto name = unqualified_vhdl_name(spelling);
+    const auto name = simple_name_of(spelling);
     constexpr auto suffix = std::string_view { "_mirror" };
     return (name.size() >= suffix.size()
-            && vhdl_name_equal(
+            && equal_ignoring_ascii_case(
                 name.substr(name.size() - suffix.size()), suffix))
-        || vhdl_name_equal(name, "value_mirror")
-        || vhdl_name_equal(name, "subtype_mirror");
+        || equal_ignoring_ascii_case(name, "value_mirror")
+        || equal_ignoring_ascii_case(name, "subtype_mirror");
 }
 
 bool reflection_mirror_subtype(
@@ -244,69 +225,69 @@ SourceLocation reflection_source_location(
 std::optional<VhdlReflectionApiKind> reflection_scalar_operation(
     const std::string_view name)
 {
-    if (vhdl_name_equal(name, "get_type_class")
-        || vhdl_name_equal(name, "get_value_class")) {
+    if (equal_ignoring_ascii_case(name, "get_type_class")
+        || equal_ignoring_ascii_case(name, "get_value_class")) {
         return VhdlReflectionApiKind::get_type_class;
     }
-    if (vhdl_name_equal(name, "get_subtype_mirror")) {
+    if (equal_ignoring_ascii_case(name, "get_subtype_mirror")) {
         return VhdlReflectionApiKind::get_subtype_mirror;
     }
-    if (vhdl_name_equal(name, "to_subtype_mirror")
-        || vhdl_name_equal(name, "to_value_mirror")) {
+    if (equal_ignoring_ascii_case(name, "to_subtype_mirror")
+        || equal_ignoring_ascii_case(name, "to_value_mirror")) {
         return VhdlReflectionApiKind::convert_generic;
     }
-    if (vhdl_name_equal(name, "enumeration_literal")) {
+    if (equal_ignoring_ascii_case(name, "enumeration_literal")) {
         return VhdlReflectionApiKind::enumeration_literal;
     }
-    if (vhdl_name_equal(name, "pos")) {
+    if (equal_ignoring_ascii_case(name, "pos")) {
         return VhdlReflectionApiKind::pos;
     }
-    if (vhdl_name_equal(name, "left")) {
+    if (equal_ignoring_ascii_case(name, "left")) {
         return VhdlReflectionApiKind::left;
     }
-    if (vhdl_name_equal(name, "right")) {
+    if (equal_ignoring_ascii_case(name, "right")) {
         return VhdlReflectionApiKind::right;
     }
-    if (vhdl_name_equal(name, "low")) {
+    if (equal_ignoring_ascii_case(name, "low")) {
         return VhdlReflectionApiKind::low;
     }
-    if (vhdl_name_equal(name, "high")) {
+    if (equal_ignoring_ascii_case(name, "high")) {
         return VhdlReflectionApiKind::high;
     }
-    if (vhdl_name_equal(name, "length")) {
+    if (equal_ignoring_ascii_case(name, "length")) {
         return VhdlReflectionApiKind::length;
     }
-    if (vhdl_name_equal(name, "ascending")) {
+    if (equal_ignoring_ascii_case(name, "ascending")) {
         return VhdlReflectionApiKind::ascending;
     }
-    if (vhdl_name_equal(name, "value")) {
+    if (equal_ignoring_ascii_case(name, "value")) {
         return VhdlReflectionApiKind::value;
     }
-    if (vhdl_name_equal(name, "units_length")) {
+    if (equal_ignoring_ascii_case(name, "units_length")) {
         return VhdlReflectionApiKind::units_length;
     }
-    if (vhdl_name_equal(name, "unit_index")) {
+    if (equal_ignoring_ascii_case(name, "unit_index")) {
         return VhdlReflectionApiKind::unit_index;
     }
-    if (vhdl_name_equal(name, "scale")) {
+    if (equal_ignoring_ascii_case(name, "scale")) {
         return VhdlReflectionApiKind::scale;
     }
-    if (vhdl_name_equal(name, "element_index")) {
+    if (equal_ignoring_ascii_case(name, "element_index")) {
         return VhdlReflectionApiKind::record_element_index;
     }
-    if (vhdl_name_equal(name, "dimensions")) {
+    if (equal_ignoring_ascii_case(name, "dimensions")) {
         return VhdlReflectionApiKind::dimensions;
     }
-    if (vhdl_name_equal(name, "index_subtype")) {
+    if (equal_ignoring_ascii_case(name, "index_subtype")) {
         return VhdlReflectionApiKind::array_index_subtype;
     }
-    if (vhdl_name_equal(name, "designated_subtype")) {
+    if (equal_ignoring_ascii_case(name, "designated_subtype")) {
         return VhdlReflectionApiKind::designated_subtype;
     }
-    if (vhdl_name_equal(name, "is_null")) {
+    if (equal_ignoring_ascii_case(name, "is_null")) {
         return VhdlReflectionApiKind::is_null;
     }
-    if (vhdl_name_equal(name, "get_file_open_kind")) {
+    if (equal_ignoring_ascii_case(name, "get_file_open_kind")) {
         return VhdlReflectionApiKind::file_open_kind;
     }
     return std::nullopt;
@@ -315,19 +296,19 @@ std::optional<VhdlReflectionApiKind> reflection_scalar_operation(
 std::optional<VhdlReflectionApiKind> reflection_string_operation(
     const std::string_view name)
 {
-    if (vhdl_name_equal(name, "simple_name")) {
+    if (equal_ignoring_ascii_case(name, "simple_name")) {
         return VhdlReflectionApiKind::simple_name;
     }
-    if (vhdl_name_equal(name, "image")) {
+    if (equal_ignoring_ascii_case(name, "image")) {
         return VhdlReflectionApiKind::image;
     }
-    if (vhdl_name_equal(name, "unit_name")) {
+    if (equal_ignoring_ascii_case(name, "unit_name")) {
         return VhdlReflectionApiKind::unit_name;
     }
-    if (vhdl_name_equal(name, "element_name")) {
+    if (equal_ignoring_ascii_case(name, "element_name")) {
         return VhdlReflectionApiKind::record_element_name;
     }
-    if (vhdl_name_equal(name, "get_file_logical_name")) {
+    if (equal_ignoring_ascii_case(name, "get_file_logical_name")) {
         return VhdlReflectionApiKind::file_logical_name;
     }
     return std::nullopt;
@@ -406,7 +387,7 @@ bind_protected_actuals(
                     const auto* formal = find_vhdl_declaration(
                         unit, formal_id);
                     return formal != nullptr
-                        && vhdl_name_equal(formal->name, name);
+                        && equal_ignoring_ascii_case(formal->name, name);
                 });
             if (found == formals.end()) {
                 return std::nullopt;
@@ -464,7 +445,7 @@ bind_protected_actuals(
                     const auto* formal = find_vhdl_declaration(
                         unit, formal_id);
                     return formal != nullptr
-                        && vhdl_name_equal(formal->name, name);
+                        && equal_ignoring_ascii_case(formal->name, name);
                 });
             if (found == formals.end()) {
                 return std::nullopt;
@@ -502,7 +483,7 @@ const semantic::vhdl::TypeDefinition* find_protected_body(
         if (!candidate || candidate->vhdl == nullptr
             || candidate->vhdl->form
                 != semantic::vhdl::TypeForm::protected_body
-            || !vhdl_name_equal(
+            || !equal_ignoring_ascii_case(
                 candidate->vhdl->name, public_type.name)) {
             continue;
         }
@@ -534,7 +515,7 @@ const semantic::vhdl::TypeDefinition* find_protected_type(
         if (!candidate || candidate->vhdl == nullptr
             || candidate->vhdl->form
                 != semantic::vhdl::TypeForm::protected_type
-            || !vhdl_name_equal(
+            || !equal_ignoring_ascii_case(
                 candidate->vhdl->name, subtype.type_mark.spelling)) {
             continue;
         }
@@ -559,7 +540,7 @@ std::optional<ContainerObjectId> find_protected_storage(
     }
     const auto found = std::ranges::find_if(
         objects, [&](const auto& candidate) {
-            return vhdl_name_equal(candidate.first, requested);
+            return equal_ignoring_ascii_case(candidate.first, requested);
         });
     return found != objects.end()
         ? std::optional { found->second }
@@ -752,7 +733,7 @@ Lowerer::lower_hir_vhdl_protected_expression(
             || !member->callable
             || !member->callable->function
             || !member->callable->defined
-            || !vhdl_name_equal(member->name, selected->member)) {
+            || !equal_ignoring_ascii_case(member->name, selected->member)) {
             continue;
         }
         const auto actuals = bind_protected_actuals(
@@ -996,7 +977,7 @@ bool Lowerer::lower_hir_vhdl_protected_statement(
             || !member->callable
             || member->callable->function
             || !member->callable->defined
-            || !vhdl_name_equal(member->name, selected->member)) {
+            || !equal_ignoring_ascii_case(member->name, selected->member)) {
             continue;
         }
         const auto actuals = bind_protected_actuals(
@@ -1429,10 +1410,10 @@ Lowerer::hir_vhdl_environment_call_path_member_selection(
     }
     const auto member_name = std::string_view { selected->vhdl->text }
         .substr(member_prefix.size());
-    const auto member = vhdl_name_equal(member_name, "name") ? 0U
-        : vhdl_name_equal(member_name, "file_name") ? 1U
-        : vhdl_name_equal(member_name, "file_path") ? 2U
-        : vhdl_name_equal(member_name, "file_line") ? 3U
+    const auto member = equal_ignoring_ascii_case(member_name, "name") ? 0U
+        : equal_ignoring_ascii_case(member_name, "file_name") ? 1U
+        : equal_ignoring_ascii_case(member_name, "file_path") ? 2U
+        : equal_ignoring_ascii_case(member_name, "file_line") ? 3U
                                                     : 4U;
     if (member >= 4U) {
         return std::nullopt;
@@ -1601,7 +1582,7 @@ Lowerer::hir_vhdl_environment_directory_string_selection(
         if (!name || name->vhdl == nullptr
             || name->vhdl->kind != semantic::vhdl::ExpressionKind::name
             || name->vhdl->text.size() <= suffix.size()
-            || !vhdl_name_equal(
+            || !equal_ignoring_ascii_case(
                 std::string_view { name->vhdl->text }.substr(
                     name->vhdl->text.size() - suffix.size()),
                 suffix)) {
@@ -1738,7 +1719,7 @@ bool Lowerer::lower_hir_vhdl_environment_directory_statement(
                 : std::string_view { association.formal->canonical };
             const auto found = std::ranges::find_if(
                 formals, [&](const std::string_view candidate) {
-                    return vhdl_name_equal(candidate, spelling);
+                    return equal_ignoring_ascii_case(candidate, spelling);
                 });
             if (found == formals.end()) {
                 valid = false;
@@ -1995,7 +1976,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_assert_expression(
         const auto name = source.argument_names.empty()
             ? std::string_view { }
             : std::string_view { source.argument_names.front() };
-        valid = valid && (name.empty() || vhdl_name_equal(name, "level"));
+        valid = valid && (name.empty() || equal_ignoring_ascii_case(name, "level"));
         level_actual = source.operands.front();
     }
     if (!valid) {
@@ -2073,7 +2054,7 @@ Lowerer::lower_hir_vhdl_assert_string_expression(
     const auto named = source.argument_names.empty()
         || (source.argument_names.size() == 1U
             && (source.argument_names.front().empty()
-                || vhdl_name_equal(
+                || equal_ignoring_ascii_case(
                     source.argument_names.front(), "level")));
     if (vhdl_standard_ < frontend::VhdlStandard::Vhdl2019
         || source.operands.size() != 1U || !named) {
@@ -2172,10 +2153,10 @@ bool Lowerer::lower_hir_vhdl_assert_statement(
         bool valid = associations.size() <= 2U;
         for (std::size_t index { }; index < associations.size(); ++index) {
             const auto name = formal_name(associations[index]);
-            if (vhdl_name_equal(name, "level")) {
+            if (equal_ignoring_ascii_case(name, "level")) {
                 valid = valid && !level_actual;
                 level_actual = associations[index].actual;
-            } else if (vhdl_name_equal(name, "enable")) {
+            } else if (equal_ignoring_ascii_case(name, "enable")) {
                 valid = valid && !enable_actual;
                 enable_actual = associations[index].actual;
             } else if (!name.empty()) {
@@ -2227,7 +2208,7 @@ bool Lowerer::lower_hir_vhdl_assert_statement(
         const auto valid = associations.size() <= 1U
             && (associations.empty()
                 || formal_name(associations.front()).empty()
-                || vhdl_name_equal(
+                || equal_ignoring_ascii_case(
                     formal_name(associations.front()), "level"));
         if (!valid) {
             report(
@@ -2263,9 +2244,9 @@ bool Lowerer::lower_hir_vhdl_assert_statement(
     for (const auto& association : associations) {
         const auto name = formal_name(association);
         const auto formal = name.empty() ? positional++
-            : vhdl_name_equal(name, "level") ? 0U
-            : vhdl_name_equal(name, "format") ? 1U
-            : vhdl_name_equal(name, "valid") ? 2U : actuals.size();
+            : equal_ignoring_ascii_case(name, "level") ? 0U
+            : equal_ignoring_ascii_case(name, "format") ? 1U
+            : equal_ignoring_ascii_case(name, "valid") ? 2U : actuals.size();
         if (formal >= actuals.size() || actuals[formal]) {
             valid = false;
         } else {
@@ -2436,7 +2417,7 @@ Lowerer::lower_hir_vhdl_environment_expression(
             } else {
                 const auto found = std::ranges::find_if(
                     formals, [&](const std::string_view candidate) {
-                        return vhdl_name_equal(candidate, name);
+                        return equal_ignoring_ascii_case(candidate, name);
                     });
                 if (found == formals.end()) {
                     valid = false;
@@ -2609,13 +2590,13 @@ Lowerer::lower_hir_vhdl_environment_expression(
                 && operand_expression->vhdl->kind
                     == semantic::vhdl::ExpressionKind::real_literal)
             || (operand_subtype
-                && vhdl_name_equal(
+                && equal_ignoring_ascii_case(
                     operand_subtype->type_mark.spelling, "real"));
         const auto argument_name = source.argument_names.empty()
             ? std::string_view { }
             : std::string_view { source.argument_names.front() };
         const auto matching_name = argument_name.empty()
-            || vhdl_name_equal(
+            || equal_ignoring_ascii_case(
                 argument_name, record ? "trec" : "timer");
         if ((!record && !real_time) || !matching_name) {
             report(
@@ -2804,8 +2785,8 @@ Lowerer::lower_hir_vhdl_environment_string_expression(
     };
     const bool named_call_path_profile = std::ranges::any_of(
         source.argument_names, [](const std::string& name) {
-            return vhdl_name_equal(name, "call_path")
-                || vhdl_name_equal(name, "separator");
+            return equal_ignoring_ascii_case(name, "call_path")
+                || equal_ignoring_ascii_case(name, "separator");
         });
     const auto positional_call_path = call_path_actual(
         source.operands.front());
@@ -2819,8 +2800,8 @@ Lowerer::lower_hir_vhdl_environment_string_expression(
                 : std::string_view { };
             const auto formal = name.empty()
                 ? positional++
-                : vhdl_name_equal(name, "call_path") ? 0U
-                : vhdl_name_equal(name, "separator") ? 1U
+                : equal_ignoring_ascii_case(name, "call_path") ? 0U
+                : equal_ignoring_ascii_case(name, "separator") ? 1U
                                                        : actuals.size();
             if (formal >= actuals.size() || actuals[formal]) {
                 valid = false;
@@ -2915,8 +2896,8 @@ Lowerer::lower_hir_vhdl_environment_string_expression(
             : std::string_view { };
         const auto formal = name.empty()
             ? positional++
-            : vhdl_name_equal(name, "trec") ? 0U
-            : vhdl_name_equal(name, "frac_digits") ? 1U
+            : equal_ignoring_ascii_case(name, "trec") ? 0U
+            : equal_ignoring_ascii_case(name, "frac_digits") ? 1U
                                                    : actuals.size();
         if (formal >= actuals.size() || actuals[formal]) {
             valid = false;
@@ -2965,7 +2946,7 @@ bool Lowerer::is_hir_vhdl_reflection_expression(
         return false;
     }
     const auto& source = *expression->vhdl;
-    if (vhdl_name_equal(source.text, "'reflect")) {
+    if (equal_ignoring_ascii_case(source.text, "'reflect")) {
         return source.operands.size() == 1U;
     }
     const auto selected = selected_vhdl_name(source.text);
@@ -2993,17 +2974,17 @@ bool Lowerer::is_hir_vhdl_reflection_expression(
         return false;
     }
     return reflection_scalar_operation(selected->member).has_value()
-        || vhdl_name_equal(selected->member, "to_enumeration")
-        || vhdl_name_equal(selected->member, "to_integer")
-        || vhdl_name_equal(selected->member, "to_floating")
-        || vhdl_name_equal(selected->member, "to_physical")
-        || vhdl_name_equal(selected->member, "to_record")
-        || vhdl_name_equal(selected->member, "to_array")
-        || vhdl_name_equal(selected->member, "to_access")
-        || vhdl_name_equal(selected->member, "to_file")
-        || vhdl_name_equal(selected->member, "to_protected")
-        || vhdl_name_equal(selected->member, "element_subtype")
-        || vhdl_name_equal(selected->member, "get");
+        || equal_ignoring_ascii_case(selected->member, "to_enumeration")
+        || equal_ignoring_ascii_case(selected->member, "to_integer")
+        || equal_ignoring_ascii_case(selected->member, "to_floating")
+        || equal_ignoring_ascii_case(selected->member, "to_physical")
+        || equal_ignoring_ascii_case(selected->member, "to_record")
+        || equal_ignoring_ascii_case(selected->member, "to_array")
+        || equal_ignoring_ascii_case(selected->member, "to_access")
+        || equal_ignoring_ascii_case(selected->member, "to_file")
+        || equal_ignoring_ascii_case(selected->member, "to_protected")
+        || equal_ignoring_ascii_case(selected->member, "element_subtype")
+        || equal_ignoring_ascii_case(selected->member, "get");
 }
 
 bool Lowerer::is_hir_vhdl_reflection_string_expression(
@@ -3056,7 +3037,7 @@ Lowerer::lower_hir_vhdl_reflection_expression(
         return std::nullopt;
     }
     const auto& source = *expression->vhdl;
-    if (vhdl_name_equal(source.text, "'reflect")) {
+    if (equal_ignoring_ascii_case(source.text, "'reflect")) {
         if (source.operands.size() != 1U || expected_width != 32U) {
             report(
                 "FSIM-ELAB-VHREFLECT-001",
@@ -3086,7 +3067,7 @@ Lowerer::lower_hir_vhdl_reflection_expression(
                 depth <= model.scopes().size(); ++depth) {
                 for (const auto& candidate : model.declarations()) {
                     if (candidate.scope != scope
-                        || !vhdl_name_equal(
+                        || !equal_ignoring_ascii_case(
                             candidate.name, operand->vhdl->text)) {
                         continue;
                     }
@@ -3151,17 +3132,17 @@ Lowerer::lower_hir_vhdl_reflection_expression(
             current = hir_effective_vhdl_subtype(current).value_or(current);
             if (!current.type_mark.target.valid()) {
                 VhdlReflectionType result;
-                const auto type_name = unqualified_vhdl_name(
+                const auto type_name = simple_name_of(
                     current.type_mark.spelling);
                 result.simple_name = type_name;
                 result.signed_value = current.signed_value;
                 result.lsb_offset = offset;
                 result.packed_width = static_cast<std::uint32_t>(
                     vhdl_subtype_width(current).value_or(
-                        vhdl_name_equal(type_name, "real")
+                        equal_ignoring_ascii_case(type_name, "real")
                             ? 64U
                             : 0U));
-                result.type_class = vhdl_name_equal(type_name, "real")
+                result.type_class = equal_ignoring_ascii_case(type_name, "real")
                     ? VhdlReflectionClass::floating
                     : VhdlReflectionClass::integer;
                 if (!current.constraints.empty()) {
@@ -3195,10 +3176,10 @@ Lowerer::lower_hir_vhdl_reflection_expression(
                 return std::nullopt;
             }
             const auto& type = *view->vhdl;
-            const bool builtin_real = vhdl_name_equal(
-                    unqualified_vhdl_name(type.name), "real")
-                || vhdl_name_equal(
-                    unqualified_vhdl_name(current.type_mark.spelling),
+            const bool builtin_real = equal_ignoring_ascii_case(
+                    simple_name_of(type.name), "real")
+                || equal_ignoring_ascii_case(
+                    simple_name_of(current.type_mark.spelling),
                     "real");
             if ((type.form == semantic::vhdl::TypeForm::subtype
                     || type.form == semantic::vhdl::TypeForm::alias)
@@ -3463,16 +3444,16 @@ Lowerer::lower_hir_vhdl_reflection_expression(
         : std::nullopt;
     const auto declared_receiver_type
         = object && object->vhdl != nullptr && object->vhdl->subtype
-        ? unqualified_vhdl_name(
+        ? simple_name_of(
               object->vhdl->subtype->type_mark.spelling)
         : std::string_view { };
     const auto effective_receiver_type = object_subtype
-        ? unqualified_vhdl_name(object_subtype->type_mark.spelling)
+        ? simple_name_of(object_subtype->type_mark.spelling)
         : std::string_view { };
     const auto receiver_is = [&](const std::string_view prefix) {
         const auto matches = [&](const std::string_view name) {
             return name.size() >= prefix.size()
-                && vhdl_name_equal(name.substr(0U, prefix.size()), prefix);
+                && equal_ignoring_ascii_case(name.substr(0U, prefix.size()), prefix);
         };
         return matches(declared_receiver_type)
             || matches(effective_receiver_type);
@@ -3487,29 +3468,29 @@ Lowerer::lower_hir_vhdl_reflection_expression(
     VhdlReflectionType conversion;
     if (!kind) {
         kind = VhdlReflectionApiKind::convert;
-        if (vhdl_name_equal(selected->member, "to_enumeration")) {
+        if (equal_ignoring_ascii_case(selected->member, "to_enumeration")) {
             conversion.type_class = VhdlReflectionClass::enumeration;
-        } else if (vhdl_name_equal(selected->member, "to_integer")) {
+        } else if (equal_ignoring_ascii_case(selected->member, "to_integer")) {
             conversion.type_class = VhdlReflectionClass::integer;
-        } else if (vhdl_name_equal(selected->member, "to_floating")) {
+        } else if (equal_ignoring_ascii_case(selected->member, "to_floating")) {
             conversion.type_class = VhdlReflectionClass::floating;
-        } else if (vhdl_name_equal(selected->member, "to_physical")) {
+        } else if (equal_ignoring_ascii_case(selected->member, "to_physical")) {
             conversion.type_class = VhdlReflectionClass::physical;
-        } else if (vhdl_name_equal(selected->member, "to_record")) {
+        } else if (equal_ignoring_ascii_case(selected->member, "to_record")) {
             conversion.type_class = VhdlReflectionClass::record;
-        } else if (vhdl_name_equal(selected->member, "to_array")) {
+        } else if (equal_ignoring_ascii_case(selected->member, "to_array")) {
             conversion.type_class = VhdlReflectionClass::array;
-        } else if (vhdl_name_equal(selected->member, "to_access")) {
+        } else if (equal_ignoring_ascii_case(selected->member, "to_access")) {
             conversion.type_class = VhdlReflectionClass::access;
-        } else if (vhdl_name_equal(selected->member, "to_file")) {
+        } else if (equal_ignoring_ascii_case(selected->member, "to_file")) {
             conversion.type_class = VhdlReflectionClass::file;
-        } else if (vhdl_name_equal(selected->member, "to_protected")) {
+        } else if (equal_ignoring_ascii_case(selected->member, "to_protected")) {
             conversion.type_class = VhdlReflectionClass::protected_type;
-        } else if (vhdl_name_equal(selected->member, "element_subtype")) {
+        } else if (equal_ignoring_ascii_case(selected->member, "element_subtype")) {
             kind = receiver_is("array_")
                 ? VhdlReflectionApiKind::array_element_subtype
                 : VhdlReflectionApiKind::record_element_subtype;
-        } else if (vhdl_name_equal(selected->member, "get")) {
+        } else if (equal_ignoring_ascii_case(selected->member, "get")) {
             kind = receiver_is("access_")
                 ? VhdlReflectionApiKind::access_get
                 : VhdlReflectionApiKind::aggregate_get;

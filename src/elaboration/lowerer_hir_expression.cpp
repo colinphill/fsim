@@ -701,10 +701,7 @@ namespace {
         auto text = expression.text;
         if (expression.boolean) {
             auto normalized = std::string { text };
-            std::ranges::transform(normalized, normalized.begin(), [](char value) {
-                return static_cast<char>(
-                    std::tolower(static_cast<unsigned char>(value)));
-            });
+            lowercase_ascii(normalized);
             if (normalized == "true" || normalized == "false") {
                 return LoweredLiteral {
                     PackedLogic4(
@@ -927,11 +924,7 @@ namespace {
         if (left.size() != right.size()) {
             return false;
         }
-        return std::ranges::equal(
-            left, right, [](const char lhs, const char rhs) {
-                return std::tolower(static_cast<unsigned char>(lhs))
-                    == std::tolower(static_cast<unsigned char>(rhs));
-            });
+        return equal_ignoring_ascii_case(left, right);
     }
 
     std::string normalized_vhdl_choice(const std::string_view choice)
@@ -957,9 +950,7 @@ std::optional<DynamicIndex> Lowerer::lower_hir_dynamic_index(
 {
     // A select index is integral (IEEE 1800-2017 11.5.1, 6.12).
     if (const auto kind = hir_systemverilog_scalar_kind(index_id);
-        kind == frontend::SystemVerilogScalarKind::Real
-        || kind == frontend::SystemVerilogScalarKind::Realtime
-        || kind == frontend::SystemVerilogScalarKind::ShortReal) {
+        frontend::is_real_scalar_kind(kind)) {
         if (const auto index = specialized_hir_unit_->find_expression(
                 index_id);
             index && index->systemverilog != nullptr) {
@@ -1506,10 +1497,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_attribute(
         std::int64_t left { 1 };
         if (subtype && !subtype->constraints.empty()) {
             const auto& range = subtype->constraints.front();
-            const auto bound = range.left ? range.left
-                : range.left_expression
-                ? hir_constant_integer(*range.left_expression)
-                : std::nullopt;
+            const auto bound = hir_range_left(range);
             if (!bound || range.descending) {
                 return std::nullopt;
             }
@@ -2863,16 +2851,8 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_aggregate(
                 || constraint.kind == semantic::vhdl::RangeKind::array_index) {
                 continue;
             }
-            const auto left = constraint.left
-                ? constraint.left
-                : constraint.left_expression
-                ? hir_constant_integer(*constraint.left_expression)
-                : std::nullopt;
-            const auto right = constraint.right
-                ? constraint.right
-                : constraint.right_expression
-                ? hir_constant_integer(*constraint.right_expression)
-                : std::nullopt;
+            const auto left = hir_range_left(constraint);
+            const auto right = hir_range_right(constraint);
             if (left && right) {
                 ordinal_range.emplace(*left, *right);
                 break;
@@ -5578,10 +5558,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_untraced(
                     if (constraint.kind != semantic::vhdl::RangeKind::array_index) {
                         continue;
                     }
-                    const auto left = constraint.left ? constraint.left
-                        : constraint.left_expression
-                        ? hir_constant_integer(*constraint.left_expression)
-                        : std::nullopt;
+                    const auto left = hir_range_left(constraint);
                     prefix_left = left.value_or(1);
                     prefix_descending = constraint.descending;
                     break;
@@ -6079,11 +6056,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 || declaration->vhdl->form
                     == semantic::vhdl::DeclarationForm::subtype);
         auto canonical_type = std::string { type_name };
-        std::ranges::transform(
-            canonical_type, canonical_type.begin(), [](const char value) {
-                return static_cast<char>(std::tolower(
-                    static_cast<unsigned char>(value)));
-            });
+        lowercase_ascii(canonical_type);
         const auto predefined_definite_type
             = canonical_type == "bit" || canonical_type == "boolean"
             || canonical_type == "integer" || canonical_type == "natural"
@@ -6249,15 +6222,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                         return candidate.spelling
                             == expression->vhdl->text;
                     }
-                    return std::ranges::equal(
-                        candidate.spelling,
-                        expression->vhdl->text,
-                        [](const char left, const char right) {
-                            return std::tolower(
-                                       static_cast<unsigned char>(left))
-                                == std::tolower(
-                                    static_cast<unsigned char>(right));
-                        });
+                    return equal_ignoring_ascii_case(candidate.spelling, expression->vhdl->text);
                 });
             if (literal == type.enumeration_literals.end()) {
                 return;
@@ -6757,16 +6722,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 || constraint.null) {
                 return std::nullopt;
             }
-            const auto left = constraint.left
-                ? constraint.left
-                : constraint.left_expression
-                ? hir_constant_integer(*constraint.left_expression)
-                : std::nullopt;
-            const auto right = constraint.right
-                ? constraint.right
-                : constraint.right_expression
-                ? hir_constant_integer(*constraint.right_expression)
-                : std::nullopt;
+            const auto left = hir_range_left(constraint);
+            const auto right = hir_range_right(constraint);
             if (!left || !right
                 || (*left != *right && !constraint.direction_from_bounds
                     && constraint.descending != (*left > *right))) {
@@ -6813,9 +6770,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         ? hir_systemverilog_scalar_kind(expression_id)
         : frontend::SystemVerilogScalarKind::None;
     const bool real_valued
-        = folded_scalar_kind == frontend::SystemVerilogScalarKind::Real
-        || folded_scalar_kind == frontend::SystemVerilogScalarKind::Realtime
-        || folded_scalar_kind == frontend::SystemVerilogScalarKind::ShortReal;
+        = frontend::is_real_scalar_kind(folded_scalar_kind);
     const auto fold_candidate = (specialization_fold_candidate
                                     || safe_vhdl_constant_candidate)
         && !real_valued;
@@ -7130,18 +7085,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     && domain == base_domain) {
                     const auto& declared_range
                         = base_subtype->constraints.front();
-                    const auto declared_left = declared_range.left
-                        ? declared_range.left
-                        : declared_range.left_expression
-                        ? hir_constant_integer(
-                              *declared_range.left_expression)
-                        : std::nullopt;
-                    const auto declared_right = declared_range.right
-                        ? declared_range.right
-                        : declared_range.right_expression
-                        ? hir_constant_integer(
-                              *declared_range.right_expression)
-                        : std::nullopt;
+                    const auto declared_left = hir_range_left(declared_range);
+                    const auto declared_right = hir_range_right(declared_range);
                     if (declared_left && declared_right
                         && (*declared_left == *declared_right
                             || declared_range.descending
@@ -9862,9 +9807,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         // A real operand rounds to an integer first (6.12.2).
         const auto operand_kind = hir_systemverilog_scalar_kind(operand);
         const bool real_operand
-            = operand_kind == frontend::SystemVerilogScalarKind::ShortReal
-            || operand_kind == frontend::SystemVerilogScalarKind::Real
-            || operand_kind == frontend::SystemVerilogScalarKind::Realtime;
+            = frontend::is_real_scalar_kind(operand_kind);
         auto lowered = real_operand
             ? lower_hir_expression(operand,
                   operand_kind == frontend::SystemVerilogScalarKind::ShortReal
@@ -10054,16 +9997,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     != semantic::vhdl::RangeKind::array_index) {
                     return std::nullopt;
                 }
-                const auto left = range.left
-                    ? range.left
-                    : range.left_expression
-                    ? hir_constant_integer(*range.left_expression)
-                    : std::nullopt;
-                const auto right = range.right
-                    ? range.right
-                    : range.right_expression
-                    ? hir_constant_integer(*range.right_expression)
-                    : std::nullopt;
+                const auto left = hir_range_left(range);
+                const auto right = hir_range_right(range);
                 if (!left || !right || range.null
                     || (*left != *right && !range.direction_from_bounds
                         && range.descending != (*left > *right))) {
@@ -10338,18 +10273,10 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 : &member->subtype.constraints.front();
             const auto left = range == nullptr
                 ? std::nullopt
-                : range->left
-                ? range->left
-                : range->left_expression
-                ? hir_constant_integer(*range->left_expression)
-                : std::nullopt;
+                : hir_range_left(*range);
             const auto right = range == nullptr
                 ? std::nullopt
-                : range->right
-                ? range->right
-                : range->right_expression
-                ? hir_constant_integer(*range->right_expression)
-                : std::nullopt;
+                : hir_range_right(*range);
             const auto selected = hir_constant_integer(*member->index);
             const auto in_range = left && right && selected
                 && *selected >= std::min(*left, *right)
@@ -10872,16 +10799,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                             == semantic::vhdl::RangeKind::discrete;
                 });
             if (constraint != target_subtype->constraints.end()) {
-                const auto left = constraint->left
-                    ? constraint->left
-                    : constraint->left_expression
-                    ? hir_constant_integer(*constraint->left_expression)
-                    : std::nullopt;
-                const auto right = constraint->right
-                    ? constraint->right
-                    : constraint->right_expression
-                    ? hir_constant_integer(*constraint->right_expression)
-                    : std::nullopt;
+                const auto left = hir_range_left(*constraint);
+                const auto right = hir_range_right(*constraint);
                 if (left && right) {
                     runtime_range = frontend::IntegerRange {
                         *left, *right, constraint->descending
@@ -11086,11 +11005,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         && expression->vhdl->text != "falling_edge"
         && !expression->vhdl->text.starts_with("@vhdl-qualified:")) {
         auto type_name = std::string { expression->vhdl->text };
-        std::ranges::transform(
-            type_name, type_name.begin(), [](const char value) {
-                return static_cast<char>(std::tolower(
-                    static_cast<unsigned char>(value)));
-            });
+        lowercase_ascii(type_name);
         const auto declaration_id = hir_referenced_declaration(
             expression_id);
         const auto declaration = declaration_id
@@ -11324,12 +11239,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             -> std::optional<RegisterId> {
             const auto scalar_kind = hir_systemverilog_scalar_kind(
                 call.operands[index]);
-            if (scalar_kind
-                    == frontend::SystemVerilogScalarKind::ShortReal
-                || scalar_kind
-                    == frontend::SystemVerilogScalarKind::Real
-                || scalar_kind
-                    == frontend::SystemVerilogScalarKind::Realtime
+            if (frontend::is_real_scalar_kind(scalar_kind)
                 || scalar_kind
                     == frontend::SystemVerilogScalarKind::Chandle) {
                 return std::nullopt;
@@ -11722,12 +11632,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 } else if (const auto initializer_kind
                     = hir_systemverilog_scalar_kind(*initializer);
                     declared_kind == frontend::SystemVerilogScalarKind::None
-                    && (initializer_kind
-                            == frontend::SystemVerilogScalarKind::Real
-                        || initializer_kind
-                            == frontend::SystemVerilogScalarKind::Realtime
-                        || initializer_kind
-                            == frontend::SystemVerilogScalarKind::ShortReal)
+                    && (frontend::is_real_scalar_kind(initializer_kind))
                     && declared && declared->systemverilog != nullptr
                     && declared->systemverilog->type
                     && declared->systemverilog->type->target.spelling
@@ -14217,9 +14122,9 @@ bool Lowerer::hir_vhdl_time_expression(
     if (source.text.starts_with(physical)) {
         const auto unit = std::string_view { source.text }.substr(
             physical.size());
-        constexpr std::array<std::string_view, 8U> time_units { "fs", "ps",
-            "ns", "us", "ms", "sec", "min", "hr" };
-        return std::ranges::find(time_units, unit) != time_units.end();
+        return std::ranges::find(vhdl_time_units, unit,
+                   &std::pair<std::string_view, std::uint64_t>::first)
+            != vhdl_time_units.end();
     }
     return source.kind == semantic::vhdl::ExpressionKind::name
         && source.text == "now" && !hir_target_declaration(value);
@@ -14267,9 +14172,7 @@ std::optional<std::string> Lowerer::hir_vhdl_path_attribute(
         return std::nullopt;
     }
     const auto lower = [](std::string text) {
-        std::ranges::transform(text, text.begin(), [](const unsigned char c) {
-            return static_cast<char>(std::tolower(c));
-        });
+        lowercase_ascii(text);
         return text;
     };
     auto name = lower(std::string { prefix->vhdl->text });
@@ -14488,10 +14391,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_runtime_image(
         }
         type_id = definition->base.type_mark.target;
     }
-    std::ranges::transform(terminal_spelling, terminal_spelling.begin(),
-        [](const unsigned char character) {
-            return static_cast<char>(std::tolower(character));
-        });
+    lowercase_ascii(terminal_spelling);
     const auto simple_type = [&] {
         // Strip library/package selection and the @builtin: identity prefix.
         const auto separator = terminal_spelling.find_last_of(".:");
@@ -14638,10 +14538,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_vhdl_runtime_image(
                     image = image.substr(1U, image.size() - 2U);
                 }
             } else if (!image.starts_with('\\')) {
-                std::ranges::transform(image, image.begin(),
-                    [](const unsigned char character) {
-                        return static_cast<char>(std::tolower(character));
-                    });
+                lowercase_ascii(image);
             }
             images.push_back(std::move(image));
         }
@@ -14749,10 +14646,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
                 if (constraint.kind != semantic::vhdl::RangeKind::array_index) {
                     continue;
                 }
-                prefix_left = constraint.left ? constraint.left
-                    : constraint.left_expression
-                    ? hir_constant_integer(*constraint.left_expression)
-                    : std::nullopt;
+                prefix_left = hir_range_left(constraint);
                 prefix_descending = constraint.descending;
                 break;
             }

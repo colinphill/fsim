@@ -243,12 +243,7 @@ void VerilogParser::structure_coverpoint_bins(
         }
 
         const bool real_coverpoint
-            = declaration.sampled_scalar_kind
-                == SystemVerilogScalarKind::ShortReal
-            || declaration.sampled_scalar_kind
-                == SystemVerilogScalarKind::Real
-            || declaration.sampled_scalar_kind
-                == SystemVerilogScalarKind::Realtime;
+            = frontend::is_real_scalar_kind(declaration.sampled_scalar_kind);
         const bool real_values = std::ranges::any_of(
             bin.values,
             [](const SystemVerilogCoverageBinValue& value) {
@@ -469,12 +464,7 @@ void VerilogParser::structure_coverpoint_bins(
     }
     if (!saw_bin_declaration) {
         const bool real_coverpoint
-            = declaration.sampled_scalar_kind
-                == SystemVerilogScalarKind::ShortReal
-            || declaration.sampled_scalar_kind
-                == SystemVerilogScalarKind::Real
-            || declaration.sampled_scalar_kind
-                == SystemVerilogScalarKind::Realtime;
+            = frontend::is_real_scalar_kind(declaration.sampled_scalar_kind);
         if (real_coverpoint) {
             error(
                 declaration.name_token.value_or(

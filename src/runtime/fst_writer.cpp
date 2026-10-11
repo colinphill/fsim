@@ -291,9 +291,7 @@ namespace {
             return 0;
         }
         if (type.kind == TraceTypeKind::SystemVerilogScalar
-            && (type.scalar_kind == SystemVerilogScalarKind::ShortReal
-                || type.scalar_kind == SystemVerilogScalarKind::Real
-                || type.scalar_kind == SystemVerilogScalarKind::Realtime)) {
+            && (frontend::is_real_scalar_kind(type.scalar_kind))) {
             return 8;
         }
         if (type.kind == TraceTypeKind::VhdlLogic9) {
@@ -322,9 +320,7 @@ namespace {
             return;
         }
         if (type.kind == TraceTypeKind::SystemVerilogScalar) {
-            if (type.scalar_kind == SystemVerilogScalarKind::ShortReal
-                || type.scalar_kind == SystemVerilogScalarKind::Real
-                || type.scalar_kind == SystemVerilogScalarKind::Realtime) {
+            if (frontend::is_real_scalar_kind(type.scalar_kind)) {
                 if (type.canonical_metadata
                     != canonical_fst_systemverilog_real_type(type.scalar_kind)) {
                     throw std::invalid_argument(
@@ -404,9 +400,7 @@ namespace {
         const auto expected_payload = type.kind == TraceTypeKind::SystemVerilogString
             ? FstPayloadKind::String
             : type.kind == TraceTypeKind::SystemVerilogScalar
-                && (type.scalar_kind == SystemVerilogScalarKind::ShortReal
-                    || type.scalar_kind == SystemVerilogScalarKind::Real
-                    || type.scalar_kind == SystemVerilogScalarKind::Realtime)
+                && (frontend::is_real_scalar_kind(type.scalar_kind))
             ? FstPayloadKind::Real
             : FstPayloadKind::Symbols;
         if (value.payload_kind() != expected_payload) {
@@ -537,9 +531,7 @@ namespace {
             return;
         }
         if (type.kind == TraceTypeKind::SystemVerilogScalar
-            && (type.scalar_kind == SystemVerilogScalarKind::ShortReal
-                || type.scalar_kind == SystemVerilogScalarKind::Real
-                || type.scalar_kind == SystemVerilogScalarKind::Realtime)) {
+            && (frontend::is_real_scalar_kind(type.scalar_kind))) {
             append_le64(output, UINT64_C(0x7ff8000000000000));
             return;
         }

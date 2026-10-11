@@ -1072,10 +1072,7 @@ struct FstTraceType {
         FstTraceType result;
         result.kind = runtime::TraceTypeKind::SystemVerilogScalar;
         result.scalar_kind = signal.systemverilog_scalar;
-        if (signal.systemverilog_scalar == SystemVerilogScalarKind::ShortReal
-            || signal.systemverilog_scalar == SystemVerilogScalarKind::Real
-            || signal.systemverilog_scalar
-                == SystemVerilogScalarKind::Realtime) {
+        if (frontend::is_real_scalar_kind(signal.systemverilog_scalar)) {
             result.canonical_metadata = runtime::canonical_fst_systemverilog_real_type(
                 signal.systemverilog_scalar);
         }

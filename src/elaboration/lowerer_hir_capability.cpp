@@ -48,13 +48,7 @@ namespace {
         if (extended(left) || extended(right)) {
             return left == right;
         }
-        return std::ranges::equal(
-            left,
-            right,
-            [](const char lhs, const char rhs) {
-                return std::tolower(static_cast<unsigned char>(lhs))
-                    == std::tolower(static_cast<unsigned char>(rhs));
-            });
+        return equal_ignoring_ascii_case(left, right);
     }
 
     bool simple_hir_identifier(
@@ -524,13 +518,7 @@ namespace {
         const std::string_view text)
     {
         auto normalized = std::string { text };
-        std::ranges::transform(
-            normalized,
-            normalized.begin(),
-            [](const char value) {
-                return static_cast<char>(
-                    std::tolower(static_cast<unsigned char>(value)));
-            });
+        lowercase_ascii(normalized);
         if (normalized == "true" || normalized == "'1'"
             || normalized == "1'b1" || normalized == "'1") {
             return 1;
@@ -691,10 +679,7 @@ namespace {
             "can", "em", "sub", "esc", "fsp", "gsp", "rsp", "usp",
         };
         std::string lower { name };
-        std::ranges::transform(lower, lower.begin(), [](const char value) {
-            return static_cast<char>(
-                std::tolower(static_cast<unsigned char>(value)));
-        });
+        lowercase_ascii(lower);
         if (const auto found = std::ranges::find(low, lower);
             found != low.end()) {
             return static_cast<std::uint64_t>(found - low.begin());
@@ -1148,41 +1133,10 @@ std::string Lowerer::hir_generic_interface_type(
 frontend::SourceSpan Lowerer::hir_source_span(
     const semantic::SourceSpanId source) const
 {
-    frontend::SourceSpan result;
     if (specialized_hir_unit_ == nullptr) {
-        return result;
+        return { };
     }
-    const auto& model = specialized_hir_unit_->design().semantics;
-    const auto& spans = model.source_spans();
-    if (!source.valid() || source.value() >= spans.size()) {
-        return result;
-    }
-    const auto& span = spans[source.value()];
-    result.source_name = span.logical_name;
-    result.begin = {
-        static_cast<std::size_t>(span.begin.offset),
-        span.begin.line,
-        span.begin.column,
-    };
-    result.end = {
-        static_cast<std::size_t>(span.end.offset),
-        span.end.line,
-        span.end.column,
-    };
-    const auto& files = model.source_files();
-    if (span.file.valid() && span.file.value() < files.size()) {
-        result.physical_source_name = files[span.file.value()].physical_name;
-    }
-    const auto& expansions = model.expansions();
-    auto expansion = span.expansion;
-    while (expansion && expansion->valid()
-        && expansion->value() < expansions.size()) {
-        const auto& record = expansions[expansion->value()];
-        result.expansion_stack.push_back(record.description);
-        expansion = record.parent;
-    }
-    std::ranges::reverse(result.expansion_stack);
-    return result;
+    return compiled_source_span(specialized_hir_unit_->design(), source);
 }
 
 bool Lowerer::hir_vhdl_active_package_constant(
@@ -1758,14 +1712,8 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_expression_range(
                 if (constraint.kind != semantic::vhdl::RangeKind::array_index) {
                     continue;
                 }
-                const auto left = constraint.left ? constraint.left
-                    : constraint.left_expression
-                    ? hir_constant_integer(*constraint.left_expression)
-                    : std::nullopt;
-                const auto right = constraint.right ? constraint.right
-                    : constraint.right_expression
-                    ? hir_constant_integer(*constraint.right_expression)
-                    : std::nullopt;
+                const auto left = hir_range_left(constraint);
+                const auto right = hir_range_right(constraint);
                 if (left && right) {
                     return HirPackedRange { *left, *right, constraint.descending };
                 }
@@ -1874,18 +1822,8 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_expression_range(
             }
         }
         if (selected_range != nullptr && !selected_range->null) {
-            const auto left = selected_range->left
-                ? selected_range->left
-                : selected_range->left_expression
-                ? hir_constant_integer(
-                      *selected_range->left_expression)
-                : std::nullopt;
-            const auto right = selected_range->right
-                ? selected_range->right
-                : selected_range->right_expression
-                ? hir_constant_integer(
-                      *selected_range->right_expression)
-                : std::nullopt;
+            const auto left = hir_range_left(*selected_range);
+            const auto right = hir_range_right(*selected_range);
             auto element_width = std::optional<std::size_t> { 1U };
             if (array != nullptr) {
                 const auto element = array->element_subtype
@@ -7884,17 +7822,7 @@ Lowerer::hir_vhdl_attribute_profile(
                 if (value_spelling.starts_with('\'')) {
                     return literal.spelling == value_spelling;
                 }
-                return std::ranges::equal(
-                    literal.spelling, value_spelling,
-                    [](const char left_character,
-                        const char right_character) {
-                        return std::tolower(
-                                   static_cast<unsigned char>(
-                                       left_character))
-                            == std::tolower(
-                                static_cast<unsigned char>(
-                                    right_character));
-                    });
+                return equal_ignoring_ascii_case(literal.spelling, value_spelling);
             });
     bool contextual_enumeration_attribute { };
     if ((!value_width || *value_width == 0U || !value_domain
@@ -9598,14 +9526,8 @@ Lowerer::hir_systemverilog_packed_shape(
     }
     std::vector<HirPackedRange> shape;
     for (const auto& dimension : type->packed_dimensions) {
-        const auto left = dimension.left ? dimension.left
-            : dimension.left_expression
-            ? hir_constant_integer(*dimension.left_expression)
-            : std::nullopt;
-        const auto right = dimension.right ? dimension.right
-            : dimension.right_expression
-            ? hir_constant_integer(*dimension.right_expression)
-            : std::nullopt;
+        const auto left = hir_range_left(dimension);
+        const auto right = hir_range_right(dimension);
         if (!left || !right) {
             return { };
         }
@@ -9977,16 +9899,9 @@ std::optional<PackedLogic4> Lowerer::hir_vhdl_default_value(
     }
     const auto effective = hir_effective_vhdl_subtype(declared);
     const auto& subtype = effective ? *effective : declared;
-    const auto simple = [](std::string_view name) {
-        if (const auto separator = name.find_last_of(".:");
-            separator != std::string_view::npos) {
-            name.remove_prefix(separator + 1U);
-        }
-        return name;
-    };
     const semantic::vhdl::TypeDefinition* definition = nullptr;
     bool real = same_hir_identifier(
-        simple(subtype.type_mark.spelling), "real", true);
+        simple_name_of(subtype.type_mark.spelling), "real", true);
     auto type_id = subtype.type_mark.target;
     std::unordered_set<std::uint32_t> visiting;
     while (type_id.valid() && visiting.insert(type_id.value()).second) {
@@ -9995,9 +9910,9 @@ std::optional<PackedLogic4> Lowerer::hir_vhdl_default_value(
             break;
         }
         definition = type->vhdl;
-        real = real || same_hir_identifier(simple(definition->name), "real", true)
+        real = real || same_hir_identifier(simple_name_of(definition->name), "real", true)
             || same_hir_identifier(
-                simple(definition->base.type_mark.spelling), "real", true);
+                simple_name_of(definition->base.type_mark.spelling), "real", true);
         if (definition->form != semantic::vhdl::TypeForm::subtype
             && definition->form != semantic::vhdl::TypeForm::alias) {
             break;
@@ -10075,7 +9990,7 @@ std::optional<PackedLogic4> Lowerer::hir_vhdl_default_value(
     if (definition == nullptr) {
         // STD.STANDARD vectors of INTEGER, TIME, REAL and BOOLEAN start at
         // their element's leftmost value (IEEE 1076-2008 6.4.2.3).
-        const auto name = simple(subtype.type_mark.spelling);
+        const auto name = simple_name_of(subtype.type_mark.spelling);
         std::optional<PackedLogic4> element;
         std::size_t element_width { };
         if (same_hir_identifier(name, "integer_vector", true)) {
@@ -10124,7 +10039,7 @@ std::optional<PackedLogic4> Lowerer::hir_vhdl_default_value(
             && definition->scalar_range->left) {
             return integer_value(*definition->scalar_range->left, width);
         }
-        const auto name = simple(subtype.type_mark.spelling);
+        const auto name = simple_name_of(subtype.type_mark.spelling);
         if (same_hir_identifier(name, "natural", true)) {
             return integer_value(0, width);
         }
@@ -10992,11 +10907,7 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
             std::size_t width { };
             for (const auto& association : source.associations) {
                 auto choice = association.choice_spelling;
-                std::ranges::transform(
-                    choice, choice.begin(), [](const char value) {
-                        return static_cast<char>(std::tolower(
-                            static_cast<unsigned char>(value)));
-                    });
+                lowercase_ascii(choice);
                 if (choice.find("others") != std::string::npos) {
                     return std::nullopt;
                 }
@@ -11707,11 +11618,7 @@ Lowerer::hir_vhdl_conversion_profile(
         type_name.remove_prefix(qualified_prefix.size());
     }
     auto canonical = std::string { type_name };
-    std::ranges::transform(
-        canonical, canonical.begin(), [](const char character) {
-            return static_cast<char>(std::tolower(
-                static_cast<unsigned char>(character)));
-        });
+    lowercase_ascii(canonical);
     if (canonical == "integer" || canonical == "natural"
         || canonical == "positive" || canonical == "time") {
         const auto width = static_cast<std::size_t>(
@@ -12339,16 +12246,8 @@ Lowerer::hir_systemverilog_member_selection(
                 -> std::optional<HirPackedRange> {
                 if (member->type.packed_range) {
                     const auto& range = *member->type.packed_range;
-                    const auto left = range.left
-                        ? range.left
-                        : range.left_expression
-                        ? hir_constant_integer(*range.left_expression)
-                        : std::nullopt;
-                    const auto right = range.right
-                        ? range.right
-                        : range.right_expression
-                        ? hir_constant_integer(*range.right_expression)
-                        : std::nullopt;
+                    const auto left = hir_range_left(range);
+                    const auto right = hir_range_right(range);
                     if (left && right
                         && index_distance(*left, *right) + 1U == *width
                         && (*left == *right
@@ -13810,14 +13709,8 @@ Lowerer::hir_vhdl_member_selection(
             for (std::size_t dimension = 0U;
                 dimension < source.operands.size(); ++dimension) {
                 const auto& range = subtype->constraints[dimension];
-                const auto left = range.left ? range.left
-                    : range.left_expression
-                    ? hir_constant_integer(*range.left_expression)
-                    : std::nullopt;
-                const auto right = range.right ? range.right
-                    : range.right_expression
-                    ? hir_constant_integer(*range.right_expression)
-                    : std::nullopt;
+                const auto left = hir_range_left(range);
+                const auto right = hir_range_right(range);
                 const auto selected = hir_constant_integer(
                     source.operands[dimension]);
                 if (!left || !right || !selected || range.null
@@ -13859,18 +13752,10 @@ Lowerer::hir_vhdl_member_selection(
                 : &subtype->constraints.front();
             const auto left = range == nullptr
                 ? std::nullopt
-                : range->left
-                ? range->left
-                : range->left_expression
-                ? hir_constant_integer(*range->left_expression)
-                : std::nullopt;
+                : hir_range_left(*range);
             const auto right = range == nullptr
                 ? std::nullopt
-                : range->right
-                ? range->right
-                : range->right_expression
-                ? hir_constant_integer(*range->right_expression)
-                : std::nullopt;
+                : hir_range_right(*range);
             const auto count = left && right && !range->null
                 ? std::optional {
                       index_distance(*left, *right) + 1U
