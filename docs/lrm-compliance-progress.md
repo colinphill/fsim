@@ -253,6 +253,27 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 35: tables, case choices, 'SUBTYPE and final procedures
+
+Fixtures: `vhdl_tables_cases_and_subtypes.vhd` and
+`sv_final_procedure_termination.sv` (both pass on xsim).
+
+- Multidimensional constants of BIT or STD_ULOGIC given by positional
+  nested aggregates (`and_table('L', '1')`).
+- Character literal case choices of BIT selectors.
+- `obj'subtype` as a subtype indication.
+- `'LENGTH`, `'LEFT`, `'RIGHT`, `'LOW` and `'HIGH` of runtime-sized STRING
+  objects and STRING formals.
+- String function names without actuals, signal attributes with their
+  signal's subtype, and lexicographic ordering of BIT_VECTOR operands of
+  different lengths.
+- SystemVerilog: `$finish` and `$stop` in final procedures; named events in
+  generate blocks. The generate parser no longer loops on an unsupported
+  item; ivtest `scoped_events` grew to 12 GB before.
+
+Corpus effect (interpreter; w106 plus tc350, w104): VESTs +8 (3189),
+nvc +4 (588), Verilator +4 (1009), ivtest +2 (2071).
+
 ### Batch 34: element constraints from actuals, labels and attribute specifications
 
 Fixtures: `vhdl_formal_element_constraints.vhd` and
@@ -1637,7 +1658,7 @@ error, and each exposes an existing gap:
 | VHDL: aggregate initializers of arrays of SEVERITY_LEVEL (`(others => note)`) | VESTs |
 | VHDL: element constraints of ports taken from the actual, `'element`, and element constraints in protected types (syntax and layouts done in batch 33, formals in batch 34) | ~35 nvc cases |
 | VHDL: `'subtype` of an object as a subtype indication (VHDL-2008) | 14 nvc cases |
-| VHDL: two-dimensional constants with bit or logic elements (`and_table('L', '1')`) | 4 VESTs clifton-labs cases |
+| VHDL: a `for` loop over `'RANGE` of a runtime-sized STRING, and element writes to it | 5 VESTs cases (`FSIM-ELAB-071`) |
 | SV: `new` for a variable of a specialized class type (`box #(5) b; b = new;`) constructs the default specialization | testbenches using parameterized classes |
 | VHDL: user resolution functions other than a single OR/AND reduction (a runtime resolver calling the function on the driver values) | 28 VESTs cases (`FSIM-ELAB-VHRESOLVE-002`/`-004`), nvc |
 | VHDL: indexing and slicing an unconstrained constant (`constant c : bit_vector := "0101"; c(1)`); its attributes were done in batch 28 | VESTs |

@@ -2117,6 +2117,7 @@ void Interpreter::Impl::handle_boundary(
         = fsim::runtime::simir::operation_get_if<Pause>(&operation)) {
         capture_simulator_status(*pause);
         clear_wait_timeout(process);
+        paused_in_final = paused_in_final || process.program().final();
         scheduler.request_stop();
         queue_current(process.id);
         notify_execution_point(

@@ -1081,6 +1081,21 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
         spelling += vhdl_name(selected.text);
     }
 
+    // `obj'subtype` denotes the subtype of an object (IEEE 1076-2008
+    // 16.2.2); the HIR resolves the object.
+    if (at(TokenKind::Apostrophe) && keyword("subtype", 1, true)) {
+        advance();
+        const auto attribute = advance();
+        require_vhdl_standard(
+            attribute, VhdlStandard::Vhdl2008,
+            "the predefined 'subtype attribute",
+            "select VHDL-2008 or name the subtype explicitly");
+        Type type;
+        type.spelling = spelling;
+        type.vhdl_object_subtype = spelling;
+        type.named_type_span = cover(first.span, previous().span);
+        return type;
+    }
     VhdlPredefinedSubtypeAttribute subtype_attribute {
         VhdlPredefinedSubtypeAttribute::None
     };

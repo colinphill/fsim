@@ -479,6 +479,10 @@ private:
         semantic::ExpressionId expression) const;
     // Whether an indexed name's prefix is a STRING lowered as a runtime
     // string (a variable, a constant, or an alias of a slice).
+    // `s'length`, `s'left`, `s'right`, `s'low` or `s'high` of a STRING
+    // held as a runtime string: a signed 32-bit integer.
+    [[nodiscard]] bool hir_vhdl_runtime_string_bound(
+        semantic::ExpressionId expression) const;
     [[nodiscard]] bool hir_vhdl_runtime_string_prefix(
         semantic::ExpressionId prefix) const;
     // The object a whole-object alias declaration denotes.

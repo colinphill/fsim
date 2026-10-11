@@ -3906,6 +3906,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
     bool started { };
     bool validation_only { };
     bool stopped_by_design { };
+    // A `$stop` executed by a final procedure (IEEE 1800-2017 9.2.3).
+    bool paused_in_final { };
     std::optional<std::int64_t> simulator_status;
     bool finals_ran { };
     bool process_profile_enabled { };

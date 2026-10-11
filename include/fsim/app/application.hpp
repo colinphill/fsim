@@ -990,6 +990,8 @@ public:
     [[nodiscard]] std::uint64_t delta() const noexcept;
     [[nodiscard]] bool has_pending() const noexcept;
     [[nodiscard]] bool finished() const noexcept;
+    /// True once a final procedure has executed `$stop`.
+    [[nodiscard]] bool paused_in_final() const noexcept;
     [[nodiscard]] bool poisoned() const noexcept;
     /// Number of processes using the LLVM executor. This is zero for the
     /// reference engine and for builds without the LLVM adapter.

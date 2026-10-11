@@ -2481,6 +2481,8 @@ public:
     /// True once a language-level Stop operation (`$finish` or equivalent) has
     /// executed. External scheduler stop requests do not set this flag.
     [[nodiscard]] bool stopped_by_design() const noexcept;
+    /// True once a final procedure has executed `$stop`.
+    [[nodiscard]] bool paused_in_final() const noexcept;
     [[nodiscard]] Scheduler& scheduler() noexcept;
     [[nodiscard]] const Scheduler& scheduler() const noexcept;
     void set_signal_change_hook(SignalChangeHook hook);

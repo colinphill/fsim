@@ -1994,6 +1994,7 @@ tests/fixtures/compliance/sv_delays_packages_and_classes.sv
 tests/fixtures/compliance/sv_display_arguments.sv
 tests/fixtures/compliance/sv_enum_methods.sv
 tests/fixtures/compliance/sv_expression_widths.sv
+tests/fixtures/compliance/sv_final_procedure_termination.sv
 tests/fixtures/compliance/sv_function_statements.sv
 tests/fixtures/compliance/sv_generate_interfaces_and_upward_names.sv
 tests/fixtures/compliance/sv_generate_references.sv
@@ -2044,6 +2045,7 @@ tests/fixtures/compliance/vhdl_scalar_type_declarations.vhd
 tests/fixtures/compliance/vhdl_signal_formals.vhd
 tests/fixtures/compliance/vhdl_string_generics.vhd
 tests/fixtures/compliance/vhdl_subprogram_forms.vhd
+tests/fixtures/compliance/vhdl_tables_cases_and_subtypes.vhd
 tests/fixtures/compliance/vhdl_textio_and_element_names.vhd
 tests/fixtures/compliance/vhdl_time_literals_and_scalar_types.vhd
 tests/fixtures/compliance/vhdl_typed_files.vhd

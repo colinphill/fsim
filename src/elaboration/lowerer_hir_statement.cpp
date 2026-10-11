@@ -8173,8 +8173,21 @@ bool Lowerer::lower_hir_statement(
                         } else {
                             auto choice_value
                                 = hir_constant_integer(choice);
+                            // A character literal takes the selector's
+                            // enumeration type ('0' of BIT).
+                            const auto character_choice = expression
+                                && expression->vhdl != nullptr
+                                && expression->vhdl->kind
+                                    == semantic::vhdl::ExpressionKind::
+                                        logic_literal
+                                && (*selector_domain
+                                        == frontend::ValueDomain::Bit2
+                                    || *selector_domain
+                                        == frontend::ValueDomain::Logic4
+                                    || *selector_domain
+                                        == frontend::ValueDomain::Logic9);
                             if (!choice_value
-                                || (choice_domain
+                                || (choice_domain && !character_choice
                                     && *choice_domain
                                         != *selector_domain)) {
                                 report(

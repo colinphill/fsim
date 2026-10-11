@@ -454,6 +454,11 @@ bool Simulation::finished() const noexcept
     return impl_->lifecycle == Impl::Lifecycle::finished;
 }
 
+bool Simulation::paused_in_final() const noexcept
+{
+    return impl_->interpreter->paused_in_final();
+}
+
 bool Simulation::poisoned() const noexcept
 {
     return impl_->lifecycle == Impl::Lifecycle::poisoned;

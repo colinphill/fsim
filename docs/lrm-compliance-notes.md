@@ -710,3 +710,41 @@ gives fsim's result in each case checked.
   gets no default specialization. Such a class is legal while unused, but
   `new` for a variable of a specialized class type (`box #(5) b; b = new;`)
   still constructs the default specialization.
+
+## Tables, case choices, 'SUBTYPE and final procedures (batch 35)
+
+- A multidimensional constant of BIT or STD_ULOGIC elements given by fully
+  positional nested aggregates of character literals is folded and indexed
+  (`and_table('L', '1')`). Aggregates with `others` or named choices are
+  not folded yet.
+- A character literal case choice of a BIT selector (`when '0'`) was
+  rejected by the domain check (`FSIM-ELAB-VHDLCASE-001`), because the
+  literal's own domain differs from BIT's; character literal choices now
+  take the selector's type.
+- `obj'subtype` as a subtype indication (VHDL-2008) denotes the subtype of
+  an earlier visible object, including the entity's ports. An
+  unconstrained array object, such as a subprogram formal, gets one
+  `obj'range` constraint per dimension, so the call frame's range applies.
+  Element constraints that a record formal takes from its actual are not
+  carried yet.
+- `'LENGTH`, `'LEFT`, `'RIGHT`, `'LOW` and `'HIGH` of a STRING held as a
+  runtime string (`variable result : string(1 to size)` in a function) are
+  computed from its length and static left bound. A `for` loop over such a
+  string's `'RANGE`, and element writes to it, still fail.
+- SystemVerilog: `$finish` and `$stop` in a final procedure are legal and
+  end the simulation at once (IEEE 1800-2017 9.2.3; before, the parser
+  rejected them with `FSIM-SV-SEM-032`). A `$stop` executed by a final
+  procedure prints "$stop paused the simulation" like any other `$stop`.
+- A function name without actuals is a call wherever a STRING is expected
+  (`report color_start;`). STRING record elements in reports (`c1.f`) are
+  not supported yet.
+- `'LAST_VALUE`, `'DRIVING_VALUE` and `'DELAYED` have their signal's
+  subtype, so an aggregate compared with them takes that type.
+- BIT_VECTOR and BOOLEAN_VECTOR operands of different lengths are ordered
+  lexicographically (`"00" < "000"`); before, they were compared as
+  numbers. A string literal operand takes the array type of the other
+  operand.
+- SystemVerilog: named events declared in generate blocks. An unsupported
+  generate-block item made the parser report the same error forever
+  without consuming input (ivtest `scoped_events` used 12 GB at compile);
+  the generate declaration parser now always advances.

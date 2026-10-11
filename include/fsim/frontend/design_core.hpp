@@ -611,6 +611,8 @@ struct Type {
     std::vector<DiscreteRangeExpression> vhdl_array_constraints;
     // Element constraints of a named composite subtype indication.
     std::vector<VhdlElementConstraint> vhdl_element_constraints;
+    // The object whose subtype a VHDL-2008 `obj'subtype` indication denotes.
+    std::string vhdl_object_subtype;
     // Present only for a SystemVerilog dynamic array, queue, or associative
     // array. All scalar fields above describe one element, not the container.
     support::RareOptional<SystemVerilogContainerInfo> systemverilog_container;

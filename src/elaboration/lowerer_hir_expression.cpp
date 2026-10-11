@@ -1493,6 +1493,62 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_attribute(
     const auto expression = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(expression_id)
         : std::nullopt;
+    // The bounds of a STRING held as a runtime string, such as a local
+    // `string(1 to size)` sized by a formal: an ascending range from its
+    // static left bound (IEEE 1076-2008 16.2.3).
+    if (expression && expression->vhdl != nullptr
+        && expression->vhdl->operands.size() == 1U
+        && hir_vhdl_runtime_string_bound(expression_id)) {
+        const auto prefix = expression->vhdl->operands.front();
+        const auto subtype = hir_vhdl_expression_subtype(prefix);
+        std::int64_t left { 1 };
+        if (subtype && !subtype->constraints.empty()) {
+            const auto& range = subtype->constraints.front();
+            const auto bound = range.left ? range.left
+                : range.left_expression
+                ? hir_constant_integer(*range.left_expression)
+                : std::nullopt;
+            if (!bound || range.descending) {
+                return std::nullopt;
+            }
+            left = *bound;
+        }
+        const auto string = lower_hir_string_expression(prefix);
+        if (!string) {
+            return std::nullopt;
+        }
+        const auto width = expected_width != 0U ? expected_width : 32U;
+        const auto length = allocate_register(32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(StringLength { length, *string });
+        const auto as_integer = [&](const RegisterId value) {
+            const auto destination = allocate_register(
+                width, frontend::ValueDomain::Integer);
+            process_.operations.emplace_back(CopyRegister {
+                destination,
+                width == 32U ? value : resize_register(value, width, true) });
+            return destination;
+        };
+        if (expression->vhdl->text == "'length") {
+            return as_integer(length);
+        }
+        const auto start = allocate_register(32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            start, integer_value(left, 32U) });
+        if (expression->vhdl->text == "'left"
+            || expression->vhdl->text == "'low") {
+            return as_integer(start);
+        }
+        const auto one = allocate_register(32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            one, integer_value(1, 32U) });
+        const auto sum = allocate_register(32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::add_signed, sum, start, length });
+        const auto last = allocate_register(32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::subtract_signed, last, sum, one });
+        return as_integer(last);
+    }
     HirVhdlAttributeFailure failure { HirVhdlAttributeFailure::none };
     const auto attribute = hir_vhdl_attribute_profile(
         expression_id, hir_process_scope_, &failure);
@@ -9784,6 +9840,63 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 || !declaration->vhdl->subtype) {
                 return std::nullopt;
             }
+            // A multidimensional constant of BIT or STD_ULOGIC elements
+            // given by fully positional nested aggregates of character
+            // literals, folded left element first.
+            if (declaration->vhdl->initializer
+                && (selection->domain == frontend::ValueDomain::Bit2
+                    || selection->domain == frontend::ValueDomain::Logic9)) {
+                std::string flat;
+                bool valid = true;
+                std::size_t depth_reached { };
+                const auto fold = [&](const auto& self,
+                                      const semantic::ExpressionId id,
+                                      const std::size_t depth) -> void {
+                    const auto node = specialized_hir_unit_->find_expression(id);
+                    if (!valid || !node || node->vhdl == nullptr || depth > 8U) {
+                        valid = false;
+                        return;
+                    }
+                    if (node->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::aggregate) {
+                        depth_reached = std::max(depth_reached, depth + 1U);
+                        for (const auto& association : node->vhdl->associations) {
+                            if (!association.choices.empty()) {
+                                valid = false;
+                                return;
+                            }
+                            self(self, association.value, depth + 1U);
+                        }
+                        return;
+                    }
+                    if (node->vhdl->kind
+                            == semantic::vhdl::ExpressionKind::logic_literal
+                        && node->vhdl->text.size() == 3U
+                        && node->vhdl->text.front() == '\'') {
+                        flat.push_back(node->vhdl->text[1]);
+                        return;
+                    }
+                    valid = false;
+                };
+                fold(fold, *declaration->vhdl->initializer, 0U);
+                if (valid && depth_reached > 1U
+                    && flat.size() == selection->root_width) {
+                    try {
+                        auto value = selection->domain
+                                == frontend::ValueDomain::Logic9
+                            ? PackedLogic4::from_logic9_msb_string(flat)
+                            : PackedLogic4::from_msb_string(flat);
+                        if (value.width() == selection->root_width) {
+                            const auto folded = allocate_register(
+                                selection->root_width, selection->domain);
+                            process_.operations.emplace_back(LoadConstant {
+                                folded, std::move(value) });
+                            return folded;
+                        }
+                    } catch (const std::invalid_argument&) {
+                    }
+                }
+            }
             const auto array_value
                 = specialized_hir_unit_->evaluate_vhdl_packed_array_declaration(
                     selection->declaration);
@@ -12877,6 +12990,18 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     && composite->first
                         == semantic::vhdl::TypeForm::array;
             };
+            // BIT_VECTOR operands of different lengths order
+            // lexicographically, not as numbers (IEEE 1076-2008 9.2.3).
+            if (array_relational && !lhs_composite && !rhs_composite
+                && expression->vhdl != nullptr
+                && hir_expression_width(source.operands[0], hir_process_scope_)
+                    != hir_expression_width(
+                        source.operands[1], hir_process_scope_)) {
+                if (const auto ordered
+                    = lower_hir_vhdl_array_ordering(*expression->vhdl)) {
+                    return ordered;
+                }
+            }
             if (array_relational
                 && (array_operand(lhs_composite)
                     || array_operand(rhs_composite))) {
@@ -15032,6 +15157,14 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
         auto declaration = hir_referenced_declaration(expression_id);
         if (!declaration) {
             return std::nullopt;
+        }
+        // A function name without actuals is a call (IEEE 1076-2008 9.3.4).
+        if (const auto function = specialized_hir_unit_->find_declaration(
+                *declaration);
+            function && function->vhdl != nullptr
+            && function->vhdl->form
+                == semantic::vhdl::DeclarationForm::function) {
+            return lower_hir_string_function_call(expression_id);
         }
         if (const auto object = hir_vhdl_alias_object(*declaration)) {
             declaration = object;

@@ -1770,7 +1770,7 @@ scheduler.
 | `FSIM-ELAB-SVIFACE-011` | error | A restricted modport actual is widened to a generic interface port or rebound to a different modport. |
 | `FSIM-ELAB-SVIFACE-012` | error | A virtual-interface assignment has a different interface specialization, widens a selected modport, rebinds it to another modport, or has a non-interface source. |
 | `FSIM-SV-SEM-031` | error | A SystemVerilog `break` or `continue` statement appears outside a procedural loop. |
-| `FSIM-SV-SEM-032` | error | A SystemVerilog `final` procedure contains a timing control, wait, or `$finish`. |
+| `FSIM-SV-SEM-032` | error | A SystemVerilog `final` procedure contains a timing control or wait (`$finish` and `$stop` are allowed and end the simulation at once). |
 | `FSIM-SV-SEM-033` | error | A SystemVerilog `final` procedure contains a nonblocking assignment. |
 | `FSIM-SV-SEM-034` | error | A procedural block closing label has no opening label or does not match it. |
 | `FSIM-SV-SEM-035` | error | A named event conflicts with another event, signal, or port declaration. |

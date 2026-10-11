@@ -3614,6 +3614,11 @@ bool Interpreter::stopped_by_design() const noexcept
     return impl_->stopped_by_design;
 }
 
+bool Interpreter::paused_in_final() const noexcept
+{
+    return impl_->paused_in_final;
+}
+
 Scheduler& Interpreter::scheduler() noexcept { return impl_->scheduler; }
 const Scheduler& Interpreter::scheduler() const noexcept
 {

@@ -751,6 +751,116 @@ void VhdlHirBuilder::add_disconnection_specifications(
     const semantic::ScopeId scope,
     const semantic::OriginId parent)
 {
+    if (!type.vhdl_object_subtype.empty()) {
+        // `obj'subtype` is the subtype of an earlier visible object (IEEE
+        // 1076-2008 16.2.2). An unconstrained array object, such as a
+        // subprogram formal, takes its index ranges from `obj'range`.
+        const auto canonical = canonical_vhdl_name(type.vhdl_object_subtype);
+        const vh::Declaration* object = nullptr;
+        auto visible_scope = std::optional<semantic::ScopeId> { scope };
+        while (visible_scope && object == nullptr) {
+            const auto& declarations = hir_.declarations();
+            for (auto candidate = declarations.rbegin();
+                candidate != declarations.rend(); ++candidate) {
+                if (candidate->scope == *visible_scope && candidate->subtype
+                    && canonical_vhdl_name(candidate->name) == canonical) {
+                    object = &*candidate;
+                    break;
+                }
+            }
+            if (!visible_scope->valid()
+                || visible_scope->value() >= model_.scopes().size()) {
+                break;
+            }
+            visible_scope = model_.scopes()[visible_scope->value()].parent;
+        }
+        if (object == nullptr) {
+            // An architecture sees its entity's ports and generics, which
+            // live in the entity's scope.
+            for (const auto& candidate : hir_.declarations()) {
+                if ((candidate.form == vh::DeclarationForm::port
+                        || candidate.form
+                            == vh::DeclarationForm::generic_constant)
+                    && candidate.subtype
+                    && canonical_vhdl_name(candidate.name) == canonical) {
+                    if (object != nullptr) {
+                        object = nullptr;
+                        break;
+                    }
+                    object = &candidate;
+                }
+            }
+        }
+        if (object != nullptr) {
+            auto result = *object->subtype;
+            const auto has_index_constraint = std::ranges::any_of(
+                result.constraints, [](const vh::RangeConstraint& range) {
+                    return range.kind == vh::RangeKind::array_index;
+                });
+            std::size_t dimensions { };
+            auto type_id = result.type_mark.target;
+            std::unordered_set<std::uint32_t> visited;
+            while (type_id.valid() && visited.insert(type_id.value()).second) {
+                const auto definition = std::ranges::find_if(hir_.types(),
+                    [&](const vh::TypeDefinition& candidate) {
+                        return candidate.id == type_id;
+                    });
+                if (definition == hir_.types().end()) {
+                    break;
+                }
+                if (definition->form == vh::TypeForm::array) {
+                    if (std::ranges::all_of(definition->array_dimensions,
+                            [](const vh::ArrayDimension& dimension) {
+                                return !dimension.constraint;
+                            })) {
+                        dimensions = definition->array_dimensions.size();
+                    }
+                    break;
+                }
+                if (std::ranges::any_of(definition->base.constraints,
+                        [](const vh::RangeConstraint& range) {
+                            return range.kind == vh::RangeKind::array_index;
+                        })) {
+                    break;
+                }
+                type_id = definition->base.type_mark.target;
+            }
+            if (!type_id.valid() && result.unconstrained) {
+                dimensions = 1U;
+            }
+            if (!has_index_constraint && dimensions != 0U) {
+                const auto span = type.named_type_span.source_name.empty()
+                    ? fallback
+                    : type.named_type_span;
+                const frontend::Expression prefix {
+                    frontend::ExpressionKind::Identifier,
+                    type.vhdl_object_subtype, { }, span };
+                for (std::size_t dimension = 1U; dimension <= dimensions;
+                    ++dimension) {
+                    std::vector<frontend::Expression> operands { prefix };
+                    if (dimensions > 1U) {
+                        operands.push_back(frontend::Expression {
+                            frontend::ExpressionKind::IntegerLiteral,
+                            std::to_string(dimension), { }, span });
+                    }
+                    frontend::DiscreteRangeExpression range {
+                        frontend::Expression { frontend::ExpressionKind::Call,
+                            "'left", operands, span },
+                        frontend::Expression { frontend::ExpressionKind::Call,
+                            "'right", operands, span },
+                        span,
+                        true,
+                    };
+                    range.direction_from_bounds = true;
+                    result.constraints.push_back(expression_range(
+                        range, vh::RangeKind::array_index, scope, parent));
+                }
+                result.unconstrained = false;
+                result.executable_width.reset();
+            }
+            return result;
+        }
+    }
     vh::SubtypeIndication result;
     result.type_mark = type_reference(type, fallback, scope);
     switch (type.domain) {

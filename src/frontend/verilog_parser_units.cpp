@@ -1144,6 +1144,7 @@ void VerilogParser::parse_generate_declaration(
   GenerateBody& body,
   std::vector<std::string>& local_names) {
   const auto start = current();
+  const auto start_position = position();
   Type type = default_verilog_type();
   if (is_direction_keyword()) {
     error(
@@ -1153,7 +1154,11 @@ void VerilogParser::parse_generate_declaration(
         "declarations");
     (void)parse_direction();
   }
-  if (is_named_type_reference_start()) {
+  if (match_keyword("event")) {
+    // A named event of a generate block (IEEE 1800-2017 15.5).
+    type.spelling = "event";
+    type.domain = ValueDomain::Logic4;
+  } else if (is_named_type_reference_start()) {
     type = parse_named_type();
   } else {
     parse_optional_net_type(type);
@@ -1274,6 +1279,10 @@ void VerilogParser::parse_generate_declaration(
       TokenKind::Semicolon,
       "';' after generated declaration",
       "FSIM-SV-PARSE-008");
+  if (position() == start_position && !at_end()) {
+    // An unrecognized item must not stall the generate body's item loop.
+    (void)advance();
+  }
 }
 
 void VerilogParser::parse_generated_parameter_group(

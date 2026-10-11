@@ -98,9 +98,8 @@ Process VerilogParser::parse_final()
                 || statement.kind == StatementKind::WaitOn
                 || statement.kind == StatementKind::WaitUntil
                 || statement.kind == StatementKind::WaitOrder
-                || statement.kind == StatementKind::Pause
-                || statement.kind == StatementKind::Finish
-                || statement.kind == StatementKind::Exit
+                // $finish and $stop are legal and end the simulation at
+                // once (IEEE 1800-2017 9.2.3).
                 || (statement.kind == StatementKind::Assignment
                     && statement.procedural_assignment_control
                         != ProceduralAssignmentControl::None);
@@ -131,8 +130,7 @@ Process VerilogParser::parse_final()
         error(
             start,
             "FSIM-SV-SEM-032",
-            "a final procedure cannot contain a timing control, wait, "
-            "or a simulation/program termination task");
+            "a final procedure cannot contain a timing control or wait");
     }
     if (has_nonblocking) {
         error(

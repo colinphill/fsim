@@ -2391,11 +2391,50 @@ Lowerer::hir_root_constant_selection(
     return selection;
 }
 
+bool Lowerer::hir_vhdl_runtime_string_bound(
+    const semantic::ExpressionId expression_id) const
+{
+    const auto expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    return expression && expression->vhdl != nullptr
+        && expression->vhdl->kind == semantic::vhdl::ExpressionKind::call
+        && expression->vhdl->operands.size() == 1U
+        && (expression->vhdl->text == "'length"
+            || expression->vhdl->text == "'left"
+            || expression->vhdl->text == "'right"
+            || expression->vhdl->text == "'low"
+            || expression->vhdl->text == "'high")
+        && hir_vhdl_runtime_string_prefix(expression->vhdl->operands.front())
+        // Static bounds keep their declared values; only a runtime-sized
+        // string takes them from its length.
+        && [&] {
+               const auto subtype = hir_vhdl_expression_subtype(
+                   expression->vhdl->operands.front());
+               if (!subtype || subtype->constraints.empty()) {
+                   return true;
+               }
+               const auto& range = subtype->constraints.front();
+               const auto bound = [&](const std::optional<std::int64_t> value,
+                                      const std::optional<semantic::ExpressionId>
+                                          residual) {
+                   return value ? value
+                       : residual ? hir_constant_integer(*residual)
+                                  : std::nullopt;
+               };
+               return !bound(range.left, range.left_expression)
+                   || !bound(range.right, range.right_expression);
+           }();
+}
+
 bool Lowerer::hir_expression_signed(
     const semantic::ExpressionId expression_id) const
 {
     if (specialized_hir_unit_ == nullptr) {
         return false;
+    }
+    if (hir_vhdl_runtime_string_bound(expression_id)) {
+        return true;
     }
     if (const auto method = hir_systemverilog_enumeration_method(
             expression_id)) {
@@ -6604,7 +6643,21 @@ bool Lowerer::hir_expression_is_string(
             && vhdl_logic_string_function_name(source.text)) {
             return true;
         }
-        if (source.kind == semantic::vhdl::ExpressionKind::call) {
+        // A function name without actuals is a call (IEEE 1076-2008 9.3.4).
+        const auto function_name = source.kind
+                == semantic::vhdl::ExpressionKind::name
+            && [&] {
+                   const auto selected = hir_referenced_declaration(
+                       expression_id);
+                   const auto function = selected
+                       ? specialized_hir_unit_->find_declaration(*selected)
+                       : std::nullopt;
+                   return function && function->vhdl != nullptr
+                       && function->vhdl->form
+                           == semantic::vhdl::DeclarationForm::function;
+               }();
+        if (source.kind == semantic::vhdl::ExpressionKind::call
+            || function_name) {
             const auto resolution = resolve_hir_vhdl_function_call(
                 expression_id, process_scope, 0U);
             if (resolution) {
@@ -8301,7 +8354,8 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
-    if (hir_vhdl_now_expression(expression_id)) {
+    if (hir_vhdl_now_expression(expression_id)
+        || hir_vhdl_runtime_string_bound(expression_id)) {
         return frontend::ValueDomain::Integer;
     }
     if (const auto method = hir_systemverilog_enumeration_method(
@@ -9720,24 +9774,49 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_array_ordering(
             && expression->vhdl->kind
                 == semantic::vhdl::ExpressionKind::aggregate;
     };
-    // The array type comes from whichever operand is not an aggregate.
-    const auto typed_index = is_aggregate(source.operands[0]) ? 1U : 0U;
+    const auto is_literal = [&](const semantic::ExpressionId operand) {
+        const auto expression = specialized_hir_unit_->find_expression(operand);
+        return expression && expression->vhdl != nullptr
+            && (expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::aggregate
+                || expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::string_literal);
+    };
+    // The array type comes from whichever operand is not a literal.
+    const auto typed_index = is_literal(source.operands[0]) ? 1U : 0U;
     const auto subtype = hir_vhdl_expression_subtype(
         source.operands[typed_index]);
     const auto* array = subtype && subtype->type_mark.target.valid()
         ? vhdl_array_definition(*specialized_hir_unit_, subtype->type_mark.target)
         : nullptr;
-    if (array == nullptr || array->array_dimensions.size() != 1U
-        || !array->element_subtype) {
+    // BIT_VECTOR and BOOLEAN_VECTOR have no retained definition; their
+    // elements are one bit.
+    const auto predefined_bit_vector = array == nullptr && subtype
+        && (same_hir_identifier(
+                std::string_view { subtype->type_mark.spelling }.substr(
+                    subtype->type_mark.spelling.find_last_of(".:") + 1U),
+                "bit_vector", true)
+            || same_hir_identifier(
+                std::string_view { subtype->type_mark.spelling }.substr(
+                    subtype->type_mark.spelling.find_last_of(".:") + 1U),
+                "boolean_vector", true));
+    if (!predefined_bit_vector
+        && (array == nullptr || array->array_dimensions.size() != 1U
+            || !array->element_subtype)) {
         return std::nullopt;
     }
-    const auto element = hir_effective_vhdl_subtype(
-        semantic::vhdl::constrained_element_subtype(
-            *subtype, "", *array->element_subtype));
-    const auto element_width = element ? vhdl_runtime_width(*element)
-                                       : std::nullopt;
-    const auto domain = element ? vhdl_domain(element->domain)
-                                : frontend::ValueDomain::Unknown;
+    const auto element = predefined_bit_vector
+        ? std::optional<semantic::vhdl::SubtypeIndication> { }
+        : hir_effective_vhdl_subtype(
+              semantic::vhdl::constrained_element_subtype(
+                  *subtype, "", *array->element_subtype));
+    const auto element_width = predefined_bit_vector
+        ? std::optional<std::size_t> { 1U }
+        : element ? vhdl_runtime_width(*element)
+                  : std::nullopt;
+    const auto domain = predefined_bit_vector ? frontend::ValueDomain::Bit2
+        : element ? vhdl_domain(element->domain)
+                  : frontend::ValueDomain::Unknown;
     const auto lhs_width = hir_expression_width(
         source.operands[0], hir_process_scope_);
     const auto rhs_width = hir_expression_width(
@@ -9751,8 +9830,14 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_array_ordering(
         return std::nullopt;
     }
     semantic::vhdl::SubtypeIndication base;
-    base.type_mark.target = array->id;
-    base.type_mark.spelling = array->name;
+    if (array != nullptr) {
+        base.type_mark.target = array->id;
+        base.type_mark.spelling = array->name;
+    } else {
+        base = *subtype;
+        base.constraints.clear();
+        base.executable_width.reset();
+    }
     const auto lower_operand = [&](const std::size_t index,
                                    const std::size_t width)
         -> std::optional<RegisterId> {
@@ -10157,6 +10242,9 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
     }
     if (const auto target = hir_vhdl_alias_target_expression(expression_id)) {
         return hir_expression_width(*target, process_scope);
+    }
+    if (hir_vhdl_runtime_string_bound(expression_id)) {
+        return 32U;
     }
     // An element of a STRING held as a runtime string is a CHARACTER.
     if (const auto element = specialized_hir_unit_->find_expression(expression_id);
@@ -12642,6 +12730,14 @@ Lowerer::hir_vhdl_expression_subtype(
         && (source.text == "'val" || source.text == "'succ"
             || source.text == "'pred" || source.text == "'leftof"
             || source.text == "'rightof")) {
+        return hir_vhdl_expression_subtype(source.operands.front());
+    }
+    // A signal's 'LAST_VALUE, 'DRIVING_VALUE and 'DELAYED have the
+    // signal's subtype (IEEE 1076-2008 16.2.4).
+    if (source.kind == semantic::vhdl::ExpressionKind::call
+        && !source.operands.empty()
+        && (source.text == "'last_value" || source.text == "'driving_value"
+            || source.text == "'delayed")) {
         return hir_vhdl_expression_subtype(source.operands.front());
     }
     if (source.kind == semantic::vhdl::ExpressionKind::call
