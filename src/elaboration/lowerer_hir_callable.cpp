@@ -5101,6 +5101,32 @@ Lowerer::resolve_hir_vhdl_procedure_call(
                 actual_width = formal->width;
                 actual_domain = formal->domain;
             }
+            // An abstract literal without a unit is not of a physical type
+            // (IEEE 1076-2008 9.3.2).
+            if (actual && actual->vhdl != nullptr
+                && (actual->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::integer_literal
+                    || actual->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::real_literal)
+                // Folded time literals keep their nominal TIME type.
+                && actual->vhdl->nominal_type.empty()
+                && formal_subtype) {
+                auto mark = std::string_view {
+                    formal_subtype->type_mark.spelling };
+                if (const auto separator = mark.find_last_of(".:");
+                    separator != std::string_view::npos) {
+                    mark.remove_prefix(separator + 1U);
+                }
+                std::string lowered { mark };
+                std::ranges::transform(lowered, lowered.begin(),
+                    [](const unsigned char character) {
+                        return static_cast<char>(std::tolower(character));
+                    });
+                if (lowered == "time" || lowered == "delay_length") {
+                    compatible = false;
+                    break;
+                }
+            }
             // A character literal belongs to a character type: BIT for '0'
             // and '1', STD_ULOGIC for its nine values, CHARACTER for any;
             // never to BOOLEAN or an integer type (IEEE 1076-2008 9.3.2).

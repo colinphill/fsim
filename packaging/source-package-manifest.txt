@@ -2045,6 +2045,7 @@ tests/fixtures/compliance/vhdl_matching_units_and_bindings.vhd
 tests/fixtures/compliance/vhdl_names_and_orderings.vhd
 tests/fixtures/compliance/vhdl_now_and_string_formals.vhd
 tests/fixtures/compliance/vhdl_operator_overloads.vhd
+tests/fixtures/compliance/vhdl_package_instances_and_blocks.vhd
 tests/fixtures/compliance/vhdl_package_shared_variables.vhd
 tests/fixtures/compliance/vhdl_package_signals.vhd
 tests/fixtures/compliance/vhdl_procedure_constant_actuals.vhd

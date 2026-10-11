@@ -982,3 +982,36 @@ gives fsim's result in each case checked.
   computes the initial effective value through the conversion function;
   fsim does not yet, so a process that reads the formal at time zero sees
   the default.
+
+## Package instances, blocks and literal overloads (batch 40)
+
+- A design-unit package instantiation (`package p is new work.g generic
+  map (...)`, IEEE 1076-2008 4.9) whose generic package is declared in the
+  same design file is expanded by the parser into an ordinary package and
+  body named `p`: a constant generic becomes a constant declaration with
+  its actual (or default), a type generic a subtype of its actual, and a
+  subprogram generic a wrapper subprogram that calls its actual. A
+  library-qualified subprogram actual (`work.q.f`) adds `use work.q.all`
+  to the expanded package, because fsim does not yet resolve
+  library-qualified calls without a use clause. Interface package
+  generics, `generic map (<>)` and templates in other design files (such as
+  `ieee.fixed_generic_pkg`) still use the declaration path, which does not
+  support them.
+- Package instantiations inside package declarative regions parse into
+  local package instances.
+- Procedure overload resolution: an abstract literal without a unit is
+  not of TIME (`check_equal(17, 17)` no longer also matches the TIME
+  overload); folded time literals keep their TIME type.
+- `label : name;` inside a block or generate body instantiates a declared
+  component without maps (it was taken as a procedure call).
+- Configuration specifications in block declarative parts are applied to
+  the block's instances, and `use open` leaves a component instance
+  unbound (IEEE 1076-2008 7.3.2.2); before, `open` selected the default
+  binding.
+- Analysis checks: a label, architecture name or entity name used as a
+  generic or port map actual is rejected (`FSIM-ELAB-VHNAME-015`), and a
+  nested block configuration must name a block or generate statement of
+  the enclosing block (`FSIM-FE-VHCONFIG-001`). Architectures that
+  instantiate other units are not elaborated at compile time, so their
+  name checks (`VHNAME-002`, `-004`, `-015`) now run on their own at
+  compile.

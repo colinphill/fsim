@@ -407,6 +407,7 @@ Type vhdl_environment_call_path_container_type(
   return type;
 }
 
+
 }  // namespace
 
 Type vhdl_environment_call_path_vector_type() {
@@ -569,6 +570,559 @@ PackageInstantiation VhdlParser::parse_vhdl_package_instantiation(
         "FSIM-VHDL-PARSE-193");
     result.span = span_from(start, previous());
     return result;
+}
+
+bool VhdlParser::expand_vhdl_library_package_instance() {
+  auto& tokens = tokens_;
+  const auto start = position();
+  const auto word = [&](const std::size_t index, const std::string_view text) {
+    return index < tokens.size()
+        && tokens[index].kind == TokenKind::Identifier
+        && detail::ascii_lower(tokens[index].text) == text;
+  };
+  const auto kind = [&](const std::size_t index, const TokenKind expected) {
+    return index < tokens.size() && tokens[index].kind == expected;
+  };
+  if (!word(start, "package") || !kind(start + 1U, TokenKind::Identifier)
+      || !word(start + 2U, "is") || !word(start + 3U, "new")) {
+    return false;
+  }
+  const auto& instance_token = tokens[start + 1U];
+  // Template name: [library.]name.
+  auto index = start + 4U;
+  if (!kind(index, TokenKind::Identifier)) {
+    return false;
+  }
+  std::string template_name = detail::ascii_lower(tokens[index].text);
+  ++index;
+  while (kind(index, TokenKind::Dot) && kind(index + 1U, TokenKind::Identifier)) {
+    template_name = detail::ascii_lower(tokens[index + 1U].text);
+    index += 2U;
+  }
+  // Generic map associations as token ranges.
+  struct Association {
+    std::string formal;
+    std::vector<Token> actual;
+  };
+  std::vector<Association> associations;
+  if (word(index, "generic") && word(index + 1U, "map")
+      && kind(index + 2U, TokenKind::LeftParen)) {
+    index += 3U;
+    std::size_t depth { };
+    Association current;
+    for (; index < tokens.size(); ++index) {
+      const auto& token = tokens[index];
+      if (token.kind == TokenKind::LeftParen) {
+        ++depth;
+      } else if (token.kind == TokenKind::RightParen) {
+        if (depth == 0U) {
+          break;
+        }
+        --depth;
+      } else if (depth == 0U && token.kind == TokenKind::Comma) {
+        associations.push_back(std::move(current));
+        current = { };
+        continue;
+      } else if (depth == 0U && token.kind == TokenKind::Arrow
+          && current.formal.empty() && current.actual.size() == 1U
+          && current.actual.front().kind == TokenKind::Identifier) {
+        current.formal = detail::ascii_lower(current.actual.front().text);
+        current.actual.clear();
+        continue;
+      }
+      current.actual.push_back(token);
+    }
+    if (!kind(index, TokenKind::RightParen)) {
+      return false;
+    }
+    associations.push_back(std::move(current));
+    ++index;
+  }
+  if (!kind(index, TokenKind::Semicolon)) {
+    return false;
+  }
+  const auto end = index;
+  for (const auto& association : associations) {
+    if (association.actual.empty()
+        || (association.actual.size() == 1U
+            && association.actual.front().kind == TokenKind::Less)) {
+      return false;
+    }
+  }
+
+  // The end of a unit begun at `from`: an `end` at nesting depth zero that
+  // is followed by `;`, the unit kind, or the unit name.
+  const auto unit_end = [&](std::size_t from, const std::string_view name)
+      -> std::optional<std::size_t> {
+    std::size_t depth { };
+    for (auto cursor = from; cursor < tokens.size(); ++cursor) {
+      if (word(cursor, "begin")) {
+        ++depth;
+        continue;
+      }
+      if (!word(cursor, "end")) {
+        continue;
+      }
+      const auto next = cursor + 1U;
+      const bool construct_end = word(next, "if") || word(next, "loop")
+          || word(next, "case") || word(next, "record")
+          || word(next, "units") || word(next, "protected")
+          || word(next, "component") || word(next, "generate")
+          || word(next, "block") || word(next, "process")
+          || word(next, "for") || word(next, "while");
+      if (construct_end) {
+        continue;
+      }
+      if (depth > 0U) {
+        --depth;
+        continue;
+      }
+      if (kind(next, TokenKind::Semicolon) || word(next, "package")
+          || word(next, name)) {
+        auto semicolon = next;
+        while (semicolon < tokens.size()
+            && !kind(semicolon, TokenKind::Semicolon)) {
+          ++semicolon;
+        }
+        return semicolon < tokens.size() ? std::optional { semicolon }
+                                         : std::nullopt;
+      }
+    }
+    return std::nullopt;
+  };
+  // The context clause (library and use clauses) just before a unit.
+  const auto context_before = [&](const std::size_t unit_start) {
+    auto first = unit_start;
+    while (first > 0U && kind(first - 1U, TokenKind::Semicolon)) {
+      auto clause = first - 1U;
+      while (clause > 0U && !kind(clause - 1U, TokenKind::Semicolon)) {
+        --clause;
+      }
+      if (!word(clause, "library") && !word(clause, "use")) {
+        break;
+      }
+      first = clause;
+    }
+    return std::vector<Token>(
+        tokens.begin() + static_cast<std::ptrdiff_t>(first),
+        tokens.begin() + static_cast<std::ptrdiff_t>(unit_start));
+  };
+
+  std::optional<std::size_t> declaration;
+  std::optional<std::size_t> body;
+  for (std::size_t cursor { }; cursor + 3U < tokens.size(); ++cursor) {
+    if (!word(cursor, "package")) {
+      continue;
+    }
+    if (word(cursor + 1U, "body") && word(cursor + 2U, template_name)
+        && word(cursor + 3U, "is")) {
+      body = cursor;
+    } else if (word(cursor + 1U, template_name) && word(cursor + 2U, "is")
+        && word(cursor + 3U, "generic")) {
+      declaration = cursor;
+    }
+  }
+  if (!declaration || !kind(*declaration + 4U, TokenKind::LeftParen)) {
+    return false;
+  }
+  // The generic clause: interface declarations separated by `;`.
+  std::vector<std::vector<Token>> interfaces;
+  std::size_t clause_end { };
+  {
+    std::size_t depth { };
+    std::vector<Token> current;
+    auto cursor = *declaration + 5U;
+    for (; cursor < tokens.size(); ++cursor) {
+      const auto& token = tokens[cursor];
+      if (token.kind == TokenKind::LeftParen) {
+        ++depth;
+      } else if (token.kind == TokenKind::RightParen) {
+        if (depth == 0U) {
+          break;
+        }
+        --depth;
+      } else if (depth == 0U && token.kind == TokenKind::Semicolon) {
+        interfaces.push_back(std::move(current));
+        current.clear();
+        continue;
+      }
+      current.push_back(token);
+    }
+    if (!kind(cursor, TokenKind::RightParen)
+        || !kind(cursor + 1U, TokenKind::Semicolon)) {
+      return false;
+    }
+    if (!current.empty()) {
+      interfaces.push_back(std::move(current));
+    }
+    clause_end = cursor + 1U;
+  }
+  const auto declaration_end = unit_end(clause_end + 1U, template_name);
+  if (!declaration_end) {
+    return false;
+  }
+  // Each generic: its name, whether it is a type, and its subtype and
+  // default tokens.
+  struct Generic {
+    std::string name;
+    bool type { };
+    std::vector<Token> subtype;
+    std::vector<Token> default_value;
+    // A subprogram generic: its alias signature `[t1, t2 return t]`.
+    std::optional<std::vector<Token>> signature;
+    // The subprogram specification and its parameter names, for a
+    // wrapper that calls the actual.
+    std::vector<Token> header;
+    std::vector<Token> parameter_names;
+    bool function { };
+  };
+  std::vector<Generic> generics;
+  for (auto interface : interfaces) {
+    std::size_t cursor { };
+    // `[pure|impure] function f (a, b : t) return r [is name|<>]` and
+    // `procedure p (a : t)` become aliases with a signature.
+    if (!interface.empty() && interface.front().kind == TokenKind::Identifier
+        && (detail::ascii_lower(interface.front().text) == "pure"
+            || detail::ascii_lower(interface.front().text) == "impure")) {
+      ++cursor;
+    }
+    if (cursor + 1U < interface.size()
+        && interface[cursor].kind == TokenKind::Identifier
+        && (detail::ascii_lower(interface[cursor].text) == "function"
+            || detail::ascii_lower(interface[cursor].text) == "procedure")
+        && (interface[cursor + 1U].kind == TokenKind::Identifier
+            || interface[cursor + 1U].kind == TokenKind::StringLiteral)) {
+      Generic subprogram;
+      subprogram.name = interface[cursor + 1U].kind == TokenKind::Identifier
+          ? detail::ascii_lower(interface[cursor + 1U].text)
+          : interface[cursor + 1U].text;
+      auto signature = std::vector<Token> { };
+      auto position = cursor + 2U;
+      if (position < interface.size()
+          && interface[position].kind == TokenKind::LeftParen) {
+        // Each parameter declaration contributes its type once per name.
+        std::size_t depth { };
+        std::vector<Token> parameter;
+        const auto flush = [&] {
+          const auto colon = std::ranges::find_if(parameter,
+              [](const Token& token) { return token.kind == TokenKind::Colon; });
+          if (colon == parameter.end()) {
+            return false;
+          }
+          std::size_t names = 1U;
+          for (auto it = parameter.begin(); it != colon; ++it) {
+            names += it->kind == TokenKind::Comma ? 1U : 0U;
+            if (it->kind == TokenKind::Identifier
+                && detail::ascii_lower(it->text) != "constant"
+                && detail::ascii_lower(it->text) != "signal"
+                && detail::ascii_lower(it->text) != "variable") {
+              subprogram.parameter_names.push_back(*it);
+            }
+          }
+          auto type_begin = std::next(colon);
+          while (type_begin != parameter.end()
+              && type_begin->kind == TokenKind::Identifier
+              && (detail::ascii_lower(type_begin->text) == "in"
+                  || detail::ascii_lower(type_begin->text) == "out"
+                  || detail::ascii_lower(type_begin->text) == "inout")) {
+            ++type_begin;
+          }
+          auto type_end = std::ranges::find_if(type_begin, parameter.end(),
+              [](const Token& token) {
+                return token.kind == TokenKind::ColonEqual;
+              });
+          if (type_begin == type_end) {
+            return false;
+          }
+          for (std::size_t name { }; name < names; ++name) {
+            if (!signature.empty()) {
+              signature.push_back(Token { TokenKind::Comma, ",",
+                  type_begin->span, { }, { } });
+            }
+            signature.insert(signature.end(), type_begin, type_end);
+          }
+          parameter.clear();
+          return true;
+        };
+        for (++position; position < interface.size(); ++position) {
+          const auto& token = interface[position];
+          if (token.kind == TokenKind::LeftParen) {
+            ++depth;
+          } else if (token.kind == TokenKind::RightParen) {
+            if (depth == 0U) {
+              break;
+            }
+            --depth;
+          } else if (depth == 0U && token.kind == TokenKind::Semicolon) {
+            if (!flush()) {
+              return false;
+            }
+            continue;
+          }
+          parameter.push_back(token);
+        }
+        if (position >= interface.size() || !flush()) {
+          return false;
+        }
+        ++position;
+      }
+      if (position + 1U < interface.size()
+          && interface[position].kind == TokenKind::Identifier
+          && detail::ascii_lower(interface[position].text) == "return") {
+        signature.push_back(Token { TokenKind::Identifier, "return",
+            interface[position].span, { }, { } });
+        signature.push_back(interface[position + 1U]);
+        position += 2U;
+      }
+      subprogram.function = detail::ascii_lower(interface[cursor].text)
+          == "function";
+      subprogram.header.assign(interface.begin(),
+          interface.begin() + static_cast<std::ptrdiff_t>(position));
+      if (position + 1U < interface.size()
+          && interface[position].kind == TokenKind::Identifier
+          && detail::ascii_lower(interface[position].text) == "is"
+          && interface[position + 1U].kind != TokenKind::Less) {
+        subprogram.default_value.assign(
+            interface.begin() + static_cast<std::ptrdiff_t>(position + 1U),
+            interface.end());
+      }
+      subprogram.signature = std::move(signature);
+      generics.push_back(std::move(subprogram));
+      continue;
+    }
+    cursor = 0U;
+    if (!interface.empty() && interface.front().kind == TokenKind::Identifier
+        && detail::ascii_lower(interface.front().text) == "constant") {
+      ++cursor;
+    }
+    if (cursor < interface.size()
+        && interface[cursor].kind == TokenKind::Identifier
+        && detail::ascii_lower(interface[cursor].text) == "type"
+        && cursor + 1U < interface.size()) {
+      if (cursor + 2U != interface.size()) {
+        return false;
+      }
+      generics.push_back({ detail::ascii_lower(interface[cursor + 1U].text),
+          true, { }, { }, std::nullopt, { }, { }, false });
+      continue;
+    }
+    std::vector<std::string> names;
+    while (cursor < interface.size()
+        && interface[cursor].kind == TokenKind::Identifier) {
+      const auto lowered = detail::ascii_lower(interface[cursor].text);
+      if (lowered == "function" || lowered == "procedure"
+          || lowered == "package" || lowered == "signal"
+          || lowered == "variable" || lowered == "file") {
+        return false;
+      }
+      names.push_back(lowered);
+      ++cursor;
+      if (cursor < interface.size()
+          && interface[cursor].kind == TokenKind::Comma) {
+        ++cursor;
+        continue;
+      }
+      break;
+    }
+    if (names.empty() || cursor >= interface.size()
+        || interface[cursor].kind != TokenKind::Colon) {
+      return false;
+    }
+    ++cursor;
+    if (cursor < interface.size()
+        && interface[cursor].kind == TokenKind::Identifier
+        && detail::ascii_lower(interface[cursor].text) == "in") {
+      ++cursor;
+    }
+    std::vector<Token> subtype;
+    std::vector<Token> default_value;
+    for (; cursor < interface.size(); ++cursor) {
+      if (interface[cursor].kind == TokenKind::ColonEqual) {
+        default_value.assign(interface.begin()
+                + static_cast<std::ptrdiff_t>(cursor + 1U),
+            interface.end());
+        break;
+      }
+      subtype.push_back(interface[cursor]);
+    }
+    if (subtype.empty()) {
+      return false;
+    }
+    for (const auto& name : names) {
+      generics.push_back(
+          { name, false, subtype, default_value, std::nullopt, { }, { },
+            false });
+    }
+  }
+  // Actuals: positional in order, then named.
+  std::vector<std::optional<std::vector<Token>>> actuals(generics.size());
+  std::size_t positional { };
+  for (const auto& association : associations) {
+    if (association.formal.empty()) {
+      if (positional >= generics.size()) {
+        return false;
+      }
+      actuals[positional++] = association.actual;
+      continue;
+    }
+    const auto found = std::ranges::find(generics, association.formal,
+        &Generic::name);
+    if (found == generics.end()) {
+      return false;
+    }
+    const auto at = static_cast<std::size_t>(
+        std::distance(generics.begin(), found));
+    if (association.actual.size() == 1U
+        && association.actual.front().kind == TokenKind::Identifier
+        && detail::ascii_lower(association.actual.front().text) == "open") {
+      continue;
+    }
+    actuals[at] = association.actual;
+  }
+
+  const auto span = instance_token.span;
+  const auto make = [&](const TokenKind token_kind, std::string text) {
+    return Token { token_kind, std::move(text), span, { }, { } };
+  };
+  const auto identifier = [&](std::string text) {
+    return make(TokenKind::Identifier, std::move(text));
+  };
+  const auto& instance_name = instance_token.text;
+  std::vector<Token> wrappers;
+  std::vector<Token> expanded = context_before(*declaration);
+  expanded.push_back(identifier("package"));
+  expanded.push_back(identifier(instance_name));
+  expanded.push_back(identifier("is"));
+  for (std::size_t generic { }; generic < generics.size(); ++generic) {
+    const auto& formal = generics[generic];
+    const auto& value = actuals[generic] ? *actuals[generic]
+                                         : formal.default_value;
+    if (value.empty()) {
+      return false;
+    }
+    if (formal.signature) {
+      // A wrapper subprogram that calls the actual; its body follows in the
+      // package body.
+      expanded.insert(expanded.end(), formal.header.begin(),
+          formal.header.end());
+      std::vector<Token> wrapper = formal.header;
+      wrapper.push_back(identifier("is"));
+      wrapper.push_back(identifier("begin"));
+      if (formal.function) {
+        wrapper.push_back(identifier("return"));
+      }
+      wrapper.insert(wrapper.end(), value.begin(), value.end());
+      if (!formal.parameter_names.empty()) {
+        wrapper.push_back(make(TokenKind::LeftParen, "("));
+        for (std::size_t name { }; name < formal.parameter_names.size();
+             ++name) {
+          if (name != 0U) {
+            wrapper.push_back(make(TokenKind::Comma, ","));
+          }
+          wrapper.push_back(formal.parameter_names[name]);
+        }
+        wrapper.push_back(make(TokenKind::RightParen, ")"));
+      }
+      wrapper.push_back(make(TokenKind::Semicolon, ";"));
+      wrapper.push_back(identifier("end"));
+      wrapper.push_back(make(TokenKind::Semicolon, ";"));
+      wrappers.insert(wrappers.end(), wrapper.begin(), wrapper.end());
+    } else if (formal.type) {
+      expanded.push_back(identifier("subtype"));
+      expanded.push_back(identifier(formal.name));
+      expanded.push_back(identifier("is"));
+      expanded.insert(expanded.end(), value.begin(), value.end());
+    } else {
+      expanded.push_back(identifier("constant"));
+      expanded.push_back(identifier(formal.name));
+      expanded.push_back(make(TokenKind::Colon, ":"));
+      expanded.insert(expanded.end(), formal.subtype.begin(),
+          formal.subtype.end());
+      expanded.push_back(make(TokenKind::ColonEqual, ":="));
+      expanded.insert(expanded.end(), value.begin(), value.end());
+    }
+    expanded.push_back(make(TokenKind::Semicolon, ";"));
+  }
+  auto declaration_end_keyword = *declaration_end;
+  while (declaration_end_keyword > clause_end
+      && !word(declaration_end_keyword, "end")) {
+    --declaration_end_keyword;
+  }
+  expanded.insert(expanded.end(),
+      tokens.begin() + static_cast<std::ptrdiff_t>(clause_end + 1U),
+      tokens.begin() + static_cast<std::ptrdiff_t>(declaration_end_keyword));
+  // The template's closing `end ... ;` names the instance instead.
+  expanded.push_back(identifier("end"));
+  expanded.push_back(identifier("package"));
+  expanded.push_back(identifier(instance_name));
+  expanded.push_back(make(TokenKind::Semicolon, ";"));
+  // A subprogram actual named by `lib.pkg.name` is made visible to the
+  // wrappers through a use clause of its package.
+  {
+    std::vector<Token> uses;
+    for (std::size_t generic { }; generic < generics.size(); ++generic) {
+      if (!generics[generic].signature || !actuals[generic]) {
+        continue;
+      }
+      const auto& value = *actuals[generic];
+      if (value.size() != 5U || value[1].kind != TokenKind::Dot
+          || value[3].kind != TokenKind::Dot) {
+        continue;
+      }
+      uses.push_back(identifier("use"));
+      uses.push_back(value[0]);
+      uses.push_back(make(TokenKind::Dot, "."));
+      uses.push_back(value[2]);
+      uses.push_back(make(TokenKind::Dot, "."));
+      uses.push_back(identifier("all"));
+      uses.push_back(make(TokenKind::Semicolon, ";"));
+    }
+    expanded.insert(expanded.begin(), uses.begin(), uses.end());
+  }
+  if (!body && !wrappers.empty()) {
+    expanded.push_back(identifier("package"));
+    expanded.push_back(identifier("body"));
+    expanded.push_back(identifier(instance_name));
+    expanded.push_back(identifier("is"));
+    expanded.insert(expanded.end(), wrappers.begin(), wrappers.end());
+    expanded.push_back(identifier("end"));
+    expanded.push_back(identifier("package"));
+    expanded.push_back(identifier("body"));
+    expanded.push_back(identifier(instance_name));
+    expanded.push_back(make(TokenKind::Semicolon, ";"));
+  }
+  if (body) {
+    const auto body_items = *body + 4U;
+    const auto body_end = unit_end(body_items, template_name);
+    if (!body_end) {
+      return false;
+    }
+    auto end_keyword = *body_end;
+    while (end_keyword > body_items && !word(end_keyword, "end")) {
+      --end_keyword;
+    }
+    const auto context = context_before(*body);
+    expanded.insert(expanded.end(), context.begin(), context.end());
+    expanded.push_back(identifier("package"));
+    expanded.push_back(identifier("body"));
+    expanded.push_back(identifier(instance_name));
+    expanded.push_back(identifier("is"));
+    expanded.insert(expanded.end(), wrappers.begin(), wrappers.end());
+    expanded.insert(expanded.end(),
+        tokens.begin() + static_cast<std::ptrdiff_t>(body_items),
+        tokens.begin() + static_cast<std::ptrdiff_t>(end_keyword));
+    expanded.push_back(identifier("end"));
+    expanded.push_back(identifier("package"));
+    expanded.push_back(identifier("body"));
+    expanded.push_back(identifier(instance_name));
+    expanded.push_back(make(TokenKind::Semicolon, ";"));
+  }
+  // Replace the instantiation.
+  tokens.erase(tokens.begin() + static_cast<std::ptrdiff_t>(start),
+      tokens.begin() + static_cast<std::ptrdiff_t>(end + 1U));
+  tokens.insert(tokens.begin() + static_cast<std::ptrdiff_t>(start),
+      expanded.begin(), expanded.end());
+  return true;
 }
 
 } // namespace fsim::frontend

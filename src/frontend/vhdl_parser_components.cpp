@@ -198,6 +198,7 @@ void VhdlParser::add_vhdl_component_declaration(
     std::vector<VhdlComponentDeclaration>& declarations,
     VhdlComponentDeclaration declaration,
     const Token& start) {
+  vhdl_component_names_.insert(declaration.name);
   const auto duplicate = std::ranges::find_if(
       declarations,
       [&](const auto& existing) {

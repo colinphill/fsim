@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "vhdl_hir_type_validation.hpp"
 
+#include "fsim/elaboration/elaborator.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 
 #include <algorithm>
@@ -3306,6 +3307,77 @@ private:
         }
     }
 
+    // IEEE 1076-2008 9.1: a label, an architecture name or an entity name
+    // is not a primary, so it cannot be an actual of a generic or port map.
+    void validate_label_actual(const semantic::ExpressionId id)
+    {
+        const auto expression = specialization_.find_expression(id);
+        if (!expression || expression->vhdl == nullptr
+            || expression->vhdl->kind != semantic::vhdl::ExpressionKind::name
+            || expression->vhdl->text.empty()
+            || expression->vhdl->text.find_first_of(".'@") != std::string::npos
+            || (expression->vhdl->referenced_name
+                && expression->vhdl->referenced_name->selected)) {
+            return;
+        }
+        const auto& text = expression->vhdl->text;
+        const auto& design = specialization_.design();
+        const auto& scopes = design.semantics.scopes();
+        const auto in_design_unit = [&](const semantic::ScopeId scope) {
+            return scope.valid() && scope.value() < scopes.size()
+                && (scopes[scope.value()].unit == entity_.id
+                    || scopes[scope.value()].unit == architecture_.id);
+        };
+        bool label = name_equal(text, architecture_.name)
+            || name_equal(text, entity_.name);
+        for (const auto& statement : design.vhdl_hir.statements()) {
+            if (label) {
+                break;
+            }
+            label = !statement.label.empty() && in_design_unit(statement.scope)
+                && name_equal(statement.label, text);
+        }
+        for (const auto& process : design.vhdl_hir.processes()) {
+            if (label) {
+                break;
+            }
+            label = in_design_unit(process.scope)
+                && name_equal(process.name, text);
+        }
+        for (const auto& candidate : design.vhdl_hir.instances()) {
+            if (label) {
+                break;
+            }
+            label = in_design_unit(candidate.scope)
+                && name_equal(candidate.name, text);
+        }
+        const auto generate_label = [&](const auto& self,
+                                        const std::vector<semantic::vhdl::GenerateRegion>& regions)
+            -> bool {
+            return std::ranges::any_of(regions, [&](const auto& region) {
+                return name_equal(region.label, text)
+                    || self(self, region.nested);
+            });
+        };
+        label = label || generate_label(generate_label, architecture_.generates);
+        if (!label) {
+            return;
+        }
+        // An object of that name declared where the actual appears hides
+        // nothing here: labels and objects share one declarative region.
+        if (expression->vhdl->referenced_name
+            && !semantic::CompiledDesignResolver { specialization_ }
+                    .resolve_vhdl(*expression->vhdl->referenced_name,
+                        expression->vhdl->scope)
+                    .candidates.empty()) {
+            return;
+        }
+        report("FSIM-ELAB-VHNAME-015",
+            "VHDL label or design unit name '" + text
+                + "' is not a value and cannot be an actual",
+            expression->vhdl->source);
+    }
+
     void validate_simple_name(const semantic::vhdl::Expression& expression,
         const bool allow_type_mark = false)
     {
@@ -6587,6 +6659,7 @@ private:
                         if (association.kind == semantic::vhdl::AssociationKind::expression
                             && association.expression) {
                             validate_value_name(*association.expression);
+                            validate_label_actual(*association.expression);
                         }
                     }
                 }
@@ -6680,6 +6753,58 @@ std::vector<VhdlHirTypeValidationIssue> validate_vhdl_hir_types(
     const semantic::vhdl::Unit& architecture)
 {
     return Validator { specialization, entity, architecture }.run();
+}
+
+std::vector<Diagnostic> validate_vhdl_architecture_names(
+    const semantic::CompiledDesign& compiled,
+    const semantic::UnitId architecture_id)
+{
+    std::vector<Diagnostic> result;
+    const auto& units = compiled.vhdl_units();
+    const auto architecture = std::ranges::find(
+        units, architecture_id, &semantic::vhdl::Unit::id);
+    if (architecture == units.end()
+        || architecture->kind != semantic::vhdl::UnitKind::architecture) {
+        return result;
+    }
+    const auto entity = std::ranges::find_if(units,
+        [&](const semantic::vhdl::Unit& candidate) {
+            return candidate.kind == semantic::vhdl::UnitKind::entity
+                && candidate.library == architecture->library
+                && name_equal(candidate.name, architecture->primary_name);
+        });
+    if (entity == units.end()) {
+        return result;
+    }
+    const auto specialization = semantic::make_specialized_hir_unit(
+        compiled, architecture_id,
+        std::span<const semantic::SpecializedHirActualIdentity> { });
+    if (!specialization) {
+        return result;
+    }
+    const auto& spans = compiled.semantics.source_spans();
+    for (const auto& issue :
+        Validator { *specialization, *entity, *architecture }.run()) {
+        // Without generic values only name rules are decidable here.
+        if (issue.code != "FSIM-ELAB-VHNAME-002"
+            && issue.code != "FSIM-ELAB-VHNAME-004"
+            && issue.code != "FSIM-ELAB-VHNAME-015") {
+            continue;
+        }
+        Diagnostic diagnostic;
+        diagnostic.code = issue.code;
+        diagnostic.message = issue.message;
+        if (issue.source.valid() && issue.source.value() < spans.size()) {
+            const auto& span = spans[issue.source.value()];
+            diagnostic.span.source_name = span.logical_name;
+            diagnostic.span.begin = { static_cast<std::size_t>(span.begin.offset),
+                span.begin.line, span.begin.column };
+            diagnostic.span.end = { static_cast<std::size_t>(span.end.offset),
+                span.end.line, span.end.column };
+        }
+        result.push_back(std::move(diagnostic));
+    }
+    return result;
 }
 
 } // namespace fsim::elaboration

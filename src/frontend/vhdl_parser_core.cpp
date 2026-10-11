@@ -130,6 +130,10 @@ ParseResult VhdlParser::run()
             auto unit = parse_vhdl_configuration(previous());
             attach_context(unit);
             design.units.push_back(std::move(unit));
+        } else if (keyword("package", 0, true) && keyword("new", 3, true)
+            && expand_vhdl_library_package_instance()) {
+            // The instance was expanded in place into a package and body.
+            continue;
         } else if (match_keyword("package", true)) {
             const auto start = previous();
             if (match_keyword("body", true)) {
@@ -451,6 +455,20 @@ DesignUnit VhdlParser::parse_package(const Token& start, const bool body)
         } else if (match_keyword("disconnect", true)) {
             parse_vhdl_disconnection_specification(
                 unit.vhdl_disconnections, previous());
+        } else if (keyword("package", 0, true) && keyword("new", 3, true)) {
+            // A package instantiation in a package declarative region
+            // (IEEE 1076-2008 4.7, 4.9).
+            const auto package_start = advance();
+            auto instance = parse_vhdl_package_instantiation(package_start);
+            if (std::ranges::any_of(unit.package_instances,
+                    [&](const auto& existing) {
+                        return existing.name == instance.name;
+                    })) {
+                error(package_start, "FSIM-VHDL-SEM-059",
+                    "duplicate local package instance '" + instance.name + "'");
+            } else {
+                unit.package_instances.push_back(std::move(instance));
+            }
         } else if (match(TokenKind::PslDirective)) {
             error(previous(), "FSIM-VHDL-PSL-009",
                 "a PSL directive is not legal in a package declarative region");
@@ -1748,6 +1766,13 @@ DesignUnit VhdlParser::parse_architecture(const Token& start)
         unit.vhdl_disconnections,
         unit.concurrent_statements);
     rewrite_vhdl_formal_conversions(unit);
+    // Configuration specifications of nested blocks bind their instances by
+    // label (IEEE 1076-2008 7.3).
+    for (auto& specification : block_configuration_specifications_) {
+        unit.vhdl_configuration_specifications.push_back(
+            std::move(specification));
+    }
+    block_configuration_specifications_.clear();
     parse_vhdl_end("architecture", unit.name);
     for (auto& item : deferred_context_items_) {
         unit.vhdl_context.push_back(std::move(item));

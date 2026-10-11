@@ -350,7 +350,7 @@ namespace {
             "FSIM-ELAB-068", "FSIM-ELAB-074", "FSIM-ELAB-077", "FSIM-ELAB-079",
             "FSIM-ELAB-082", "FSIM-ELAB-091", "FSIM-ELAB-092",
             "FSIM-ELAB-DYNINDEX-002", "FSIM-ELAB-GEN-002", "FSIM-ELAB-PKG-009",
-            "FSIM-ELAB-VHNAME-014",
+            "FSIM-ELAB-VHNAME-014", "FSIM-ELAB-VHNAME-015",
             "FSIM-ELAB-VHACCESS-009", "FSIM-ELAB-VHACCESS-020",
             "FSIM-ELAB-VHAGG-003", "FSIM-ELAB-VHAGG-008", "FSIM-ELAB-VHASSIGN-001", "FSIM-ELAB-VHASSIGN-002", "FSIM-ELAB-VHATTR-012", "FSIM-ELAB-VHACCESS-030", "FSIM-ELAB-VHLOOP-001",
             "FSIM-ELAB-VHBODY-001", "FSIM-ELAB-VHCALL-001", "FSIM-ELAB-VHCALL-002", "FSIM-ELAB-VHCALL-003", "FSIM-ELAB-VHTIME-004", "FSIM-ELAB-VHASSIGN-003", "FSIM-ELAB-VHOPER-002", "FSIM-ELAB-VHRANGE-002", "FSIM-ELAB-VHRANGE-003", "FSIM-ELAB-VHARRAY-011", "FSIM-ELAB-VHARRAY-012", "FSIM-ELAB-VHDLCASE-007", "FSIM-ELAB-VHDLCASE-008", "FSIM-ELAB-VHDLCASE-009", "FSIM-ELAB-VHDLCASE-010",
@@ -397,8 +397,29 @@ namespace {
         bool clean = true;
         for (const auto& unit : checked.vhdl_hir.units()) {
             if (unit.kind != semantic::vhdl::UnitKind::architecture
-                || !analyzed.contains(unit.id.value())
-                || instantiating_units.contains(unit.id.value())) {
+                || !analyzed.contains(unit.id.value())) {
+                continue;
+            }
+            if (instantiating_units.contains(unit.id.value())) {
+                // Name rules are checked without elaborating the instances.
+                for (const auto& input :
+                    elaboration::validate_vhdl_architecture_names(checked, unit.id)) {
+                    const auto file = support::path_to_utf8(
+                        std::filesystem::path { input.span.source_name.str() }.filename());
+                    if (!files.contains(file)) {
+                        continue;
+                    }
+                    diagnostic::SourceSpan span;
+                    span.path = input.span.source_name.str();
+                    span.begin.line = static_cast<std::uint32_t>(input.span.begin.line);
+                    span.begin.column = static_cast<std::uint32_t>(input.span.begin.column);
+                    span.begin.offset = input.span.begin.offset;
+                    span.end.line = static_cast<std::uint32_t>(input.span.end.line);
+                    span.end.column = static_cast<std::uint32_t>(input.span.end.column);
+                    span.end.offset = input.span.end.offset;
+                    diagnostics.error(input.code, input.message, std::move(span));
+                    clean = false;
+                }
                 continue;
             }
             const auto top = unit.library + "." + unit.primary_name + "(" + unit.name + ")";

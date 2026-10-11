@@ -87,6 +87,12 @@ private:
   ParameterDeclaration parse_vhdl_interface_package(const Token &start);
 
   PackageInstantiation parse_vhdl_package_instantiation(const Token &start);
+  // Expands a design-unit-level `package p is new g generic map (...)` whose
+  // template is declared in the same design file into an ordinary package
+  // and body (IEEE 1076-2008 4.9): constant and type generics become
+  // constant and subtype declarations. Returns false, leaving the tokens
+  // unchanged, for any other form.
+  bool expand_vhdl_library_package_instance();
 
   DesignUnit parse_entity(const Token &start);
 
@@ -357,6 +363,12 @@ private:
   // Units of physical types declared so far in this design file; a unit
   // name alone denotes one unit (IEEE 1076-2008 5.2.4.1).
   std::unordered_set<std::string> vhdl_physical_unit_names_;
+  // Component names declared so far: `label : name;` in a block or generate
+  // body instantiates such a component (IEEE 1076-2008 11.7.1).
+  std::unordered_set<std::string> vhdl_component_names_;
+  // Configuration specifications in block declarative parts, moved to the
+  // enclosing architecture once it is parsed.
+  std::vector<VhdlComponentConfiguration> block_configuration_specifications_;
   bool in_vhdl_function_{};
   bool in_vhdl_procedure_{};
   bool vhdl_profile_compatible_{true};

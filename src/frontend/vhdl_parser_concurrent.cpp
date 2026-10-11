@@ -629,6 +629,12 @@ bool VhdlParser::parse_vhdl_generate_declarations(
           body.vhdl_disconnections, previous());
       continue;
     }
+    if (match_keyword("for", true)) {
+      parsed = true;
+      block_configuration_specifications_.push_back(
+          parse_vhdl_component_configuration(previous(), false));
+      continue;
+    }
     if (keyword("variable", 0, true)
         || keyword("shared", 0, true)
         || keyword("use", 0, true)
@@ -794,10 +800,14 @@ void VhdlParser::parse_vhdl_generate_branch(
               *label, previous()));
       continue;
     }
+    const bool component_without_maps = label
+        && at(TokenKind::Identifier) && at(TokenKind::Semicolon, 1)
+        && vhdl_component_names_.contains(vhdl_name(current().text));
     if (label && (
         keyword("entity", 0, true)
         || keyword("configuration", 0, true)
         || keyword("component", 0, true)
+        || component_without_maps
         || (at(TokenKind::Identifier)
             && (keyword("port", 1, true)
                 || keyword("generic", 1, true))))) {

@@ -385,6 +385,12 @@ struct Diagnostic {
     frontend::SourceSpan span;
 };
 
+/// The name checks of one VHDL architecture without elaborating what it
+/// instantiates (compile-time analysis of architectures with instances).
+[[nodiscard]] std::vector<Diagnostic> validate_vhdl_architecture_names(
+    const semantic::CompiledDesign& compiled,
+    semantic::UnitId architecture);
+
 struct VhdlModeViewElementBinding {
     std::string formal_path;
     std::string actual_path;

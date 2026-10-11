@@ -78,6 +78,14 @@ class AnalysisOrderValidator {
       }
     }
     for (const auto& unit : units) {
+      if (unit.language == frontend::Language::Vhdl2008
+          && unit.kind == frontend::UnitKind::VhdlArchitecture) {
+        local_architectures_.insert_or_assign(
+            architecture_key(library_of(unit), unit.primary_name, unit.name),
+            &unit);
+      }
+    }
+    for (const auto& unit : units) {
       if (unit.language != frontend::Language::Vhdl2008) {
         continue;
       }
@@ -299,6 +307,32 @@ class AnalysisOrderValidator {
       }
   }
 
+  // IEEE 1076-2008 3.4.2: a block configuration inside another names a
+  // block or generate statement of the enclosing block.
+  void validate_block_labels(
+      const frontend::VhdlBlockConfiguration& block,
+      const std::span<const frontend::GenerateRegion> regions)
+  {
+      for (const auto& child : block.block_configurations) {
+          const auto region = std::ranges::find_if(regions,
+              [&](const frontend::GenerateRegion& candidate) {
+                  return std::ranges::equal(candidate.then_scope, child.block_name,
+                      [](const unsigned char left, const unsigned char right) {
+                          return std::tolower(left) == std::tolower(right);
+                      });
+              });
+          if (region == regions.end()) {
+              report("FSIM-FE-VHCONFIG-001",
+                  "block configuration '" + child.block_name
+                      + "' does not name a block or generate statement of the "
+                        "enclosing block",
+                  child.span);
+              continue;
+          }
+          validate_block_labels(child, region->then_body.generate_regions);
+      }
+  }
+
   void validate_block(
       const frontend::VhdlBlockConfiguration& block,
       const DesignUnit& owner)
@@ -416,6 +450,11 @@ class AnalysisOrderValidator {
                   block.span);
           }
           validate_block(block, unit);
+          if (const auto architecture = local_architectures_.find(
+                  architecture_key(library, unit.primary_name, block.block_name));
+              architecture != local_architectures_.end()) {
+            validate_block_labels(block, architecture->second->generate_regions);
+          }
         }
         break;
       default:
@@ -494,6 +533,8 @@ class AnalysisOrderValidator {
   std::set<std::string> primary_units_;
   std::set<std::string> secondary_units_;
   std::set<std::string> local_entities_;
+  // Architectures of this design file, for configuration block checks.
+  std::map<std::string, const DesignUnit*> local_architectures_;
   bool allow_external_architecture_primary_ { };
 };
 

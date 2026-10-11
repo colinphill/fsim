@@ -171,6 +171,8 @@ private:
         enum class Status {
             failed,
             selected,
+            // `use open`: the component instance is left unbound.
+            unbound,
         };
 
         Status status { Status::failed };

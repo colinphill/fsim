@@ -22346,6 +22346,10 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
                 = std::move(selected_systemc_target),
             });
         if (child_selection.status
+            == CompiledVhdlChildSelectionResult::Status::unbound) {
+            continue;
+        }
+        if (child_selection.status
             != CompiledVhdlChildSelectionResult::Status::selected) {
             return false;
         }
@@ -23642,6 +23646,7 @@ HierarchyBuilder::select_compiled_vhdl_child(
     auto& child = result.child;
     auto& selected_systemc_target = result.selected_systemc_target;
     bool missing_explicit_configuration_rule { };
+    bool unbound { };
     const auto select = [&]() {
         const auto select_entity_architecture = [&](
                                                     const semantic::vhdl::Name& entity_name,
@@ -23910,6 +23915,12 @@ HierarchyBuilder::select_compiled_vhdl_child(
                 child_component_source = selected_rule->source;
                 switch (selected_rule->binding.kind) {
                 case semantic::vhdl::BindingKind::open:
+                    // An explicit `use open` leaves the instance unbound
+                    // (IEEE 1076-2008 7.3.2.2); it elaborates to nothing.
+                    if (record.component) {
+                        unbound = true;
+                        return true;
+                    }
                     if (!select_default_component()) {
                         return false;
                     }
@@ -24009,7 +24020,9 @@ HierarchyBuilder::select_compiled_vhdl_child(
     if (!select()) {
         return result;
     }
-    result.status = CompiledVhdlChildSelectionResult::Status::selected;
+    result.status = unbound
+        ? CompiledVhdlChildSelectionResult::Status::unbound
+        : CompiledVhdlChildSelectionResult::Status::selected;
     return result;
 }
 

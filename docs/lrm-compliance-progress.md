@@ -253,6 +253,35 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 40: package instances, blocks, literal overloads and analysis checks
+
+Fixture: `vhdl_package_instances_and_blocks.vhd` (passes on xsim).
+
+- Design-unit instantiation of a generic package declared in the same
+  file, expanded into an ordinary package (constant, type and subprogram
+  generics); package instantiations in package declarative regions.
+- An abstract literal without a unit does not match TIME formals.
+- `label : name;` component instances, configuration specifications and
+  `use open` in blocks.
+- Analysis checks: labels and design-unit names as map actuals, block
+  configuration labels, and name checks at compile for architectures with
+  instances.
+
+Corpus (passed/total, unique case ids; w123 = wip21 for the VHDL suites;
+the SystemVerilog suites are unchanged from batch 39, which this batch
+does not touch):
+
+| Suite | Batch 39 | Batch 40 |
+|---|---:|---:|
+| VESTs | 3247/3648 | 3261/3648 |
+| nvc regress | 609/1482 | 611/1482 |
+| VHDL Compliance-Tests | 29/72 | 31/72 |
+| ivtest | 2124/2826 | 2124/2826 |
+| Verilator test_regress | 1022/2415 | 1022/2415 |
+| sv-tests | 1337/1497 | 1337/1497 |
+
+No VHDL case that passed at batch 39 fails in w123.
+
 ### Batch 39: port conversions, bindings, generics, matching operators, packed elements
 
 Fixture: `vhdl_matching_units_and_bindings.vhd` (xsim does not support
@@ -1785,7 +1814,7 @@ them are not counted as gaps.
 | VHDL: output-port defaults as the driver's initial value | VESTs, nvc issue885 |
 | VHDL: reading an `out` port is accepted before VHDL-2008 | VESTs tc112 |
 | VHDL: individual association of formal subelements (`rec.field => x`) and formal conversion functions (`to_x(F) => S`) | 98 VESTs/nvc cases (`FSIM-VHDL-PARSE-042`) |
-| VHDL: library-level package instantiation (`package p is new work.g generic map (...)`) and nested package declarations; the library-level form is read as a package declaration whose items are all rejected | 21 nvc/VHDL-Compliance cases (`FSIM-VHDL-UNSUPPORTED-022` 'new'/'package') |
+| VHDL: nested package declarations (`package inner is ... end package;` inside a package); design-unit instantiation of same-file templates done in batch 40 | nvc genpack13, issue653, issue732 |
 | VHDL: names in a configuration are not resolved against the configured architecture (architecture-local constants in generate specifications); design-wide unique names are used as a fallback | nvc config cases (`FSIM-ELAB-VHCONFIG-010`) |
 | VHDL: aggregate initializers of arrays of SEVERITY_LEVEL (`(others => note)`) | VESTs |
 | VHDL: element constraints of ports taken from the actual, `'element`, and element constraints in protected types (syntax and layouts done in batch 33, formals in batch 34) | ~35 nvc cases |
@@ -1799,7 +1828,9 @@ them are not counted as gaps.
 | SV: `new` for a variable of a specialized class type (`box #(5) b; b = new;`) constructs the default specialization | testbenches using parameterized classes |
 | VHDL: user resolution functions other than a single OR/AND reduction (a runtime resolver calling the function on the driver values) | 28 VESTs cases (`FSIM-ELAB-VHRESOLVE-002`/`-004`), nvc |
 | VHDL: indexing and slicing an unconstrained constant (`constant c : bit_vector := "0101"; c(1)`); its attributes were done in batch 28 | VESTs |
-| VHDL: configuration specifications in block declarative parts | 7 VESTs cases (`FSIM-VHDL-PARSE-078`) |
+| VHDL: library-qualified subprogram calls without a use clause (`work.pkg.f(x)`): the qualified lookup finds the package prototype but the call is not resolved to its body | VESTs dynamic_package_procedure_for_loop, generic package actuals |
+| Compiled engine: a procedure that reads a formal whose actual is a literal fails with "register has not been initialized" (the interpreter is correct) | default-engine users; the corpus runs the interpreter |
+| VHDL: generic packages with protected types, interface package generics (`package p is new g generic map (<>)`) and templates from other design files | ~15 nvc genpack/issue cases |
 | VHDL: records whose elements are two-dimensional or subtype-constrained arrays as signal initial values | 11 VESTs cases (`FSIM-ELAB-HIR-001` initializer) |
 | CLI: `fsim elaborate --top <entity>` for a VHDL entity fails with `FSIM-ELAB-004` (the CLI qualifies the name without an architecture); `entity(arch)` works | usability |
 | SV: an X/Z or out-of-range dynamic index in a signal write must skip the write instead of failing (interpreter and LLVM paths) | Verilator, ivtest (`FSIM-RUN-0001`) |
