@@ -5101,6 +5101,33 @@ Lowerer::resolve_hir_vhdl_procedure_call(
                 actual_width = formal->width;
                 actual_domain = formal->domain;
             }
+            // A character literal belongs to a character type: BIT for '0'
+            // and '1', STD_ULOGIC for its nine values, CHARACTER for any;
+            // never to BOOLEAN or an integer type (IEEE 1076-2008 9.3.2).
+            if (actual && actual->vhdl != nullptr
+                && actual->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::logic_literal
+                && actual->vhdl->text.size() == 3U
+                && actual->vhdl->text.front() == '\'') {
+                const auto value = static_cast<char>(std::toupper(
+                    static_cast<unsigned char>(actual->vhdl->text[1])));
+                const bool array_formal = formal_subtype
+                    && hir_vhdl_array_type_family(*formal_subtype);
+                const bool fits = array_formal ? false
+                    : formal->width == 8U
+                    || (formal->width == 1U
+                        && (formal->domain == frontend::ValueDomain::Bit2
+                                ? value == '0' || value == '1'
+                                : formal->domain
+                                        == frontend::ValueDomain::Logic9
+                                    && std::string_view { "UX01ZWLH-" }.find(
+                                           value)
+                                        != std::string_view::npos));
+                if (!fits) {
+                    compatible = false;
+                    break;
+                }
+            }
             if (!actual_width || !actual_domain) {
                 const auto nested = resolve_hir_vhdl_function_call(
                     (*actuals)[index], process_scope, formal->width);
@@ -5160,8 +5187,18 @@ Lowerer::resolve_hir_vhdl_procedure_call(
                 const auto actual_family = actual_type_subtype
                     ? hir_vhdl_array_type_family(*actual_type_subtype)
                     : std::nullopt;
-                compatible = !formal_family || !actual_family
-                    || *formal_family == *actual_family;
+                // A scalar BIT or STD_ULOGIC value is not an array.
+                const auto scalar_name = actual_type_subtype
+                    ? std::string_view { actual_type_subtype->type_mark.spelling }
+                    : std::string_view { };
+                const bool scalar_logic_actual = actual_type_subtype
+                    && actual_type_subtype->constraints.empty()
+                    && (scalar_name == "std_ulogic" || scalar_name == "std_logic"
+                        || scalar_name == "bit");
+                compatible = (!formal_family || !actual_family
+                                 || *formal_family == *actual_family)
+                    && !(formal_family && !actual_family
+                        && scalar_logic_actual);
             }
         }
         if (!compatible) {

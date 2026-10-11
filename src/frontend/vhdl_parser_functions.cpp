@@ -692,12 +692,9 @@ ParameterDeclaration VhdlParser::parse_vhdl_interface_function(
 
   Token name;
   if (at(TokenKind::StringLiteral)) {
+    // An operator symbol designates an interface function that overloads
+    // that operator (IEEE 1076-2008 6.5.4).
     name = advance();
-    error(
-        name,
-        "FSIM-VHDL-UNSUPPORTED-033",
-        "operator-symbol interface function designators are not "
-        "implemented");
     generic.name = string_literal_text(name);
   } else {
     name = expect_identifier("interface function name");

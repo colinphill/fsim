@@ -74,8 +74,10 @@ package body vunit_shim_pkg is
   -- the same in every iteration and no test names need to be stored.
   type shim_state_t is protected
     procedure begin_suite;
-    impure function next_iteration return boolean;
-    impure function try_run return boolean;
+    procedure advance_iteration;
+    impure function iteration_active return boolean;
+    procedure attempt_run;
+    impure function run_selected return boolean;
     procedure record_failure;
     impure function failure_count return natural;
   end protected;
@@ -86,35 +88,50 @@ package body vunit_shim_pkg is
     variable index : natural := 0;
     variable calls : natural := 0;
     variable failures : natural := 0;
+    variable active : boolean := false;
+    variable selected : boolean := false;
 
     procedure begin_suite is
     begin
       started := false;
     end procedure;
 
-    impure function next_iteration return boolean is
+    -- Protected functions only return a flag; the state changes are in
+    -- procedures, so each function body is a single return statement.
+    procedure advance_iteration is
     begin
+      active := true;
       if not started then
         started := true;
         index := 1;
       elsif ran_in_iteration then
         index := index + 1;
       else
-        return false;
+        active := false;
       end if;
-      calls := 0;
-      ran_in_iteration := false;
-      return true;
+      if active then
+        calls := 0;
+        ran_in_iteration := false;
+      end if;
+    end procedure;
+
+    impure function iteration_active return boolean is
+    begin
+      return active;
     end function;
 
-    impure function try_run return boolean is
+    procedure attempt_run is
     begin
       calls := calls + 1;
-      if ran_in_iteration or calls /= index then
-        return false;
+      selected := not ran_in_iteration and calls = index;
+      if selected then
+        ran_in_iteration := true;
       end if;
-      ran_in_iteration := true;
-      return true;
+    end procedure;
+
+    impure function run_selected return boolean is
+    begin
+      return selected;
     end function;
 
     procedure record_failure is
@@ -147,13 +164,15 @@ package body vunit_shim_pkg is
 
   impure function test_suite return boolean is
   begin
-    return state.next_iteration;
+    state.advance_iteration;
+    return state.iteration_active;
   end function;
 
   impure function run(constant name : string) return boolean is
     variable selected : boolean;
   begin
-    selected := state.try_run;
+    state.attempt_run;
+    selected := state.run_selected;
     if selected then
       report "VUNIT-SHIM: start " & name severity note;
     end if;

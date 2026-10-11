@@ -2583,6 +2583,10 @@ CompiledDesignResolver::effective_vhdl_subtype(
             } else if (same_vhdl_identifier(name, "time_vector")) {
                 element_width = 64U;
                 element_domain = vhdl::ValueDomain::integer;
+            } else if (same_vhdl_identifier(name, "real_vector")) {
+                // REAL elements are IEEE doubles (IEEE 1076-2008 16.3).
+                element_width = 64U;
+                element_domain = vhdl::ValueDomain::bit2;
             } else if (same_vhdl_identifier(name, "std_logic_vector")
                 || same_vhdl_identifier(name, "std_ulogic_vector")
                 || same_vhdl_identifier(name, "signed")
@@ -4203,7 +4207,12 @@ CompiledDeclarationResolution CompiledDesignResolver::resolve_vhdl(
                     break;
                 }
                 std::vector<ScopeId> selected;
-                if (same_vhdl_identifier(record->name, parts.front())) {
+                const auto owner = design_->find_unit(record->unit);
+                const bool unit_scope = owner && owner->identity != nullptr
+                    && owner->identity->scope == enclosing;
+                if (unit_scope) {
+                    // Named by the design unit, below.
+                } else if (same_vhdl_identifier(record->name, parts.front())) {
                     selected.push_back(enclosing);
                 } else if (record->name == "<loop>") {
                     // A loop scope is named by its statement's label.
@@ -4220,8 +4229,8 @@ CompiledDeclarationResolution CompiledDesignResolver::resolve_vhdl(
                         selected.push_back(enclosing);
                     }
                 }
-                if (!record->parent) {
-                    const auto unit = design_->find_unit(record->unit);
+                if (unit_scope) {
+                    const auto& unit = owner;
                     if (unit && unit->vhdl != nullptr) {
                         const auto entity = primary_vhdl_unit(
                             *design_, *unit->vhdl);

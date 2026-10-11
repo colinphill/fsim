@@ -2041,6 +2041,7 @@ tests/fixtures/compliance/vhdl_formal_element_constraints.vhd
 tests/fixtures/compliance/vhdl_formal_subelements.vhd
 tests/fixtures/compliance/vhdl_generate_configuration.vhd
 tests/fixtures/compliance/vhdl_individual_association.vhd
+tests/fixtures/compliance/vhdl_matching_units_and_bindings.vhd
 tests/fixtures/compliance/vhdl_names_and_orderings.vhd
 tests/fixtures/compliance/vhdl_now_and_string_formals.vhd
 tests/fixtures/compliance/vhdl_operator_overloads.vhd

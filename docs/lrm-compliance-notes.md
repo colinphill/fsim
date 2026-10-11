@@ -926,3 +926,59 @@ gives fsim's result in each case checked.
   subprogram label, or the architecture or entity name (`proc.v`,
   `outer.i`, `arch.s`; IEEE 1076-2008 8.3), select that construct's
   declaration. They were looked up as package members.
+
+## Port conversions, bindings, generics, matching operators and packed elements (batch 39)
+
+- A port actual that is a conversion function call (`f => conv(s)`)
+  creates an adapter signal with the formal's materialized type: its
+  domain, signedness, integer range, array metadata and default value. An
+  array of INTEGER formal failed the boundary checks before (value-domain
+  and signedness mismatches), and its elements could not be read through
+  the adapter. Arrays of INTEGER are no longer checked as one signed
+  integer at a port boundary, also for direct signal actuals.
+- A binding indication with a generic or port map (in a configuration or
+  a configuration specification) associates the entity's formals itself,
+  so the component it binds need not declare the same generics.
+- REAL generic actuals that are static (`10.0`, `real(n'high)`) are
+  accepted, and a REAL generic is a real operand in arithmetic with other
+  real expressions.
+- An expanded name prefixed by the entity name must denote a declaration
+  of the entity (`ent.sig` for an architecture signal is an error,
+  `FSIM-ELAB-VHNAME-014`), as an analysis check.
+- Generic subprograms in standard order (`function f generic (n :
+  integer) (x : integer) return integer`), with an optional `parameter`
+  keyword. The generic clause is moved in front of the subprogram keyword
+  before parsing, where the existing generic subprogram support reads it.
+- Operator-symbol designators of interface functions (`function "+" (a,
+  b : t) return t is <>`) parse; resolving their `is <>` defaults to the
+  predefined operators of the actual type is not supported yet.
+- The name of a unit of a user physical type used alone (`yd`, `ft`)
+  denotes one unit. Predefined TIME units used alone (`us = 1000 ns`) are
+  still not supported.
+- Matching ordering operators `?<`, `?<=`, `?>`, `?>=` of BIT and
+  STD_ULOGIC (IEEE 1076-2008 9.2.3): 'U' when an operand is 'U', 'X' when
+  an operand is not 0, 1, L or H, otherwise the order of the 0/1 values.
+  The predefined matching operators have the operands' element type (BIT
+  or STD_ULOGIC) for overload resolution.
+- Overload resolution of procedure calls: a character literal actual
+  matches only a character type that contains it (BIT for '0' and '1',
+  STD_ULOGIC for its nine values, CHARACTER), never BOOLEAN, an integer
+  type or an array; a scalar BIT or STD_ULOGIC actual does not match an
+  array formal.
+- SystemVerilog: an index of an unpacked array element selects the
+  element's packed dimensions (`logic [1:0][3:0] p [0:1]; p[1][0]` is a
+  4-bit element, `p[1][1][2]` a bit). The first packed dimension was
+  dropped for the unpacked index, so `p[1][0]` read and wrote one bit.
+- The VUnit stand-in's protected functions now each consist of a single
+  return statement (their state changes moved to protected procedures), so
+  testbenches that loop with `while test_suite loop ... run(...)` run.
+- Variables of the predefined VHDL-2008 vectors (`INTEGER_VECTOR`,
+  `REAL_VECTOR`, `TIME_VECTOR`, `BOOLEAN_VECTOR`) without an initializer
+  have storage: they have no HIR type definition, so their index
+  constraints now mark them as composite storage, and `REAL_VECTOR` has
+  64-bit elements. Wider than 64 bits, they were rejected before.
+- A conversion-function adapter starts with the formal type's default
+  value (each element's `'LEFT`) until the conversion runs. The LRM
+  computes the initial effective value through the conversion function;
+  fsim does not yet, so a process that reads the formal at time zero sees
+  the default.

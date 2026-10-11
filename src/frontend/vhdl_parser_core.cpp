@@ -3,10 +3,64 @@
 
 namespace fsim::frontend {
 
+namespace {
+
+[[nodiscard]] bool vhdl_token_is(const Token& token, const std::string_view word)
+{
+    return token.kind == TokenKind::Identifier
+        && detail::ascii_lower(token.text) == word;
+}
+
+// A generic subprogram declares its generic clause after the designator
+// (`function f generic (...) parameter (...) return t`; IEEE 1076-2008
+// 4.2.1). The parser reads a generic clause that precedes the subprogram
+// keyword, so the clause is moved in front of `[pure|impure] function`.
+void move_vhdl_generic_subprogram_headers(std::vector<Token>& tokens)
+{
+    for (std::size_t index { }; index + 3U < tokens.size(); ++index) {
+        if (!vhdl_token_is(tokens[index], "function")
+            && !vhdl_token_is(tokens[index], "procedure")) {
+            continue;
+        }
+        const auto& designator = tokens[index + 1U];
+        if ((designator.kind != TokenKind::Identifier
+                && designator.kind != TokenKind::StringLiteral)
+            || !vhdl_token_is(tokens[index + 2U], "generic")
+            || tokens[index + 3U].kind != TokenKind::LeftParen) {
+            continue;
+        }
+        std::size_t depth { };
+        auto end = index + 3U;
+        for (; end < tokens.size(); ++end) {
+            if (tokens[end].kind == TokenKind::LeftParen) {
+                ++depth;
+            } else if (tokens[end].kind == TokenKind::RightParen
+                && --depth == 0U) {
+                break;
+            }
+        }
+        if (end >= tokens.size()) {
+            return;
+        }
+        const auto start = index > 0U
+                && (vhdl_token_is(tokens[index - 1U], "pure")
+                    || vhdl_token_is(tokens[index - 1U], "impure"))
+            ? index - 1U
+            : index;
+        std::rotate(tokens.begin() + static_cast<std::ptrdiff_t>(start),
+            tokens.begin() + static_cast<std::ptrdiff_t>(index + 2U),
+            tokens.begin() + static_cast<std::ptrdiff_t>(end + 1U));
+        index = end;
+    }
+}
+
+}  // namespace
+
 VhdlParser::VhdlParser(LexResult lexed, const VhdlStandard standard)
     : ParserBase(std::move(lexed.tokens), std::move(lexed.diagnostics))
     , vhdl_standard_(standard)
 {
+    move_vhdl_generic_subprogram_headers(tokens_);
 }
 
 ParseResult VhdlParser::run()

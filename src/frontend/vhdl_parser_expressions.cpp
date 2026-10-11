@@ -471,7 +471,7 @@ Expression VhdlParser::parse_expression(
                 "select VHDL-1993 or replace it with an explicitly declared "
                 "VHDL-1987 subprogram");
         }
-        if (operation->name == "?=" || operation->name == "?/=") {
+        if (operation->name.starts_with('?')) {
             require_vhdl_standard(
                 operator_token, VhdlStandard::Vhdl2008,
                 "the '" + operation->name + "' matching operator",
@@ -540,6 +540,10 @@ VhdlParser::binary_operation() const
     }
     if (at(TokenKind::Question) && (at(TokenKind::Assign, 1) || (at(TokenKind::NotEqual, 1) && current(1).text == "/="))) {
         return BinaryOperation { 3, at(TokenKind::Assign, 1) ? "?=" : "?/=", 2 };
+    }
+    // Matching ordering operators (IEEE 1076-2008 9.2.3).
+    if (at(TokenKind::Question) && (at(TokenKind::Less, 1) || at(TokenKind::LessEqual, 1) || at(TokenKind::Greater, 1) || at(TokenKind::GreaterEqual, 1))) {
+        return BinaryOperation { 3, "?" + current(1).text, 2 };
     }
     if (keyword("sll", 0, true) || keyword("srl", 0, true) || keyword("sla", 0, true) || keyword("sra", 0, true) || keyword("rol", 0, true) || keyword("ror", 0, true)) {
         return BinaryOperation { 4, detail::ascii_lower(current().text) };
@@ -1346,6 +1350,13 @@ Expression VhdlParser::parse_primary()
                     cover(name.span, member.span) };
             }
             return call;
+        }
+        if (vhdl_physical_unit_names_.contains(canonical)) {
+            return Expression { ExpressionKind::Call,
+                "@vhdl-physical:" + canonical,
+                { Expression { ExpressionKind::IntegerLiteral, "1", { },
+                    name.span } },
+                name.span };
         }
         return Expression {
             ExpressionKind::Identifier, std::move(canonical), { }, name.span

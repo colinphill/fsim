@@ -529,7 +529,9 @@ private:
     // expression, outermost first: a name's declared dimensions, or those
     // left after an element select. Empty for an ordinary vector.
     [[nodiscard]] std::vector<HirPackedRange>
-    hir_systemverilog_packed_shape(semantic::ExpressionId expression) const;
+    hir_systemverilog_packed_shape(
+        semantic::ExpressionId expression,
+        bool element_shape = false) const;
     // Whether a call actual sign-extends to its formal's width: a
     // SystemVerilog value extends by its own signedness (IEEE 1800-2017
     // 11.8.2, 13.5), other languages by the formal's.

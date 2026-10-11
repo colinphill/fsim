@@ -716,7 +716,8 @@ private:
         const semantic::vhdl::Unit& architecture,
         const semantic::vhdl::Instance& record,
         const semantic::vhdl::Unit* target_entity,
-        const semantic::SpecializedHirUnit& working_specialization);
+        const semantic::SpecializedHirUnit& working_specialization,
+        bool explicit_binding_maps = false);
 
     std::unordered_set<std::uint32_t>
     materialize_compiled_vhdl_component_port_defaults(

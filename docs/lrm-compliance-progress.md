@@ -253,6 +253,44 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 39: port conversions, bindings, generics, matching operators, packed elements
+
+Fixture: `vhdl_matching_units_and_bindings.vhd` (xsim does not support
+subprogram instantiation; with the generic function written as a plain
+function the fixture passes on xsim).
+
+- Port actuals that are conversion function calls use an adapter with
+  the formal's type; arrays of INTEGER ports bind (directly and through
+  conversions).
+- Binding indications with their own generic or port maps bind
+  components that do not declare those generics; static REAL generic
+  actuals; REAL generics in real arithmetic.
+- Entity-prefixed expanded names must denote entity declarations
+  (`FSIM-ELAB-VHNAME-014`, fixing the batch 38 regression on tc1014).
+- Generic subprograms in standard order; operator-symbol interface
+  function designators parse.
+- User physical unit names as primaries; matching ordering operators;
+  procedure overload resolution by character literal and scalar/array
+  kind of the actuals.
+- Variables of `INTEGER_VECTOR` and `REAL_VECTOR` without initializers.
+- SystemVerilog: indices into an unpacked array of packed arrays select
+  packed elements correctly (reads and writes).
+- VUnit stand-in: single-return protected functions.
+
+Corpus (passed/total, unique case ids; w120 = wip18 for VESTs, nvc and
+VHDL Compliance-Tests, w119 = wip17 for ivtest, Verilator and sv-tests):
+
+| Suite | Batch 38 | Batch 39 |
+|---|---:|---:|
+| VESTs | 3223/3648 | 3247/3648 |
+| nvc regress | 602/1482 | 609/1482 |
+| VHDL Compliance-Tests | 19/72 | 29/72 |
+| ivtest | 2124/2826 | 2124/2826 |
+| Verilator test_regress | 1020/2415 | 1022/2415 |
+| sv-tests | 1337/1497 | 1337/1497 |
+
+No case that passed at Batch 38 fails in w119 or w120.
+
 ### Batch 38: string methods, timescales, return conversions, individual association
 
 Fixtures: `sv_string_methods_and_updates.sv`,
@@ -1715,11 +1753,16 @@ them are not counted as gaps.
 | SV: `force` with a non-constant expression follows the expression's changes | ivtest `pr245` and others |
 | SV: hierarchical task and function calls (`u.f(x)`, `block.f()`, `m1.c.f()`): callable bodies are lowered in the caller's instance context | ~25 ivtest/Verilator cases (`unsupported expression kind 9 '.f'`) |
 | SV: `%v` strength format; needs a per-bit resolved-strength query from the display formatter (the interpreter resolves strength per signal) | 18 ivtest cases (`FSIM-SV-SEM-042`) |
+| VHDL: interface functions with an `is <>` default named by an operator symbol (`function "+" (a, b : t) return t is <>`) must resolve to the predefined operator of the actual type; the syntax parses since batch 39 | nvc gentype8, gentype9, conf5 |
+| VHDL: protected function bodies other than a single `return` statement (they are inlined as expressions) | VUnit-style testbenches |
+| VHDL: the initial effective value of a port whose actual is a conversion function call is the converted initial value of the actual (IEEE 1076-2008 14.7.3); fsim starts from the formal's default until the conversion runs | VESTs tc3070 family |
+| SV: members of a packed structure that is itself a member of an unpacked structure (`u.packed_member.field`), read and written | Verilator `t_param_type5` and others |
+| SV: `disable` of a task or of a named block from another process | 12 ivtest, 9 Verilator cases (`FSIM-ELAB-SVDISABLE-001`) |
 | VHDL: record element constraints (`rec(y(1 to 3))`) | 26 nvc cases (`FSIM-VHDL-PARSE-009`) |
 | VHDL: VHDL-2008 element constraints of arrays and records (`t(1 to 2)(7 downto 0)`, `t(open)(7 downto 0)`, `rec(f(1 to 3))`); needs element constraints in the HIR subtype and in every array and record layout | about 50 nvc cases (`FSIM-VHDL-PARSE-009`, `-018`, `-135`) |
 | VHDL: individual association in procedure calls with a conversion function in the formal part (`f(b) => x`) or a signal-class formal; plain subelement association done in batch 38 | VESTs tc146, tc154; nvc signal25, signal27, signal30 |
 | VHDL: external names (`<<signal .a.b : t>>`) | 9 nvc cases |
-| VHDL: indexing the predefined VHDL-2008 vectors (`integer_vector`), which have no HIR type definition | nvc |
+| VHDL: the predefined VHDL-2008 vectors (`integer_vector`, `real_vector`) in qualified expressions (`integer_vector'(1, 2)`) and as formals; variables of them work since batch 39 | nvc agg7 and others |
 | SV: nonblocking whole-object writes of unpacked aggregates (`out <= buffer[i]`) and continuous assignment to unpacked structure members | Verilator |
 | SV: `randomize` and constraint blocks | 36 sv-tests cases (`FSIM-SV-CLASS-005`) |
 | VHDL: chained signal attributes (`clk'delayed'last_event`) | 16 VESTs cases (`FSIM-VHDL-PARSE-046`) |
@@ -1742,7 +1785,7 @@ them are not counted as gaps.
 | VHDL: output-port defaults as the driver's initial value | VESTs, nvc issue885 |
 | VHDL: reading an `out` port is accepted before VHDL-2008 | VESTs tc112 |
 | VHDL: individual association of formal subelements (`rec.field => x`) and formal conversion functions (`to_x(F) => S`) | 98 VESTs/nvc cases (`FSIM-VHDL-PARSE-042`) |
-| VHDL: library-level package instantiation (`package p is new work.g generic map (...)`) | 21 nvc/VHDL-Compliance cases (`FSIM-VHDL-UNSUPPORTED-022` 'new') |
+| VHDL: library-level package instantiation (`package p is new work.g generic map (...)`) and nested package declarations; the library-level form is read as a package declaration whose items are all rejected | 21 nvc/VHDL-Compliance cases (`FSIM-VHDL-UNSUPPORTED-022` 'new'/'package') |
 | VHDL: names in a configuration are not resolved against the configured architecture (architecture-local constants in generate specifications); design-wide unique names are used as a fallback | nvc config cases (`FSIM-ELAB-VHCONFIG-010`) |
 | VHDL: aggregate initializers of arrays of SEVERITY_LEVEL (`(others => note)`) | VESTs |
 | VHDL: element constraints of ports taken from the actual, `'element`, and element constraints in protected types (syntax and layouts done in batch 33, formals in batch 34) | ~35 nvc cases |
@@ -1779,4 +1822,4 @@ them are not counted as gaps.
 | SV: `fork` inside functions and tasks (lowering) | sv-tests, UVM |
 | SV: hierarchical references in event controls, continuous assignments, generate processes | Verilator |
 | VHDL: VHDL-2008 STD.ENV package (`use std.env.all`) | VHDL-2008 testbenches |
-| VHDL: TIME `'image` and `TIME'HIGH`, physical unit names as primaries (`us = 1000 ns`) | VESTs |
+| VHDL: TIME `'image` and `TIME'HIGH`; predefined TIME unit names as primaries (`us = 1000 ns`; user physical unit names done in batch 39) | VESTs tc298, tc299 |

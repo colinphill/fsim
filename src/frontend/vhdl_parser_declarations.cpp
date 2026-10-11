@@ -639,6 +639,7 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
       }
       expect(TokenKind::Semicolon, "';' after physical unit declaration",
              "FSIM-VHDL-PARSE-241");
+      vhdl_physical_unit_names_.insert(canonical_unit);
       physical.units.push_back(
           VhdlPhysicalUnit{canonical_unit, std::move(scale), std::nullopt,
                            span_from(unit_start, previous())});

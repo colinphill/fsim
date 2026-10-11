@@ -4427,6 +4427,23 @@ namespace {
             return compiled_vhdl_static_real(
                 specialization, source.operands.front(), depth + 1U);
         }
+        // A conversion to REAL of a static numeric value (9.3.6).
+        if (source.kind == Kind::call && source.operands.size() == 1U
+            && compiled_vhdl_name_equal(
+                compiled_vhdl_simple_name(source.referenced_name
+                        ? source.referenced_name->spelling
+                        : source.text),
+                "real")) {
+            if (const auto operand = compiled_vhdl_static_real(
+                    specialization, source.operands.front(), depth + 1U)) {
+                return operand;
+            }
+            const auto integral = specialization.evaluate_integral_expression(
+                source.operands.front());
+            return integral
+                ? std::optional { static_cast<double>(*integral) }
+                : std::nullopt;
+        }
         if (source.kind != Kind::name || !source.referenced_name) {
             return std::nullopt;
         }
@@ -14877,8 +14894,21 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
             domain = compiled_value_domain(
                 formal_declaration.subtype->domain);
         }
-        const auto integer_range = compiled_integer_range(
-            *formal_declaration.subtype);
+        // The adapter carries the formal's signal type, which the boundary
+        // check compares with (an array of INTEGER is a signed integer
+        // value, for example).
+        const auto formal_signal_type = compiled_vhdl_signal_type(
+            child_interface_specialization,
+            *formal_declaration.subtype,
+            formal_declaration.scope);
+        if (formal_signal_type
+            && formal_signal_type->domain != frontend::ValueDomain::Unknown) {
+            domain = formal_signal_type->domain;
+        }
+        const auto integer_range = formal_signal_type
+                && formal_signal_type->integer_range
+            ? formal_signal_type->integer_range
+            : compiled_integer_range(*formal_declaration.subtype);
         const auto static_value = accepts_input && width
                 && *width <= 64U
             ? compiled_vhdl_static_port_value(
@@ -14927,12 +14957,26 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
             info.type_name = formal_declaration.subtype
                                  ->type_mark.spelling;
             info.source_domain = domain;
-            info.is_signed = formal_declaration.subtype
-                                 ->signed_value
+            info.is_signed = (formal_signal_type
+                                     ? formal_signal_type->is_signed
+                                     : formal_declaration.subtype
+                                           ->signed_value)
                 || domain == frontend::ValueDomain::Integer;
             info.packed_range = compiled_packed_range(
                 *formal_declaration.subtype);
             info.integer_range = integer_range;
+            if (formal_signal_type) {
+                const auto& type = *formal_signal_type;
+                info.type_name = type.spelling;
+                info.packed_range = type.packed_range;
+                info.vhdl_array = type.vhdl_array;
+                info.vhdl_access = type.vhdl_access;
+                info.vhdl_physical = type.vhdl_physical;
+                info.packed_members = type.packed_members;
+                info.nominal_type = type.nominal_type;
+                info.enumeration_literals = type.enumeration_literals;
+                info.enumeration_range = type.enumeration_range;
+            }
             info.declaration_span = compiled_source_span(
                 *compiled_, binding.source);
             design_.signal_info_.push_back(std::move(info));
@@ -14944,6 +14988,9 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                               *value, domain, *width)
                         : static_value
                         ? *static_value
+                        : formal_signal_type
+                        ? default_compiled_packed_value(
+                              *formal_signal_type, *width)
                         : compiled_vhdl_initial_value(
                               *formal_declaration.subtype,
                               domain, *width),
@@ -15949,10 +15996,22 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                         && conversion.actual_domain
                         == alias_info->source_domain;
                 });
+        // Signals take the domain of their materialized type (an array of
+        // INTEGER is an integer value), so compare with that.
+        const auto declared_type = declaration.subtype
+            ? compiled_vhdl_signal_type(
+                  working_specialization, *declaration.subtype,
+                  declaration.scope)
+            : std::nullopt;
+        const auto declared_domain = declared_type
+                && declared_type->domain != frontend::ValueDomain::Unknown
+            ? declared_type->domain
+            : domain;
         const auto layout_mismatch = alias_info != nullptr
             && !inferred_port_subtype
             && (alias_info->width != width
                 || (alias_info->source_domain != domain
+                    && alias_info->source_domain != declared_domain
                     && !state_domain_alias_provenance));
         if (alias_info == nullptr
             || (layout_mismatch
@@ -17593,7 +17652,7 @@ HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
             const auto value = working_specialization
                                    .evaluate_integral_expression(
                                        *binding.expression);
-            const auto static_value = layout && layout->width != 0U
+            auto static_value = layout && layout->width != 0U
                 ? compiled_vhdl_static_port_value(
                       working_specialization,
                       *binding.expression,
@@ -17602,6 +17661,14 @@ HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
                       layout->domain,
                       layout->width)
                 : std::nullopt;
+            // A static REAL actual (IEEE 1076-2008 9.4.2).
+            if (!value && !static_value && layout && layout->width == 64U) {
+                if (const auto real = compiled_vhdl_static_real(
+                        working_specialization, *binding.expression)) {
+                    static_value = PackedLogic4::from_aval_bval(
+                        64U, std::bit_cast<std::uint64_t>(*real), 0U);
+                }
+            }
             if (value
                 && !compiled_vhdl_specialization_value_satisfies_subtype(
                     working_specialization,
@@ -18926,6 +18993,25 @@ bool HierarchyBuilder::validate_compiled_vhdl_selected_package_names(
                     parts.front(), entity->name)
                 || compiled_vhdl_name_equal(
                     parts.front(), architecture.primary_name));
+        // An expanded name prefixed by the design unit must denote a
+        // declaration of that unit (IEEE 1076-2008 8.3).
+        if (hierarchy_root_name && parts.size() == 2U
+            && expression.referenced_name
+            && semantic::CompiledDesignResolver {
+                   *compiled_, architecture.id, &*specialized }
+                       .resolve_vhdl(*expression.referenced_name,
+                           expression.scope, { })
+                       .status
+                == semantic::CompiledResolutionStatus::not_found) {
+            report(
+                "FSIM-ELAB-VHNAME-014",
+                "expanded name '" + std::string { spelling }
+                    + "' does not denote a declaration of the construct "
+                      "named by its prefix",
+                compiled_source_span(*compiled_, expression.source));
+            valid = false;
+            continue;
+        }
         if (parts.size() < 2U || locally_declared(parts.front())
             || hierarchy_root_name) {
             continue;
@@ -19841,8 +19927,15 @@ bool HierarchyBuilder::validate_compiled_vhdl_port_actual_compatibility(
         : compiled_vhdl_signal_width(
               *formal_declaration.subtype)
               .value_or(0U);
+    // An array of INTEGER is checked element by element through its
+    // nominal type; whole-value signedness and a scalar integer range do
+    // not apply to it.
+    const bool integer_array_formal = formal_type
+        && formal_domain == frontend::ValueDomain::Integer
+        && formal_type->vhdl_array;
     if (formal_width > 1U && actual_info.width > 1U
-        && formal_signed != actual_info.is_signed) {
+        && formal_signed != actual_info.is_signed
+        && !integer_array_formal) {
         report(
             "FSIM-ELAB-BIND-021",
             "signedness mismatch on '" + child_path
@@ -19858,7 +19951,8 @@ bool HierarchyBuilder::validate_compiled_vhdl_port_actual_compatibility(
     }
     if (formal_domain == frontend::ValueDomain::Integer
         && actual_info.source_domain
-            == frontend::ValueDomain::Integer) {
+            == frontend::ValueDomain::Integer
+        && !integer_array_formal) {
         const auto formal_integer_range
             = executable_integer_range(
                 formal_domain,
@@ -21256,12 +21350,23 @@ HierarchyBuilder::select_compiled_vhdl_component_candidate(
     const semantic::vhdl::Unit& architecture,
     const semantic::vhdl::Instance& record,
     const semantic::vhdl::Unit* target_entity,
-    const semantic::SpecializedHirUnit& working_specialization)
+    const semantic::SpecializedHirUnit& working_specialization,
+    const bool explicit_binding_maps)
 {
     const auto visible_components
         = collect_visible_compiled_vhdl_components(
             architecture, working_specialization, record.scope,
             record.target.spelling);
+    // A binding indication with a generic or port map associates the
+    // entity's formals itself, so the component need not match the
+    // entity's profile (IEEE 1076-2008 5.2.1.2, 7.3.2.2).
+    if (explicit_binding_maps && visible_components.size() == 1U) {
+        CompiledVhdlComponentCandidateSelection selection;
+        selection.status
+            = CompiledVhdlComponentCandidateSelection::Status::selected;
+        selection.component = visible_components.front();
+        return selection;
+    }
     const auto entity_formals = [&](const bool ports) {
         std::vector<const semantic::vhdl::Declaration*> result;
         if (target_entity == nullptr) {
@@ -22379,7 +22484,10 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
             const auto selection
                 = select_compiled_vhdl_component_candidate(
                     architecture, record, target_entity,
-                    working_specialization);
+                    working_specialization,
+                    selected_rule != nullptr
+                        && (!selected_rule->binding.generic_map.empty()
+                            || !selected_rule->binding.port_map.empty()));
             if (selection.status
                 != CompiledVhdlComponentCandidateSelection::Status::selected) {
                 continue;

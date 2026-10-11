@@ -828,6 +828,8 @@ namespace {
             || operation == "===" || operation == "!=="
             || operation == "==?" || operation == "!=?"
             || operation == "?=" || operation == "?/="
+            || operation == "?<" || operation == "?<="
+            || operation == "?>" || operation == "?>="
             || operation == "<" || operation == "<="
             || operation == ">" || operation == ">=";
     }
@@ -13264,6 +13266,9 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                         == semantic::vhdl::ExpressionKind::real_literal) {
                     return true;
                 }
+                if (hir_vhdl_expression_is_real(id)) {
+                    return true;
+                }
                 const auto subtype = hir_vhdl_expression_subtype(id);
                 const auto is_real = [&](const auto& value) {
                     auto spelling = std::string_view {
@@ -13803,6 +13808,105 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                         process_.operations.emplace_back(IntegerBinary {
                             *integer_operation, destination, *lhs, *rhs });
                         result = destination;
+                    } else if (language_ == frontend::Language::Vhdl2008
+                        && (source.text == "?<" || source.text == "?<="
+                            || source.text == "?>" || source.text == "?>=")
+                        && register_width(*lhs) == 1U
+                        && register_width(*rhs) == 1U) {
+                        // Matching ordering of BIT and STD_ULOGIC (IEEE
+                        // 1076-2008 9.2.3): 'U' if an operand is 'U', else
+                        // 'X' unless both are 0, 1, L or H, else the order
+                        // of their 0/1 values.
+                        const auto logic9
+                            = register_domain(*lhs)
+                                == frontend::ValueDomain::Logic9
+                            || register_domain(*rhs)
+                                == frontend::ValueDomain::Logic9;
+                        const auto value_domain = logic9
+                            ? frontend::ValueDomain::Logic9
+                            : frontend::ValueDomain::Bit2;
+                        const auto constant = [&](const char level) {
+                            const auto destination
+                                = allocate_register(1U, value_domain);
+                            process_.operations.emplace_back(LoadConstant {
+                                destination,
+                                logic9
+                                    ? PackedLogic4::from_logic9_msb_string(
+                                          std::string(1U, level))
+                                    : PackedLogic4(1U,
+                                          level == '1' ? Logic4::one
+                                                       : Logic4::zero),
+                            });
+                            return destination;
+                        };
+                        const auto binary = [&](const BinaryOperator operation,
+                                                const RegisterId left,
+                                                const RegisterId right) {
+                            const auto destination = allocate_register(
+                                1U, frontend::ValueDomain::Boolean);
+                            process_.operations.emplace_back(Binary {
+                                operation, destination, left, right });
+                            return destination;
+                        };
+                        const auto logical = [&](const LogicalBinaryOperator operation,
+                                                 const RegisterId left,
+                                                 const RegisterId right) {
+                            const auto destination = allocate_register(
+                                1U, frontend::ValueDomain::Boolean);
+                            process_.operations.emplace_back(LogicalBinary {
+                                operation, destination, left, right });
+                            return destination;
+                        };
+                        const auto negate = [&](const RegisterId value) {
+                            const auto destination = allocate_register(
+                                1U, frontend::ValueDomain::Boolean);
+                            process_.operations.emplace_back(
+                                LogicalNot { destination, value });
+                            return destination;
+                        };
+                        const auto match = logic9
+                            ? BinaryOperator::vhdl_match_equal
+                            : BinaryOperator::case_equal;
+                        const auto one = constant('1');
+                        const auto zero = constant('0');
+                        const auto left_one = binary(match, *lhs, one);
+                        const auto right_one = binary(match, *rhs, one);
+                        const auto known = logical(
+                            LogicalBinaryOperator::logical_and,
+                            logical(LogicalBinaryOperator::logical_or,
+                                left_one, binary(match, *lhs, zero)),
+                            logical(LogicalBinaryOperator::logical_or,
+                                right_one, binary(match, *rhs, zero)));
+                        const auto less = source.text == "?<"
+                            || source.text == "?<=";
+                        const auto strict = source.text == "?<"
+                            || source.text == "?>";
+                        // l < r is (not l) and r; l <= r is (not l) or r.
+                        const auto ordered = logical(
+                            strict ? LogicalBinaryOperator::logical_and
+                                   : LogicalBinaryOperator::logical_or,
+                            less ? negate(left_one) : left_one,
+                            less ? right_one : negate(right_one));
+                        auto selected = allocate_register(1U, value_domain);
+                        process_.operations.emplace_back(ConditionalSelect {
+                            selected, ordered, one, zero });
+                        if (logic9) {
+                            const auto unknown = allocate_register(
+                                1U, value_domain);
+                            process_.operations.emplace_back(
+                                ConditionalSelect { unknown, known, selected,
+                                    constant('X') });
+                            const auto u = constant('U');
+                            const auto any_u = logical(
+                                LogicalBinaryOperator::logical_or,
+                                binary(BinaryOperator::case_equal, *lhs, u),
+                                binary(BinaryOperator::case_equal, *rhs, u));
+                            selected = allocate_register(1U, value_domain);
+                            process_.operations.emplace_back(
+                                ConditionalSelect { selected, any_u, u,
+                                    unknown });
+                        }
+                        result = selected;
                     } else {
                         auto operation = std::optional<BinaryOperator> { };
                         if (source.text == "+") {
