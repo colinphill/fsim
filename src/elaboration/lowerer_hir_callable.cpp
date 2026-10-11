@@ -6195,25 +6195,7 @@ Lowerer::lower_hir_function_call_value(
     }
     for (const auto& [index, constraints] : vhdl_actual_element_constraints) {
         callable_key += "|vhdl-element:" + std::to_string(index) + "=";
-        for (const auto& constraint : constraints) {
-            for (const auto& step : constraint.path) {
-                callable_key += step + "/";
-            }
-            for (const auto& range : constraint.constraints) {
-                const auto bound = [&](const std::optional<std::int64_t> value,
-                                       const std::optional<semantic::ExpressionId>
-                                           expression) {
-                    const auto folded = value ? value
-                        : expression ? hir_constant_integer(*expression)
-                                     : std::nullopt;
-                    return folded ? std::to_string(*folded) : std::string { "?" };
-                };
-                callable_key += bound(range.left, range.left_expression) + ":"
-                    + bound(range.right, range.right_expression)
-                    + (range.descending ? "d" : "a") + ",";
-            }
-            callable_key += ";";
-        }
+        append_vhdl_element_constraint_key(callable_key, constraints);
     }
     auto frame_index = hir_callable_frames_.size();
     bool new_frame { true };
@@ -7811,26 +7793,8 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
             && !actual_effective->element_constraints.empty()) {
             range_actual_key += "|e" + std::to_string(index) + ":"
                 + std::to_string(*width / (distance + 1U));
-            for (const auto& constraint :
-                actual_effective->element_constraints) {
-                for (const auto& step : constraint.path) {
-                    range_actual_key += step + "/";
-                }
-                for (const auto& element_range : constraint.constraints) {
-                    const auto left = element_range.left
-                        ? element_range.left
-                        : element_range.left_expression
-                        ? hir_constant_integer(*element_range.left_expression)
-                        : std::nullopt;
-                    const auto right = element_range.right
-                        ? element_range.right
-                        : element_range.right_expression
-                        ? hir_constant_integer(*element_range.right_expression)
-                        : std::nullopt;
-                    range_actual_key += (left ? std::to_string(*left) : "?")
-                        + ":" + (right ? std::to_string(*right) : "?") + ",";
-                }
-            }
+            append_vhdl_element_constraint_key(
+                range_actual_key, actual_effective->element_constraints);
             procedure_element_constraints.emplace_back(
                 index, actual_effective->element_constraints);
         }
@@ -8727,6 +8691,30 @@ bool Lowerer::lower_pending_hir_callables()
     hir_enclosing_local_registers_.clear();
     hir_enclosing_local_string_registers_.clear();
     return lowered;
+}
+
+void Lowerer::append_vhdl_element_constraint_key(std::string& key,
+    const std::vector<semantic::vhdl::ElementConstraint>& constraints) const
+{
+    const auto bound = [&](const std::optional<std::int64_t> value,
+                           const std::optional<semantic::ExpressionId>
+                               expression) {
+        const auto folded = value ? value
+            : expression ? hir_constant_integer(*expression)
+                         : std::nullopt;
+        return folded ? std::to_string(*folded) : std::string { "?" };
+    };
+    for (const auto& constraint : constraints) {
+        for (const auto& step : constraint.path) {
+            key += step + "/";
+        }
+        for (const auto& range : constraint.constraints) {
+            key += bound(range.left, range.left_expression) + ":"
+                + bound(range.right, range.right_expression)
+                + (range.descending ? "d" : "a") + ",";
+        }
+        key += ";";
+    }
 }
 
 } // namespace fsim::elaboration

@@ -2016,6 +2016,7 @@ tests/fixtures/compliance/sv_operand_signedness.sv
 tests/fixtures/compliance/sv_package_timescale_and_returns.sv
 tests/fixtures/compliance/sv_packed_multidim.sv
 tests/fixtures/compliance/sv_parameter_types.sv
+tests/fixtures/compliance/sv_pattern_files_and_production_defaults.sv
 tests/fixtures/compliance/sv_patterns_and_aggregates.sv
 tests/fixtures/compliance/sv_port_width_mismatch.sv
 tests/fixtures/compliance/sv_randsequence.sv

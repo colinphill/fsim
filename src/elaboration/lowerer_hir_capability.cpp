@@ -9681,7 +9681,7 @@ bool Lowerer::hir_vhdl_character_typed(
     if (!expression || expression->vhdl == nullptr) {
         return false;
     }
-    if (const auto code = vhdl_character_literal_code(*expression->vhdl)) {
+    if (vhdl_character_literal_code(*expression->vhdl)) {
         return vhdl_non_logic_character_literal(*expression->vhdl);
     }
     if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::name
@@ -12392,23 +12392,19 @@ Lowerer::hir_vhdl_expression_subtype(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
-    // An element of a STRING held as a runtime string is a CHARACTER.
-    if (const auto element = specialized_hir_unit_->find_expression(expression_id);
-        element && element->vhdl != nullptr
-        && element->vhdl->kind == semantic::vhdl::ExpressionKind::index
-        && element->vhdl->operands.size() == 2U
-        && hir_vhdl_runtime_string_prefix(element->vhdl->operands[0])) {
-        semantic::vhdl::SubtypeIndication character;
-        character.type_mark.spelling = "character";
-        character.domain = semantic::vhdl::ValueDomain::bit2;
-        character.executable_width = 8U;
-        return character;
-    }
-    // An element of a STD.STANDARD scalar vector (IEEE 1076-2008 16.3).
     if (const auto element = specialized_hir_unit_->find_expression(expression_id);
         element && element->vhdl != nullptr
         && element->vhdl->kind == semantic::vhdl::ExpressionKind::index
         && element->vhdl->operands.size() == 2U) {
+        // An element of a STRING held as a runtime string is a CHARACTER.
+        if (hir_vhdl_runtime_string_prefix(element->vhdl->operands[0])) {
+            semantic::vhdl::SubtypeIndication character;
+            character.type_mark.spelling = "character";
+            character.domain = semantic::vhdl::ValueDomain::bit2;
+            character.executable_width = 8U;
+            return character;
+        }
+        // An element of a STD.STANDARD scalar vector (IEEE 1076-2008 16.3).
         if (const auto prefix
             = hir_vhdl_expression_subtype(element->vhdl->operands[0])) {
             auto spelling = std::string_view { prefix->type_mark.spelling };

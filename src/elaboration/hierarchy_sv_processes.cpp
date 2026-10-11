@@ -206,6 +206,74 @@ namespace {
 
 } // namespace
 
+void HierarchyBuilder::publish_systemverilog_concurrent_occurrence(
+    SystemVerilogConcurrentProcessOccurrence& lowered,
+    const semantic::sv::Unit& unit,
+    SpecializationInfo& specialization,
+    const std::optional<std::uint32_t> program_owner)
+{
+    if (lowered.instance) {
+        auto& instance = *lowered.instance;
+        instance.reactive = program_owner.has_value();
+        instance.program_owner = program_owner;
+        canonicalize_process_operations(lowered.common, instance);
+        specialization.processes.push_back(instance.id);
+        design_.append_process_instance_record(
+            std::move(lowered.common), std::move(instance));
+        return;
+    }
+    auto& process = *lowered.process;
+    process.language_standard = unit.standard;
+    process.compatibility_profile = unit.compatibility_profile;
+    process.reactive = program_owner.has_value();
+    process.program_owner = program_owner;
+    canonicalize_process_operations(process);
+    specialization.processes.push_back(process.id);
+    design_.append_process_record(std::move(process));
+}
+
+void HierarchyBuilder::publish_systemverilog_process(Process& lowered,
+    const semantic::sv::Unit& unit,
+    const bool concurrent_assertion,
+    SpecializationInfo& specialization,
+    const semantic::ProcessId process_id,
+    const std::optional<std::uint32_t> program_owner,
+    const bool canonicalize)
+{
+    lowered.language_standard = unit.standard;
+    lowered.compatibility_profile = unit.compatibility_profile;
+    lowered.observed = concurrent_assertion;
+    lowered.reactive = !concurrent_assertion && program_owner.has_value();
+    lowered.program_owner = program_owner;
+    if (canonicalize) {
+        canonicalize_process_operations(lowered);
+    }
+    specialization.processes.push_back(lowered.id);
+    specialization.semantic_processes.emplace_back(lowered.id, process_id);
+    design_.append_process_record(std::move(lowered));
+}
+
+void HierarchyBuilder::append_generated_systemverilog_processes(
+    Lowerer& source,
+    const semantic::sv::Unit& unit,
+    SpecializationInfo& specialization,
+    const std::optional<std::uint32_t> program_owner)
+{
+    auto generated_processes = source.take_generated_processes();
+    record_lowering_census(
+        systemverilog_lowerer_generated_processes_,
+        generated_processes.size());
+    for (auto& generated : generated_processes) {
+        generated.language_standard = unit.standard;
+        generated.compatibility_profile = unit.compatibility_profile;
+        generated.reactive = program_owner.has_value();
+        generated.program_owner = program_owner;
+        canonicalize_process_operations(generated);
+        specialization.processes.push_back(generated.id);
+        design_.append_process_record(std::move(generated));
+    }
+}
+
 bool HierarchyBuilder::lower_compiled_systemverilog_processes(
     const semantic::sv::Unit& unit,
     const semantic::SpecializedHirUnit& specialized,
@@ -255,20 +323,8 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
     }
 
     const auto append_generated_processes = [&](Lowerer& source) {
-        auto generated_processes = source.take_generated_processes();
-        record_lowering_census(
-            systemverilog_lowerer_generated_processes_,
-            generated_processes.size());
-        for (auto& generated : generated_processes) {
-            generated.language_standard = unit.standard;
-            generated.compatibility_profile
-                = unit.compatibility_profile;
-            generated.reactive = program_owner.has_value();
-            generated.program_owner = program_owner;
-            canonicalize_process_operations(generated);
-            specialization.processes.push_back(generated.id);
-            design_.append_process_record(std::move(generated));
-        }
+        append_generated_systemverilog_processes(
+            source, unit, specialization, program_owner);
     };
 
     record_lowering_census(
@@ -317,24 +373,8 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
                 compiled_source_span(*compiled_, statement_source));
             return false;
         }
-        if (lowered->instance) {
-            auto& instance = *lowered->instance;
-            instance.reactive = program_owner.has_value();
-            instance.program_owner = program_owner;
-            canonicalize_process_operations(lowered->common, instance);
-            specialization.processes.push_back(instance.id);
-            design_.append_process_instance_record(
-                std::move(lowered->common), std::move(instance));
-        } else {
-            auto& process = *lowered->process;
-            process.language_standard = unit.standard;
-            process.compatibility_profile = unit.compatibility_profile;
-            process.reactive = program_owner.has_value();
-            process.program_owner = program_owner;
-            canonicalize_process_operations(process);
-            specialization.processes.push_back(process.id);
-            design_.append_process_record(std::move(process));
-        }
+        publish_systemverilog_concurrent_occurrence(
+            *lowered, unit, specialization, program_owner);
         append_generated_processes(lowerer);
     }
     // Preserve the established elaboration order: concurrent drivers are
@@ -587,26 +627,8 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
                     continue;
                 }
             }
-            if (lowered->instance) {
-                auto& instance = *lowered->instance;
-                instance.reactive = program_owner.has_value();
-                instance.program_owner = program_owner;
-                canonicalize_process_operations(
-                    lowered->common, instance);
-                specialization.processes.push_back(instance.id);
-                design_.append_process_instance_record(
-                    std::move(lowered->common), std::move(instance));
-            } else {
-                auto& process = *lowered->process;
-                process.language_standard = unit.standard;
-                process.compatibility_profile
-                    = unit.compatibility_profile;
-                process.reactive = program_owner.has_value();
-                process.program_owner = program_owner;
-                canonicalize_process_operations(process);
-                specialization.processes.push_back(process.id);
-                design_.append_process_record(std::move(process));
-            }
+            publish_systemverilog_concurrent_occurrence(
+                *lowered, unit, specialization, program_owner);
             append_generated_processes(generated_lowerer);
         }
         for (const auto process_id : occurrence.region->processes) {
@@ -724,7 +746,8 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
                     != generated_signal_declarations.end()
                 && diagnostics_.size() == diagnostics_before
                 && invocation_after >= invocation_before
-                && !generated_lowerer.has_generated_processes()) {
+                && !generated_lowerer.has_generated_processes()
+                && !generated_lowerer.hierarchical_reference_used()) {
                 remembered_template
                     = remember_systemverilog_process_template(
                         unit,
@@ -796,14 +819,8 @@ bool HierarchyBuilder::lower_deferred_generated_systemverilog(
         auto& specialization
             = design_.specializations_[specialization_index];
         const auto append_generated = [&] {
-            for (auto& generated : generated_lowerer.take_generated_processes()) {
-                generated.language_standard = unit.standard;
-                generated.compatibility_profile = unit.compatibility_profile;
-                canonicalize_process_operations(generated);
-                design_.specializations_[specialization_index]
-                    .processes.push_back(generated.id);
-                design_.append_process_record(std::move(generated));
-            }
+            append_generated_systemverilog_processes(
+                generated_lowerer, unit, specialization, program_owner);
         };
         if (item.statement) {
             const auto statement = occurrence.specialization
@@ -822,24 +839,8 @@ bool HierarchyBuilder::lower_deferred_generated_systemverilog(
                             : unit.source));
                 return false;
             }
-            if (lowered->instance) {
-                auto& instance = *lowered->instance;
-                instance.reactive = program_owner.has_value();
-                instance.program_owner = program_owner;
-                canonicalize_process_operations(lowered->common, instance);
-                specialization.processes.push_back(instance.id);
-                design_.append_process_instance_record(
-                    std::move(lowered->common), std::move(instance));
-            } else {
-                auto& process = *lowered->process;
-                process.language_standard = unit.standard;
-                process.compatibility_profile = unit.compatibility_profile;
-                process.reactive = program_owner.has_value();
-                process.program_owner = program_owner;
-                canonicalize_process_operations(process);
-                specialization.processes.push_back(process.id);
-                design_.append_process_record(std::move(process));
-            }
+            publish_systemverilog_concurrent_occurrence(
+                *lowered, unit, specialization, program_owner);
             append_generated();
             continue;
         }
@@ -863,16 +864,8 @@ bool HierarchyBuilder::lower_deferred_generated_systemverilog(
             && process->systemverilog->name == "<process>") {
             lowered->name = occurrence.path;
         }
-        lowered->language_standard = unit.standard;
-        lowered->compatibility_profile = unit.compatibility_profile;
-        lowered->observed = concurrent_assertion;
-        lowered->reactive = !concurrent_assertion && program_owner.has_value();
-        lowered->program_owner = program_owner;
-        canonicalize_process_operations(*lowered);
-        specialization.processes.push_back(lowered->id);
-        specialization.semantic_processes.emplace_back(
-            lowered->id, *item.process);
-        design_.append_process_record(std::move(*lowered));
+        publish_systemverilog_process(*lowered, unit, concurrent_assertion,
+            specialization, *item.process, program_owner);
         append_generated();
     }
     return true;
@@ -910,32 +903,10 @@ bool HierarchyBuilder::lower_deferred_systemverilog_processes(
         }
         auto& specialization
             = design_.specializations_[specialization_index];
-        if (lowered->instance) {
-            auto& instance = *lowered->instance;
-            instance.reactive = program_owner.has_value();
-            instance.program_owner = program_owner;
-            canonicalize_process_operations(lowered->common, instance);
-            specialization.processes.push_back(instance.id);
-            design_.append_process_instance_record(
-                std::move(lowered->common), std::move(instance));
-        } else {
-            auto& process = *lowered->process;
-            process.language_standard = unit.standard;
-            process.compatibility_profile = unit.compatibility_profile;
-            process.reactive = program_owner.has_value();
-            process.program_owner = program_owner;
-            canonicalize_process_operations(process);
-            specialization.processes.push_back(process.id);
-            design_.append_process_record(std::move(process));
-        }
-        for (auto& generated : lowerer.take_generated_processes()) {
-            generated.language_standard = unit.standard;
-            generated.compatibility_profile = unit.compatibility_profile;
-            canonicalize_process_operations(generated);
-            design_.specializations_[specialization_index]
-                .processes.push_back(generated.id);
-            design_.append_process_record(std::move(generated));
-        }
+        publish_systemverilog_concurrent_occurrence(
+            *lowered, unit, specialization, program_owner);
+        append_generated_systemverilog_processes(
+            lowerer, unit, specialization, program_owner);
     }
     for (const auto process_id : deferred_processes) {
         const auto process = specialized.find_process(process_id);
@@ -956,27 +927,12 @@ bool HierarchyBuilder::lower_deferred_systemverilog_processes(
         const bool concurrent_assertion = process
             && process->systemverilog != nullptr
             && process->systemverilog->concurrent_assertion;
-        lowered->language_standard = unit.standard;
-        lowered->compatibility_profile = unit.compatibility_profile;
-        lowered->observed = concurrent_assertion;
-        lowered->reactive = !concurrent_assertion
-            && program_owner.has_value();
-        lowered->program_owner = program_owner;
-        canonicalize_process_operations(*lowered);
         auto& specialization
             = design_.specializations_[specialization_index];
-        specialization.processes.push_back(lowered->id);
-        specialization.semantic_processes.emplace_back(
-            lowered->id, process_id);
-        design_.append_process_record(std::move(*lowered));
-        for (auto& generated : lowerer.take_generated_processes()) {
-            generated.language_standard = unit.standard;
-            generated.compatibility_profile = unit.compatibility_profile;
-            canonicalize_process_operations(generated);
-            design_.specializations_[specialization_index]
-                .processes.push_back(generated.id);
-            design_.append_process_record(std::move(generated));
-        }
+        publish_systemverilog_process(*lowered, unit, concurrent_assertion,
+            specialization, process_id, program_owner);
+        append_generated_systemverilog_processes(
+            lowerer, unit, specialization, program_owner);
     }
     return true;
 }

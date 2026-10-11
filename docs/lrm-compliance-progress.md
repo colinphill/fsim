@@ -253,6 +253,55 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Cleanup batch 1: drifted copies and dead code
+
+Fixture: `sv_pattern_files_and_production_defaults.sv` (xsim does not
+support randsequence; the `%p` part passes on xsim).
+
+This batch follows an audit of the code added by batches 1 to 40. It
+fixes bugs where copies of the same logic had drifted apart, and
+removes dead code:
+
+- Processes generated while lowering deferred SystemVerilog statements
+  (fork branches, assertion threads) now keep their program block's
+  reactive region and owner. Concurrent statements, processes and
+  generated processes are published by three shared members of
+  HierarchyBuilder instead of seven inline copies. A generated-block
+  process that uses a hierarchical reference is no longer remembered as
+  a template.
+- The VHDL procedure frame cache keys element constraints with their
+  direction, as function frames do (one shared key builder).
+- OTHERS choices in static VHDL aggregates are matched exactly rather
+  than by substring.
+- randsequence production formals with defaults that contain commas
+  split at top level.
+- `$fwrite` with `%p` writes an enumeration value by name, as `$display`
+  and `$sformatf` do.
+- Removed: a repeated waveform type check, an unreachable record
+  constant branch, an unreachable `real_vector` element branch, an
+  unused binding and a duplicate expression lookup. Compile-time
+  analysis diagnostics use the shared span conversion.
+
+Not changed: the audit also listed a 32-bit default `integer_vector`
+element under VHDL-2019, which would change behaviour and moves to
+cleanup batch 3. Its report that class `new` passes string actuals
+differently from methods did not reproduce (literal, variable and
+concatenation actuals, with and without defaults, all bind).
+
+Corpus (passed/total, unique case ids; c1 = wip22, against w123 for the
+VHDL suites and w119 for the SystemVerilog suites):
+
+| Suite | Batch 40 | Cleanup 1 |
+|---|---:|---:|
+| VESTs | 3261/3648 | 3261/3648 |
+| nvc regress | 611/1482 | 611/1482 |
+| VHDL Compliance-Tests | 31/72 | 31/72 |
+| ivtest | 2124/2826 | 2124/2826 |
+| Verilator test_regress | 1022/2415 | 1022/2415 |
+| sv-tests | 1337/1497 | 1337/1497 |
+
+No case that passed at batch 40 fails in c1.
+
 ### Batch 40: package instances, blocks, literal overloads and analysis checks
 
 Fixture: `vhdl_package_instances_and_blocks.vhd` (passes on xsim).

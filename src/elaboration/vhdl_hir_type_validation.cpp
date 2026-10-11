@@ -6299,16 +6299,6 @@ private:
                     }
                 }
             }
-            if (statement.kind
-                    == semantic::vhdl::StatementKind::signal_assignment
-                && statement.target) {
-                for (const auto& element : statement.waveform) {
-                    if (!element.disconnect && element.value.valid()) {
-                        validate_assignment_type(
-                            *statement.target, element.value, statement.source);
-                    }
-                }
-            }
             if (statement.kind == semantic::vhdl::StatementKind::loop
                 && statement.loop_initial && !statement.loop_limit) {
                 discrete_range_attributes.insert(

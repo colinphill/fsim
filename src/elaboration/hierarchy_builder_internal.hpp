@@ -1405,6 +1405,29 @@ private:
         std::optional<std::uint32_t> program_owner,
         const std::vector<std::pair<semantic::StatementId, std::size_t>>&
             deferred_statements = { });
+    // Append a lowered SystemVerilog concurrent statement to the
+    // specialization's processes; a program's statements are reactive.
+    void publish_systemverilog_concurrent_occurrence(
+        SystemVerilogConcurrentProcessOccurrence& lowered,
+        const semantic::sv::Unit& unit,
+        SpecializationInfo& specialization,
+        std::optional<std::uint32_t> program_owner);
+    // Append a lowered SystemVerilog process; concurrent assertions run in
+    // the observed region. Canonicalization is skipped for a process
+    // remembered as a template, which must keep the prototype's body.
+    void publish_systemverilog_process(Process& lowered,
+        const semantic::sv::Unit& unit,
+        bool concurrent_assertion,
+        SpecializationInfo& specialization,
+        semantic::ProcessId process_id,
+        std::optional<std::uint32_t> program_owner,
+        bool canonicalize = true);
+    // Append the processes `source` generated while lowering (fork
+    // branches, assertion threads) to the specialization.
+    void append_generated_systemverilog_processes(Lowerer& source,
+        const semantic::sv::Unit& unit,
+        SpecializationInfo& specialization,
+        std::optional<std::uint32_t> program_owner);
 
     bool materialize_compiled_systemverilog_declaration(
         const semantic::sv::Unit& unit,

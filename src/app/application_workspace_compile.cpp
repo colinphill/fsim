@@ -409,15 +409,7 @@ namespace {
                     if (!files.contains(file)) {
                         continue;
                     }
-                    diagnostic::SourceSpan span;
-                    span.path = input.span.source_name.str();
-                    span.begin.line = static_cast<std::uint32_t>(input.span.begin.line);
-                    span.begin.column = static_cast<std::uint32_t>(input.span.begin.column);
-                    span.begin.offset = input.span.begin.offset;
-                    span.end.line = static_cast<std::uint32_t>(input.span.end.line);
-                    span.end.column = static_cast<std::uint32_t>(input.span.end.column);
-                    span.end.offset = input.span.end.offset;
-                    diagnostics.error(input.code, input.message, std::move(span));
+                    diagnostics.error(input.code, input.message, span(input.span));
                     clean = false;
                 }
                 continue;
@@ -435,15 +427,7 @@ namespace {
                 if (!analysis_rule(input.code) || !files.contains(file)) {
                     continue;
                 }
-                diagnostic::SourceSpan span;
-                span.path = input.span.source_name.str();
-                span.begin.line = static_cast<std::uint32_t>(input.span.begin.line);
-                span.begin.column = static_cast<std::uint32_t>(input.span.begin.column);
-                span.begin.offset = input.span.begin.offset;
-                span.end.line = static_cast<std::uint32_t>(input.span.end.line);
-                span.end.column = static_cast<std::uint32_t>(input.span.end.column);
-                span.end.offset = input.span.end.offset;
-                diagnostics.error(input.code, input.message, std::move(span));
+                diagnostics.error(input.code, input.message, span(input.span));
                 clean = false;
             }
         }

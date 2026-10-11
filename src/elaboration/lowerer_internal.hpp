@@ -361,6 +361,11 @@ private:
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<std::int64_t> hir_constant_integer(
         semantic::ExpressionId expression) const;
+    // Append a callable-cache key fragment for an actual's VHDL element
+    // constraints: each constraint's path, folded bounds and direction.
+    void append_vhdl_element_constraint_key(std::string& key,
+        const std::vector<semantic::vhdl::ElementConstraint>& constraints)
+        const;
     [[nodiscard]] std::optional<semantic::ExpressionId>
     hir_constant_initializer(
         semantic::DeclarationId declaration) const;

@@ -3010,12 +3010,6 @@ namespace {
                             element.packed_range
                                 = frontend::PackedRange { 63, 0, true };
                         } else if (compiled_vhdl_name_equal(
-                                       name, "real_vector")) {
-                            element.spelling = "real";
-                            element.domain = frontend::ValueDomain::Bit2;
-                            element.packed_range
-                                = frontend::PackedRange { 63, 0, true };
-                        } else if (compiled_vhdl_name_equal(
                                        name, "boolean_vector")) {
                             element.spelling = "boolean";
                             element.domain = frontend::ValueDomain::Boolean;
@@ -4771,33 +4765,6 @@ namespace {
             if (elements.empty()) {
                 return std::nullopt;
             }
-            // A record constant (or generic default) denotes its initializer.
-            if (source.kind == semantic::vhdl::ExpressionKind::name
-                && source.referenced_name && source.referenced_name->selected) {
-                const auto constant = specialization.find_declaration(
-                    *source.referenced_name->selected);
-                if (constant && constant->vhdl != nullptr
-                    && (constant->vhdl->form == semantic::vhdl::DeclarationForm::constant
-                        || constant->vhdl->form
-                            == semantic::vhdl::DeclarationForm::generic_constant)) {
-                    std::optional<semantic::ExpressionId> initializer
-                        = constant->vhdl->initializer;
-                    if (constant->vhdl->form
-                        == semantic::vhdl::DeclarationForm::generic_constant) {
-                        for (const auto& actual
-                            : specialization.specialization().actual_identities) {
-                            if (actual.declaration == *source.referenced_name->selected) {
-                                initializer = actual.actual_expression;
-                            }
-                        }
-                    }
-                    if (!initializer || *initializer == expression_id) {
-                        return std::nullopt;
-                    }
-                    return compiled_vhdl_static_port_value(specialization,
-                        *initializer, subtype, scope, domain, width);
-                }
-            }
             std::vector<std::optional<std::string>> values(
                 elements.size());
             std::optional<semantic::ExpressionId> others;
@@ -4895,7 +4862,7 @@ namespace {
                         return static_cast<char>(std::tolower(
                             static_cast<unsigned char>(character)));
                     });
-                if (choice.find("others") != std::string::npos) {
+                if (choice == "others") {
                     if (others) {
                         return std::nullopt;
                     }
@@ -5045,7 +5012,7 @@ namespace {
                     return static_cast<char>(std::tolower(
                         static_cast<unsigned char>(character)));
                 });
-            if (choice_spelling.find("others") != std::string::npos) {
+            if (choice_spelling == "others") {
                 if (others) {
                     return std::nullopt;
                 }
@@ -5728,8 +5695,7 @@ namespace {
             std::optional<semantic::ExpressionId> others;
             std::size_t positional { };
             for (const auto& association : source.associations) {
-                if (lowered(association.choice_spelling).find("others")
-                    != std::string::npos) {
+                if (lowered(association.choice_spelling) == "others") {
                     if (others) {
                         return std::nullopt;
                     }

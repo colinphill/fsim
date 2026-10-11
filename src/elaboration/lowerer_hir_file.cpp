@@ -3436,6 +3436,18 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                     });
                     return true;
                 }
+                // ... and an enumeration value by name.
+                if (pattern) {
+                    if (const auto name
+                        = lower_hir_systemverilog_enumeration_value_name(
+                            *output.value)) {
+                        process_.operations.emplace_back(FileWriteString {
+                            *handle, *name, output.prefix, std::move(suffix),
+                            newline,
+                        });
+                        return true;
+                    }
+                }
                 if ((output.format == semantic::sv::OutputFormat::string
                         || output.format
                             == semantic::sv::OutputFormat::decimal)

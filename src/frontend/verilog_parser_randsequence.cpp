@@ -390,34 +390,34 @@ std::optional<Statement> VerilogParser::parse_randsequence(const Token& start) {
         + std::to_string(block_counter++) + "_" + production.name.text;
     emit("begin : " + label);
     // Formals become block variables initialized from the actuals.
-    std::vector<std::vector<Token>> formals(1);
-    for (const auto& token : production.formals) {
-      if (token.kind == TokenKind::Comma) {
-        formals.emplace_back();
-      } else {
-        formals.back().push_back(token);
-      }
-    }
-    std::vector<std::vector<Token>> actuals(1);
-    std::size_t depth{};
-    if (call != nullptr) {
-      for (const auto& token : call->arguments) {
+    // Formals and actuals are comma lists; a default value or an actual
+    // may contain nested commas.
+    const auto split_top_level = [](const std::vector<Token>& tokens) {
+      std::vector<std::vector<Token>> items(1);
+      std::size_t depth{};
+      for (const auto& token : tokens) {
         if (token.kind == TokenKind::LeftParen
             || token.kind == TokenKind::LeftBracket
             || token.kind == TokenKind::LeftBrace) {
           ++depth;
-        } else if (token.kind == TokenKind::RightParen
-            || token.kind == TokenKind::RightBracket
-            || token.kind == TokenKind::RightBrace) {
+        } else if ((token.kind == TokenKind::RightParen
+                       || token.kind == TokenKind::RightBracket
+                       || token.kind == TokenKind::RightBrace)
+            && depth != 0U) {
           --depth;
         }
         if (depth == 0U && token.kind == TokenKind::Comma) {
-          actuals.emplace_back();
+          items.emplace_back();
         } else {
-          actuals.back().push_back(token);
+          items.back().push_back(token);
         }
       }
-    }
+      return items;
+    };
+    const auto formals = split_top_level(production.formals);
+    const auto actuals = call != nullptr
+        ? split_top_level(call->arguments)
+        : std::vector<std::vector<Token>>(1);
     std::map<std::string, std::string> local;
     for (std::size_t index = 0; index < formals.size(); ++index) {
       auto formal = formals[index];
