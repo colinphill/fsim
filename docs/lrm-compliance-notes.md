@@ -839,3 +839,90 @@ gives fsim's result in each case checked.
 - String-returning class methods (`c.get_name()` used as a string) are
   not supported yet: the class executor and `ClassMethodCall` carry only
   packed results.
+
+## String methods, compound updates, arrays of arrays, record constants and 'VALUE (batch 38)
+
+- A class method that returns a string can be used as a string value
+  (`s = c.get();`, `c.get() == "x"`, `$display("%s", c.get())`). The
+  result travels to the caller in a trailing hidden string actual
+  (`@result-string`), which the runtime copies back like an output string
+  argument, so `ClassMethodCall` needed no new result field. A string
+  function called from inside another class method still discards its
+  result.
+- Compound assignments and increments of unpacked array elements selected
+  by variable indices, and of multidimensional elements (`a[i] += 1`,
+  `m[1][2]++`), run as the ordinary assignment of their normalized value
+  when the target has no side effect. A target with a side effect
+  (`x[i++] += 2`) still needs a single evaluation and is not supported.
+- An element of a multidimensional array whose elements are arrays
+  (`m(2, true)`) has the element subtype: each selector consumes one
+  dimension. The lowerer and the analysis checks used to strip a single
+  dimension. An element of a multidimensional record member read with
+  constant indices (`v.f(1, false)`) is a static slice of the member.
+- Elements of record constants (`c.f1`, `c.f2(2)`) read the constant's
+  initializer, an aggregate given its declared subtype. Before, a record
+  constant's elements could not be read at all.
+- `T'VALUE` of integer types (whitespace, sign, underscores, based
+  literals and exponents) and of enumeration types (case-insensitive
+  identifiers, character literals), including BOOLEAN, BIT and
+  SEVERITY_LEVEL. `T'VALUE` of CHARACTER, real and physical types is not
+  supported yet.
+- UVM (partly): `$cast` to a library class no longer keeps the class from
+  specializing, so user classes derived from `uvm_component` and its
+  subclasses are available; user constructors run after the UVM services
+  have initialized the object and component state, and `super.new` stops
+  at the UVM library classes; `uvm_report_enabled`,
+  `get_report_verbosity_level` and `get_report_action` answer from the
+  report policy; `super.*_phase` calls into `uvm_component` are not run.
+  The class executor now passes string actuals, evaluates `&&` and `||`,
+  unsized based literals and package-qualified enumeration literals. A
+  UVM test still stops at `run_test()`, whose library body the class
+  executor cannot run (`uvm_init`); the simulation's native test runner is
+  not connected to it yet, and the sv-tests UVM cases that pass are
+  elaboration checks.
+- A shift in a Verilog-2005 or SystemVerilog expression takes the context
+  width (IEEE 1364-2005 5.4.1): `{a, b} >> 4` assigned to a wider target
+  shifts the widened value. The self-determined width was used for every
+  language except SystemVerilog, so Verilog-2005 dropped high bits.
+- `$printtimescale` and the stochastic queue tasks (`$q_initialize`,
+  `$q_add`, `$q_remove`, `$q_full`, `$q_exam`) are Verilog-2005 tasks as
+  well (IEEE 1364-2005 17.3.1, 17.6); they were rejected outside
+  SystemVerilog.
+- A task or function declared in a package or in `$unit` uses its
+  declaring scope's time unit for `$time`, `$stime` and `$realtime`, and
+  `$printtimescale` without an argument names that scope (`($unit::)`,
+  `(pkg::)`; IEEE 1800-2017 3.14.2, 20.4.1). `$unit` takes the
+  compilation-unit `timeunit`, or the `` `timescale `` in effect. A class
+  declared in `$unit` still uses the caller's time unit.
+- A `return` value converts to the function's declared type like an
+  assignment (IEEE 1800-2017 13.4.1): a real returned from an integral
+  function rounds to the nearest integer, and an integral value returned
+  from a real function becomes real. Both returned the raw bits before.
+- Assignment to an element of a VHDL STRING variable (`s(2) := 'x'`),
+  which is held as a runtime string, replaces the character at the
+  index's offset from the declared left bound. It was rejected.
+- A VHDL constant initialized by an `others` aggregate is evaluated with
+  its declared subtype as the aggregate's context, and a CHARACTER
+  constant fills an array of CHARACTER as its 8-bit code. Arrays of
+  CHARACTER other than STRING still cannot be initialized from named
+  constants.
+- A qualified expression of an array type (`t'(...)`) is no longer
+  mistaken for an indexed name when the analysis checks look for an
+  array root; only object names are indexed that way, and a slice keeps
+  its array type.
+- Individual association in procedure calls (IEEE 1076-2008 6.5.7.1):
+  `p(1) => a, p(2) => b`, `p.x => a`, `p(1, 2) => a`, `p(1)(2) => a`.
+  The parser gathers the associations of one formal into a named
+  aggregate actual (`p => (1 => a, 2 => b)`), nested one level per
+  selector. An `in` subelement takes the aggregate's value; for `out` and
+  `inout` formals the returned value is copied back through the aggregate
+  to each named actual. Conversion functions in the formal part
+  (`f(b) => x`) and signal-class formals are not supported yet.
+- An `out` or `inout` actual that is a record element (`v.f`) now updates
+  only that element; the whole record was overwritten with the element
+  value before. An element of a multidimensional array with static
+  indices (`m(2, 1)`) is accepted as such an actual.
+- Expanded names whose prefix is an enclosing process, block, loop or
+  subprogram label, or the architecture or entity name (`proc.v`,
+  `outer.i`, `arch.s`; IEEE 1076-2008 8.3), select that construct's
+  declaration. They were looked up as package members.

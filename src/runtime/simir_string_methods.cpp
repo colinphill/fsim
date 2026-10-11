@@ -157,6 +157,109 @@ std::string string_from_integer(
         : std::string { };
 }
 
+// An integer literal with optional leading and trailing whitespace, sign,
+// base (`16#FF#`), underscores and exponent (IEEE 1076-2008 15.5).
+[[nodiscard]] std::int64_t vhdl_integer_value(const std::string_view text)
+{
+    const auto fail = [&]() -> std::int64_t {
+        throw std::invalid_argument {
+            "VHDL 'VALUE: \"" + std::string { text }
+            + "\" is not an integer literal"
+        };
+    };
+    const auto space = [](const char character) {
+        return character == ' ' || character == '\t'
+            || character == '\xa0';
+    };
+    std::size_t begin { };
+    std::size_t end { text.size() };
+    while (begin < end && space(text[begin]))
+        ++begin;
+    while (end > begin && space(text[end - 1U]))
+        --end;
+    auto literal = text.substr(begin, end - begin);
+    bool negative { };
+    if (!literal.empty() && (literal.front() == '-' || literal.front() == '+')) {
+        negative = literal.front() == '-';
+        literal.remove_prefix(1U);
+    }
+    const auto digit_value = [](const char character) -> int {
+        if (character >= '0' && character <= '9')
+            return character - '0';
+        if (character >= 'a' && character <= 'f')
+            return character - 'a' + 10;
+        if (character >= 'A' && character <= 'F')
+            return character - 'A' + 10;
+        return -1;
+    };
+    // Digits with single underscores between them.
+    const auto digits = [&](std::string_view part, const int radix,
+                            unsigned __int128& value) {
+        if (part.empty() || part.front() == '_' || part.back() == '_')
+            return false;
+        bool underscore { };
+        for (const auto character : part) {
+            if (character == '_') {
+                if (underscore)
+                    return false;
+                underscore = true;
+                continue;
+            }
+            underscore = false;
+            const auto digit = digit_value(character);
+            if (digit < 0 || digit >= radix)
+                return false;
+            value = value * static_cast<unsigned>(radix)
+                + static_cast<unsigned>(digit);
+            if (value > (static_cast<unsigned __int128>(1) << 64))
+                return false;
+        }
+        return true;
+    };
+    unsigned __int128 value { };
+    auto exponent_part = std::string_view { };
+    const auto hash = literal.find_first_of("#:");
+    if (hash != std::string_view::npos) {
+        unsigned __int128 radix { };
+        const auto close = literal.find(literal[hash], hash + 1U);
+        if (!digits(literal.substr(0U, hash), 10, radix) || radix < 2U
+            || radix > 16U || close == std::string_view::npos
+            || !digits(literal.substr(hash + 1U, close - hash - 1U),
+                static_cast<int>(radix), value)) {
+            return fail();
+        }
+        exponent_part = literal.substr(close + 1U);
+    } else {
+        const auto exponent = literal.find_first_of("eE");
+        if (!digits(literal.substr(0U, exponent), 10, value))
+            return fail();
+        if (exponent != std::string_view::npos)
+            exponent_part = literal.substr(exponent);
+    }
+    if (!exponent_part.empty()) {
+        if (exponent_part.front() != 'e' && exponent_part.front() != 'E')
+            return fail();
+        exponent_part.remove_prefix(1U);
+        if (!exponent_part.empty() && exponent_part.front() == '+')
+            exponent_part.remove_prefix(1U);
+        unsigned __int128 exponent { };
+        if (!digits(exponent_part, 10, exponent) || exponent > 20U)
+            return fail();
+        for (unsigned __int128 index { }; index < exponent; ++index) {
+            value *= 10U;
+            if (value > (static_cast<unsigned __int128>(1) << 64))
+                return fail();
+        }
+    }
+    const auto limit = static_cast<unsigned __int128>(
+                           std::numeric_limits<std::int64_t>::max())
+        + (negative ? 1U : 0U);
+    if (value > limit)
+        return fail();
+    return negative ? static_cast<std::int64_t>(-static_cast<__int128>(value))
+                    : static_cast<std::int64_t>(value);
+}
+
 [[nodiscard]] std::uint64_t string_to_real_bits(
     const std::string_view value)
 {
@@ -244,6 +347,52 @@ StringMethodResult execute_string_method(
     }
     if (operation == StringMethodOperator::atoreal) {
         return { std::nullopt, string_to_real_bits(source), std::nullopt };
+    }
+    if (operation == StringMethodOperator::vhdl_enumeration_value) {
+        const auto space = [](const char character) {
+            return character == ' ' || character == '\t'
+                || character == '\xa0';
+        };
+        std::string_view text { source };
+        while (!text.empty() && space(text.front()))
+            text.remove_prefix(1U);
+        while (!text.empty() && space(text.back()))
+            text.remove_suffix(1U);
+        const auto equal = [&](const std::string_view literal) {
+            // Identifiers compare without case; character literals exactly.
+            if (literal.size() != text.size())
+                return false;
+            if (!literal.empty() && literal.front() == '\'')
+                return literal == text;
+            return std::ranges::equal(literal, text,
+                [](const char left, const char right) {
+                    return std::tolower(static_cast<unsigned char>(left))
+                        == std::tolower(static_cast<unsigned char>(right));
+                });
+        };
+        std::uint64_t position { };
+        std::size_t start { };
+        while (start <= argument.size()) {
+            const auto end = argument.find('\n', start);
+            const auto literal = argument.substr(start,
+                end == std::string_view::npos ? std::string_view::npos
+                                              : end - start);
+            if (equal(literal))
+                return { std::nullopt, position, std::nullopt };
+            if (end == std::string_view::npos)
+                break;
+            start = end + 1U;
+            ++position;
+        }
+        throw std::invalid_argument {
+            "VHDL 'VALUE: \"" + source
+            + "\" is not a literal of the enumeration type"
+        };
+    }
+    if (operation == StringMethodOperator::vhdl_integer_value) {
+        return { std::nullopt,
+            static_cast<std::uint64_t>(vhdl_integer_value(source)),
+            std::nullopt };
     }
     if (operation == StringMethodOperator::realtoa) {
         if (!first_bits) {
@@ -375,7 +524,8 @@ void Interpreter::Impl::execute_string(
     const StringMethod& operation)
 {
     auto& source = get_string_register(process, operation.source);
-    if (operation.operation >= StringMethodOperator::format_packed) {
+    if (operation.operation >= StringMethodOperator::format_packed
+        && operation.operation <= StringMethodOperator::format_vhdl_time) {
         const auto packed = operation.operation == StringMethodOperator::format_packed
                 || operation.operation
                     == StringMethodOperator::format_vhdl_time
@@ -400,7 +550,9 @@ void Interpreter::Impl::execute_string(
             : std::nullopt;
     };
     const bool compare = operation.operation == StringMethodOperator::compare
-        || operation.operation == StringMethodOperator::icompare;
+        || operation.operation == StringMethodOperator::icompare
+        || operation.operation
+            == StringMethodOperator::vhdl_enumeration_value;
     const bool has_first = operation.operation == StringMethodOperator::getc
         || operation.operation == StringMethodOperator::putc
         || operation.operation == StringMethodOperator::substr

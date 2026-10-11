@@ -509,8 +509,6 @@ Simulation::Impl::static_property_parts(const std::string_view identity)
     runtime::SystemVerilogUvmRootHandle automatic_root { };
     std::string automatic_root_identity;
     try {
-        invoke_source_constructor(
-            specialization, handle, actuals, string_actuals, actual_names);
         if (is_systemverilog_uvm_type(
                 built.compiled_systemverilog_class_specializations,
                 specialization,
@@ -565,6 +563,11 @@ Simulation::Impl::static_property_parts(const std::string_view identity)
             }
             uvm_components.initialize(handle, std::move(name), parent, root);
         }
+        // The UVM base state exists once `super.new` has run, so a
+        // user-derived constructor may already report through it; the
+        // simulation's UVM services stand in for the library constructors.
+        invoke_source_constructor(
+            specialization, handle, actuals, string_actuals, actual_names);
     } catch (...) {
         if (component_specialization) {
             if (uvm_components.contains(handle)) {

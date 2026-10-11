@@ -2064,10 +2064,12 @@ Lowerer::hir_class_method_profile(
     const auto class_result = callable.type
         && callable.type->value_form
             == semantic::sv::TypeForm::class_handle;
+    const auto string_result = callable.type
+        && callable.type->value_form == semantic::sv::TypeForm::string;
     // A void method has no result; its calls discard a one-bit placeholder
-    // (IEEE 1800-2017 13.4.1).
+    // (IEEE 1800-2017 13.4.1). A string result also leaves one.
     const auto result_width = callable.type
-            && callable.type->target.spelling == "void"
+            && (callable.type->target.spelling == "void" || string_result)
         ? std::optional<std::size_t> { 1U }
         : callable.type ? hir_systemverilog_type_width(*callable.type)
                         : std::nullopt;
@@ -2121,6 +2123,7 @@ Lowerer::hir_class_method_profile(
     result.static_method = static_call;
     result.virtual_dispatch = instance_call
         && !call.text.starts_with("@sv-base-method:");
+    result.string_result = string_result;
     if (instance_call) {
         result.receiver = call.operands.front();
         const auto receiver_width = hir_expression_width(
@@ -2546,11 +2549,12 @@ bool Lowerer::can_lower_hir_class_method_call(
 
 std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
     const semantic::ExpressionId expression,
-    const std::size_t expected_width)
+    const std::size_t expected_width,
+    std::optional<StringRegisterId>* const string_result)
 {
     const auto profile = hir_class_method_profile(
         expression, hir_process_scope_);
-    if (!profile) {
+    if (!profile || (profile->string_result != (string_result != nullptr))) {
         return std::nullopt;
     }
     auto inline_constraints = hir_inline_constraints(
@@ -2603,6 +2607,17 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
             static_cast<std::uint8_t>(actual.direction));
     }
 
+    if (profile->string_result) {
+        // The runtime writes the result into this trailing string actual.
+        const auto text = allocate_string_register();
+        process_.operations.emplace_back(LoadStringConstant { text, { } });
+        actuals.push_back(text);
+        actual_kinds.push_back(1U);
+        actual_names.emplace_back("@result-string");
+        actual_directions.push_back(
+            static_cast<std::uint8_t>(frontend::PortDirection::Output));
+        *string_result = text;
+    }
     const auto destination = allocate_register(
         profile->result_width, profile->result_domain);
     if (profile->static_method) {
@@ -7610,6 +7625,13 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         if (actual && actual->vhdl != nullptr && writable) {
             continue;
         }
+        // Individually associated subelements (IEEE 1076-2008 6.5.7.1).
+        if (actual && actual->vhdl != nullptr
+            && actual->vhdl->kind
+                == semantic::vhdl::ExpressionKind::aggregate
+            && hir_vhdl_aggregate_is_writable((*actuals)[index])) {
+            continue;
+        }
         report(
             "FSIM-ELAB-VHPROC-018",
             "variable-class, output, and inout procedure formal '"
@@ -7900,7 +7922,13 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         }
         const auto direction
             = hir_callable_frames_[frame_index].directions[index];
-        if (class_method_copy_out(direction)) {
+        const auto actual_expression = specialized_hir_unit_->find_expression(
+            (*actuals)[index]);
+        const bool aggregate_actual = actual_expression
+            && actual_expression->vhdl != nullptr
+            && actual_expression->vhdl->kind
+                == semantic::vhdl::ExpressionKind::aggregate;
+        if (class_method_copy_out(direction) && !aggregate_actual) {
             copy_out_targets[index]
                 = capture_hir_packed_update_target((*actuals)[index]);
         }
@@ -8029,7 +8057,21 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         if (!copy_out_values[index]) {
             continue;
         }
-        const auto copied = copy_out_targets[index]
+        const auto actual_expression = specialized_hir_unit_->find_expression(
+            (*actuals)[index]);
+        const auto formal_declaration = specialized_hir_unit_->find_declaration(
+            formals[index]);
+        const bool aggregate_actual = actual_expression
+            && actual_expression->vhdl != nullptr
+            && actual_expression->vhdl->kind
+                == semantic::vhdl::ExpressionKind::aggregate
+            && formal_declaration && formal_declaration->vhdl != nullptr
+            && formal_declaration->vhdl->subtype;
+        const auto copied = aggregate_actual
+            ? lower_hir_vhdl_aggregate_copy_out((*actuals)[index],
+                  *copy_out_values[index],
+                  *formal_declaration->vhdl->subtype)
+            : copy_out_targets[index]
             ? write_hir_packed_update_target(
                   *copy_out_targets[index], *copy_out_values[index])
             : lower_hir_packed_copy_out(
@@ -8121,15 +8163,52 @@ bool Lowerer::lower_hir_callable_return(
             || *result_subtype->executable_width == 0U)) {
         result_subtype->executable_width = type.width;
     }
+    // A SystemVerilog return value converts to the declared return type
+    // like an assignment (IEEE 1800-2017 13.4.1, 6.12.2).
+    using ScalarKind = frontend::SystemVerilogScalarKind;
+    auto return_kind = ScalarKind::None;
+    if (declaration && declaration->systemverilog != nullptr
+        && declaration->systemverilog->callable) {
+        const auto& spelling
+            = declaration->systemverilog->callable->return_type.target
+                  .spelling;
+        return_kind = spelling == "real" ? ScalarKind::Real
+            : spelling == "realtime"     ? ScalarKind::Realtime
+            : spelling == "shortreal"    ? ScalarKind::ShortReal
+                                         : ScalarKind::None;
+    }
+    const auto real_kind = [](const ScalarKind kind) {
+        return kind == ScalarKind::Real || kind == ScalarKind::Realtime
+            || kind == ScalarKind::ShortReal;
+    };
+    const auto value_kind = expression && expression->systemverilog != nullptr
+        ? hir_systemverilog_scalar_kind(*value)
+        : ScalarKind::None;
+    const bool real_to_integral = expression
+        && expression->systemverilog != nullptr
+        && declaration && declaration->systemverilog != nullptr
+        && declaration->systemverilog->callable
+        && return_kind == ScalarKind::None && real_kind(value_kind);
     auto lowered = expression && expression->vhdl != nullptr
             && expression->vhdl->kind
                 == semantic::vhdl::ExpressionKind::aggregate
             && result_subtype
         ? lower_hir_vhdl_aggregate(
               *value, type.width, &*result_subtype)
+        : real_to_integral
+        ? lower_hir_expression(
+              *value, value_kind == ScalarKind::ShortReal ? 32U : 64U,
+              value_kind)
         : lower_hir_expression(*value, type.width);
     if (!lowered) {
         return false;
+    }
+    if (real_to_integral) {
+        lowered = convert_hir_real_to_integral(*lowered, value_kind);
+    } else if (real_kind(return_kind) && !real_kind(value_kind)
+        && expression && expression->systemverilog != nullptr) {
+        lowered = convert_hir_integral_to_real(
+            *lowered, hir_expression_signed(*value), return_kind);
     }
     if (register_width(*lowered) != type.width) {
         lowered = resize_register(

@@ -17,6 +17,56 @@ namespace fsim::app {
     const auto method_name = method_separator == std::string_view::npos
         ? canonical_identity
         : canonical_identity.substr(method_separator + 2U);
+    // The UVM library's phase callbacks of uvm_component (reached through
+    // `super.build_phase(phase)` and the like) do framework bookkeeping that
+    // the simulation's UVM phase services perform; their bodies are not run.
+    if (canonical_identity.find("uvm_pkg::uvm_component::")
+            != std::string_view::npos
+        && method_name.ends_with("_phase")) {
+        return runtime::PackedLogic4 { };
+    }
+    // The report-object queries that `uvm_report_enabled` and the report
+    // macros make answer from the simulation's report policy.
+    if (canonical_identity.find("uvm_report_object::")
+            != std::string_view::npos
+        && (method_name == "get_report_verbosity_level"
+            || method_name == "get_report_action"
+            || method_name == "uvm_report_enabled")) {
+        const auto word = [&](const std::size_t index,
+                              const std::int64_t fallback) {
+            if (index >= actuals.size()
+                || actuals[index].low_word().bval != 0U) {
+                return fallback;
+            }
+            return static_cast<std::int64_t>(static_cast<std::int32_t>(
+                static_cast<std::uint32_t>(actuals[index].low_word().aval)));
+        };
+        const auto text = [&](const std::size_t index) {
+            return index < string_actuals.size() ? string_actuals[index]
+                                                 : std::string { };
+        };
+        const auto severity = [](const std::int64_t value) {
+            return value >= 0 && value <= 3
+                ? static_cast<runtime::SystemVerilogUvmReportSeverity>(value)
+                : runtime::SystemVerilogUvmReportSeverity::Info;
+        };
+        if (method_name == "uvm_report_enabled") {
+            return runtime::PackedLogic4::from_aval_bval(1U,
+                uvm_reports.enabled(handle,
+                    static_cast<std::int32_t>(word(0U, 200)),
+                    severity(word(1U, 0)), text(2U))
+                    ? 1U
+                    : 0U,
+                0U);
+        }
+        const auto policy = uvm_reports.policy(
+            handle, severity(word(0U, 0)), text(1U));
+        return runtime::PackedLogic4::from_aval_bval(32U,
+            method_name == "get_report_action"
+                ? static_cast<std::uint32_t>(policy.action)
+                : static_cast<std::uint32_t>(policy.verbosity),
+            0U);
+    }
     if (method_name == "uvm_report_info"
         && actuals.size() >= 3U && string_actuals.size() >= 3U) {
         runtime::SystemVerilogUvmReportRequest request;

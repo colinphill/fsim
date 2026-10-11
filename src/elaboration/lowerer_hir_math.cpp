@@ -155,6 +155,27 @@ Lowerer::hir_systemverilog_math_function(
         expression->systemverilog->text);
 }
 
+const semantic::sv::Unit* Lowerer::hir_time_scope_unit(
+    const semantic::ScopeId scope) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return nullptr;
+    }
+    const auto& design = specialized_hir_unit_->design();
+    const auto current = design.find_unit(specialized_hir_unit_->unit());
+    const auto* const fallback
+        = current ? current->systemverilog : nullptr;
+    const auto& scopes = design.semantics.scopes();
+    if (!scope.valid() || scope.value() >= scopes.size()) {
+        return fallback;
+    }
+    const auto owner = design.find_unit(scopes[scope.value()].unit);
+    return owner && owner->systemverilog != nullptr
+            && owner->systemverilog->kind == semantic::sv::UnitKind::package
+        ? owner->systemverilog
+        : fallback;
+}
+
 std::optional<RegisterId> Lowerer::lower_hir_systemverilog_math_call(
     const semantic::ExpressionId expression_id)
 {
@@ -187,10 +208,9 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_math_call(
         return std::nullopt;
     }
     if (time_math_function(*function)) {
-        const auto unit = specialized_hir_unit_->design().find_unit(
-            specialized_hir_unit_->unit());
-        const auto* const context = unit && unit->systemverilog != nullptr
-            ? &unit->systemverilog->compilation
+        const auto* const time_unit_owner = hir_time_scope_unit(call.scope);
+        const auto* const context = time_unit_owner != nullptr
+            ? &time_unit_owner->compilation
             : nullptr;
         // $simtime counts simulation-precision ticks: the runtime's zero
         // unit is the project resolution.

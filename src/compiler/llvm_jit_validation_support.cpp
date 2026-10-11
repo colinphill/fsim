@@ -378,7 +378,7 @@ std::optional<std::string> validate_string_method_metadata(
     const auto kind = operation.operation;
     if (!string_register(operation.source))
         return "StringMethod source string register is out of range";
-    if (kind > StringMethodOperator::format_vhdl_time)
+    if (kind > StringMethodOperator::vhdl_enumeration_value)
         return "StringMethod kind is invalid";
     const auto formatted_width = formatted_value_width(
         operation.format, operation.scalar_kind);
@@ -399,7 +399,9 @@ std::optional<std::string> validate_string_method_metadata(
         return "StringMethod destination string register is out of range";
     if (integer_result)
         registers.push_back({ operation.destination, 32U, true });
-    if (kind == StringMethodOperator::atoreal)
+    if (kind == StringMethodOperator::atoreal
+        || kind == StringMethodOperator::vhdl_integer_value
+        || kind == StringMethodOperator::vhdl_enumeration_value)
         registers.push_back({ operation.destination, 64U, true });
     if (kind == StringMethodOperator::getc || kind == StringMethodOperator::putc
         || kind == StringMethodOperator::substr
@@ -417,6 +419,7 @@ std::optional<std::string> validate_string_method_metadata(
             false });
     if (kind == StringMethodOperator::compare
         || kind == StringMethodOperator::icompare
+        || kind == StringMethodOperator::vhdl_enumeration_value
         || kind == StringMethodOperator::format_string) {
         if (!string_register(operation.argument))
             return "StringMethod argument string register is out of range";

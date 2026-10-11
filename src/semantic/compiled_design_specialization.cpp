@@ -2035,6 +2035,24 @@ private:
                 && subtype.domain == vhdl::ValueDomain::integer) {
                 return value;
             }
+            // A CHARACTER constant evaluates to its position; as an element
+            // it is the 8-bit character code.
+            auto mark = std::string_view { subtype.type_mark.spelling };
+            if (const auto separator = mark.find_last_of(".:");
+                separator != std::string_view::npos) {
+                mark.remove_prefix(separator + 1U);
+            }
+            if (value.kind == VhdlConstantValue::Kind::integer
+                && subtype.constraints.empty()
+                && vhdl_name_equal(mark, "character")
+                && value.integer >= 0 && value.integer <= 255) {
+                std::string bits;
+                for (int bit = 7; bit >= 0; --bit) {
+                    bits.push_back(
+                        ((value.integer >> bit) & 1) != 0 ? '1' : '0');
+                }
+                return vhdl_packed_value(std::move(bits), 7, 0);
+            }
             return std::nullopt;
         }
         const auto bounds = vhdl_packed_bounds(subtype);
@@ -2951,6 +2969,23 @@ private:
                         profile.binding_present |= binding_ != nullptr;
                     } else {
                         result = evaluate_vhdl_value(initializer);
+                    }
+                    // An OTHERS aggregate takes its shape from the constant's
+                    // subtype (IEEE 1076-2008 9.3.3.3).
+                    if (!result && view->vhdl->subtype) {
+                        const auto source = unit_.find_expression(initializer);
+                        if (source && source->vhdl != nullptr
+                            && source->vhdl->kind
+                                == vhdl::ExpressionKind::aggregate) {
+                            if (const auto effective
+                                = CompiledDesignResolver { unit_ }
+                                      .effective_vhdl_subtype(
+                                          *view->vhdl->subtype,
+                                          view->vhdl->scope)) {
+                                result = evaluate_vhdl_aggregate(
+                                    initializer, *effective);
+                            }
+                        }
                     }
                     // A packed initial value takes the index range of the
                     // constant's constrained subtype (IEEE 1076-2008 6.4.2.2,

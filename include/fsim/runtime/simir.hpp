@@ -189,7 +189,13 @@ enum class StringMethodOperator : std::uint8_t {
     // unit whose index in fs, ps, ns, us, ms, sec, min, hr is `precision`
     // (the primary unit fs when out of range), followed by the unit name
     // (IEEE 1076-2008 5.2.4.2, 16.4 WRITE).
-    format_vhdl_time
+    format_vhdl_time,
+    // T'VALUE of an integer type: the integer literal in the source string
+    // (IEEE 1076-2008 16.2.2), as a 64-bit value in `destination`.
+    vhdl_integer_value,
+    // T'VALUE of an enumeration type: the position of the literal named by
+    // the source string among the newline-separated `argument` literals.
+    vhdl_enumeration_value
 };
 struct StringMethod {
     StringMethodOperator operation { };

@@ -985,8 +985,11 @@ private:
             && !expression->class_member_identity.starts_with('@')) {
             valid = valid && std::ranges::any_of(
                 hir_.classes(), [&](const ClassDeclaration& declaration) {
-                    // A construction (`new`) names its class.
-                    if (expression->text.starts_with("@sv-new:")
+                    // A construction (`new`) and a class `$cast` name
+                    // their class.
+                    if ((expression->text.starts_with("@sv-new:")
+                            || expression->text.starts_with(
+                                "@sv-dollar-cast:"))
                         && class_declaration_identity(declaration)
                             == expression->class_member_identity) {
                         return true;

@@ -581,7 +581,20 @@ DesignUnit& VerilogParser::compilation_unit_package(const Token& start) {
         unit.standard_revision = standard_revision_;
         unit.verilog_compatibility_profile = compatibility_profile_;
         unit.systemverilog_imports = compilation_unit_imports_;
-        update_unit_time(unit);
+        // $unit takes the compilation-unit timeunit, else the `timescale in
+        // effect (IEEE 1800-2017 3.14.2.3).
+        const auto& time_unit = compilation_time_unit_.empty()
+            ? current_time_unit_
+            : compilation_time_unit_;
+        unit.time_unit = time_unit.empty()
+            ? std::string { }
+            : std::to_string(compilation_time_unit_.empty()
+                      ? current_time_unit_magnitude_
+                      : compilation_time_unit_magnitude_)
+                + time_unit;
+        unit.time_precision = compilation_time_precision_.empty()
+            ? current_time_precision_
+            : compilation_time_precision_;
         // The design file names its compilation unit, so separately compiled
         // files keep separate $unit scopes.
         std::uint64_t hash = 1469598103934665603ULL;

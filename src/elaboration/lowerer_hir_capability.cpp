@@ -6775,6 +6775,12 @@ bool Lowerer::hir_expression_is_string(
         && source.text == "$sformatf") {
         return true;
     }
+    if (source.kind == semantic::sv::ExpressionKind::class_method_call
+        || source.kind == semantic::sv::ExpressionKind::class_static_method_call) {
+        const auto profile = hir_class_method_profile(
+            expression_id, process_scope);
+        return profile && profile->string_result;
+    }
     if (source.kind == semantic::sv::ExpressionKind::call
         && (source.text == ".toupper"
             || source.text == ".tolower"
@@ -12714,9 +12720,14 @@ Lowerer::hir_vhdl_expression_subtype(
             }
             return selected;
         }
-        if (base->constraints.size() > 1U) {
+        // Each selector consumes one dimension; the element subtype remains
+        // once every dimension is selected (IEEE 1076-2008 8.4).
+        const auto selectors = source.operands.size() - 1U;
+        if (base->constraints.size() > selectors) {
             auto reduced = *base;
-            reduced.constraints.erase(reduced.constraints.begin());
+            reduced.constraints.erase(reduced.constraints.begin(),
+                reduced.constraints.begin()
+                    + static_cast<std::ptrdiff_t>(selectors));
             reduced.executable_width.reset();
             reduced.unconstrained = false;
             return hir_effective_vhdl_subtype(reduced);
@@ -12729,7 +12740,7 @@ Lowerer::hir_vhdl_expression_subtype(
         && !source.operands.empty()
         && (source.text == "'val" || source.text == "'succ"
             || source.text == "'pred" || source.text == "'leftof"
-            || source.text == "'rightof")) {
+            || source.text == "'rightof" || source.text == "'value")) {
         return hir_vhdl_expression_subtype(source.operands.front());
     }
     // A signal's 'LAST_VALUE, 'DRIVING_VALUE and 'DELAYED have the
@@ -13492,7 +13503,7 @@ Lowerer::hir_vhdl_member_selection(
     }
     const bool indexed_member
         = source.kind == semantic::vhdl::ExpressionKind::call
-        && source.operands.size() == 1U
+        && !source.operands.empty()
         && source.text.find('.') != std::string::npos;
     if (source.kind == semantic::vhdl::ExpressionKind::name
         || indexed_member) {
@@ -13660,6 +13671,70 @@ Lowerer::hir_vhdl_member_selection(
             return std::nullopt;
         }
         std::size_t element_width { };
+        // An element of a multidimensional array member selected by
+        // constant indices (`v.f(1, 2)`) is a static slice of the member,
+        // the rightmost dimension varying fastest (IEEE 1076-2008 5.3.2.1).
+        if (indexed_member && source.operands.size() > 1U) {
+            if (subtype->constraints.size() != source.operands.size()
+                || !subtype->type_mark.target.valid()) {
+                return std::nullopt;
+            }
+            const auto* array = vhdl_array_definition(
+                *specialized_hir_unit_, subtype->type_mark.target);
+            if (array == nullptr || !array->element_subtype) {
+                return std::nullopt;
+            }
+            auto element = hir_effective_vhdl_subtype(
+                semantic::vhdl::constrained_element_subtype(
+                    *subtype, "", *array->element_subtype));
+            std::uint64_t ordinal { };
+            std::uint64_t elements { 1U };
+            for (std::size_t dimension = 0U;
+                dimension < source.operands.size(); ++dimension) {
+                const auto& range = subtype->constraints[dimension];
+                const auto left = range.left ? range.left
+                    : range.left_expression
+                    ? hir_constant_integer(*range.left_expression)
+                    : std::nullopt;
+                const auto right = range.right ? range.right
+                    : range.right_expression
+                    ? hir_constant_integer(*range.right_expression)
+                    : std::nullopt;
+                const auto selected = hir_constant_integer(
+                    source.operands[dimension]);
+                if (!left || !right || !selected || range.null
+                    || *selected < std::min(*left, *right)
+                    || *selected > std::max(*left, *right)) {
+                    return std::nullopt;
+                }
+                const auto count = index_distance(*left, *right) + 1U;
+                ordinal = ordinal * count + index_distance(*selected, *right);
+                elements *= count;
+            }
+            if (!element || elements == 0U || *width % elements != 0U) {
+                return std::nullopt;
+            }
+            const auto stride = *width / static_cast<std::size_t>(elements);
+            const auto element_domain = packed_domain(
+                packed_domain, *element, domain_visiting);
+            if (!scalar_domain(element_domain)) {
+                return std::nullopt;
+            }
+            element->executable_width = stride;
+            return HirVhdlMemberSelection {
+                *declaration_id,
+                semantic::ExpressionId { },
+                *element,
+                total_offset + static_cast<std::size_t>(ordinal) * stride,
+                stride,
+                element_domain,
+                element->signed_value
+                    || element->domain
+                        == semantic::vhdl::ValueDomain::integer,
+                std::nullopt,
+                0U,
+            };
+        }
         if (indexed_member) {
             const auto range = subtype->constraints.empty()
                 ? nullptr

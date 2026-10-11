@@ -262,7 +262,10 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         } else if (const auto* method = fsim::runtime::simir::operation_get_if<runtime::simir::StringMethod>(&operation)) {
             auto& source = state.executor->string_registers_.at(method->source);
             if (method->operation
-                >= runtime::simir::StringMethodOperator::format_packed) {
+                    >= runtime::simir::StringMethodOperator::format_packed
+                && method->operation
+                    <= runtime::simir::StringMethodOperator::
+                        format_vhdl_time) {
                 const auto packed = method->operation
                             == runtime::simir::StringMethodOperator::format_packed
                         || method->operation
@@ -295,7 +298,10 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             const bool compare = method->operation
                     == runtime::simir::StringMethodOperator::compare
                 || method->operation
-                    == runtime::simir::StringMethodOperator::icompare;
+                    == runtime::simir::StringMethodOperator::icompare
+                || method->operation
+                    == runtime::simir::StringMethodOperator::
+                        vhdl_enumeration_value;
             const auto result = runtime::simir::execute_string_method(
                 method->operation, source,
                 compare

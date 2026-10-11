@@ -2621,8 +2621,7 @@ bool Lowerer::lower_hir_statement(
                 || statement->systemverilog->assignment_control
                     != semantic::sv::AssignmentControl::none
                 || statement->systemverilog->delay
-                || statement->systemverilog->update_kind
-                    != semantic::sv::UpdateKind::none) {
+                || hir_update_reevaluates_target(*statement->systemverilog)) {
                 return false;
             }
             const auto source_width = hir_expression_width(
@@ -2729,8 +2728,7 @@ bool Lowerer::lower_hir_statement(
         // (IEEE 1800-2017 10.4.2).
         const bool event_control_lowered_early
             = event_controlled && !nonblocking
-            && statement->systemverilog->update_kind
-                == semantic::sv::UpdateKind::none;
+            && !hir_update_reevaluates_target(*statement->systemverilog);
         if (event_control_lowered_early
             && !lower_assignment_event_control(
                 *statement->systemverilog)) {
@@ -2752,8 +2750,7 @@ bool Lowerer::lower_hir_statement(
         };
         const bool timed_nonblocking = nonblocking && !signal_assignment
             && statement->systemverilog != nullptr
-            && statement->systemverilog->update_kind
-                == semantic::sv::UpdateKind::none
+            && !hir_update_reevaluates_target(*statement->systemverilog)
             && (statement->systemverilog->assignment_control
                     == semantic::sv::AssignmentControl::event
                 || (statement->systemverilog->assignment_control
@@ -2958,42 +2955,48 @@ bool Lowerer::lower_hir_statement(
                     span);
                 return true;
             }
+            // An update whose target has no side effect can also run as
+            // the ordinary assignment of its normalized value when the
+            // target has no captured update path (an unpacked array
+            // element, for example).
             const auto captured = capture_hir_packed_update_target(*target);
-            if (!captured) {
+            if (!captured && hir_update_reevaluates_target(input)) {
                 return false;
             }
-            if (event_controlled
-                && !lower_assignment_event_control(input)) {
-                return false;
-            }
-            const auto updated = lower_hir_packed_update_value(
-                *captured,
-                input.update_operator,
-                normalized->systemverilog->operands.back());
-            if (!updated) {
-                return false;
-            }
-            if (!event_controlled
-                && !lower_intra_assignment_control()) {
-                return false;
-            }
-            if (input.assignment_control
-                == semantic::sv::AssignmentControl::delay) {
-                if (!input.delay || !input.delay->additional.empty()) {
+            if (captured) {
+                if (event_controlled
+                    && !lower_assignment_event_control(input)) {
                     return false;
                 }
-                const auto delay = delay_magnitude(
-                    input.delay->primary);
-                if (!delay) {
+                const auto updated = lower_hir_packed_update_value(
+                    *captured,
+                    input.update_operator,
+                    normalized->systemverilog->operands.back());
+                if (!updated) {
                     return false;
                 }
-                emit_debug_point(DebugPointKind::wait, span);
-                process_.operations.emplace_back(WaitFor { *delay });
-            } else if (input.delay) {
-                return false;
+                if (!event_controlled
+                    && !lower_intra_assignment_control()) {
+                    return false;
+                }
+                if (input.assignment_control
+                    == semantic::sv::AssignmentControl::delay) {
+                    if (!input.delay || !input.delay->additional.empty()) {
+                        return false;
+                    }
+                    const auto delay = delay_magnitude(
+                        input.delay->primary);
+                    if (!delay) {
+                        return false;
+                    }
+                    emit_debug_point(DebugPointKind::wait, span);
+                    process_.operations.emplace_back(WaitFor { *delay });
+                } else if (input.delay) {
+                    return false;
+                }
+                return write_hir_packed_update_target(
+                    *captured, *updated);
             }
-            return write_hir_packed_update_target(
-                *captured, *updated);
         }
         if (target_expression->systemverilog != nullptr) {
             const auto& selected = *target_expression->systemverilog;
@@ -3042,8 +3045,7 @@ bool Lowerer::lower_hir_statement(
                             == semantic::sv::AssignmentControl::none
                         && !statement->systemverilog->delay)
                     || timed_nonblocking)
-                && statement->systemverilog->update_kind
-                    == semantic::sv::UpdateKind::none;
+                && !hir_update_reevaluates_target(*statement->systemverilog);
             if (signal_assignment && packed_element
                 && direct_container_object && !element->local
                 && element->type != nullptr
@@ -3062,8 +3064,7 @@ bool Lowerer::lower_hir_statement(
                 && statement->systemverilog->assignment_control
                     == semantic::sv::AssignmentControl::none
                 && !statement->systemverilog->delay
-                && statement->systemverilog->update_kind
-                    == semantic::sv::UpdateKind::none) {
+                && !hir_update_reevaluates_target(*statement->systemverilog)) {
                 const auto selection = hir_constant_selection(
                     *target, hir_process_scope_);
                 if (selection && selection->width != 0U
@@ -3269,8 +3270,7 @@ bool Lowerer::lower_hir_statement(
                     || input.assignment_control
                         != semantic::sv::AssignmentControl::none
                     || input.delay
-                    || input.update_kind
-                        != semantic::sv::UpdateKind::none
+                    || hir_update_reevaluates_target(input)
                     || element->read_only || !selection
                     || selection->width == 0U
                     || selection->offset > element->width
@@ -3379,7 +3379,7 @@ bool Lowerer::lower_hir_statement(
                 || input.assignment_control
                     != semantic::sv::AssignmentControl::none
                 || input.delay
-                || input.update_kind != semantic::sv::UpdateKind::none) {
+                || hir_update_reevaluates_target(input)) {
                 return false;
             }
             if (container->read_only) {
@@ -3440,7 +3440,7 @@ bool Lowerer::lower_hir_statement(
                 || input.assignment_control
                     != semantic::sv::AssignmentControl::none
                 || input.delay
-                || input.update_kind != semantic::sv::UpdateKind::none) {
+                || hir_update_reevaluates_target(input)) {
                 return false;
             }
             return lower_hir_container_locator_assignment(
@@ -3527,7 +3527,7 @@ bool Lowerer::lower_hir_statement(
                 || input.assignment_control
                     != semantic::sv::AssignmentControl::none
                 || input.delay
-                || input.update_kind != semantic::sv::UpdateKind::none) {
+                || hir_update_reevaluates_target(input)) {
                 return false;
             }
             const auto diagnostics_before = diagnostics_.size();
@@ -3556,7 +3556,7 @@ bool Lowerer::lower_hir_statement(
                 || input.assignment_control
                     != semantic::sv::AssignmentControl::none
                 || input.delay
-                || input.update_kind != semantic::sv::UpdateKind::none) {
+                || hir_update_reevaluates_target(input)) {
                 return false;
             }
             if (container->read_only) {
@@ -3678,8 +3678,7 @@ bool Lowerer::lower_hir_statement(
                     || input.assignment_control
                         != semantic::sv::AssignmentControl::none
                     || input.delay
-                    || input.update_kind
-                        != semantic::sv::UpdateKind::none) {
+                    || hir_update_reevaluates_target(input)) {
                     return false;
                 }
                 if (container->read_only) {
@@ -3849,7 +3848,7 @@ bool Lowerer::lower_hir_statement(
                 || input.assignment_control
                     != semantic::sv::AssignmentControl::none
                 || input.delay
-                || input.update_kind != semantic::sv::UpdateKind::none) {
+                || hir_update_reevaluates_target(input)) {
                 return false;
             }
             if (string_member->element.read_only) {
@@ -3916,7 +3915,7 @@ bool Lowerer::lower_hir_statement(
                 && input.assignment_control
                     == semantic::sv::AssignmentControl::none
                 && !input.delay
-                && input.update_kind == semantic::sv::UpdateKind::none
+                && !hir_update_reevaluates_target(input)
                 && selection->width != 0U
                 && selection->offset <= member->leaf.element_width
                 && selection->width
@@ -3999,12 +3998,12 @@ bool Lowerer::lower_hir_statement(
             const bool nonblocking_member = nonblocking && !signal_assignment
                 && !aggregate_member->element.local
                 && input.assignment_control == semantic::sv::AssignmentControl::none
-                && !input.delay && input.update_kind == semantic::sv::UpdateKind::none;
+                && !input.delay && !hir_update_reevaluates_target(input);
             if ((signal_assignment || nonblocking
                     || input.assignment_control
                         != semantic::sv::AssignmentControl::none
                     || input.delay
-                    || input.update_kind != semantic::sv::UpdateKind::none)
+                    || hir_update_reevaluates_target(input))
                 && !nonblocking_member) {
                 return false;
             }
@@ -4128,8 +4127,7 @@ bool Lowerer::lower_hir_statement(
                             == semantic::sv::AssignmentControl::none
                         && !input.delay)
                     || timed_nonblocking)
-                && input.update_kind
-                    == semantic::sv::UpdateKind::none) {
+                && !hir_update_reevaluates_target(input)) {
                 // A bit- or part-select of a scalar element is illegal
                 // (IEEE 1800-2017 11.5.1).
                 if (const auto record = specialized_hir_unit_
@@ -4286,7 +4284,7 @@ bool Lowerer::lower_hir_statement(
                 && (input.assignment_control
                         != semantic::sv::AssignmentControl::none
                     || input.delay
-                    || (input.update_kind != semantic::sv::UpdateKind::none
+                    || (hir_update_reevaluates_target(input)
                         && !real_element_update))) {
                 trace_generated("fixed-net-control");
                 return false;
@@ -4877,7 +4875,7 @@ bool Lowerer::lower_hir_statement(
                 || input.assignment_control
                     != semantic::sv::AssignmentControl::none
                 || input.delay
-                || input.update_kind != semantic::sv::UpdateKind::none
+                || hir_update_reevaluates_target(input)
                 || !width || *width == 0U) {
                 return false;
             }
@@ -5005,7 +5003,7 @@ bool Lowerer::lower_hir_statement(
                 || input.assignment_control
                     != semantic::sv::AssignmentControl::none
                 || input.delay
-                || input.update_kind != semantic::sv::UpdateKind::none) {
+                || hir_update_reevaluates_target(input)) {
                 return false;
             }
             const auto lowered = lower_hir_string_expression(*value);
@@ -5448,6 +5446,77 @@ bool Lowerer::lower_hir_statement(
                     == HirStringFormatStatus::invalid) {
                 return true;
             }
+            // An element of a STRING variable held as a runtime string: the
+            // index is converted to the zero-based character offset.
+            if (target_expression->vhdl != nullptr
+                && target_expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::index
+                && target_expression->vhdl->operands.size() == 2U
+                && hir_target_declaration(
+                       target_expression->vhdl->operands.front())
+                    == declaration
+                && value && !signal_assignment
+                && string_binding->kind == HirStringBindingKind::local
+                && string_binding->local) {
+                const auto prefix_declaration
+                    = specialized_hir_unit_->find_declaration(*declaration);
+                std::int64_t prefix_left = 1;
+                bool prefix_descending { };
+                if (prefix_declaration && prefix_declaration->vhdl != nullptr
+                    && prefix_declaration->vhdl->subtype) {
+                    const auto subtype = hir_effective_vhdl_subtype(
+                        *prefix_declaration->vhdl->subtype);
+                    for (const auto& constraint : subtype
+                             ? subtype->constraints
+                             : prefix_declaration->vhdl->subtype
+                                   ->constraints) {
+                        if (constraint.kind
+                            != semantic::vhdl::RangeKind::array_index) {
+                            continue;
+                        }
+                        const auto left = constraint.left
+                            ? constraint.left
+                            : constraint.left_expression
+                            ? hir_constant_integer(
+                                  *constraint.left_expression)
+                            : std::nullopt;
+                        if (!left) {
+                            return false;
+                        }
+                        prefix_left = *left;
+                        prefix_descending = constraint.descending;
+                        break;
+                    }
+                }
+                auto index = lower_hir_expression(
+                    target_expression->vhdl->operands[1], 32U);
+                auto byte = lower_hir_expression(*value, 8U);
+                if (!index || !byte) {
+                    return false;
+                }
+                if (register_width(*index) != 32U) {
+                    index = resize_register(*index, 32U, true);
+                }
+                const auto base = allocate_register(
+                    32U, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(LoadConstant {
+                    base, integer_value(prefix_left, 32U) });
+                const auto offset = allocate_register(
+                    32U, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(IntegerBinary {
+                    IntegerBinaryOperator::subtract,
+                    offset,
+                    prefix_descending ? base : *index,
+                    prefix_descending ? *index : base,
+                });
+                process_.operations.emplace_back(StringReplaceByte {
+                    *string_binding->local,
+                    offset,
+                    resize_register(*byte, 32U, false),
+                    true,
+                });
+                return true;
+            }
             if (string_element) {
                 const auto& input = *statement->systemverilog;
                 if (signal_assignment || nonblocking
@@ -5456,8 +5525,7 @@ bool Lowerer::lower_hir_statement(
                     || input.assignment_control
                         != semantic::sv::AssignmentControl::none
                     || input.delay
-                    || input.update_kind
-                        != semantic::sv::UpdateKind::none) {
+                    || hir_update_reevaluates_target(input)) {
                     return false;
                 }
                 if (string_binding->kind == HirStringBindingKind::object
@@ -11585,7 +11653,9 @@ bool Lowerer::lower_hir_statement(
                         && argument->systemverilog->kind
                             == semantic::sv::ExpressionKind::name
                         && !argument->systemverilog->text.empty());
-                if (language_ != frontend::Language::SystemVerilog2017
+                // $printtimescale is a Verilog-2005 task as well (IEEE
+                // 1364-2005 17.3.1).
+                if (language_ == frontend::Language::Vhdl2008
                     || input.task_arguments.size() > 1U || named
                     || !valid_argument) {
                     report(
@@ -11593,6 +11663,31 @@ bool Lowerer::lower_hir_statement(
                         "$printtimescale accepts at most one hierarchical "
                         "identifier in SystemVerilog",
                         span);
+                    return true;
+                }
+                const auto* const time_owner
+                    = hir_time_scope_unit(input.scope);
+                if (!argument && time_owner != nullptr
+                    && time_owner->kind == semantic::sv::UnitKind::package) {
+                    // A package or $unit subroutine reports its declaring
+                    // scope (IEEE 1800-2017 20.4.1).
+                    const auto& compilation = time_owner->compilation;
+                    process_.operations.emplace_back(Display {
+                        "Time scale of ("
+                            + (time_owner->name.starts_with("fsim_unit_")
+                                    ? std::string { "$unit" }
+                                    : time_owner->name)
+                            + "::) is "
+                            + (compilation.time_unit.empty()
+                                    ? std::string { "1s" }
+                                    : compilation.time_unit)
+                            + " / "
+                            + (compilation.time_precision.empty()
+                                    ? std::string { "1s" }
+                                    : compilation.time_precision),
+                        true,
+                        false,
+                    });
                     return true;
                 }
                 process_.operations.emplace_back(Display {
@@ -11665,7 +11760,9 @@ bool Lowerer::lower_hir_statement(
                         [](const semantic::sv::TaskAssociation& argument) {
                             return argument.actual.has_value();
                         });
-                if (language_ != frontend::Language::SystemVerilog2017
+                // The stochastic queue tasks are Verilog-2005 as well
+                // (IEEE 1364-2005 17.6).
+                if (language_ == frontend::Language::Vhdl2008
                     || named || !complete) {
                     report(
                         "FSIM-ELAB-SVQUEUE-001",
@@ -14937,6 +15034,58 @@ void Lowerer::prepare_hir_procedural_continuous_assignments(
         }
     };
     visit(visit, statements);
+}
+
+bool Lowerer::hir_update_reevaluates_target(
+    const semantic::sv::Statement& statement) const
+{
+    if (statement.update_kind == semantic::sv::UpdateKind::none) {
+        return false;
+    }
+    if (!statement.target || specialized_hir_unit_ == nullptr) {
+        return true;
+    }
+    using Kind = semantic::sv::ExpressionKind;
+    const auto pure = [&](const auto& self,
+                          const semantic::ExpressionId id,
+                          const std::size_t depth) -> bool {
+        const auto expression = specialized_hir_unit_->find_expression(id);
+        if (!expression || expression->systemverilog == nullptr
+            || depth > 64U) {
+            return false;
+        }
+        const auto& source = *expression->systemverilog;
+        switch (source.kind) {
+        case Kind::name:
+        case Kind::integer_literal:
+        case Kind::boolean_literal:
+        case Kind::logic_literal:
+        case Kind::string_literal:
+            return true;
+        case Kind::unary:
+        case Kind::binary:
+        case Kind::index:
+        case Kind::slice:
+        case Kind::concatenation:
+        case Kind::class_property:
+            break;
+        case Kind::call:
+            // Member selections and casts are names, not calls.
+            if (!source.text.starts_with("@sv-select:")
+                && !source.text.starts_with("@sv-cast:")
+                && !source.text.starts_with("@sv-property:")) {
+                return false;
+            }
+            break;
+        default:
+            return false;
+        }
+        return std::ranges::all_of(source.operands,
+            [&](const semantic::ExpressionId operand) {
+                return self(self, operand, depth + 1U);
+            });
+    };
+    return !pure(pure, *statement.target, 0U);
 }
 
 std::optional<StringRegisterId> Lowerer::lower_hir_strength_text(

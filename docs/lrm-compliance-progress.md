@@ -253,6 +253,46 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 38: string methods, timescales, return conversions, individual association
+
+Fixtures: `sv_string_methods_and_updates.sv`,
+`sv_package_timescale_and_returns.sv`, `vhdl_records_arrays_and_values.vhd`
+(all pass on xsim) and `vhdl_individual_association.vhd` (xsim does not
+support individual association in subprogram calls; the rest of the
+fixture passes on xsim with those calls written out).
+
+- Class methods that return strings, compound updates of variably indexed
+  unpacked elements, virtual calls through pure virtual prototypes.
+- Elements of multidimensional arrays of arrays and of record constants;
+  `'VALUE` of integer and enumeration types.
+- UVM user components specialize and construct, with report queries
+  answered from the report policy; `run_test()` itself is still not
+  executed (see the gaps queue).
+- Verilog-2005 shifts take the context width; `$printtimescale` and the
+  `$q_*` tasks are accepted in Verilog-2005.
+- Package and `$unit` subroutines use their own time unit for `$time`
+  and `$printtimescale`.
+- `return` converts between real and integral function results.
+- VHDL STRING element assignment; individual association of formal
+  subelements in procedure calls; `out` actuals that are record elements
+  or static elements of two-dimensional arrays; expanded names whose
+  prefix is an enclosing label or the design unit.
+
+Corpus (passed/total, unique case ids; w116 = wip14 for VESTs, nvc,
+VHDL Compliance-Tests, ivtest and Verilator, w115 = wip13 for sv-tests,
+plus targeted wip15 reruns for the VHDL items after wip14):
+
+| Suite | Batch 37 (w114) | Batch 38 |
+|---|---:|---:|
+| VESTs | 3213/3648 | 3222/3648 (w116 3213 plus 9 targeted) |
+| nvc regress | 597/1482 | 600/1482 (w116 598 plus 2 targeted) |
+| VHDL Compliance-Tests | 19/72 | 19/72 |
+| ivtest | 2109/2826 | 2124/2826 |
+| Verilator test_regress | 1018/2415 | 1020/2415 |
+| sv-tests | 1329/1497 | 1337/1497 |
+
+No case that passed in w114 fails in w115 or w116.
+
 ### Batch 37: forces, bidirectional connections, strengths and constructors
 
 Fixture: `sv_force_switches_and_strengths.sv` (passes on xsim without its
@@ -1658,6 +1698,13 @@ error, and each exposes an existing gap:
 
 ## Known gaps queue (ranked by blocked corpus cases; refreshed per run)
 
+Out of scope (owner, 2026-10-11): extensions and behaviour of other
+simulators that the LRMs do not define, such as Verilator `$c`/`$cpure`,
+Verilator scheduling assumptions (an `always` block without timing seeing
+settled nets), Icarus-specific same-time races, and implementation-defined
+widths such as 32-bit truncation of unsized literals. Cases that depend on
+them are not counted as gaps.
+
 | Gap | Evidence |
 |---|---|
 | SV: multidimensional interface instance arrays (`ifc a[2][3] ()`); one-dimensional arrays and port arrays done in batch 23 | 14 Verilator cases (`FSIM-SV-PARSE-008`) |
@@ -1670,13 +1717,13 @@ error, and each exposes an existing gap:
 | SV: `%v` strength format; needs a per-bit resolved-strength query from the display formatter (the interpreter resolves strength per signal) | 18 ivtest cases (`FSIM-SV-SEM-042`) |
 | VHDL: record element constraints (`rec(y(1 to 3))`) | 26 nvc cases (`FSIM-VHDL-PARSE-009`) |
 | VHDL: VHDL-2008 element constraints of arrays and records (`t(1 to 2)(7 downto 0)`, `t(open)(7 downto 0)`, `rec(f(1 to 3))`); needs element constraints in the HIR subtype and in every array and record layout | about 50 nvc cases (`FSIM-VHDL-PARSE-009`, `-018`, `-135`) |
-| VHDL: individual (subelement) association of procedure formals (`P(1) => a, P(2) => b`), mostly `inout` | 12 VESTs cases (`FSIM-VHDL-PARSE-179`) |
+| VHDL: individual association in procedure calls with a conversion function in the formal part (`f(b) => x`) or a signal-class formal; plain subelement association done in batch 38 | VESTs tc146, tc154; nvc signal25, signal27, signal30 |
 | VHDL: external names (`<<signal .a.b : t>>`) | 9 nvc cases |
 | VHDL: indexing the predefined VHDL-2008 vectors (`integer_vector`), which have no HIR type definition | nvc |
 | SV: nonblocking whole-object writes of unpacked aggregates (`out <= buffer[i]`) and continuous assignment to unpacked structure members | Verilator |
 | SV: `randomize` and constraint blocks | 36 sv-tests cases (`FSIM-SV-CLASS-005`) |
 | VHDL: chained signal attributes (`clk'delayed'last_event`) | 16 VESTs cases (`FSIM-VHDL-PARSE-046`) |
-| SV: UVM `run_test` from source: the phase, objection and report services exist but are only driven through the C++ API. Lowering `run_test()` fails because the frame of `uvm_root::run_test` is allocated as static and its locals (`l_rs`, `factory`, `test_names`, `phase_runner_proc`, ...) do not initialize; a minimal `uvm_env` test reproduces it (batch 30) | 100 UVM sv-tests |
+| SV: UVM `run_test` from source. User components now specialize and construct (batch 38), but `run_test()` inlines the library body, which reaches `uvm_coreservice_t::get()` and `uvm_init`; the class executor cannot run package functions, timing or a suspendable run phase. The native phase runner (`execute_uvm_function_phase`, `execute_uvm_task_phase`, `SystemVerilogUvmTestRunnerService`) is only driven by unit tests: it needs a production phase loop, a `uvm_phase` object for objections, and a suspendable run phase | ~100 UVM sv-tests (the UVM cases that pass are elaboration checks) |
 | VHDL: resolution of guarded `bus`/`register` signals (disconnected drivers leave the driving-value array, so the resolver needs one variant per driver count) and of arrays of resolved elements; general resolution functions done in batch 31 | 7 VESTs (`FSIM-ELAB-VHDLGUARD-001/-002`), nvc guard4, VESTs tc1709/tc1711 |
 | VHDL: record signals initialized from static record constants that contain 2-D arrays | VESTs tc440, tc449, tc473, tc474, tc485, tc486 |
 | VHDL: names in package-body subprograms are not checked at analysis (the validator selects only entity and architecture scopes) | VESTs tc907-tc909 |
@@ -1690,7 +1737,7 @@ error, and each exposes an existing gap:
 | sv-tests: SV class/randomization constraint syntax | `FSIM-SV-UNSUPPORTED-001` (73) |
 | VHDL: `wait for` with a non-static duration (for example a TIME formal) | testbench procedures |
 | VHDL: `rising_edge`/`falling_edge` of a signal-class formal | testbench procedures |
-| VHDL: STD_ULOGIC index values given as character literals (`t('H')`, `array (std_ulogic) of ...` aggregates); CHARACTER done in batch 10 except STRING element writes (`s(1) := 'A'`) | IEEE package tables, VESTs |
+| VHDL: STD_ULOGIC index values given as character literals (`t('H')`, `array (std_ulogic) of ...` aggregates); CHARACTER done in batch 10, STRING element writes in batch 38 | IEEE package tables, VESTs |
 | VHDL: invalid input accepted (for example integer literals as `unsigned` aggregate elements) | sv-tests/VESTs negative cases |
 | VHDL: output-port defaults as the driver's initial value | VESTs, nvc issue885 |
 | VHDL: reading an `out` port is accepted before VHDL-2008 | VESTs tc112 |
@@ -1701,10 +1748,10 @@ error, and each exposes an existing gap:
 | VHDL: element constraints of ports taken from the actual, `'element`, and element constraints in protected types (syntax and layouts done in batch 33, formals in batch 34) | ~35 nvc cases |
 | VHDL: `'subtype` of an object as a subtype indication (VHDL-2008) | 14 nvc cases |
 | VHDL: a `for` loop over `'RANGE` of a runtime-sized STRING, and element writes to it | 5 VESTs cases (`FSIM-ELAB-071`) |
-| VHDL: signal initializers that do not fold at elaboration (function calls, composite constants of records and nested arrays) | ~22 VESTs/nvc cases (`FSIM-ELAB-HIR-001` "not a bounded integral value") |
+| VHDL: signal initializers that do not fold at elaboration (function calls, composite constants of records and nested arrays, arrays of CHARACTER other than STRING filled from named constants). Most of the VESTs cases are static values the elaboration evaluators do not cover; a run-time initializer would need a SimIR deposit operation that runs before the first process | ~21 VESTs/nvc cases (`FSIM-ELAB-HIR-001` "not a bounded integral value") |
 | VHDL: TEXTIO `SREAD`, `JUSTIFY`, and READ of STRING values from a line | nvc textio5, textio6 |
-| SV: string-returning class methods, and pure virtual tasks called through a base handle | ~10 Verilator/sv-tests class cases, UVM `get_name` |
-| SV: UVM classes whose methods have unresolved HIR references (`uvm_component`) fail specialization, so user components derived from them are unavailable | 16 sv-tests UVM cases (`FSIM-RUN-0002`) |
+| SV: pure virtual tasks called through a base handle, and string-returning class methods called from inside another class method (string results elsewhere done in batch 38) | Verilator/sv-tests class cases |
+| SV: a class declared in `$unit` uses the caller's time unit for `$time` and `$printtimescale` (packages and `$unit` subroutines done in batch 38) | ivtest br1003a |
 | SV: MOS and CMOS switches with an unknown control (L and H outputs), switch and primitive delays on `tranif`, and `$countdrivers` | ivtest `cmos`, `pr1787394*`, `switch_primitives`, `pr2941939`, `countdrivers*` |
 | SV: `new` for a variable of a specialized class type (`box #(5) b; b = new;`) constructs the default specialization | testbenches using parameterized classes |
 | VHDL: user resolution functions other than a single OR/AND reduction (a runtime resolver calling the function on the driver values) | 28 VESTs cases (`FSIM-ELAB-VHRESOLVE-002`/`-004`), nvc |

@@ -128,7 +128,14 @@ private:
         // A `break` or `continue` leaving the statement list.
         bool broke { };
         bool continued { };
+        // The result of a function that returns a string.
+        std::optional<std::string> text;
     };
+    [[nodiscard]] std::optional<std::string> evaluate_returned_string(
+        semantic::ExpressionId id,
+        runtime::SystemVerilogClassHandle handle,
+        PackedEnvironment& environment,
+        const StringEnvironment& strings);
 
     [[nodiscard]] const semantic::sv::ClassSpecialization* specialization(
         std::string_view identity) const noexcept;
@@ -207,6 +214,8 @@ private:
     SystemVerilogClassExecutionStatistics statistics_;
     std::size_t depth_ { };
     std::size_t constant_depth_ { };
+    // The function being executed returns a string.
+    bool string_return_ { };
 };
 
 } // namespace fsim::app::application_detail

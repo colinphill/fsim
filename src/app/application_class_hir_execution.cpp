@@ -50,8 +50,12 @@ constexpr std::size_t maximum_literal_width = 16U * 1024U * 1024U;
         }
         return runtime::PackedLogic4(1U, value);
     }
-    const auto width = decimal(
-        std::string_view { spelling }.substr(0U, apostrophe));
+    // An unsized based literal (`'b0101`) has at least 32 bits (IEEE
+    // 1800-2017 5.7.1), more when its digits need them.
+    const auto width = apostrophe == 0U
+        ? std::optional<std::uint64_t> { std::max<std::uint64_t>(32U,
+              static_cast<std::uint64_t>(suffix.size()) * 4U) }
+        : decimal(std::string_view { spelling }.substr(0U, apostrophe));
     if (!width || *width == 0U || *width > maximum_literal_width)
         return std::nullopt;
     if (!suffix.empty()
@@ -489,8 +493,19 @@ SystemVerilogClassHirExecution::evaluate_packed(
                             64U, previous->low_word().aval + 1U, 0U);
                     }
                     previous = current;
-                    if (literal.name == value->text) {
-                        ++matches;
+                    // A package-qualified literal (`uvm_pkg::UVM_INFO`)
+                    // names the same literal.
+                    const auto separator = value->text.rfind("::");
+                    const auto name = separator == std::string::npos
+                        ? std::string_view { value->text }
+                        : std::string_view { value->text }.substr(
+                              separator + 2U);
+                    if (literal.name == name) {
+                        // The same literal reached through several types
+                        // (a typedef of the enumeration) has one value.
+                        if (matches == 0U || literal_value != current) {
+                            ++matches;
+                        }
                         literal_value = current;
                     }
                 }
@@ -557,21 +572,39 @@ SystemVerilogClassHirExecution::evaluate_packed(
             = !value->text.starts_with(base_method_prefix);
         const auto receiver = evaluate_packed(
             value->operands.front(), handle, environment);
-        if (!receiver || receiver->low_word().bval != 0U)
+        if (!receiver || receiver->low_word().bval != 0U) {
             return std::nullopt;
+        }
         std::vector<runtime::PackedLogic4> actuals;
+        std::vector<std::string> string_actuals;
         for (const auto operand : value->operands | std::views::drop(1)) {
-            const auto actual = evaluate_packed(operand, handle, environment);
-            if (!actual)
+            // An actual is passed as both a packed value and text where it
+            // has them; the callee takes the form its formal's type needs.
+            const auto* source = expression(operand);
+            auto text = source != nullptr
+                    && source->kind == ExpressionKind::string_literal
+                ? evaluate_string(operand,
+                      strings_ != nullptr ? *strings_ : StringEnvironment { },
+                      handle)
+                : std::optional<std::string> { };
+            const auto actual = text
+                ? std::optional<runtime::PackedLogic4> { }
+                : evaluate_packed(operand, handle, environment);
+            if (!actual && !text && strings_ != nullptr) {
+                text = evaluate_string(operand, *strings_, handle);
+            }
+            if (!actual && !text) {
                 return std::nullopt;
-            actuals.push_back(*actual);
+            }
+            actuals.push_back(actual.value_or(
+                runtime::PackedLogic4(64U, runtime::Logic4::zero)));
+            string_actuals.push_back(text.value_or(std::string { }));
         }
         std::vector<std::string> names(actuals.size());
         if (value->argument_names.size() == value->operands.size()) {
             std::ranges::copy(
                 value->argument_names | std::views::drop(1), names.begin());
         }
-        std::vector<std::string> string_actuals(actuals.size());
         std::vector<std::uint8_t> directions;
         const auto identity = marker_payload(*value,
             virtual_dispatch ? method_prefix : base_method_prefix);
@@ -661,6 +694,39 @@ SystemVerilogClassHirExecution::evaluate_packed(
         return std::nullopt;
     }
     const auto left = evaluate_packed(value->operands[0], handle, environment);
+    // Logical operators short-circuit (IEEE 1800-2017 11.4.7).
+    if ((value->text == "&&" || value->text == "||") && left) {
+        const auto truth = [](const runtime::PackedLogic4& operand)
+            -> std::optional<bool> {
+            bool unknown { };
+            for (std::size_t bit = 0U; bit < operand.width(); ++bit) {
+                const auto state = operand.get(bit);
+                if (state == runtime::Logic4::one)
+                    return true;
+                unknown = unknown || state != runtime::Logic4::zero;
+            }
+            return unknown ? std::nullopt : std::optional { false };
+        };
+        const auto lhs_truth = truth(*left);
+        const bool conjunction = value->text == "&&";
+        if (lhs_truth && *lhs_truth != conjunction) {
+            return runtime::PackedLogic4::from_aval_bval(
+                1U, conjunction ? 0U : 1U, 0U);
+        }
+        const auto right_value = evaluate_packed(
+            value->operands[1], handle, environment);
+        if (!right_value)
+            return std::nullopt;
+        const auto rhs_truth = truth(*right_value);
+        if (rhs_truth && *rhs_truth != conjunction) {
+            return runtime::PackedLogic4::from_aval_bval(
+                1U, conjunction ? 0U : 1U, 0U);
+        }
+        if (!lhs_truth || !rhs_truth)
+            return runtime::PackedLogic4(1U, runtime::Logic4::x);
+        return runtime::PackedLogic4::from_aval_bval(
+            1U, conjunction ? 1U : 0U, 0U);
+    }
     const auto right = evaluate_packed(value->operands[1], handle, environment);
     if (!left || !right)
         return std::nullopt;
@@ -976,7 +1042,20 @@ SystemVerilogClassHirExecution::execute(
         }
         if (item->kind == semantic::sv::StatementKind::return_statement) {
             if (!item->value)
-                return { true, runtime::PackedLogic4 { } };
+                return { true, runtime::PackedLogic4 { }, false, false, std::nullopt };
+            if (string_return_) {
+                auto text = evaluate_returned_string(
+                    *item->value, handle, environment, string_environment);
+                if (!text) {
+                    throw std::invalid_argument {
+                        "class HIR string return expression is not executable"
+                    };
+                }
+                ExecutionResult returned;
+                returned.returned = true;
+                returned.text = std::move(*text);
+                return returned;
+            }
             const auto value = evaluate_packed(
                 *item->value, handle, environment);
             if (!value) {
@@ -984,7 +1063,7 @@ SystemVerilogClassHirExecution::execute(
                     "class HIR return expression is not executable"
                 };
             }
-            return { true, *value };
+            return { true, *value, false, false, std::nullopt };
         }
         if (item->kind == semantic::sv::StatementKind::block) {
             for (const auto declaration_id : item->declarations) {
@@ -1060,6 +1139,7 @@ SystemVerilogClassHirExecution::execute(
                     };
                 }
                 std::vector<runtime::PackedLogic4> actuals;
+                std::vector<std::string> string_actuals;
                 std::vector<std::string> names;
                 for (const auto& association :
                     item->task_arguments | std::views::drop(1)) {
@@ -1068,17 +1148,33 @@ SystemVerilogClassHirExecution::execute(
                             "class HIR method argument is open"
                         };
                     }
-                    const auto actual = evaluate_packed(
-                        *association.actual, handle, environment);
-                    if (!actual) {
+                    // A string actual travels as text; the callee takes the
+                    // form its formal's type needs.
+                    const auto* source = expression(*association.actual);
+                    auto text = source != nullptr
+                            && source->kind
+                                == semantic::sv::ExpressionKind::string_literal
+                        ? evaluate_string(
+                              *association.actual, string_environment, handle)
+                        : std::optional<std::string> { };
+                    const auto actual = text
+                        ? std::optional<runtime::PackedLogic4> { }
+                        : evaluate_packed(
+                              *association.actual, handle, environment);
+                    if (!actual && !text) {
+                        text = evaluate_string(
+                            *association.actual, string_environment, handle);
+                    }
+                    if (!actual && !text) {
                         throw std::invalid_argument {
                             "class HIR method argument is not executable"
                         };
                     }
-                    actuals.push_back(*actual);
+                    actuals.push_back(actual.value_or(
+                        runtime::PackedLogic4(64U, runtime::Logic4::zero)));
+                    string_actuals.push_back(text.value_or(std::string { }));
                     names.push_back(association.formal.value_or(std::string { }));
                 }
-                std::vector<std::string> string_actuals(actuals.size());
                 std::vector<std::uint8_t> directions;
                 const bool virtual_dispatch = receiver_expression == nullptr
                     || receiver_expression->text != "super";
@@ -1255,7 +1351,7 @@ SystemVerilogClassHirExecution::execute(
             };
         }
     }
-    return { false, runtime::PackedLogic4 { } };
+    return { false, runtime::PackedLogic4 { }, false, false, std::nullopt };
 }
 
 void SystemVerilogClassHirExecution::write_display(
@@ -1344,14 +1440,66 @@ void SystemVerilogClassHirExecution::write_display(
     output_(text, statement.output_newline);
 }
 
+std::optional<std::string>
+SystemVerilogClassHirExecution::evaluate_returned_string(
+    const semantic::ExpressionId id,
+    const runtime::SystemVerilogClassHandle handle,
+    PackedEnvironment& environment,
+    const StringEnvironment& strings)
+{
+    const auto* value = expression(id);
+    if (value != nullptr && value->kind == semantic::sv::ExpressionKind::call
+        && value->text == "?:" && value->operands.size() == 3U) {
+        const auto condition = evaluate_packed(
+            value->operands[0], handle, environment);
+        if (!condition) {
+            return std::nullopt;
+        }
+        const auto word = condition->low_word();
+        return evaluate_returned_string(
+            (word.aval & ~word.bval) != 0U ? value->operands[1]
+                                           : value->operands[2],
+            handle, environment, strings);
+    }
+    return evaluate_string(id, strings, handle);
+}
+
 runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function(
     const semantic::sv::SpecializedClassMethod& method,
     const runtime::SystemVerilogClassHandle handle,
     std::vector<runtime::PackedLogic4>& actuals,
     std::vector<std::string>& string_actuals,
-    const std::span<const std::string> actual_names,
-    const std::span<const std::uint8_t> actual_directions)
+    const std::span<const std::string> actual_names_view,
+    const std::span<const std::uint8_t> actual_directions_view)
 {
+    // A string result travels in a trailing hidden string actual, which the
+    // caller copies back like an output string argument.
+    constexpr std::string_view result_name { "@result-string" };
+    const bool string_result = !actual_names_view.empty()
+        && actual_names_view.back() == result_name
+        && !actuals.empty() && string_actuals.size() == actuals.size();
+    std::vector<std::string> names(
+        actual_names_view.begin(), actual_names_view.end());
+    std::vector<std::uint8_t> directions(
+        actual_directions_view.begin(), actual_directions_view.end());
+    if (string_result) {
+        actuals.pop_back();
+        string_actuals.pop_back();
+        names.pop_back();
+        if (!directions.empty()) {
+            directions.pop_back();
+        }
+    }
+    const std::span<const std::string> actual_names { names };
+    const std::span<const std::uint8_t> actual_directions { directions };
+    const auto previous_string_return = string_return_;
+    string_return_ = method.return_type && is_string(*method.return_type);
+    struct StringReturnGuard {
+        bool& flag;
+        bool previous;
+        ~StringReturnGuard() { flag = previous; }
+    } string_return_guard { string_return_, previous_string_return };
+
     if (depth_ >= maximum_class_call_depth)
         throw std::overflow_error { "SystemVerilog HIR class call depth exhausted" };
     ++depth_;
@@ -1420,6 +1568,13 @@ runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function(
             actuals[index] = resize_packed(environment.at(formal->name), widths[index]);
     }
     ++statistics_.hir_functions;
+    if (string_result) {
+        actuals.emplace_back(64U, runtime::Logic4::zero);
+        string_actuals.push_back(result.text.value_or(std::string { }));
+        return runtime::PackedLogic4(1U, runtime::Logic4::zero);
+    }
+    if (string_return_)
+        return runtime::PackedLogic4(1U, runtime::Logic4::zero);
     if (void_result)
         return runtime::PackedLogic4 { };
     if (!method.return_type)
@@ -1571,7 +1726,13 @@ void SystemVerilogClassHirExecution::invoke_constructor_impl(
             break;
         }
     }
-    if (selected.base) {
+    // The UVM library's own constructors are replaced by the simulation's
+    // UVM services, which initialize object and component state after the
+    // user-derived constructor returns.
+    if (selected.base
+        && (base == nullptr
+            || base->declaration_identity.find("uvm_pkg::")
+                == std::string::npos)) {
         if (base == nullptr)
             throw std::invalid_argument { "base HIR class specialization is unavailable" };
         invoke_constructor_impl(

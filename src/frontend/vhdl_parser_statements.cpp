@@ -670,10 +670,89 @@ VhdlParser::parse_vhdl_procedure_call() {
   }
   if (match(TokenKind::LeftParen)) {
     bool saw_named = false;
+    // A formal designator naming a subelement of a formal (`p(1)`, `p.f`,
+    // `p(1)(2)`, `p(1, 2)`) associates that subelement individually (IEEE
+    // 1076-2008 6.5.7.1). The associations of one formal become one named
+    // aggregate actual for that formal.
+    struct IndividualPart {
+      std::vector<Expression> path;
+      Expression value;
+    };
+    std::vector<std::pair<std::string, std::vector<IndividualPart>>>
+        individual;
+    const auto individual_formal_ahead = [&]() {
+      if (!at(TokenKind::Identifier)) {
+        return false;
+      }
+      std::size_t lookahead = 1;
+      bool selected = false;
+      for (;;) {
+        if (at(TokenKind::Dot, lookahead)
+            && at(TokenKind::Identifier, lookahead + 1)) {
+          lookahead += 2;
+          selected = true;
+          continue;
+        }
+        if (!at(TokenKind::LeftParen, lookahead)) {
+          break;
+        }
+        std::size_t depth = 0;
+        do {
+          if (at(TokenKind::LeftParen, lookahead)) {
+            ++depth;
+          } else if (at(TokenKind::RightParen, lookahead)) {
+            --depth;
+          } else if (at(TokenKind::EndOfFile, lookahead)) {
+            return false;
+          }
+          ++lookahead;
+        } while (depth != 0);
+        selected = true;
+      }
+      return selected && at(TokenKind::Arrow, lookahead);
+    };
     if (!at(TokenKind::RightParen)) {
       do {
         const auto association_start = current();
         SubprogramAssociation association;
+        if (individual_formal_ahead()) {
+          saw_named = true;
+          const auto base = vhdl_name(advance().text);
+          IndividualPart part;
+          for (;;) {
+            if (match(TokenKind::Dot)) {
+              const auto element = expect_identifier("record element name");
+              part.path.push_back(Expression { ExpressionKind::Identifier,
+                  vhdl_name(element.text), { }, element.span });
+              continue;
+            }
+            if (!match(TokenKind::LeftParen)) {
+              break;
+            }
+            do {
+              part.path.push_back(parse_expression());
+            } while (match(TokenKind::Comma));
+            expect(TokenKind::RightParen, "')' after formal subelement",
+                "FSIM-VHDL-PARSE-179");
+          }
+          expect(TokenKind::Arrow, "'=>' after formal subelement",
+              "FSIM-VHDL-PARSE-179");
+          part.value = parse_expression();
+          auto group = std::ranges::find(individual, base,
+              &std::pair<std::string, std::vector<IndividualPart>>::first);
+          if (group == individual.end()) {
+            individual.emplace_back(base, std::vector<IndividualPart> { });
+            group = std::prev(individual.end());
+            // The aggregate is filled in once every part is known.
+            association.formal = base;
+            association.value = Expression { ExpressionKind::Aggregate,
+                "", { }, association_start.span };
+            association.span = span_from(association_start, previous());
+            statement.procedure_arguments.push_back(std::move(association));
+          }
+          group->second.push_back(std::move(part));
+          continue;
+        }
         if (at(TokenKind::Identifier)
             && at(TokenKind::Arrow, 1)) {
           saw_named = true;
@@ -701,6 +780,72 @@ VhdlParser::parse_vhdl_procedure_call() {
         TokenKind::RightParen,
         "')' after procedure call arguments",
         "FSIM-VHDL-PARSE-179");
+    const auto choice_key = [](const auto& self, const Expression& choice)
+        -> std::string {
+      auto key = std::to_string(static_cast<int>(choice.kind)) + ":"
+          + detail::ascii_lower(choice.text) + "(";
+      for (const auto& operand : choice.operands) {
+        key += self(self, operand) + ",";
+      }
+      return key + ")";
+    };
+    // Parts sharing a selector at `depth` form one nested association.
+    const auto build = [&](const auto& self,
+                           const std::vector<const IndividualPart*>& parts,
+                           const std::size_t depth,
+                           const SourceSpan& span) -> Expression {
+      Expression aggregate { ExpressionKind::Aggregate, "", { }, span };
+      std::vector<std::string> keys;
+      std::vector<std::vector<const IndividualPart*>> groups;
+      for (const auto* part : parts) {
+        if (depth >= part->path.size()) {
+          continue;
+        }
+        const auto key = choice_key(choice_key, part->path[depth]);
+        const auto found = std::ranges::find(keys, key);
+        if (found == keys.end()) {
+          keys.push_back(key);
+          groups.push_back({ part });
+        } else {
+          groups[static_cast<std::size_t>(
+                     std::distance(keys.begin(), found))]
+              .push_back(part);
+        }
+      }
+      for (const auto& group : groups) {
+        auto choice = group.front()->path[depth];
+        auto value = group.size() == 1U
+                && group.front()->path.size() == depth + 1U
+            ? group.front()->value
+            : self(self, group, depth + 1U, span);
+        if (choice.kind == ExpressionKind::Identifier) {
+          choice.text = vhdl_name(choice.text);
+        }
+        aggregate.aggregate_choices.push_back(
+            choice.kind == ExpressionKind::Identifier ? choice.text
+                                                      : "@array");
+        aggregate.aggregate_choice_expressions.push_back(
+            std::vector<Expression> { std::move(choice) });
+        aggregate.operands.push_back(std::move(value));
+      }
+      return aggregate;
+    };
+    for (auto& [base, parts] : individual) {
+      auto target = std::ranges::find_if(statement.procedure_arguments,
+          [&](const SubprogramAssociation& candidate) {
+            return candidate.formal == base
+                && candidate.value.kind == ExpressionKind::Aggregate
+                && candidate.value.operands.empty();
+          });
+      if (target == statement.procedure_arguments.end()) {
+        continue;
+      }
+      std::vector<const IndividualPart*> pointers;
+      for (const auto& part : parts) {
+        pointers.push_back(&part);
+      }
+      target->value = build(build, pointers, 0U, target->value.span);
+    }
   } else if (!at(TokenKind::Semicolon)) {
     rewind(start_position);
     return std::nullopt;

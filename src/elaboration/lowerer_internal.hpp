@@ -887,6 +887,15 @@ private:
         semantic::ExpressionId expression,
         std::size_t expected_width,
         const semantic::vhdl::SubtypeIndication* contextual_subtype = nullptr);
+    // Copies a composite value back through an aggregate of writable names,
+    // the actual of individually associated out or inout subelements (IEEE
+    // 1076-2008 6.5.7.1).
+    [[nodiscard]] bool lower_hir_vhdl_aggregate_copy_out(
+        semantic::ExpressionId aggregate,
+        RegisterId source,
+        const semantic::vhdl::SubtypeIndication& subtype);
+    [[nodiscard]] bool hir_vhdl_aggregate_is_writable(
+        semantic::ExpressionId aggregate) const;
     [[nodiscard]] bool can_lower_hir_expression(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope,
@@ -941,6 +950,11 @@ private:
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_systemverilog_math_call(
         semantic::ExpressionId expression);
+    // The unit whose timescale governs a SystemVerilog scope: a package or
+    // $unit subroutine keeps its declaring unit's time unit (IEEE 1800-2017
+    // 3.14.2), anything else uses the unit being lowered.
+    [[nodiscard]] const semantic::sv::Unit* hir_time_scope_unit(
+        semantic::ScopeId scope) const;
     [[nodiscard]] bool is_hir_systemverilog_file_call(
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<RegisterId>
@@ -1553,6 +1567,8 @@ private:
         bool result_signed { };
         bool static_method { };
         bool virtual_dispatch { true };
+        // The method returns a string, carried in a hidden string actual.
+        bool string_result { };
     };
     [[nodiscard]] std::optional<std::vector<
         runtime::SystemVerilogConstraintTemplate>>
@@ -1570,7 +1586,8 @@ private:
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_class_method_call(
         semantic::ExpressionId expression,
-        std::size_t expected_width);
+        std::size_t expected_width,
+        std::optional<StringRegisterId>* string_result = nullptr);
     struct HirClassTaskProfile {
         semantic::DeclarationId declaration;
         std::string identity;
@@ -1773,6 +1790,11 @@ private:
         semantic::StatementId statement);
     [[nodiscard]] bool lower_hir_procedural_force(
         semantic::StatementId statement);
+    // Whether an assignment update (`a[i] += v`, `a[i]++`), whose value
+    // already reads its target, would evaluate a side effect of the target
+    // twice (IEEE 1800-2017 11.4.1).
+    [[nodiscard]] bool hir_update_reevaluates_target(
+        const semantic::sv::Statement& statement) const;
     // `%v` (IEEE 1800-2017 21.2.1.5): the strength text of a named net or
     // variable.
     [[nodiscard]] std::optional<StringRegisterId> lower_hir_strength_text(

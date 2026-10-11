@@ -2013,6 +2013,7 @@ tests/fixtures/compliance/sv_module_items.sv
 tests/fixtures/compliance/sv_net_data_types.sv
 tests/fixtures/compliance/sv_nonblocking_struct_members.sv
 tests/fixtures/compliance/sv_operand_signedness.sv
+tests/fixtures/compliance/sv_package_timescale_and_returns.sv
 tests/fixtures/compliance/sv_packed_multidim.sv
 tests/fixtures/compliance/sv_parameter_types.sv
 tests/fixtures/compliance/sv_patterns_and_aggregates.sv
@@ -2022,6 +2023,7 @@ tests/fixtures/compliance/sv_real_values_and_events.sv
 tests/fixtures/compliance/sv_sequence_properties.sv
 tests/fixtures/compliance/sv_streaming_unpack.sv
 tests/fixtures/compliance/sv_string_containers.sv
+tests/fixtures/compliance/sv_string_methods_and_updates.sv
 tests/fixtures/compliance/sv_time_without_timescale.sv
 tests/fixtures/compliance/sv_type_and_class_forms.sv
 tests/fixtures/compliance/sv_values_and_assertion_items.sv
@@ -2038,6 +2040,7 @@ tests/fixtures/compliance/vhdl_environment_tee_and_flush.vhd
 tests/fixtures/compliance/vhdl_formal_element_constraints.vhd
 tests/fixtures/compliance/vhdl_formal_subelements.vhd
 tests/fixtures/compliance/vhdl_generate_configuration.vhd
+tests/fixtures/compliance/vhdl_individual_association.vhd
 tests/fixtures/compliance/vhdl_names_and_orderings.vhd
 tests/fixtures/compliance/vhdl_now_and_string_formals.vhd
 tests/fixtures/compliance/vhdl_operator_overloads.vhd
@@ -2049,6 +2052,7 @@ tests/fixtures/compliance/vhdl_range_constraints.vhd
 tests/fixtures/compliance/vhdl_real_arithmetic.vhd
 tests/fixtures/compliance/vhdl_reanalysis.vhd
 tests/fixtures/compliance/vhdl_reanalysis_first.vhd.in
+tests/fixtures/compliance/vhdl_records_arrays_and_values.vhd
 tests/fixtures/compliance/vhdl_resolution_functions.vhd
 tests/fixtures/compliance/vhdl_scalar_type_declarations.vhd
 tests/fixtures/compliance/vhdl_signal_formals.vhd

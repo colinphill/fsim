@@ -4167,17 +4167,6 @@ CompiledDeclarationResolution CompiledDesignResolver::resolve_vhdl(
         return { CompiledResolutionStatus::invalid, { } };
     }
 
-    if (parts.size() > 1U) {
-        const auto packages = resolve_vhdl_package_members(
-            name, use_scope, predicate);
-        std::vector<DeclarationId> declarations;
-        declarations.reserve(packages.candidates.size());
-        for (const auto& candidate : packages.candidates) {
-            declarations.push_back(candidate.member);
-        }
-        return declaration_result(std::move(declarations));
-    }
-
     const auto in_scope = [&](const ScopeId scope) {
         std::vector<DeclarationId> candidates;
         visit_vhdl_declarations_in_scope(
@@ -4193,6 +4182,76 @@ CompiledDeclarationResolution CompiledDesignResolver::resolve_vhdl(
             });
         return declaration_result(std::move(candidates));
     };
+    if (parts.size() > 1U) {
+        const auto packages = resolve_vhdl_package_members(
+            name, use_scope, predicate);
+        std::vector<DeclarationId> declarations;
+        declarations.reserve(packages.candidates.size());
+        for (const auto& candidate : packages.candidates) {
+            declarations.push_back(candidate.member);
+        }
+        // An expanded name whose prefix denotes an enclosing construct, a
+        // labeled statement, a subprogram, or the design unit, selects a
+        // declaration of that construct (IEEE 1076-2008 8.3).
+        if (declarations.empty() && parts.size() == 2U) {
+            auto enclosing = use_scope;
+            for (std::size_t depth { }; enclosing.valid()
+                 && depth <= design_->semantics.scopes().size();
+                 ++depth) {
+                const auto* record = find_scope(*design_, enclosing);
+                if (record == nullptr) {
+                    break;
+                }
+                std::vector<ScopeId> selected;
+                if (same_vhdl_identifier(record->name, parts.front())) {
+                    selected.push_back(enclosing);
+                } else if (record->name == "<loop>") {
+                    // A loop scope is named by its statement's label.
+                    const auto& statements = design_->vhdl_hir.statements();
+                    if (std::ranges::any_of(statements,
+                            [&](const vhdl::Statement& statement) {
+                                return statement.nested_scope == enclosing
+                                    && (same_vhdl_identifier(
+                                            statement.label, parts.front())
+                                        || same_vhdl_identifier(
+                                            statement.loop_label,
+                                            parts.front()));
+                            })) {
+                        selected.push_back(enclosing);
+                    }
+                }
+                if (!record->parent) {
+                    const auto unit = design_->find_unit(record->unit);
+                    if (unit && unit->vhdl != nullptr) {
+                        const auto entity = primary_vhdl_unit(
+                            *design_, *unit->vhdl);
+                        if (same_vhdl_identifier(
+                                unit->vhdl->name, parts.front())) {
+                            selected.push_back(enclosing);
+                            if (entity) {
+                                selected.push_back((**entity).scope);
+                            }
+                        } else if (entity
+                            && same_vhdl_identifier(
+                                (**entity).name, parts.front())) {
+                            selected.push_back((**entity).scope);
+                        }
+                    }
+                }
+                for (const auto candidate : selected) {
+                    auto tier = in_scope(candidate);
+                    if (tier.status != CompiledResolutionStatus::not_found) {
+                        return tier;
+                    }
+                }
+                if (!record->parent) {
+                    break;
+                }
+                enclosing = *record->parent;
+            }
+        }
+        return declaration_result(std::move(declarations));
+    }
     auto scope = use_scope;
     const Scope* root { };
     for (std::size_t depth { };

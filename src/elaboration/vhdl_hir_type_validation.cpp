@@ -1605,6 +1605,44 @@ private:
             || !declaration->vhdl->subtype) {
             return std::nullopt;
         }
+        // An indexed name of an object denotes an element, whose type is
+        // the element subtype once every dimension is selected.
+        // A discrete range operand (`b(1 to 2)`) makes the name a slice,
+        // which keeps the prefix's type.
+        const auto slice_operand = std::ranges::any_of(
+            expression->vhdl->operands,
+            [&](const semantic::ExpressionId operand) {
+                const auto selector = specialization_.find_expression(operand);
+                return selector && selector->vhdl != nullptr
+                    && ((selector->vhdl->kind
+                                == semantic::vhdl::ExpressionKind::binary
+                            && (name_equal(selector->vhdl->text, "to")
+                                || name_equal(selector->vhdl->text, "downto")))
+                        || selector->vhdl->text.ends_with("'range")
+                        || selector->vhdl->text.ends_with("'reverse_range"));
+            });
+        using Form = semantic::vhdl::DeclarationForm;
+        const auto object = declaration->vhdl->form == Form::signal
+            || declaration->vhdl->form == Form::variable
+            || declaration->vhdl->form == Form::constant
+            || declaration->vhdl->form == Form::port
+            || declaration->vhdl->form == Form::generic_constant
+            || declaration->vhdl->form == Form::alias;
+        if ((expression->vhdl->kind == semantic::vhdl::ExpressionKind::index
+                || (expression->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::call
+                    && object && !declaration->vhdl->callable))
+            && !expression->vhdl->operands.empty() && !slice_operand) {
+            const auto selected = expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::index
+                ? expression_subtype(id)
+                : indexed_subtype(
+                      specialized_subtype(*declaration->vhdl->subtype),
+                      expression->vhdl->operands.size());
+            const auto type = selected ? subtype_type(*selected)
+                                       : std::nullopt;
+            return type ? array_root(*type) : std::nullopt;
+        }
         const auto type = subtype_type(
             specialized_subtype(*declaration->vhdl->subtype));
         return type ? array_root(*type) : std::nullopt;
@@ -1755,16 +1793,34 @@ private:
                 || value.kind == semantic::vhdl::ExpressionKind::slice) {
                 return base;
             }
-            if (base->constraints.size() > 1U) {
-                auto reduced = *base;
-                reduced.constraints.erase(reduced.constraints.begin());
-                reduced.executable_width.reset();
-                reduced.unconstrained = false;
-                return specialized_subtype(std::move(reduced));
-            }
-            return array_element_subtype(*base);
+            return indexed_subtype(*base, value.operands.size() - 1U);
         }
         return std::nullopt;
+    }
+
+    // The subtype denoted by indexing `selectors` dimensions of an array
+    // subtype: the remaining dimensions, or the element subtype once every
+    // dimension is selected (IEEE 1076-2008 8.4).
+    std::optional<SubtypeIndication> indexed_subtype(
+        const SubtypeIndication& base, const std::size_t selectors) const
+    {
+        const auto type = subtype_type(base);
+        const auto root = type ? array_root(*type) : std::nullopt;
+        const auto* definition = root ? type_definition(*root) : nullptr;
+        const auto dimensions = definition != nullptr
+            ? definition->array_dimensions.size()
+            : base.constraints.size();
+        if (selectors < dimensions && selectors != 0U) {
+            auto reduced = base;
+            const auto erased = std::min(selectors, reduced.constraints.size());
+            reduced.constraints.erase(reduced.constraints.begin(),
+                reduced.constraints.begin()
+                    + static_cast<std::ptrdiff_t>(erased));
+            reduced.executable_width.reset();
+            reduced.unconstrained = false;
+            return specialized_subtype(std::move(reduced));
+        }
+        return array_element_subtype(base);
     }
 
     std::optional<TypeProfile> expression_profile(

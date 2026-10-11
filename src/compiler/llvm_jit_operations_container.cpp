@@ -605,6 +605,8 @@ void ContainerOperationLowerer::lower(
         : std::nullopt;
     const auto destination = value.operation == StringMethodOperator::getc
             || value.operation == StringMethodOperator::atoreal
+            || value.operation == StringMethodOperator::vhdl_integer_value
+            || value.operation == StringMethodOperator::vhdl_enumeration_value
             || value.operation == StringMethodOperator::compare
             || value.operation == StringMethodOperator::icompare
             || (value.operation >= StringMethodOperator::atoi
