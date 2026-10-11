@@ -667,32 +667,16 @@ Lowerer::lower_hir_formatted_string(
         if (conversion.format != frontend::OutputFormat::Pattern || !value) {
             return append_value_impl(conversion, value);
         }
-        if (hir_static_container_expression_type(*value)) {
-            const auto container = lower_hir_static_container_value(*value);
-            if (!container) {
-                return false;
-            }
-            append_literal(conversion.prefix);
-            const auto text = allocate_string_register();
-            process_.operations.emplace_back(
-                FormatContainerPattern { text, container->value });
-            append_text(text);
-            return true;
+        const auto pattern = lower_hir_pattern_text(*value);
+        if (pattern.failed) {
+            return false;
         }
-        if (hir_expression_is_string(*value, hir_process_scope_)) {
-            const auto text = lower_hir_string_expression(*value);
-            if (!text) {
-                return false;
+        if (pattern.text) {
+            append_literal(conversion.prefix + (pattern.quoted ? "\"" : ""));
+            append_text(*pattern.text);
+            if (pattern.quoted) {
+                append_literal("\"");
             }
-            append_literal(conversion.prefix + "\"");
-            append_text(*text);
-            append_literal("\"");
-            return true;
-        }
-        if (const auto name
-            = lower_hir_systemverilog_enumeration_value_name(*value)) {
-            append_literal(conversion.prefix);
-            append_text(*name);
             return true;
         }
         auto singular = conversion;
@@ -3372,46 +3356,19 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                 }
                 const bool pattern
                     = output.format == semantic::sv::OutputFormat::pattern;
-                // `%p` writes an unpacked value as an assignment pattern
-                // and a string in quotes (IEEE 1800-2017 21.2.1.7).
-                if (pattern
-                    && hir_static_container_expression_type(*output.value)) {
-                    const auto container
-                        = lower_hir_static_container_value(*output.value);
-                    if (!container) {
-                        return false;
-                    }
-                    const auto text = allocate_string_register();
-                    process_.operations.emplace_back(
-                        FormatContainerPattern { text, container->value });
-                    process_.operations.emplace_back(FileWriteString {
-                        *handle, text, output.prefix, std::move(suffix),
-                        newline,
-                    });
-                    return true;
-                }
-                if (pattern
-                    && hir_expression_is_string(
-                        *output.value, hir_process_scope_)) {
-                    const auto value = lower_hir_string_expression(
-                        *output.value);
-                    if (!value) {
-                        return false;
-                    }
-                    process_.operations.emplace_back(FileWriteString {
-                        *handle, *value, output.prefix + "\"",
-                        "\"" + std::move(suffix), newline,
-                    });
-                    return true;
-                }
-                // ... and an enumeration value by name.
+                // `%p` writes an unpacked value as an assignment pattern,
+                // a string in quotes and an enumeration value by name
+                // (IEEE 1800-2017 21.2.1.7).
                 if (pattern) {
-                    if (const auto name
-                        = lower_hir_systemverilog_enumeration_value_name(
-                            *output.value)) {
+                    const auto text = lower_hir_pattern_text(*output.value);
+                    if (text.failed) {
+                        return false;
+                    }
+                    if (text.text) {
+                        const auto quote = text.quoted ? "\"" : "";
                         process_.operations.emplace_back(FileWriteString {
-                            *handle, *name, output.prefix, std::move(suffix),
-                            newline,
+                            *handle, *text.text, output.prefix + quote,
+                            quote + std::move(suffix), newline,
                         });
                         return true;
                     }
@@ -3570,6 +3527,33 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
             object->second, target, std::nullopt });
     }
     return true;
+}
+
+Lowerer::HirPatternText Lowerer::lower_hir_pattern_text(
+    const semantic::ExpressionId value)
+{
+    if (hir_static_container_expression_type(value)) {
+        const auto container = lower_hir_static_container_value(value);
+        if (!container) {
+            return { .failed = true, .text = std::nullopt };
+        }
+        const auto text = allocate_string_register();
+        process_.operations.emplace_back(
+            FormatContainerPattern { text, container->value });
+        return { .failed = false, .text = text };
+    }
+    if (hir_expression_is_string(value, hir_process_scope_)) {
+        const auto text = lower_hir_string_expression(value);
+        if (!text) {
+            return { .failed = true, .text = std::nullopt };
+        }
+        return { .failed = false, .text = *text, .quoted = true };
+    }
+    if (const auto name
+        = lower_hir_systemverilog_enumeration_value_name(value)) {
+        return { .failed = false, .text = *name };
+    }
+    return { };
 }
 
 } // namespace fsim::elaboration

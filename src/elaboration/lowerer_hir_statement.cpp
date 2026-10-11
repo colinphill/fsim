@@ -11119,37 +11119,16 @@ bool Lowerer::lower_hir_statement(
                 suppress_leading_zero, minimum_width, left_justify, zero_pad,
                 precision);
         }
-        if (hir_static_container_expression_type(*expression)) {
-            const auto value = lower_hir_static_container_value(*expression);
-            if (!value) {
-                return false;
-            }
-            const auto text = allocate_string_register();
-            process_.operations.emplace_back(
-                FormatContainerPattern { text, value->value });
-            emit_deferred_assertion_action_handoff();
-            process_.operations.emplace_back(StringDisplay {
-                text, std::move(prefix), std::move(suffix), newline,
-                postponed });
-            return true;
+        const auto pattern = lower_hir_pattern_text(*expression);
+        if (pattern.failed) {
+            return false;
         }
-        if (hir_expression_is_string(*expression, hir_process_scope_)) {
-            const auto value = lower_hir_string_expression(*expression);
-            if (!value) {
-                return false;
-            }
+        if (pattern.text) {
+            const auto quote = pattern.quoted ? "\"" : "";
             emit_deferred_assertion_action_handoff();
             process_.operations.emplace_back(StringDisplay {
-                *value, std::move(prefix) + "\"", "\"" + std::move(suffix),
-                newline, postponed });
-            return true;
-        }
-        if (const auto name
-            = lower_hir_systemverilog_enumeration_value_name(*expression)) {
-            emit_deferred_assertion_action_handoff();
-            process_.operations.emplace_back(StringDisplay {
-                *name, std::move(prefix), std::move(suffix), newline,
-                postponed });
+                *pattern.text, std::move(prefix) + quote,
+                quote + std::move(suffix), newline, postponed });
             return true;
         }
         const auto kind = hir_systemverilog_scalar_kind(*expression);
@@ -15002,6 +14981,10 @@ bool Lowerer::hir_update_reevaluates_target(
     if (!statement.target || specialized_hir_unit_ == nullptr) {
         return true;
     }
+    if (hir_reevaluation_cache_.statement == &statement
+        && hir_reevaluation_cache_.unit == specialized_hir_unit_) {
+        return hir_reevaluation_cache_.reevaluates;
+    }
     using Kind = semantic::sv::ExpressionKind;
     const auto pure = [&](const auto& self,
                           const semantic::ExpressionId id,
@@ -15042,7 +15025,9 @@ bool Lowerer::hir_update_reevaluates_target(
                 return self(self, operand, depth + 1U);
             });
     };
-    return !pure(pure, *statement.target, 0U);
+    const bool reevaluates = !pure(pure, *statement.target, 0U);
+    hir_reevaluation_cache_ = { &statement, specialized_hir_unit_, reevaluates };
+    return reevaluates;
 }
 
 std::optional<StringRegisterId> Lowerer::lower_hir_strength_text(

@@ -73,6 +73,13 @@ public:
     {
     }
 
+    // Check only the name rules (FSIM-ELAB-VHNAME-*), skipping the type
+    // checks that need generic values.
+    void set_names_only() noexcept
+    {
+        names_only_ = true;
+    }
+
     [[nodiscard]] std::vector<VhdlHirTypeValidationIssue> run()
     {
         // STD.ENV, IEEE.MATH_REAL/MATH_COMPLEX and the VHDL-2019 reflection
@@ -112,6 +119,11 @@ public:
         }
         collect_unit_types(entity_);
         collect_unit_types(architecture_);
+        if (names_only_) {
+            // The name rules are all checked while walking the operations.
+            validate_operations();
+            return std::move(issues_);
+        }
         validate_unit_objects(entity_);
         validate_unit_objects(architecture_);
         validate_attribute_specifications();
@@ -1858,6 +1870,12 @@ private:
         return !left.empty() && !right.empty() && left != right;
     }
 
+    // Two operand types differ: different classes or conflicting roots.
+    static bool types_conflict(const OperandType& left, const OperandType& right)
+    {
+        return left.kind != right.kind || roots_conflict(left.root, right.root);
+    }
+
     // The type declared by the nearest `type` declaration on a subtype's
     // chain: `type x1 is range 1.0 to 9.0` is kept as a subtype of REAL.
     std::optional<std::string> declared_scalar_root(const SubtypeIndication& subtype) const
@@ -2136,7 +2154,7 @@ private:
                     || kind == OperandClass::floating;
             };
             const auto same = [&]() -> OperandType {
-                if (left.kind != right.kind || roots_conflict(left.root, right.root)) {
+                if (types_conflict(left, right)) {
                     return { };
                 }
                 return { left.kind, left.root.empty() ? right.root : left.root };
@@ -2519,7 +2537,7 @@ private:
             }
             const bool related = left.kind == OperandClass::integer
                 ? right.kind == OperandClass::integer
-                : left.kind == right.kind && !roots_conflict(left.root, right.root);
+                : !types_conflict(left, right);
             if (!related) {
                 report("FSIM-ELAB-VHCONV-006",
                     "a VHDL array type conversion requires closely related index types",
@@ -2610,8 +2628,7 @@ private:
                 || expected.kind == OperandClass::record;
             if (comparable && actual.kind != OperandClass::unknown
                 && actual.kind != OperandClass::null
-                && (actual.kind != expected.kind
-                    || roots_conflict(actual.root, expected.root))) {
+                && types_conflict(actual, expected)) {
                 report("FSIM-ELAB-VHQUAL-005",
                     "the operand of a VHDL qualified expression does not have "
                     "the type of its type mark",
@@ -2951,8 +2968,7 @@ private:
                     || kind == OperandClass::physical || kind == OperandClass::enumeration;
             };
             return !scalar(expected.kind) || !scalar(given.kind)
-                || (given.kind == expected.kind
-                    && !roots_conflict(given.root, expected.root));
+                || (!types_conflict(given, expected));
         };
         for (std::size_t index { }; index < actuals.size(); ++index) {
             const auto& [name, actual] = actuals[index];
@@ -3575,8 +3591,7 @@ private:
                     || kind == OperandClass::physical || kind == OperandClass::enumeration;
             };
             return !scalar(expected.kind) || actual.kind == OperandClass::unknown
-                || (actual.kind == expected.kind
-                    && !roots_conflict(actual.root, expected.root));
+                || (!types_conflict(actual, expected));
         };
         if (definition->form == TypeForm::array) {
             if (!definition->element_subtype) {
@@ -4028,8 +4043,7 @@ private:
             }
             const auto type = operand_type(choice);
             if (type.kind != OperandClass::unknown && selector_type.kind != OperandClass::unknown
-                && (type.kind != selector_type.kind
-                    || roots_conflict(type.root, selector_type.root))) {
+                && types_conflict(type, selector_type)) {
                 report("FSIM-ELAB-VHDLCASE-008",
                     "a VHDL case choice does not have the type of the case expression",
                     found->vhdl->source);
@@ -4256,7 +4270,7 @@ private:
         };
         if ((scalar(expected.kind) || scalar(given.kind))
             && expected.kind != OperandClass::unknown && given.kind != OperandClass::unknown
-            && (expected.kind != given.kind || roots_conflict(expected.root, given.root))) {
+            && types_conflict(expected, given)) {
             report("FSIM-ELAB-VHALIAS-002",
                 "the subtype of VHDL alias '" + alias.name
                     + "' does not have the type of the aliased object",
@@ -4394,7 +4408,7 @@ private:
                 || kind == OperandClass::physical || kind == OperandClass::enumeration;
         };
         if (scalar(expected.kind) && scalar(given.kind)
-            && (given.kind != expected.kind || roots_conflict(given.root, expected.root))) {
+            && types_conflict(given, expected)) {
             report("FSIM-ELAB-VHRETURN-001",
                 "the value of a VHDL return statement does not have the function's "
                 "result type",
@@ -4442,7 +4456,7 @@ private:
             return type.kind != OperandClass::unknown;
         };
         if (known(left) && known(right)
-            && (left.kind != right.kind || roots_conflict(left.root, right.root))) {
+            && types_conflict(left, right)) {
             report("FSIM-ELAB-VHRANGE-001",
                 "the bounds of a VHDL range must have the same type", source);
             return;
@@ -4481,8 +4495,7 @@ private:
         }
         for (const auto& bound : { left, right }) {
             if (known(bound) && known(index_type)
-                && (bound.kind != index_type.kind
-                    || roots_conflict(bound.root, index_type.root))) {
+                && types_conflict(bound, index_type)) {
                 report("FSIM-ELAB-VHRANGE-001",
                     "a VHDL slice range must have the index type of its prefix",
                     source);
@@ -4625,8 +4638,7 @@ private:
         if (!known(left.kind) || !known(right.kind)) {
             return;
         }
-        const auto same_type = left.kind == right.kind
-            && !roots_conflict(left.root, right.root);
+        const auto same_type = !types_conflict(left, right);
         if (adding) {
             if (!same_type) {
                 reject();
@@ -5656,8 +5668,7 @@ private:
                     || actual.kind == OperandClass::unknown) {
                     continue;
                 }
-                if (actual.kind != expected.kind
-                    || roots_conflict(actual.root, expected.root)) {
+                if (types_conflict(actual, expected)) {
                     report("FSIM-ELAB-VHARRAYSEL-006",
                         "a VHDL array index is not of the dimension's index type",
                         selected->source);
@@ -5880,8 +5891,7 @@ private:
                         || kind == OperandClass::physical || kind == OperandClass::enumeration;
                 };
                 if (scalar(expected.kind) && scalar(given.kind)
-                    && (given.kind != expected.kind
-                        || roots_conflict(given.root, expected.root))) {
+                    && types_conflict(given, expected)) {
                     report("FSIM-ELAB-VHASSIGN-001",
                         "the initial value of VHDL object '" + stored.name
                             + "' does not have its type",
@@ -6269,8 +6279,7 @@ private:
                     const auto right = operand_type(*statement.loop_limit);
                     if (left.kind != OperandClass::unknown
                         && right.kind != OperandClass::unknown
-                        && (left.kind != right.kind
-                            || roots_conflict(left.root, right.root))) {
+                        && types_conflict(left, right)) {
                         report("FSIM-ELAB-VHRANGE-001",
                             "the bounds of a VHDL range must have the same type",
                             statement.source);
@@ -6707,6 +6716,7 @@ private:
     std::unordered_set<std::uint32_t> relevant_types_;
     bool name_check_ { true };
     bool operator_check_ { true };
+    bool names_only_ { };
     std::optional<std::unordered_set<std::uint32_t>> signal_formals_;
     std::optional<std::unordered_set<std::string>> exempt_names_;
     std::unordered_set<std::string> reported_;
@@ -6750,8 +6760,9 @@ std::vector<Diagnostic> validate_vhdl_architecture_names(
     if (!specialization) {
         return result;
     }
-    for (const auto& issue :
-        Validator { *specialization, *entity, *architecture }.run()) {
+    Validator validator { *specialization, *entity, *architecture };
+    validator.set_names_only();
+    for (const auto& issue : validator.run()) {
         // Without generic values only name rules are decidable here.
         if (issue.code != "FSIM-ELAB-VHNAME-002"
             && issue.code != "FSIM-ELAB-VHNAME-004"

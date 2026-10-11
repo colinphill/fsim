@@ -2029,6 +2029,7 @@ tests/fixtures/compliance/sv_time_without_timescale.sv
 tests/fixtures/compliance/sv_type_and_class_forms.sv
 tests/fixtures/compliance/sv_values_and_assertion_items.sv
 tests/fixtures/compliance/verilog_2005_begin_keywords.v
+tests/fixtures/compliance/vhdl2019_integer_vectors.vhd
 tests/fixtures/compliance/vhdl_aliases_and_array_formals.vhd
 tests/fixtures/compliance/vhdl_attributes_and_conversions.vhd
 tests/fixtures/compliance/vhdl_character_arrays_and_bounds.vhd

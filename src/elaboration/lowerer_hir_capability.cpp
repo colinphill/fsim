@@ -9994,9 +9994,16 @@ std::optional<PackedLogic4> Lowerer::hir_vhdl_default_value(
         std::optional<PackedLogic4> element;
         std::size_t element_width { };
         if (same_hir_identifier(name, "integer_vector", true)) {
-            element_width = 32U;
-            element = integer_value(
-                std::numeric_limits<std::int32_t>::min(), element_width);
+            semantic::vhdl::SubtypeIndication integer_mark;
+            integer_mark.type_mark.spelling = "integer";
+            const auto integer = hir_effective_vhdl_subtype(integer_mark);
+            element_width = integer && integer->integer_storage_width != 0U
+                ? integer->integer_storage_width
+                : 32U;
+            element = integer_value(element_width == 64U
+                    ? std::numeric_limits<std::int64_t>::min()
+                    : std::numeric_limits<std::int32_t>::min(),
+                element_width);
         } else if (same_hir_identifier(name, "time_vector", true)) {
             element_width = 64U;
             element = integer_value(

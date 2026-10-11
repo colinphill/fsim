@@ -253,6 +253,53 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Cleanup batch 3: behavioural merges
+
+Fixture: `vhdl2019_integer_vectors.vhd`.
+
+- VHDL function and procedure overload resolution share one
+  actual-to-formal predicate. Procedures now also check the nominal type,
+  array shapes, record formals and unspecified-type inference; functions
+  now also reject abstract literals for TIME formals, character literals
+  that do not belong to the formal's type, and scalar BIT or STD_ULOGIC
+  actuals for array formals.
+- `%p` in `$display`, `$sformatf` and `$fwrite` shares one helper for
+  unpacked values, strings and enumeration names.
+- INTEGER_VECTOR elements are 64 bits under VHDL-2019, matching INTEGER
+  (IEEE 1076-2019 5.2.3.1). A signal aggregate of INTEGER_VECTOR was
+  rejected before (`FSIM-ELAB-VHARRAYAGG-002`), and default values used
+  the 32-bit INTEGER'LOW.
+- Static values of record and array elements go through one dispatcher
+  (REAL, CHARACTER, arrays, then other values). Subtypes derived from
+  REAL, CHARACTER and STRING are recognised through their whole chain;
+  qualified character literals and character constants are followed in
+  both places.
+- The compile-time name check runs the validator in a names-only mode
+  instead of running every type check and discarding the results.
+- Assignment lowering caches whether an update target needs
+  re-evaluation (it was recomputed up to 22 times per statement).
+- The validator's 14 hand-written "types differ" tests use one helper.
+
+ctest: the `vhdl` (19 failures) and `systemverilog` (22 failures)
+labels fail the same tests with the c2 and c3 libraries. Those failures
+predate the cleanup (for example `FSIM-ELAB-VHNAME-004` on `'ascending`
+and on an instance label, and `FSIM-ELAB-VHARRAYSEL-005`); the next
+batch fixes them.
+
+Corpus (passed/total, unique case ids; c3 = wip24, against c2):
+
+| Suite | Cleanup 2 | Cleanup 3 |
+|---|---:|---:|
+| VESTs | 3261/3648 | 3266/3648 |
+| nvc regress | 611/1482 | 612/1482 |
+| VHDL Compliance-Tests | 31/72 | 31/72 |
+| ivtest | 2124/2826 | 2124/2826 |
+| Verilator test_regress | 1022/2415 | 1022/2415 |
+| sv-tests | 1337/1497 | 1337/1497 |
+
+No case that passed in c2 fails in c3; VESTs gains tc440, tc473, tc474,
+tc485 and tc486, and nvc gains one case.
+
 ### Cleanup batch 2: shared helpers
 
 No behaviour change is intended. Repeated code is replaced by shared

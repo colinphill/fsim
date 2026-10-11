@@ -732,6 +732,16 @@ private:
     [[nodiscard]] std::optional<HirEnumerationMethod>
     hir_systemverilog_enumeration_profile(HirEnumerationMethod method,
         semantic::DeclarationId declaration) const;
+    // The text `%p` writes for a value (IEEE 1800-2017 21.2.1.7) when it is
+    // not formatted like `%0d` or `%g`: an unpacked value as an assignment
+    // pattern, a string (to be quoted) or an enumeration value's name.
+    struct HirPatternText {
+        bool failed { };
+        std::optional<StringRegisterId> text;
+        bool quoted { };
+    };
+    [[nodiscard]] HirPatternText lower_hir_pattern_text(
+        semantic::ExpressionId value);
     // The literal name of an enumeration variable's value, or "" (6.19.5.6).
     [[nodiscard]] std::optional<StringRegisterId>
     lower_hir_systemverilog_enumeration_value_name(
@@ -1667,6 +1677,21 @@ private:
     resolve_hir_vhdl_procedure_call(
         semantic::StatementId statement,
         semantic::ScopeId process_scope) const;
+    // The unspecified formal types (VHDL-2019 6.5.2) an overload candidate
+    // infers from its actuals; one identity per inference name.
+    struct HirVhdlOverloadInference {
+        bool uses_unspecified_type { };
+        std::unordered_map<std::string, std::string> actual_types;
+    };
+    // Whether `actual` may be associated with `formal` of the overload
+    // candidate `resolution` (IEEE 1076-2008 4.5.3, 12.5).
+    [[nodiscard]] bool hir_vhdl_actual_matches_formal(
+        const HirCallableResolution& resolution,
+        semantic::DeclarationId formal,
+        semantic::ScopeId callable_scope,
+        semantic::ExpressionId actual,
+        semantic::ScopeId process_scope,
+        HirVhdlOverloadInference& inference) const;
     [[nodiscard]] std::optional<std::vector<semantic::ExpressionId>>
     bind_hir_function_actuals(
         semantic::ExpressionId expression,
@@ -1822,6 +1847,14 @@ private:
     // twice (IEEE 1800-2017 11.4.1).
     [[nodiscard]] bool hir_update_reevaluates_target(
         const semantic::sv::Statement& statement) const;
+    // hir_update_reevaluates_target's last answer: assignment lowering
+    // asks it repeatedly for one statement.
+    struct HirReevaluationCache {
+        const semantic::sv::Statement* statement { };
+        const semantic::SpecializedHirUnit* unit { };
+        bool reevaluates { };
+    };
+    mutable HirReevaluationCache hir_reevaluation_cache_;
     // `%v` (IEEE 1800-2017 21.2.1.5): the strength text of a named net or
     // variable.
     [[nodiscard]] std::optional<StringRegisterId> lower_hir_strength_text(
