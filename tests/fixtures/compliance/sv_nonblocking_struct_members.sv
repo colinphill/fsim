@@ -1,4 +1,5 @@
 // fsim: top=sv_nonblocking_struct_members
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 10.4.2: nonblocking assignments to members of unpacked
 // structures and of unpacked arrays of structures update the members in the
 // NBA region, and several such writes in one time step all take effect.

@@ -1280,7 +1280,7 @@ endmodule
       R"(
 module container_invalid;
   int fixed[3];
-  int wildcard_values[*];
+  int real_size_values[1.5];
   int queue[$];
   task static bad_lifetime(ref byte values[int]);
   endtask

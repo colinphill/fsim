@@ -1,4 +1,5 @@
 // fsim: top=sv_randsequence std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 18.17: randsequence with weights, if, case, repeat, rand
 // join, break, return and production arguments; zero weights make every
 // selection deterministic. xsim 2025.2 does not simulate randsequence; the

@@ -1,4 +1,5 @@
 // fsim: top=sv_expression_widths std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 11.8.2: a value extends to its target by its own
 // signedness (assignments and task/function arguments); 6.24.1: a cast
 // evaluates its operand in the cast's width; 11.6.1: sized arithmetic in a

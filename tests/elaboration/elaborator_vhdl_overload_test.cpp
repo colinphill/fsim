@@ -462,10 +462,10 @@ package overload_pkg is
   function choose(value : boolean) return boolean;
   procedure assign_value(
     source : in integer;
-    variable target : out integer);
+    signal target : out integer);
   procedure assign_value(
     source : in boolean;
-    variable target : out boolean);
+    signal target : out boolean);
 end package;
 
 package body overload_pkg is
@@ -479,15 +479,15 @@ package body overload_pkg is
   end function;
   procedure assign_value(
     source : in integer;
-    variable target : out integer) is
+    signal target : out integer) is
   begin
-    target := source + 20;
+    target <= source + 20;
   end procedure;
   procedure assign_value(
     source : in boolean;
-    variable target : out boolean) is
+    signal target : out boolean) is
   begin
-    target := not source;
+    target <= not source;
   end procedure;
 end package body;
 
@@ -566,15 +566,15 @@ architecture rtl of callable_overload_top is
   end function;
   procedure assign_local(
     source : in integer;
-    variable target : out integer) is
+    signal target : out integer) is
   begin
-    target := source + 40;
+    target <= source + 40;
   end procedure;
   procedure assign_local(
     source : in boolean;
-    variable target : out boolean) is
+    signal target : out boolean) is
   begin
-    target := not source;
+    target <= not source;
   end procedure;
   function contextual(value : integer) return integer is
   begin
@@ -723,7 +723,7 @@ package integer_ops is
   function adjust(value : integer) return integer;
   procedure update_value(
     source : in integer;
-    variable target : out integer);
+    signal target : out integer);
 end package;
 package body integer_ops is
   function adjust(value : integer) return integer is
@@ -732,9 +732,9 @@ package body integer_ops is
   end function;
   procedure update_value(
     source : in integer;
-    variable target : out integer) is
+    signal target : out integer) is
   begin
-    target := source + 2;
+    target <= source + 2;
   end procedure;
 end package body;
 
@@ -742,7 +742,7 @@ package boolean_ops is
   function adjust(value : boolean) return boolean;
   procedure update_value(
     source : in boolean;
-    variable target : out boolean);
+    signal target : out boolean);
 end package;
 package body boolean_ops is
   function adjust(value : boolean) return boolean is
@@ -751,9 +751,9 @@ package body boolean_ops is
   end function;
   procedure update_value(
     source : in boolean;
-    variable target : out boolean) is
+    signal target : out boolean) is
   begin
-    target := not source;
+    target <= not source;
   end procedure;
 end package body;
 
@@ -800,10 +800,10 @@ package imported_ops is
   function hidden(value : boolean) return boolean;
   procedure hidden_store(
     source : in integer;
-    variable target : out integer);
+    signal target : out integer);
   procedure hidden_store(
     source : in boolean;
-    variable target : out boolean);
+    signal target : out boolean);
 end package;
 package body imported_ops is
   function hidden(value : integer) return integer is
@@ -816,15 +816,15 @@ package body imported_ops is
   end function;
   procedure hidden_store(
     source : in integer;
-    variable target : out integer) is
+    signal target : out integer) is
   begin
-    target := source + 1;
+    target <= source + 1;
   end procedure;
   procedure hidden_store(
     source : in boolean;
-    variable target : out boolean) is
+    signal target : out boolean) is
   begin
-    target := not source;
+    target <= not source;
   end procedure;
 end package body;
 
@@ -838,9 +838,9 @@ architecture rtl of overload_hiding is
   end function;
   procedure hidden_store(
     source : in integer;
-    variable target : out integer) is
+    signal target : out integer) is
   begin
-    target := source + 2;
+    target <= source + 2;
   end procedure;
   signal source : integer;
   signal result : integer;
@@ -1088,7 +1088,7 @@ architecture rtl of default_legality is
     null;
   end procedure;
 begin
-  result <= invalid_default();
+  result <= invalid_default;
   process(result)
   begin
     invalid_procedure_default;
@@ -1113,13 +1113,14 @@ end architecture;
 entity resolution_legality is
 end entity;
 architecture rtl of resolution_legality is
-  type first_pair is array (0 to 1) of bit;
-  type second_pair is array (0 to 1) of bit;
+  type first_pair is array (natural range <>) of bit;
+  type second_pair is array (natural range <>) of bit;
+  type fixed_pair is array (0 to 1) of bit;
   function wrong_profile(value : bit) return bit is
   begin
     return value;
   end function;
-  function unsupported(values : first_pair) return bit is
+  function unsupported(values : fixed_pair) return bit is
   begin
     return values(0) xor values(1);
   end function;
@@ -1158,9 +1159,13 @@ end architecture;
   assert(has_diagnostic(
       resolution_legality_result,
       "FSIM-ELAB-VHRESOLVE-003"));
-  assert(has_diagnostic(
-      resolution_legality_result,
-      "FSIM-ELAB-VHRESOLVE-004"));
+  // A parameter of a constrained array type is not a resolution function
+  // profile (IEEE 1076-2008 4.6).
+  assert(std::ranges::count_if(resolution_legality_result.diagnostics,
+             [](const auto& diagnostic) {
+                 return diagnostic.code == "FSIM-ELAB-VHRESOLVE-002";
+             })
+      >= 2);
 
   const auto no_match = fsim::frontend::parse_text(
       "vhdl-callable-overload-no-match.vhd",

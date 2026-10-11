@@ -1,4 +1,5 @@
 -- fsim: top=character_arrays_and_bounds(sim) std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-1993 7.3.1: a string literal of a one-dimensional array of
 -- CHARACTER; 14.1: 'LEFT, 'LOW and 'HIGH of the predefined REAL and TIME
 -- types; 14.1: 'LAST_EVENT of a signal without an event is TIME'HIGH;

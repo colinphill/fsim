@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # A2 arbitrary-root DAG role-journal witness.
 add_executable(
   fsim_application_native_frontier_a2_root_forest_tests

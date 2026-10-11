@@ -73,7 +73,7 @@ public:
     {
     }
 
-    // Check only the name rules (FSIM-ELAB-VHNAME-*), skipping the type
+    // Check only the VHNAME name rules, skipping the type
     // checks that need generic values.
     void set_names_only() noexcept
     {
@@ -3225,6 +3225,57 @@ private:
         }
     }
 
+    // The VHDL revision of the design unit that contains a scope.
+    std::string_view unit_standard(const semantic::ScopeId scope) const
+    {
+        const auto& scopes = specialization_.design().semantics.scopes();
+        if (!scope.valid() || scope.value() >= scopes.size()) {
+            return architecture_.standard;
+        }
+        const auto unit = scopes[scope.value()].unit;
+        for (const auto& candidate : specialization_.design().vhdl_hir.units()) {
+            if (candidate.id == unit) {
+                return candidate.standard;
+            }
+        }
+        return architecture_.standard;
+    }
+
+    // Whether the entity or component an instance names declares a type,
+    // subprogram or package generic, whose actual is not a value.
+    bool instance_has_type_generic(const semantic::vhdl::Instance& instance) const
+    {
+        const auto& hir = specialization_.design().vhdl_hir;
+        auto target = std::string_view { instance.target.spelling };
+        if (const auto open = target.find('('); open != std::string_view::npos) {
+            target = target.substr(0U, open);
+        }
+        const auto name = simple_name_of(target);
+        std::vector<semantic::ScopeId> scopes;
+        for (const auto& unit : hir.units()) {
+            if (unit.kind == semantic::vhdl::UnitKind::entity
+                && equal_ignoring_ascii_case(unit.name, name)) {
+                scopes.push_back(unit.scope);
+            }
+        }
+        for (const auto& declaration : hir.declarations()) {
+            if (declaration.form == semantic::vhdl::DeclarationForm::component
+                && equal_ignoring_ascii_case(declaration.name, name)
+                && declaration.nested_scope) {
+                scopes.push_back(*declaration.nested_scope);
+            }
+        }
+        return std::ranges::any_of(hir.declarations(),
+            [&](const semantic::vhdl::Declaration& declaration) {
+                using Form = semantic::vhdl::DeclarationForm;
+                return (declaration.form == Form::generic_type
+                           || declaration.form == Form::generic_package
+                           || declaration.form == Form::generic_function
+                           || declaration.form == Form::generic_procedure)
+                    && std::ranges::find(scopes, declaration.scope) != scopes.end();
+            });
+    }
+
     // IEEE 1076-2008 12.3: a simple name in an expression denotes a visible
     // declaration (not a label or a design unit).
     void validate_value_name(const semantic::ExpressionId id,
@@ -3395,7 +3446,8 @@ private:
                          || declaration->vhdl->form == Form::subtype)
                         && !allow_type_mark)
                     || declaration->vhdl->form == Form::component
-                    || declaration->vhdl->form == Form::package_instance
+                    || (declaration->vhdl->form == Form::package_instance
+                        && !allow_type_mark)
                     || declaration->vhdl->form == Form::generated)) {
                 report("FSIM-ELAB-VHNAME-004",
                     "VHDL name '" + expression.text
@@ -5915,9 +5967,11 @@ private:
                 continue;
             }
             // IEEE 1076-2008 6.4.2.3, 6.4.2.4: a signal or variable has a
-            // constrained (fully bounded) array subtype.
+            // constrained (fully bounded) array subtype. VHDL-2019 takes the
+            // constraints of one with an initial value from that value.
             if ((stored.form == Form::signal || stored.form == Form::variable)
-                && unconstrained_array_subtype(*stored.subtype)) {
+                && unconstrained_array_subtype(*stored.subtype)
+                && !(stored.initializer && unit_standard(stored.scope) == "2019")) {
                 report("FSIM-ELAB-VHARRAY-010",
                     "VHDL " + std::string { stored.form == Form::signal ? "signal" : "variable" }
                         + " '" + stored.name + "' requires a constrained array subtype",
@@ -6631,11 +6685,15 @@ private:
                     instance.source);
             }
             if (name_check_) {
+                // The actual of a type or package generic is a subtype
+                // indication or a package (IEEE 1076-2008 6.5.7.2).
+                const bool type_generics = instance_has_type_generic(instance);
                 for (const auto* map : { &instance.generic_map, &instance.port_map }) {
                     for (const auto& association : *map) {
                         if (association.kind == semantic::vhdl::AssociationKind::expression
                             && association.expression) {
-                            validate_value_name(*association.expression);
+                            validate_value_name(*association.expression,
+                                map == &instance.generic_map && type_generics);
                             validate_label_actual(*association.expression);
                         }
                     }

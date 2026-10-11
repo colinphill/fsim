@@ -1,4 +1,5 @@
 // fsim: top=sv_parameter_types std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 6.20.2: a value parameter without a type or range takes
 // the width and signedness of its value; with a range it has that range and
 // its value converts to it. 5.7.1: an unsized based literal is 32 bits and

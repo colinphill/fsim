@@ -1,4 +1,5 @@
 -- fsim: top=typed_files(sim) std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-1993 3.4 and 14.1: files of TIME, REAL, BOOLEAN, enumeration,
 -- BIT_VECTOR and record elements are written and read back unchanged.
 entity typed_files is

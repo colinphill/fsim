@@ -975,8 +975,12 @@ end architecture;
 )",
         "vhdl:work.missing_component_type_top(rtl)");
     assert(!missing_component_type.ok());
+    // The undeclared port type is reported by the name check
+    // (VHTYPE-006) or, failing that, by elaboration (VHTYPE-001).
     assert(has_diagnostic(
-        missing_component_type, "FSIM-ELAB-VHTYPE-001"));
+               missing_component_type, "FSIM-ELAB-VHTYPE-001")
+        || has_diagnostic(
+            missing_component_type, "FSIM-ELAB-VHTYPE-006"));
 
     const auto missing_nonvalue_default = elaborate_vhdl_component_text(
         "component_missing_nonvalue_default.vhd",
@@ -1476,6 +1480,7 @@ end architecture;
 entity expression_port_top is
 end entity;
 architecture rtl of expression_port_top is
+  subtype nibble_t is bit_vector(3 downto 0);
   component expression_port_leaf is
     port (
       component_input : in bit_vector(3 downto 0);
@@ -1486,7 +1491,7 @@ begin
     port map (bit_vector'("1010"), open);
   aggregate_child: entity work.expression_port_leaf(rtl)
     port map (
-      entity_input => bit_vector'(
+      entity_input => nibble_t'(
         0 => '1', others => '0'),
       entity_output => open);
 end architecture;

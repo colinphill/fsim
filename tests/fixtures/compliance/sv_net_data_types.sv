@@ -1,4 +1,5 @@
 // fsim: top=sv_net_data_types std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 6.7.1: a net declaration with an explicit 4-state data
 // type (wire logic, wire integer), and the vectored/scalared keywords.
 module sv_net_data_types;

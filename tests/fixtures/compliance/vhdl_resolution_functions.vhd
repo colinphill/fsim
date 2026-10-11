@@ -1,4 +1,5 @@
 -- fsim: top=resolution_functions(sim) std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-1993 2.4 and 12.6.1: a resolution function computes a resolved
 -- signal's value from the array of its drivers' values, indexed from the
 -- low bound of the formal's index subtype; the initial value is the

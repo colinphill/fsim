@@ -339,9 +339,14 @@ void verify_mode(
             std::string,
             fsim::runtime::SimulationTick>> {
             { "0", 3 }, { "1", 29 }, { "0", 43 }, { "Z", 63 }, { "X", 83 } }));
-    assert(
+    // The buf gate follows the assignment except that it drives x, not z,
+    // for a z input (IEEE 1800-2017 28.5; as xsim).
+    assert((
         changes_for(reference, "transition_delays.gate_output")
-        == changes_for(reference, "transition_delays.two_output"));
+        == std::vector<std::pair<
+            std::string,
+            fsim::runtime::SimulationTick>> {
+            { "0", 3 }, { "1", 29 }, { "0", 43 }, { "X", 63 } }));
     const auto mode_offset = static_cast<fsim::runtime::SimulationTick>(mode);
     const std::vector<std::pair<
         std::string,
@@ -350,8 +355,8 @@ void verify_mode(
             { "0", 4 + mode_offset },
             { "1", 21 + mode_offset },
             { "0", 44 + mode_offset },
-            { "Z", 61 + mode_offset },
-            { "X", 81 + mode_offset }
+            // A buffer drives x for a z input (IEEE 1800-2017 28.5).
+            { "X", 61 + mode_offset }
         };
     const auto actual_gate_triple = changes_for(
         reference, "transition_delays.gate_triple_output");
@@ -364,8 +369,18 @@ void verify_mode(
         std::cerr << '\n';
     }
     assert(actual_gate_triple == expected_gate_triple);
-    assert((
-        changes_for(reference, "transition_delays.gate_array_output")
+    // Each instance of the gate array updates its own bit, so the settled
+    // value of each time step is compared.
+    auto settled_gate_array
+        = changes_for(reference, "transition_delays.gate_array_output");
+    for (std::size_t index = settled_gate_array.size(); index > 1U; --index) {
+        if (settled_gate_array[index - 2U].second
+            == settled_gate_array[index - 1U].second) {
+            settled_gate_array.erase(settled_gate_array.begin()
+                + static_cast<std::ptrdiff_t>(index - 2U));
+        }
+    }
+    assert((settled_gate_array
         == std::vector<std::pair<
             std::string,
             fsim::runtime::SimulationTick>> {
@@ -375,7 +390,9 @@ void verify_mode(
         == std::vector<std::pair<
             std::string,
             fsim::runtime::SimulationTick>> {
-            { "1", 22 }, { "0", 43 }, { "Z", 64 }, { "X", 82 } }));
+            // As xsim: the disabled buffer turns off after 4 ps, and a z
+            // data input drives x (IEEE 1800-2017 28.6).
+            { "Z", 4 }, { "1", 22 }, { "0", 43 }, { "X", 62 } }));
     assert((
         changes_for(reference, "transition_delays.notif_output")
         == std::vector<std::pair<
@@ -1402,14 +1419,15 @@ endmodule
             == std::vector<std::pair<
                 std::string,
                 fsim::runtime::SimulationTick>> {
-                { "0", 4 }, { "1", 13 }, { "0", 24 } }));
+                // The undriven wire takes its driver's X at time 0.
+                { "X", 0 }, { "0", 4 }, { "1", 13 }, { "0", 24 } }));
         assert(changes_for_signal("parameter_delay_top.slow") == expected_slow);
         assert((
             changes_for_signal("parameter_delay_top.net_slow")
             == std::vector<std::pair<
                 std::string,
                 fsim::runtime::SimulationTick>> {
-                { "0", 7 }, { "1", 16 }, { "0", 27 } }));
+                { "X", 0 }, { "0", 7 }, { "1", 16 }, { "0", 27 } }));
         assert(reference.changes == cold.changes);
         assert(reference.changes == warm.changes);
         assert(reference.specialization_keys == cold.specialization_keys);

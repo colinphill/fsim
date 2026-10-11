@@ -1,4 +1,5 @@
 -- fsim: top=environment_tee_and_flush(sim) std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 16.5: STOP and FINISH made visible by a use clause of
 -- STD.ENV; 16.4: TEE writes a line to a file and to OUTPUT; 5.5.2: FLUSH
 -- of an open file, after which a second file object reads what was

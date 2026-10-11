@@ -1,4 +1,5 @@
 -- fsim: top=names_and_orderings(sim) std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-1993 1.1.2: constants in an entity declarative part; 2.1.1.2:
 -- signal parameters of functions; 7.2.2: ordering of discrete arrays,
 -- lexicographic from the left element; 3.2.1: index ranges and integer

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # A2 applied-role journal, cancellation, and checked-fallback witness.
 add_executable(
   fsim_runtime_a2_role_journal_tests

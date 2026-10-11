@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # A2 single-root acyclic fanout role-journal witness.
 add_executable(
   fsim_application_native_frontier_a2_single_root_fanout_tests

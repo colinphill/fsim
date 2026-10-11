@@ -1,4 +1,5 @@
 -- fsim: top=package_instances_and_blocks_cfg std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 4.9: a design-unit package instantiation of a generic
 -- package with constant, type and function generics; 11.7.1: a component
 -- instantiated without maps inside a block; 7.3: a configuration

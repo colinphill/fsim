@@ -1,4 +1,5 @@
 // fsim: top=sv_delays_packages_and_classes std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 10.3.3 and 10.4.2: continuous and nonblocking assignments
 // whose delay is a run-time expression; 11.5.1: a partially out-of-range
 // part-select writes only the bits inside the range; 10.4.2: nonblocking

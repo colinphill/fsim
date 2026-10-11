@@ -1,4 +1,5 @@
 -- fsim: top=package_shared_variables(sim) std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 4.7, 5.6.2 and 6.4.2.4: a shared variable of a protected
 -- type declared in a package (here its body) is one object shared by every
 -- design unit that calls the package's subprograms.

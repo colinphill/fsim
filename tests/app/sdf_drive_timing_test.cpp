@@ -369,7 +369,9 @@ void test_pending_force_release_strength_and_vector_parity()
     const auto vector = run_forced_path("11", "00", "XX");
     require(vector.visible_before_release == "XX"
             && vector.strong_driver == "ZZ" && vector.weak_driver == "00"
-            && vector.peer == "00" && vector.visible_after_release == "00",
+            // A forced net drives its switch network (IEEE 1800-2017
+            // 10.6.2, 28.8), so the forced value reaches the tran peer.
+            && vector.peer == "XX" && vector.visible_after_release == "00",
         "force must mask delayed drivers while release exposes current resolution");
     require(std::ranges::any_of(vector.driver_changes, [](const auto& change) {
         return std::get<0>(change) == 3U
@@ -383,7 +385,7 @@ void test_pending_force_release_strength_and_vector_parity()
         "annotated pending values and driver removal must update beneath force");
     require(scalar.visible_before_release == "X"
             && scalar.strong_driver == "Z" && scalar.weak_driver == "0"
-            && scalar.peer == "0" && scalar.visible_after_release == "0",
+            && scalar.peer == "X" && scalar.visible_after_release == "0",
         "scalar and packed drive timing must use equivalent resolution rules");
 }
 
@@ -584,16 +586,14 @@ endmodule
                 && compiled.changes == reference.changes,
             "interpreter and LLVM must agree on partial force and release");
 
-        const auto forced_64 = "X" + std::string(63U, '0');
+        // The strong 0 from time 0 would appear at 3 ps and give way to Z
+        // at 5 ps; the module path delay is inertial, so that 2 ps pulse
+        // is rejected (IEEE 1800-2017 30.7) and the nets stay X (strong X
+        // over weak 1) until 5 ps, as in xsim. The forced bits then stay X
+        // while the unforced bits take the weak 1.
         const auto weak_64 = "X" + std::string(63U, '1');
-        const auto forced_65 = "XX" + std::string(63U, '0');
         const auto weak_65 = "XX" + std::string(63U, '1');
-        require(has_change(reference, 1U, "top.z1", "X")
-                && has_change(reference, 1U, "top.z64", forced_64)
-                && has_change(reference, 1U, "top.z65", forced_65),
-            "partial force must preserve strongly driven unforced bits");
-        require(has_change(reference, 0U, "top.z64", std::string(64U, '0'))
-                && has_change(reference, 0U, "top.z65", std::string(65U, '0'))
+        require(!has_change(reference, 3U, "top.z64", std::string(64U, '0'))
                 && has_change(reference, 5U, "top.z64", weak_64)
                 && has_change(reference, 5U, "top.z65", weak_65),
             "underlying strong-to-Z updates must resolve beneath partial force");

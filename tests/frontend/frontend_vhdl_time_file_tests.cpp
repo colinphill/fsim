@@ -160,7 +160,10 @@ end architecture;
           && architecture->parameters.front().type.packed_range->left == 63
           && architecture->parameters.front().type.packed_range->right == 0
           && architecture->parameters.front().type.integer_range
-          && architecture->parameters.front().type.integer_range->left == 0
+          // TIME includes negative values; only DELAY_LENGTH is
+          // non-negative (IEEE 1076-2008 16.3).
+          && architecture->parameters.front().type.integer_range->left
+              == std::numeric_limits<std::int64_t>::min()
           && architecture->parameters.front().type.integer_range->right
               == std::numeric_limits<std::int64_t>::max()
           && architecture->parameters.front().default_value.kind

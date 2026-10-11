@@ -3425,11 +3425,17 @@ namespace {
             const bool supported_base = base
                 && (base->domain == frontend::ValueDomain::Bit2
                     || base->domain == frontend::ValueDomain::Logic9);
+            // The parameter is a one-dimensional unconstrained array of the
+            // resolved type (IEEE 1076-2008 4.6).
+            const bool unconstrained_array_formal = formal_type
+                && formal_type->vhdl_array
+                && formal_type->vhdl_array->dimensions.size() == 1U
+                && formal_type->vhdl_array->dimensions.front().unconstrained;
             const bool profile_matches = callable.callable->function
                 && callable.callable->pure
                 && callable.callable->defined
                 && callable.callable->formals.size() == 1U
-                && supported_base && formal_type && formal_type->vhdl_array
+                && supported_base && unconstrained_array_formal
                 && formal_type->vhdl_array->element_domain == base->domain
                 && return_type && !return_type->vhdl_array
                 && return_type->domain == base->domain;
@@ -3445,7 +3451,7 @@ namespace {
                 && callable.callable->pure
                 && callable.callable->defined
                 && callable.callable->formals.size() == 1U
-                && base && formal_type && formal_type->vhdl_array
+                && base && unconstrained_array_formal
                 && return_type
                 && std::ranges::find(general_bodies, resolution.body)
                     == general_bodies.end();
@@ -4160,7 +4166,7 @@ namespace {
         }
         if (definition != nullptr
             && definition->form == semantic::vhdl::TypeForm::record) {
-            PackedLogic4 result { width, Logic4::zero };
+            std::vector<std::pair<PackedLogic4, std::size_t>> values;
             auto offset = width;
             for (const auto& element : definition->record_elements) {
                 const auto element_subtype = compiled_vhdl_link_subtype(
@@ -4173,15 +4179,29 @@ namespace {
                     return std::nullopt;
                 }
                 offset -= *element_width;
-                const auto value = compiled_vhdl_composite_default(
+                auto value = compiled_vhdl_composite_default(
                     specialization, element_subtype, *element_width,
                     depth + 1U, true);
                 if (!value) {
                     return std::nullopt;
                 }
-                insert_compiled_default(result, *value, offset);
+                values.emplace_back(std::move(*value), offset);
             }
-            return offset == 0U ? std::optional { result } : std::nullopt;
+            if (offset != 0U) {
+                return std::nullopt;
+            }
+            // A nine-valued element ('U' for STD_ULOGIC) keeps the record's
+            // value nine-valued.
+            PackedLogic4 result { width, Logic4::zero };
+            if (std::ranges::any_of(values, [](const auto& entry) {
+                    return entry.first.is_logic9();
+                })) {
+                result.fill(runtime::Logic9::zero);
+            }
+            for (const auto& [value, at] : values) {
+                insert_compiled_default(result, value, at);
+            }
+            return result;
         }
         if (definition != nullptr
             && definition->form == semantic::vhdl::TypeForm::array
@@ -8802,7 +8822,7 @@ namespace {
                     && std::ranges::any_of(bound, [](const bool covered) {
                            return !covered;
                        })) {
-                    append("FSIM-ELAB-SVAGG-003",
+                    append("FSIM-ELAB-SVAGG-008",
                         "assignment pattern omits a structure member",
                         value.source);
                     valid = false;
@@ -14273,7 +14293,7 @@ HierarchyBuilder::compiled_vhdl_root_generic_actuals(
         }
         if (!identity) {
             report(
-                "FSIM-ELAB-GENERIC-009",
+                "FSIM-ELAB-GENERIC-011",
                 "top-level generic override '" + declaration->vhdl->name
                     + "=" + value
                     + "' is not a STRING, integer or BOOLEAN value",
@@ -14502,10 +14522,42 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                         ->type_mark.spelling);
             const auto actual_name
                 = simple_name_of(qualified_name);
+            // The qualifying type mark may be any subtype of the
+            // formal's base type (IEEE 1076-2008 9.3.5, 6.5.7.1).
+            const auto base_name = [&](const semantic::vhdl::SubtypeIndication& subtype,
+                                       const semantic::ScopeId scope) {
+                auto current = compiled_vhdl_link_subtype(
+                    port_actual_specialization, subtype, scope);
+                std::unordered_set<std::uint32_t> visited;
+                for (;;) {
+                    const auto type_id = current.type_mark.target;
+                    const auto type = type_id.valid()
+                            && visited.insert(type_id.value()).second
+                        ? port_actual_specialization.find_type(type_id)
+                        : std::nullopt;
+                    if (!type || type->vhdl == nullptr
+                        || (type->vhdl->form
+                                != semantic::vhdl::TypeForm::subtype
+                            && type->vhdl->form
+                                != semantic::vhdl::TypeForm::alias)) {
+                        return lowercase_ascii_copy(
+                            type && type->vhdl != nullptr
+                                ? simple_name_of(type->vhdl->name)
+                                : simple_name_of(current.type_mark.spelling));
+                    }
+                    current = type->vhdl->base;
+                }
+            };
+            const auto formal_base = base_name(
+                *formal_declaration.subtype, formal_declaration.scope);
             const auto compatible
                 = (!formal_name.empty() && !actual_name.empty()
                       && compiled_vhdl_name_equal(
                           formal_name, actual_name))
+                || (!formal_base.empty()
+                    && formal_base
+                        == base_name(qualified_subtype,
+                            actual_expression.scope))
                 || semantic::CompiledDesignResolver {
                        port_actual_specialization
                    }
@@ -16659,13 +16711,34 @@ bool HierarchyBuilder::validate_compiled_vhdl_context_visibility(
                         owner_library, parts[0]);
                     if (named_package == nullptr) {
                         if (!compiled_vhdl_name_equal(parts[1], "all")) {
+                            const auto library
+                                = compiled_vhdl_effective_library(
+                                    parts[0], owner_library);
                             const auto* package = find_unit(
                                 semantic::vhdl::UnitKind::package,
-                                compiled_vhdl_effective_library(
-                                    parts[0], owner_library),
-                                parts[1]);
+                                library, parts[1]);
                             if (package != nullptr) {
                                 validate_package(*package, item.source);
+                            } else if (compiled_vhdl_library_equal(
+                                           library, owner_library)
+                                && std::ranges::none_of(
+                                    compiled_->vhdl_units(),
+                                    [&](const semantic::vhdl::Unit& unit) {
+                                        return unit.primary_name.empty()
+                                            && compiled_vhdl_library_equal(
+                                                unit.library, library)
+                                            && compiled_vhdl_name_equal(
+                                                unit.name, parts[1]);
+                                    })) {
+                                // `use lib.unit` names a design unit of
+                                // the library (IEEE 1076-2008 12.4).
+                                report("FSIM-ELAB-PKG-001",
+                                    "use clause names '" + std::string { spelling }
+                                        + "', which is not a design unit of library '"
+                                        + std::string { library } + "'",
+                                    compiled_source_span(
+                                        *compiled_, item.source));
+                                valid = false;
                             }
                         }
                         continue;
@@ -18818,6 +18891,16 @@ bool HierarchyBuilder::validate_compiled_vhdl_selected_package_names(
             }
         }
     }
+    // The path of an external name is a hierarchy path, not an expanded
+    // name (IEEE 1076-2008 8.7).
+    std::unordered_set<std::uint32_t> external_paths;
+    for (const auto& expression : compiled_->vhdl_hir.expressions()) {
+        if (expression.kind == semantic::vhdl::ExpressionKind::call
+            && expression.text == "@vhdl-external"
+            && !expression.operands.empty()) {
+            external_paths.insert(expression.operands.front().value());
+        }
+    }
     const auto locally_declared = [&](const std::string_view name) {
         return std::ranges::any_of(
             compiled_->vhdl_hir.declarations(),
@@ -18838,6 +18921,7 @@ bool HierarchyBuilder::validate_compiled_vhdl_selected_package_names(
         if (expression.kind
                 != semantic::vhdl::ExpressionKind::name
             || association_actuals.contains(expression.id.value())
+            || external_paths.contains(expression.id.value())
             || (expression.referenced_name
                 && (expression.referenced_name->selected
                     || !expression.referenced_name

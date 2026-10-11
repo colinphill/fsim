@@ -2314,8 +2314,8 @@ end architecture;
     constant_literal_record.id = constant_literal;
     constant_literal_record.scope = architecture_scope;
     constant_literal_record.kind
-        = semantic::vhdl::ExpressionKind::integer_literal;
-    constant_literal_record.text = "1";
+        = semantic::vhdl::ExpressionKind::logic_literal;
+    constant_literal_record.text = "'1'";
     constant_literal_record.source = statement_source;
     constant_literal_record.origin = architecture_origin;
     constant_compiled.vhdl_hir.mutable_expressions().push_back(

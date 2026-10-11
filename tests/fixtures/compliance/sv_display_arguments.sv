@@ -1,4 +1,5 @@
 // fsim: top=sv_display_arguments std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 21.2.1: an empty display argument prints a space, a string
 // literal after the first argument is a format for the arguments that follow,
 // and a decimal value without an explicit field width is padded to the width

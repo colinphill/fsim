@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Add from tests/CMakeLists.txt after the test helpers are defined.
 add_executable(
   fsim_llvm_region_frontier_abi_v2_layout_tests

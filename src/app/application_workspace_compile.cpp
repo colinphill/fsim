@@ -380,8 +380,9 @@ namespace {
         // A unit that needs generic values or other design context cannot be
         // checked on its own.
         const auto incomplete_context = [](const std::string_view code) {
-            return code.starts_with("FSIM-ELAB-GENERIC-")
-                || code.starts_with("FSIM-ELAB-VHFUNC-");
+            // The generic (GENERIC) and function call (VHFUNC) families.
+            const auto family = code.substr(0, code.rfind('-'));
+            return family.ends_with("-GENERIC") || family.ends_with("-VHFUNC");
         };
         // Elaborating an architecture also elaborates everything it
         // instantiates, which can cost more than the analysis itself; an

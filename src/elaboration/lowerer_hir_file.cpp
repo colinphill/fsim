@@ -3050,6 +3050,16 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         // (IEEE 1076-2008 16.4).
         const auto user_enumeration = [&] {
             const auto subtype = hir_vhdl_expression_subtype(*value);
+            // Nor does it for the STANDARD enumerations SEVERITY_LEVEL,
+            // FILE_OPEN_KIND and FILE_OPEN_STATUS.
+            if (subtype) {
+                const auto mark = lowercase_ascii_copy(
+                    simple_name_of(subtype->type_mark.spelling));
+                if (mark == "severity_level" || mark == "file_open_kind"
+                    || mark == "file_open_status") {
+                    return true;
+                }
+            }
             auto type_id = subtype ? subtype->type_mark.target
                                    : semantic::TypeId { };
             std::unordered_set<std::uint32_t> visited;
@@ -3079,7 +3089,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         // TO_STRING produces it.
         if (user_enumeration) {
             return fail("FSIM-ELAB-VHTEXTIO-009",
-                "STD.TEXTIO declares no WRITE for a value of a user-declared "
+                "STD.TEXTIO declares no WRITE for a value of this "
                 "enumeration type");
         }
         if (const auto image = lower_hir_vhdl_runtime_image(*value,

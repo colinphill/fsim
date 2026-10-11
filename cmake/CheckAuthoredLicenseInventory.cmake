@@ -35,7 +35,9 @@ foreach(FSIM_RELATIVE IN LISTS FSIM_PACKAGED_PATHS)
   string(FIND "${FSIM_PREFIX}" "SPDX-License-Identifier: Apache-2.0"
     FSIM_APACHE_OFFSET)
   if(FSIM_APACHE_OFFSET EQUAL -1)
-    if(FSIM_RELATIVE STREQUAL "scripts/simplification_benchmarks.json")
+    # Data files (golden outputs, benchmark tables) carry their notice in a
+    # REUSE-style `.license` companion.
+    if(EXISTS "${FSIM_FILE}.license")
       file(READ "${FSIM_FILE}.license" FSIM_COMPANION_LICENSE)
       if(FSIM_COMPANION_LICENSE STREQUAL
           "SPDX-License-Identifier: Apache-2.0\n")

@@ -243,7 +243,7 @@ foreach(FSIM_ABI_V2_POLICY IN ITEMS
   endif()
 endforeach()
 foreach(FSIM_ABI_V2_EVIDENCE IN ITEMS
-    "sizeof(fsim_jit_services_v2) == 680U"
+    "sizeof(fsim_jit_services_v2) == 688U"
     "sizeof(fsim_jit_runtime_instance_v2) == 232U"
     "offsetof(fsim_jit_services_v2, write_update) == 32U"
     "offsetof(fsim_jit_services_v2, write_signal_packed) == 624U"

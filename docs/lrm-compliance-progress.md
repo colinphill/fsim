@@ -253,6 +253,82 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Regression batch 1: ctest regressions from the LRM batches
+
+Fixtures: `vhdl_record_defaults_and_resolution.vhd` and
+`sv_buffer_gates_z_input.sv` (both pass on xsim).
+
+The `vhdl`, `systemverilog` and `compliance` ctest labels had 41
+failures. Most came from analysis checks added by earlier batches that
+our own test designs violated, and some from simulator regressions.
+
+Simulator fixes:
+
+- A record signal's STD_LOGIC_VECTOR element started at 'X' instead of
+  'U' (since batch 34): a record default now stays nine-valued when an
+  element is.
+- `buf` and `bufif` drive x for a z input (IEEE 1800-2017 28.5, 28.6);
+  they passed z through. Matches xsim, including the delays.
+- A resolution function's parameter must be a one-dimensional
+  unconstrained array (IEEE 1076-2008 4.6).
+- A port actual qualified by a subtype of the formal's type is accepted
+  (the check compared type mark names).
+- Generic map actuals of type, package and subprogram generics are not
+  flagged as type names (`FSIM-ELAB-VHNAME-004`); external name paths are
+  not checked as expanded names (`FSIM-ELAB-VHNAME-014`).
+- VHDL-2019 signals and variables with an unconstrained array subtype
+  and an initial value take its constraints.
+- `use lib.unit;` naming no design unit is reported (`FSIM-ELAB-PKG-001`).
+- STD.TEXTIO has no WRITE for SEVERITY_LEVEL, FILE_OPEN_KIND or
+  FILE_OPEN_STATUS (`FSIM-ELAB-VHTEXTIO-009`).
+- Two codes reused by later batches with new meanings were renumbered
+  (`FSIM-ELAB-GENERIC-011`, `FSIM-ELAB-SVAGG-008`); retired codes moved to
+  the compatibility registry; the catalog documents VHNAME-014/015 and
+  FE-VHCONFIG-001.
+
+Test sources fixed to legal VHDL (the owner chose fixing tests over
+keeping non-LRM extensions): signals passed to `variable` formals,
+reserved words as identifiers (`label`, generate labels equal to
+generics), slices of two-dimensional arrays, negative BIT_VECTOR bounds,
+`f()` calls, missing IEEE context clauses and component declarations,
+NATURAL assigned to UNSIGNED, an access-type signal, an unconstrained
+VHDL-2008 variable, OTHERS in an unconstrained qualified aggregate, and
+a declaration between the generic and port clauses. Expectations that
+changed with LRM-correct behaviour were updated (TIME includes negative
+values; `use open` leaves an instance unbound; a forced net drives its
+switch network; module path delays reject short pulses; the VITAL path
+delay applies at 0 ns; newer analysis codes replace bounded-runtime
+codes), each checked against xsim where it is a simulation result.
+
+Housekeeping: test initializers for a field added in batch 29 (the
+`fsim_runtime_tests` and `fsim_llvm_tests` binaries did not compile),
+SPDX notices and `.license` companions for files added without them,
+and stale counts in the closure-audit and Windows ABI checks.
+
+Still failing (not LRM): the native region-kernel admission tests
+(`systemverilog-scheduling-witnesses.llvm-O0/O2`, `native-region-route`,
+`native-frontier-random-dag`) fail with the v4 qualification binary too;
+`specify` parses a runtime-state layout changed by Engine v4 Phase 1;
+`vhdl_projected` (native component member count) and two runtime
+optimizer tests (`fsim.runtime` static cohorts,
+`aggregate_proxy_leaf_write_differential`) need separate investigation.
+`uvm-closure-audit` and `source-package-manifest` fail only on an
+untracked local file. Known gap: with a partial force of one bit of a
+net, a bit-select of that bit reads Z instead of X before the force.
+
+Corpus (passed/total, unique case ids; r1 = wip25, against c3):
+
+| Suite | Cleanup 3 | Regression 1 |
+|---|---:|---:|
+| VESTs | 3266/3648 | 3266/3648 |
+| nvc regress | 612/1482 | 613/1482 |
+| VHDL Compliance-Tests | 31/72 | 31/72 |
+| ivtest | 2124/2826 | 2129/2826 |
+| Verilator test_regress | 1022/2415 | 1022/2415 |
+| sv-tests | 1337/1497 | 1337/1497 |
+
+No case that passed in c3 fails in r1.
+
 ### Cleanup batch 3: behavioural merges
 
 Fixture: `vhdl2019_integer_vectors.vhd`.

@@ -1,4 +1,5 @@
 -- fsim: top=composite_constants(sim) std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 6.4.2.2 and 9.3.3: composite constants and signals whose
 -- elements are integers, enumerations, vectors or records, declared in
 -- packages and architectures, read with static and dynamic indices.

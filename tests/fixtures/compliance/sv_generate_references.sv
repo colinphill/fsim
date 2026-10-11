@@ -1,4 +1,5 @@
 // fsim: top=sv_generate_references
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 27.4 and 23.6: variables and instance parameters of loop
 // generate blocks referenced by constant index (`row[1].col[2].tap`), and
 // 23.8/23.10: a defparam whose first name is the enclosing generate block.

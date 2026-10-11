@@ -1,4 +1,5 @@
 // fsim: top=sv_class_construction_in_methods std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 8.7: `new` inside class methods (a singleton built by a
 // static function) and property initializers that are not literals, run
 // after the base constructor; 8.9: a static class-handle property

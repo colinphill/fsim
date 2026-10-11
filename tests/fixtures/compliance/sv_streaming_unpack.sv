@@ -1,4 +1,5 @@
 // fsim: top=sv_streaming_unpack std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 11.4.14.3: a streaming concatenation as an assignment
 // target unpacks the source into its operands.
 module sv_streaming_unpack;

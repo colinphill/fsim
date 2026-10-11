@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 add_executable(
   fsim_application_native_frontier_generic_update_failure_tests
   app/native_frontier_generic_update_failure_test.cpp

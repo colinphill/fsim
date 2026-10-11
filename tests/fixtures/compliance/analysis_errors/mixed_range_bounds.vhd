@@ -1,4 +1,5 @@
 -- fsim-expect: FSIM-ELAB-VHRANGE-001 std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 5.2.3.1: an integer type definition has integer bounds.
 entity mixed_range_bounds is
 end entity;

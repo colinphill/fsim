@@ -1,4 +1,5 @@
 -- fsim: top=qualified_aggregates_and_imports(sim) std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-1993 10.4: use clauses naming a whole library, a package, and
 -- the contents of a package made visible by an earlier use clause; 7.3.2:
 -- aggregates of CHARACTER and TIME arrays and qualified aggregates of

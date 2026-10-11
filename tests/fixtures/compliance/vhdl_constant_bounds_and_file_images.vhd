@@ -1,4 +1,5 @@
 -- fsim: top=constant_bounds_and_file_images(sim) std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-1993 3.2.1.1 and 4.3.1.1: an unconstrained constant takes its
 -- index range from its value; 14.1: the bounds of a floating subtype; 4.3.1.2:
 -- signal initial values of record and TIME types; 3.3: array attributes of

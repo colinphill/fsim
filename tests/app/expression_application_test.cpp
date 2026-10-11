@@ -754,6 +754,7 @@ architecture rtl of shift_rotate_app is
   signal conditional_selected : std_logic_vector(7 downto 0);
   signal expression_conditional : std_logic_vector(128 downto 0);
   signal short_circuit_conditional : integer;
+  signal zero_divisor : integer := 0;
   signal case_expression : std_logic_vector(7 downto 0);
   signal case_range_expression : integer;
   signal external_name_expression : signed(7 downto 0);
@@ -795,7 +796,7 @@ begin
   expression_conditional <=
     (129X"2" when false else case_declaration);
   short_circuit_conditional <=
-    (7 when true else 1 / 0);
+    (7 when true else 1 / zero_divisor);
   case_expression <=
     (case dynamic_selector is
        when "10" | "11" => 8X"3C",

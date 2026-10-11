@@ -1,4 +1,5 @@
 -- fsim-expect: FSIM-ELAB-VHBODY-001 std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 4.2.1: a subprogram declared in an architecture has its
 -- body in the same declarative part.
 entity missing_body is

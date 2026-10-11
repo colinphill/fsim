@@ -1139,7 +1139,8 @@ begin
     Matrix_Dynamic_Read <=
       Matrix_Local(Matrix_Row, Matrix_Column);
     Matrix_Local(Matrix_Row, Matrix_Column) := '0';
-    Matrix_Local(0, 3 downto 2) := "10";
+    Matrix_Local(0, 3) := '1';
+    Matrix_Local(0, 2) := '0';
     Matrix_Local_Result <= Matrix_Local;
     Matrix_Signal_Target(1, 2) <= '1';
     Matrix_Dynamic_Signal_Target(Matrix_Row, Matrix_Column) <= '1';
@@ -1246,14 +1247,22 @@ begin
       Generated_Matrix_Copy(Callable_Matrix_Input);
   end generate;
 
-  Disjoint_Driver_Matrix(0, 3 downto 1) <= "101";
-  Disjoint_Driver_Matrix(1, 3 downto 1) <= "010";
+  Disjoint_Driver_Matrix(0, 3) <= '1';
+  Disjoint_Driver_Matrix(0, 2) <= '0';
+  Disjoint_Driver_Matrix(0, 1) <= '1';
+  Disjoint_Driver_Matrix(1, 3) <= '0';
+  Disjoint_Driver_Matrix(1, 2) <= '1';
+  Disjoint_Driver_Matrix(1, 1) <= '0';
   Disjoint_Driver_Expected <= ("101", "010");
   Disjoint_Driver_Equal <=
     Disjoint_Driver_Matrix = Disjoint_Driver_Expected;
 
-  Resolved_Driver_Matrix(0, 3 downto 1) <= "10Z";
-  Resolved_Driver_Matrix(1, 3 downto 1) <= "0H1";
+  Resolved_Driver_Matrix(0, 3) <= '1';
+  Resolved_Driver_Matrix(0, 2) <= '0';
+  Resolved_Driver_Matrix(0, 1) <= 'Z';
+  Resolved_Driver_Matrix(1, 3) <= '0';
+  Resolved_Driver_Matrix(1, 2) <= 'H';
+  Resolved_Driver_Matrix(1, 1) <= '1';
   Resolved_Driver_Expected <= ("10Z", "0H1");
   Resolved_Driver_Equal <=
     Resolved_Driver_Matrix = Resolved_Driver_Expected;
@@ -1319,7 +1328,8 @@ begin
     (2 => (Flag => true, Data => "10"),
      others => (Data => "01", Flag => false));
   Matrix_Cell_Read <= Matrix_Positional(1, 2);
-  Matrix_Slice_Read <= Matrix_Positional(0, 3 downto 2);
+  Matrix_Slice_Read <=
+    Matrix_Positional(0, 3) & Matrix_Positional(0, 2);
   Nested_Read <= Nested(1)(2);
   Vector_Rows <= ("1010", "0101");
   Vector_Read <= Vector_Rows(1);
@@ -1809,8 +1819,10 @@ architecture rtl of Overlapping_Driver_Failure is
   type Matrix_T is array (0 to 1, 3 downto 1) of bit;
   signal Value : Matrix_T;
 begin
-  Value(0, 3 downto 2) <= "10";
-  Value(0, 2 downto 1) <= "01";
+  Value(0, 3) <= '1';
+  Value(0, 2) <= '0';
+  Value(0, 2) <= '0';
+  Value(0, 1) <= '1';
 end architecture;
 )";
     assert(output.good());

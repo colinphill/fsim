@@ -1,4 +1,5 @@
 // fsim: top=sv_patterns_and_aggregates std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 21.2.1.7: %p assignment patterns in $sformatf; 7.2: members
 // of an unpacked structure variable, including string and real members;
 // 10.9 and 6.8: container declaration initializers; 10.10: unpacked array

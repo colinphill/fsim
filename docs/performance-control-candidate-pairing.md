@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # Throughput control/candidate pairing runner
 
 `python3 scripts/perf_pair_campaign.py` is the control/candidate wrapper for the

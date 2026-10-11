@@ -1,4 +1,5 @@
 -- fsim: top=vhdl_operator_overloads(sim)
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 9.2.4-9.2.8: predefined adding, multiplying, remainder and
 -- exponentiation operators on numeric operands, and visible overloads of
 -- those operators for other types (these must not be rejected at analysis).

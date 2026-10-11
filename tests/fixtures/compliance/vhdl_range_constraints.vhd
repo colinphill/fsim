@@ -1,4 +1,5 @@
 -- fsim: top=range_constraints(sim) std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-1993 3.2.1.1 and 4.2: index constraints given by a range
 -- attribute, a discrete subtype name or `T range L to R`; attributes and
 -- locals of unconstrained formals inside subprograms; the optional reserved

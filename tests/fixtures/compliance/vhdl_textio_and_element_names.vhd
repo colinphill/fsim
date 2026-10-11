@@ -1,4 +1,5 @@
 -- fsim: top=vhdl_textio_and_element_names(sim) std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 16.4: TextIO WRITE of TIME with a unit, REAL with DIGITS,
 -- enumeration and vector values, OUTPUT, DEALLOCATE of a LINE and LINE
 -- formals of mode inout; 9.3.4: operator symbol function calls; 9.3.5:

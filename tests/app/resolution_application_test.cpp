@@ -1551,7 +1551,10 @@ endmodule
     const auto vhdl_source = directory / "mixed_timing_mid.vhd";
     {
         std::ofstream output(vhdl_source, std::ios::binary);
-        output << R"(entity Mixed_Timing_Mid is
+        output << R"(library ieee;
+use ieee.std_logic_1164.all;
+
+entity Mixed_Timing_Mid is
   generic (Enabled : boolean := false);
   port (
     Zero_Result : out std_logic_vector(3 downto 0);
@@ -1566,6 +1569,12 @@ endmodule
 end entity;
 
 architecture rtl of Mixed_Timing_Mid is
+  component sv_transition_leaf is
+    port (Result : out std_logic_vector(3 downto 0));
+  end component sv_transition_leaf;
+  component sv_region_leaf is
+    port (Result : out std_logic_vector(3 downto 0));
+  end component sv_region_leaf;
 begin
   Transition_Leaf : sv_transition_leaf
     port map (Result => Transition_Result);
@@ -1968,7 +1977,10 @@ endmodule
     const auto vhdl_source = directory.path / "vhdl_driver.vhd";
     {
         std::ofstream output(vhdl_source, std::ios::binary);
-        output << R"(entity vhdl_driver is
+        output << R"(library ieee;
+use ieee.std_logic_1164.all;
+
+entity vhdl_driver is
   port (value : out std_logic);
 end entity;
 

@@ -1,4 +1,5 @@
 -- fsim: top=vhdl_attributes_and_conversions(sim) std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 6.7 and 7.2: user-defined attribute values; 6.5.7.1:
 -- conversion functions in the formal part of an output port association;
 -- 9.4: static REAL and CHARACTER array initial values; 9.2: a user-defined

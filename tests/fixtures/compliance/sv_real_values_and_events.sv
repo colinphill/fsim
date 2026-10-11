@@ -1,4 +1,5 @@
 // fsim: top=sv_real_values_and_events std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 6.12.2: integral and real values convert on assignment to
 // container elements and function arguments; 11.3.1: a real operand makes an
 // operation real, and 11.4.3: a real power; 11.4.13: compound assignments

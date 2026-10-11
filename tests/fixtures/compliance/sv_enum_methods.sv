@@ -1,4 +1,5 @@
 // fsim: top=sv_enum_methods std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 6.19.5: enumeration methods first, last, next(N),
 // prev(N), num and name, with or without parentheses, on typedef and
 // anonymous enumerations; 6.19.2: literal ranges name[N] and name[N:M];

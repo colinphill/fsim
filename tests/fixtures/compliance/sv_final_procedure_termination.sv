@@ -1,4 +1,5 @@
 // fsim: top=sv_final_procedure_termination
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 9.2.3: a final procedure may call $finish or $stop, which
 // end the simulation at once; here the check that would call $stop passes.
 module sv_final_procedure_termination;

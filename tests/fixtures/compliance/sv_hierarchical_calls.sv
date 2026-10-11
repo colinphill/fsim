@@ -1,4 +1,5 @@
 // fsim: top=sv_hierarchical_calls
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 23.8: functions and tasks of other module instances and of
 // generate blocks called through hierarchical names, reading and writing
 // the variables of the instance that declares them.

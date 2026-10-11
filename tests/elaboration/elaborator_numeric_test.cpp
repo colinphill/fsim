@@ -594,8 +594,8 @@ entity invalid_vhdl_subtypes is
     Bad_Generic : Imported_Count_T := 10;
     Bad_Vector_Generic : Imported_Vector_T := "0000"
   );
-  subtype Later_Port_T is bit;
   port (Bad_Port : in Later_Port_T);
+  subtype Later_Port_T is bit;
 end entity;
 
 use work.invalid_subtype_types.all;
@@ -659,8 +659,10 @@ end architecture;
     assert(std::ranges::any_of(
         rejected_vhdl_subtypes.diagnostics,
         [](const auto& diagnostic) {
-            return diagnostic.code
-                    == "FSIM-ELAB-VHTYPE-001"
+            // Analysis reports a type used before its declaration
+            // (FSIM-ELAB-VHTYPE-006) before elaboration does (VHTYPE-001).
+            return (diagnostic.code == "FSIM-ELAB-VHTYPE-001"
+                       || diagnostic.code == "FSIM-ELAB-VHTYPE-006")
                 && diagnostic.message.find("later_port_t")
                     != std::string::npos;
         }));
@@ -1314,6 +1316,9 @@ end entity;
 use work.enumeration_boundary_types.all;
 architecture rtl of enumeration_mixed_parent is
   signal Actual : First_T;
+  component Foreign_Enumeration_Child is
+    port (Value : in First_T);
+  end component;
 begin
   Child : Foreign_Enumeration_Child
     port map (Value => Actual);

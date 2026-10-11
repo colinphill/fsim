@@ -1,4 +1,5 @@
 -- fsim: top=records_arrays_and_values(sim) std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 8.4: an element of a two-dimensional array whose elements
 -- are arrays, also as a record element selected by constant indices;
 -- 6.4.2.2: elements of record constants; 16.2.2: 'VALUE of integer and

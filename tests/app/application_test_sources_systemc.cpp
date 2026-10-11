@@ -1408,18 +1408,30 @@ systemc_method_vhdl_source =
 {
   std::ofstream output(systemc_method_vhdl_source);
   output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity systemc_method_vhdl_host is
 end entity systemc_method_vhdl_host;
 
 architecture rtl of systemc_method_vhdl_host is
   signal value : std_logic;
   signal inverted : std_logic;
+  component method_bridge_placeholder is
+    generic (passthrough : boolean);
+    port (
+      value : in std_logic;
+      inverted : out std_logic);
+  end component method_bridge_placeholder;
 begin
   value <= '1';
   u_method: method_bridge_placeholder
     generic map (passthrough => true)
     port map (value => value, inverted => inverted);
 end architecture rtl;
+
+library ieee;
+use ieee.std_logic_1164.all;
 
 entity systemc_thread_vhdl_host is
 end entity systemc_thread_vhdl_host;
@@ -1432,6 +1444,16 @@ architecture rtl of systemc_thread_vhdl_host is
   signal static_count : std_logic_vector(7 downto 0);
   signal named_count : std_logic_vector(7 downto 0);
   signal timeout_count : std_logic_vector(7 downto 0);
+  component accellera_threads_placeholder is
+    port (
+      clock : in std_logic;
+      count : out std_logic_vector(7 downto 0);
+      timed : out std_logic_vector(7 downto 0);
+      event_count : out std_logic_vector(7 downto 0);
+      static_count : out std_logic_vector(7 downto 0);
+      named_count : out std_logic_vector(7 downto 0);
+      timeout_count : out std_logic_vector(7 downto 0));
+  end component accellera_threads_placeholder;
 begin
   u_threads: accellera_threads_placeholder
     port map (
@@ -1456,6 +1478,9 @@ begin
   end process drive;
 end architecture rtl;
 
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity systemc_schedule_lifecycle_vhdl_host is
 end entity systemc_schedule_lifecycle_vhdl_host;
 
@@ -1473,6 +1498,28 @@ architecture rtl of systemc_schedule_lifecycle_vhdl_host is
   signal channel_updates : std_logic_vector(7 downto 0);
   signal channel_event_count : std_logic_vector(7 downto 0);
   signal cross_updates : std_logic_vector(7 downto 0);
+  component accellera_threads_placeholder is
+    port (
+      clock : in std_logic;
+      count : out std_logic_vector(7 downto 0);
+      timed : out std_logic_vector(7 downto 0);
+      event_count : out std_logic_vector(7 downto 0);
+      static_count : out std_logic_vector(7 downto 0);
+      named_count : out std_logic_vector(7 downto 0);
+      timeout_count : out std_logic_vector(7 downto 0));
+  end component accellera_threads_placeholder;
+  component kernel_channels_placeholder is
+    port (
+      value : out std_logic_vector(7 downto 0);
+      updates : out std_logic_vector(7 downto 0);
+      event_count : out std_logic_vector(7 downto 0);
+      cross_updates : out std_logic_vector(7 downto 0));
+  end component kernel_channels_placeholder;
+  component lifecycle_module_placeholder is
+    port (
+      trigger : in std_logic;
+      ready : out std_logic);
+  end component lifecycle_module_placeholder;
 begin
   u_threads: accellera_threads_placeholder
     port map (

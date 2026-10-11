@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Include from tests/CMakeLists.txt after fsim_configure_test and
 # fsim_register_simple_test have been defined.
 add_executable(

@@ -1,4 +1,5 @@
 // fsim: top=sv_values_and_assertion_items std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 11.4.5: a known differing bit decides == and != even when
 // other bits are unknown; 21.2.1.4: %d of partly unknown values; 7.4.5: a
 // variable index under a constant one in a multidimensional packed array;

@@ -1,4 +1,5 @@
 -- fsim: top=character_type(sim) std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 5.2.2.1 and 16.3: STD.STANDARD CHARACTER values, from
 -- graphic literals, non-graphic names (NUL, DEL, C128), and logic-looking
 -- literals ('0') whose context is CHARACTER; 9.2.5: concatenation with a

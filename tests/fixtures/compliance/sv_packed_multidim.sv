@@ -1,4 +1,5 @@
 // fsim: top=sv_packed_multidim std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 7.4.5: element, range and indexed part-selects of the
 // outer dimension of a multidimensional packed array select whole elements;
 // an element can itself be part-selected. Reads and writes, constant and

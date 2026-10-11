@@ -1,4 +1,5 @@
 // fsim: top=sv_class_statements std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 13.4.1: class function methods called as statements and
 // discarded with void'(); 8.9: a static property reached through an object
 // handle; 11.4.12.2: string replication.

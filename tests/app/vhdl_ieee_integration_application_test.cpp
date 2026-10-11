@@ -1408,7 +1408,7 @@ end architecture;
         assert(found);
     };
     expect_vital_failure(
-        "signal invalid : std_logic;", "invalid <= VitalBUF();",
+        "signal invalid : std_logic;", "invalid <= VitalBUF;",
         "FSIM-ELAB-VITAL-003");
     expect_vital_failure(
         "signal invalid : std_logic;",

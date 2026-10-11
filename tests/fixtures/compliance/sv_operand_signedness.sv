@@ -1,4 +1,5 @@
 // fsim: top=sv_operand_signedness std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 11.8.1/11.8.2: an operation is signed only when all of its
 // operands are, and its context-determined operands extend by that
 // signedness; 23.3.3.7: a port read keeps its declared signedness;

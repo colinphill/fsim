@@ -1,4 +1,5 @@
 -- fsim: top=vhdl_real_arithmetic(sim) std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 5.2.5 and 9.2: runtime REAL arithmetic, comparison,
 -- negation, conversion, and images.
 entity vhdl_real_arithmetic is

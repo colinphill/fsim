@@ -1,4 +1,5 @@
 -- fsim: top=formal_subelements(sim) std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-1993 4.3.2.2: individual association of formal subelements
 -- (`d(7) => x, d(6 downto 0) => y`, `r.f => z`) for input ports; and the
 -- VHDL-2008 slice form of an aggregate range choice, used by the parser to

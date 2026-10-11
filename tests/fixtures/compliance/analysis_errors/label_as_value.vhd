@@ -1,4 +1,5 @@
 -- fsim-expect: FSIM-ELAB-VHNAME-002 std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 12.3: a statement label does not denote a value.
 entity label_as_value is
 end entity;

@@ -198,12 +198,14 @@ void verify(const Capture& capture) {
       {"0", 5}, {"1", 22}, {"Z", 35}, {"0", 45}}));
   assert((changes_for(capture, kNames[3]) == std::vector<Timed>{
       {"0", 7}, {"1", 22}, {"Z", 36}, {"0", 47}}));
+  // The input's change from 'U' at 0 ns is an event, so 'LAST_EVENT
+  // selects the paths' delays rather than the defaults from 0 ns on.
   assert((changes_for(capture, kNames[4]) == std::vector<Timed>{
-      {"0", 8}, {"1", 24}, {"Z", 34}, {"0", 44}}));
+      {"0", 4}, {"1", 24}, {"Z", 34}, {"0", 44}}));
   assert((changes_for(capture, kNames[5]) == std::vector<Timed>{
-      {"0", 8}, {"1", 22}, {"Z", 35}, {"0", 45}}));
+      {"0", 5}, {"1", 22}, {"Z", 35}, {"0", 45}}));
   assert((changes_for(capture, kNames[6]) == std::vector<Timed>{
-      {"0", 8}, {"H", 22}, {"Z", 36}, {"0", 47}}));
+      {"0", 7}, {"H", 22}, {"Z", 36}, {"0", 47}}));
   assert((changes_for(capture, kNames[7]) == std::vector<Timed>{
       {"X", 22}, {"0", 32}}));
   assert((changes_for(capture, kNames[8]) == std::vector<Timed>{

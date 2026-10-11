@@ -30,6 +30,9 @@ entity Recursive_Driver_Mid is
   port (Result : out bit_vector(3 downto 0));
 end entity;
 architecture rtl of Recursive_Driver_Mid is
+  component sv_driver_leaf is
+    port (Result : out bit_vector(3 downto 0));
+  end component;
 begin
   Leaf : sv_driver_leaf port map (Result => Result);
 end architecture;
@@ -175,6 +178,8 @@ endmodule
   const auto wired_driver = fsim::frontend::parse_text(
       "mixed_wired_driver.vhd",
       R"(
+library ieee;
+use ieee.std_logic_1164.all;
 entity Vhdl_Zero_Driver is
   port (Result : out std_logic);
 end entity;
@@ -182,6 +187,8 @@ architecture rtl of Vhdl_Zero_Driver is
 begin
   Result <= '0';
 end architecture;
+library ieee;
+use ieee.std_logic_1164.all;
 entity Vhdl_One_Driver is
   port (Result : out std_logic);
 end entity;
@@ -189,6 +196,8 @@ architecture rtl of Vhdl_One_Driver is
 begin
   Result <= '1';
 end architecture;
+library ieee;
+use ieee.std_logic_1164.all;
 entity Vhdl_Z_Driver is
   port (Result : out std_logic);
 end entity;
@@ -269,11 +278,22 @@ end architecture;
   const auto std_logic_top = fsim::frontend::parse_text(
       "mixed_std_logic_top.vhd",
       R"(
+library ieee;
+use ieee.std_logic_1164.all;
 entity Mixed_Std_Logic_Top is
   port (Conflict, Released : out std_logic);
 end entity;
 architecture rtl of Mixed_Std_Logic_Top is
   signal Conflict_Net, Released_Net : std_logic;
+  component sv_logic_zero is
+    port (Value : out std_logic);
+  end component;
+  component sv_logic_one is
+    port (Value : out std_logic);
+  end component;
+  component sv_logic_z is
+    port (Value : out std_logic);
+  end component;
 begin
   Zero_Conflict : sv_logic_zero port map (Value => Conflict_Net);
   One_Conflict : sv_logic_one port map (Value => Conflict_Net);

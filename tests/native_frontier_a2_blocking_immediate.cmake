@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # A2 original-key SystemVerilog WriteBlocking witness.
 add_executable(
   fsim_application_native_frontier_a2_blocking_immediate_tests

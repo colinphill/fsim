@@ -1,4 +1,5 @@
 // fsim: top=sv_copies_and_constructors std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 18.16: randcase (zero weights make the selection
 // deterministic); 11.3.6: assignments
 // within expressions; 8.8: typed constructors; 8.12: shallow copies; 8.17:

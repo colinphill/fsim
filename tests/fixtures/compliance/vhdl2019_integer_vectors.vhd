@@ -1,4 +1,5 @@
 -- fsim: top=integer_vectors_2019(sim) std=2019
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2019 5.2.3.1: INTEGER covers at least the 64-bit range, and
 -- the elements of INTEGER_VECTOR (16.3) are INTEGER values.
 entity integer_vectors_2019 is

@@ -522,12 +522,13 @@ end configuration;
             "nested_configuration.outer_block.loop_gen[1].generated")
             .unit
         == "vhdl:work.nested_leaf(fast)");
-    assert(
-        specialization(
-            nested_result,
-            "nested_configuration.outer_block.open_child")
-            .unit
-        == "vhdl:work.stable_leaf(rtl)");
+    // `use open` leaves the instance unbound (IEEE 1076-2008 7.3.2.1).
+    assert(std::ranges::none_of(
+        nested_result.design->specializations(),
+        [](const auto& candidate) {
+            return candidate.instance
+                == "nested_configuration.outer_block.open_child";
+        }));
     assert(
         specialization(
             nested_result,

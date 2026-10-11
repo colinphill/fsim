@@ -1,4 +1,5 @@
 -- fsim: top=reanalysis(sim) std=1993 before=vhdl_reanalysis_first.vhd.in
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-1993 11.4: analyzing a library unit again replaces the unit of
 -- the same name, even when another design file defined it; the secondary
 -- units of a replaced primary unit become obsolete.

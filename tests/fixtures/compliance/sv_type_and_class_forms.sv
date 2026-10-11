@@ -1,4 +1,5 @@
 // fsim: top=sv_type_and_class_forms std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 20.6.2: $bits of a data type; 7.4.1: a packed array of a
 // named vector type; 23.2.2.3: a net port of a named type; 13.3: a classic
 // task argument typed by a later declaration; 8.6: class property writes,

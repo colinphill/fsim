@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # A2 parsed single-root balanced-DAG join role-journal witness.
 add_executable(
   fsim_application_native_frontier_a2_dag_join_tests

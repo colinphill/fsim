@@ -10,6 +10,8 @@ void test_vhdl_recursive_composite_layout()
     const auto parsed = fsim::frontend::parse_text(
         "vhdl_recursive_composite.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
 entity Recursive_Composite is
 end entity;
 
@@ -376,7 +378,6 @@ architecture rtl of access_storage is
   begin
     Target := new bit_vector'(Value);
   end procedure;
-  signal Current : Byte_Pointer;
   signal Observed_Initial : bit_vector(7 downto 0);
   signal Observed_Updated : bit_vector(7 downto 0);
   signal Count_Result : integer;
@@ -438,35 +439,9 @@ end architecture;
         }
     }
     assert(elaborated.ok());
-    const auto current = elaborated.design->find_signal("current");
-    assert(current);
-    const auto& info = elaborated.design->signals().at(*current);
-    assert(
-        info.width == 32
-        && info.source_domain
-            == fsim::frontend::ValueDomain::Bit2
-        && info.vhdl_access
-        && info.vhdl_access->handle_width == 32
-        && info.vhdl_access->maximum_objects
-               == std::numeric_limits<std::uint32_t>::max()
-        && info.vhdl_access->nullable
-        && info.vhdl_access->owns_designated_object
-        && info.vhdl_access->deallocate_releases_storage
-        && !info.vhdl_access->reclaim_when_unreachable
-        && info.vhdl_access->simulation_lifetime
-        && info.vhdl_access->designated_types.size() == 1
-        && info.vhdl_access->designated_types[0].width() == 8);
-    const auto access_paths = elaborated.design->signal_paths();
-    assert(std::ranges::any_of(
-        access_paths,
-        [&](const auto& path) {
-            return path.first == "access_storage.current"
-                && path.second == *current;
-        }));
+    // Only variables are of access types (IEEE 1076-2008 5.4.1); access
+    // storage is checked through the process's variables below.
     const auto interpreter = elaborated.design->create_interpreter();
-    assert(
-        interpreter->signal_value(*current).to_msb_string()
-        == std::string(32, '0'));
 
     const auto& process = elaborated.design->processes().front();
     assert(
@@ -945,7 +920,7 @@ begin
   first : process
   begin
     Shared_Counter.Add(2);
-    Shared_Counter.Add(Shared_Counter.Read());
+    Shared_Counter.Add(Shared_Counter.Read);
     Shared_Counter.Fill_Wide;
     Wide_High <= Shared_Counter.Read_Wide_Bit(136);
     Wide_Low <= Shared_Counter.Read_Wide_Bit(0);
@@ -1132,13 +1107,13 @@ architecture rtl of invalid_pure_protected_access is
   shared variable Shared_Counter : Counter;
   pure function Illegal return integer is
   begin
-    return Shared_Counter.Read();
+    return Shared_Counter.Read;
   end function;
   signal Observed : integer;
 begin
   exercise : process
   begin
-    Observed <= Illegal();
+    Observed <= Illegal;
     wait;
   end process;
 end architecture;
@@ -1670,7 +1645,7 @@ void test_vhdl_revision_expression_elaboration()
         "vhdl93_expression_elaboration.vhd",
         "entity Revision_Expression is end entity;\n"
         "architecture rtl of revision_expression is\n"
-        "  subtype Wide_T is bit_vector(105 downto -31);\n"
+        "  subtype Wide_T is bit_vector(136 downto 0);\n"
         "  type Empty_T is array (0 downto 1) of bit;\n"
         "  function Contextual(Value : Wide_T) return Wide_T is\n"
         "  begin return Value; end function;\n"
@@ -1721,8 +1696,8 @@ void test_vhdl_revision_expression_elaboration()
         "vhdl93_expression_ambiguity.vhd",
         "entity Revision_Ambiguity is end entity;\n"
         "architecture rtl of revision_ambiguity is\n"
-        "  subtype Wide_Bit_T is bit_vector(105 downto -31);\n"
-        "  subtype Wide_Logic_T is std_logic_vector(105 downto -31);\n"
+        "  subtype Wide_Bit_T is bit_vector(136 downto 0);\n"
+        "  subtype Wide_Logic_T is std_logic_vector(136 downto 0);\n"
         "  function Compat(Value : Wide_Bit_T) return Wide_Bit_T is\n"
         "  begin return Value; end function;\n"
         "  function Compat(Value : Wide_Logic_T) return Wide_Bit_T is\n"

@@ -1,4 +1,5 @@
 // fsim: top=sv_declarations_and_calls std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 7.2: an unpacked structure variable local to a procedure,
 // and bit- and part-selects of a structure member as assignment targets;
 // 12.7.1: for loops with empty clauses; 12.7.2: a real repeat count rounds;

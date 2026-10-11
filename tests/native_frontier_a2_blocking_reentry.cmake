@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # A2 later native re-entry after an injected precommit WriteBlocking failure.
 add_executable(
   fsim_application_native_frontier_a2_blocking_reentry_tests

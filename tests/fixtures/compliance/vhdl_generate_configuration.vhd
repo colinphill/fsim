@@ -1,4 +1,5 @@
 -- fsim: top=generate_configuration_cfg std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 3.4.2: a block configuration of a for-generate selects a
 -- static discrete range of parameter values, with bounds given by package
 -- constants and scalar attributes; 12.3: a component declaration in a block

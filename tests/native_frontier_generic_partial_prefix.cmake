@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Include inside the existing if(FSIM_WITH_LLVM) test block. The fixture
 # delegates through the production LLVM providers and observes the generated
 # entry only to record the borrowed scheduler prefix it receives.

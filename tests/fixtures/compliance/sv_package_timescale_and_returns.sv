@@ -1,4 +1,5 @@
 // fsim: top=sv_package_timescale_and_returns std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 3.14.2: a subroutine declared in a package uses the
 // package's time unit for $time, not the caller's.
 // 13.4.1 and 6.12.2: a return value converts to the function's declared

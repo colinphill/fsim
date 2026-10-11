@@ -1,4 +1,5 @@
 -- fsim: top=enum_index_arrays(sim) std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 5.3.2: arrays indexed by enumeration and BOOLEAN types.
 library ieee;
 use ieee.std_logic_1164.all;

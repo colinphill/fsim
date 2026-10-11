@@ -1,4 +1,5 @@
 -- fsim: top=aliases_and_array_formals(sim) std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-1993 4.3.3.1: object aliases of slices and elements, with the
 -- alias subtype's own index range; 2.1.1.1 and 3.2.1.1: subprogram formals of
 -- unconstrained array types (STRING, arrays of INTEGER) take the index range

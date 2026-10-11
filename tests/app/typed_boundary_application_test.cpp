@@ -338,6 +338,14 @@ architecture rtl of Typed_Boundary_Vhdl_Middle is
   signal Native_Result : std_logic;
   signal Native_Wide_Value : std_logic_vector(136 downto 0);
   signal Native_Wide_Result : std_logic_vector(136 downto 0);
+  component boundary_native_placeholder
+    port (
+      value : in std_logic;
+      inverted : out std_logic;
+      wide_value : in std_logic_vector(136 downto 0);
+      wide_result : out std_logic_vector(136 downto 0)
+    );
+  end component;
   -- psl default clock is Native_Value = '1';
   -- psl property Native_Inverted is Native_Result = '0';
 begin

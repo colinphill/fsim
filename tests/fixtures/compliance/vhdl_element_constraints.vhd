@@ -1,4 +1,5 @@
 -- fsim: top=element_constraints(sim) std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 5.3.2.1 and 5.3.3.1: array and record element
 -- constraints, including `open` index constraints, constraints through a
 -- named subtype and nested record elements of an array; 6.4.2.3: default

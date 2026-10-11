@@ -1,4 +1,5 @@
 -- fsim: top=vhdl_subprogram_forms(sim) std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008: protected type bodies in the same region (5.6.3),
 -- parameterless function calls (9.3.4), edge predicates as expressions
 -- (16.7), runtime WAIT FOR durations (10.2), and output-port defaults

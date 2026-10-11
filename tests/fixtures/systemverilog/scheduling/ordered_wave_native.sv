@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 `timescale 1ns/1ns
 module ordered_wave_member #(parameter W = 1);
     reg [W-1:0] stimulus;

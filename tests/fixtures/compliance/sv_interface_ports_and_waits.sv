@@ -1,4 +1,5 @@
 // fsim: top=sv_interface_ports_and_waits std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 25.5: an interface port array connected element by element,
 // and a non-ANSI interface port declared in the module body; 23.3.2.1:
 // positional connections follow the header order of non-ANSI ports; 25.9:

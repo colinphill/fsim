@@ -1,4 +1,5 @@
 -- fsim-expect: FSIM-ELAB-VHREPORT-001 std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 10.3: a report expression has type STRING.
 entity integer_report is
 end entity;

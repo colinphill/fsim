@@ -1,4 +1,5 @@
 -- fsim: top=string_generics(sim) std=2008 generic=config=fast:x4 generic=width=12
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 6.5.6.2: STRING generics, with and without defaults, bound
 -- by a generic map or by a top-level override; procedure overloads that
 -- differ only by array type (4.5.2); a protected type body with private

@@ -1,4 +1,5 @@
 -- fsim: top=package_signals(sim) std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 4.7 and 6.4.2.3: signals declared in a package are single
 -- design-wide objects, written by one instance and read by others; 12.4:
 -- use clauses in package, entity and architecture declarative regions;

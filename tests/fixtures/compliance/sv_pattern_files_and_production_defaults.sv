@@ -1,4 +1,5 @@
 // fsim: top=sv_pattern_files_and_production_defaults
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 21.2.1.7: `%p` written to a file shows an enumeration
 // value by name; 18.17.7: a production formal's default value may contain
 // commas inside a call.

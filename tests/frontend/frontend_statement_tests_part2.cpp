@@ -573,7 +573,10 @@ endmodule
             && statements[0].delay->magnitude == 2
             && statements[1].delay
             && statements[1].delay->magnitude == 2
-            && statements[0].value.kind == ExpressionKind::Identifier
+            // A buffer passes its input through `| 1'b0`, which drives x
+            // for z (IEEE 1800-2017 28.5).
+            && statements[0].value.kind == ExpressionKind::Binary
+            && statements[0].value.text == "|"
             && statements[2].value.kind == ExpressionKind::Unary
             && statements[3].value.kind == ExpressionKind::Binary
             && statements[3].verilog_drive_strength
@@ -608,8 +611,10 @@ endmodule
                 == ExpressionKind::Unary
             && statements[15].label == "fanout$output0"
             && statements[16].label == "fanout$output1"
-            && statements[15].value.text == "a"
-            && statements[16].value.text == "a"
+            && statements[15].value.text == "|"
+            && statements[15].value.operands[0].text == "a"
+            && statements[16].value.text == "|"
+            && statements[16].value.operands[0].text == "a"
             && statements[17].label == "single_input"
             && statements[17].value.text == "a",
         "tri-state, multiple-output, and single-input gate forms lower to "

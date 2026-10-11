@@ -1,4 +1,5 @@
 -- fsim-expect: FSIM-ELAB-VHNAME-002 std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 10.9: a case choice is a value of the selector's type.
 entity undeclared_choice is
 end entity;

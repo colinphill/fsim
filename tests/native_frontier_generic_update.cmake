@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Include inside the existing if(FSIM_WITH_LLVM) test block. This is a
 # standalone application test because it constructs real LLVM process and
 # region-frontier providers for interpreter/O0/O2 differential runs.

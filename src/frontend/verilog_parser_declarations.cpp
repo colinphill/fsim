@@ -1833,12 +1833,21 @@ void VerilogParser::parse_gate_primitive(
 
       Expression value = std::move(mapped_inputs.front());
       if (unary) {
+        const auto combined = cover(start.span, value.span);
         if (operation == "not") {
-          const auto combined = cover(start.span, value.span);
           value = Expression{
               ExpressionKind::Unary,
               "~",
               {std::move(value)},
+              combined};
+        } else {
+          // A buffer drives x for a z input (IEEE 1800-2017 28.5).
+          value = Expression{
+              ExpressionKind::Binary,
+              "|",
+              {std::move(value),
+               Expression{ExpressionKind::LogicLiteral, "1'b0", {},
+                   combined}},
               combined};
         }
       } else if (tristate) {
@@ -1849,6 +1858,16 @@ void VerilogParser::parse_gate_primitive(
               "~",
               {std::move(value)},
               inverted_span};
+        } else {
+          // A buffer drives x for a z input (IEEE 1800-2017 28.6).
+          const auto buffered_span = cover(start.span, value.span);
+          value = Expression{
+              ExpressionKind::Binary,
+              "|",
+              {std::move(value),
+               Expression{ExpressionKind::LogicLiteral, "1'b0", {},
+                   buffered_span}},
+              buffered_span};
         }
         auto control = std::move(mapped_inputs[1]);
         if (operation == "bufif0" || operation == "notif0") {

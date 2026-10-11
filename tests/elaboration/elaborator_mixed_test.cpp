@@ -192,11 +192,18 @@ end architecture rtl;
     const auto ordinal_vhdl_parent = fsim::frontend::parse_text(
         "ordinal_vhdl_parent.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
 entity ordinal_vhdl_parent is
 end entity;
 architecture rtl of ordinal_vhdl_parent is
   signal source : std_logic_vector(7 downto 4);
   signal result : std_logic_vector(20 to 23);
+  component ordinal_sv_child
+    port (
+      data : in std_logic_vector(1 to 4);
+      result : out std_logic_vector(9 downto 6));
+  end component;
 begin
   source <= "10XZ";
   child: ordinal_sv_child
@@ -385,6 +392,9 @@ end architecture;
     const auto width_vhdl_parent = fsim::frontend::parse_text(
         "width_vhdl_parent.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity width_vhdl_parent is
 end entity;
 architecture rtl of width_vhdl_parent is
@@ -393,6 +403,14 @@ architecture rtl of width_vhdl_parent is
   signal trunc_source : std_logic_vector(7 downto 0);
   signal widened_result : std_logic_vector(7 downto 0);
   signal truncated_result : std_logic_vector(3 downto 0);
+  component width_sv_child
+    port (
+      zero_in : in std_logic_vector(3 downto 0);
+      sign_in : in signed(3 downto 0);
+      trunc_in : in std_logic_vector(7 downto 0);
+      widen_out : out std_logic_vector(7 downto 0);
+      truncate_out : out std_logic_vector(3 downto 0));
+  end component;
 begin
   zero_source <= "1010";
   sign_source <= "1010";
@@ -608,6 +626,8 @@ end architecture;
     const auto signed_vhdl_parent = fsim::frontend::parse_text(
         "signed_vhdl_parent.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
 entity signed_vhdl_parent is
 end entity;
 architecture rtl of signed_vhdl_parent is
@@ -615,6 +635,13 @@ architecture rtl of signed_vhdl_parent is
   signal copy_source : std_logic_vector(3 downto 0);
   signal wide_result : std_logic_vector(7 downto 0);
   signal copy_result : std_logic_vector(3 downto 0);
+  component signed_sv_child
+    port (
+      zero_in : in std_logic_vector(3 downto 0);
+      copy_in : in std_logic_vector(3 downto 0);
+      sign_out : out std_logic_vector(7 downto 0);
+      copy_out : out std_logic_vector(3 downto 0));
+  end component;
 begin
   zero_source <= "1010";
   copy_source <= "1010";
@@ -821,6 +848,11 @@ end entity;
 architecture rtl of integer_boundary is
   signal source : integer;
   signal result : integer;
+  component sv_integer_child
+    port (
+      value : in integer;
+      result : out integer);
+  end component;
 begin
   source <= -2;
   child: sv_integer_child
@@ -1070,12 +1102,19 @@ end architecture;
         rejected_struct_boundary, "FSIM-ELAB-BIND-049"));
 
     constexpr std::string_view vhdl_parent = R"(
+library ieee;
+use ieee.std_logic_1164.all;
 entity vhdl_top is
 end entity vhdl_top;
 
 architecture rtl of vhdl_top is
   signal source : std_logic_vector(3 downto 0);
   signal inverted : std_logic_vector(3 downto 0);
+  component sv_child
+    port (
+      value : in std_logic_vector(3 downto 0);
+      inverted : out std_logic_vector(3 downto 0));
+  end component;
 begin
   source <= "1010";
   u_child: sv_child

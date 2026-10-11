@@ -1,4 +1,5 @@
 -- fsim: top=vhdl_scalar_type_declarations(sim) std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 5.2.3 and 5.2.5: integer and floating type declarations.
 entity vhdl_scalar_type_declarations is
 end entity;

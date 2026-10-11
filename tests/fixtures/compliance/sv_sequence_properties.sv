@@ -1,4 +1,5 @@
 // fsim: top=sv_sequence_properties std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 16.7-16.12: sequence properties with ranged delays,
 // consecutive and goto repetition, `or`, `not`, named sequences and property
 // instances with actuals, `|->` and `|=>`, with overlapping attempts; 16.14:

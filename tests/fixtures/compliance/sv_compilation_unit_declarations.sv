@@ -1,4 +1,5 @@
 // fsim: top=sv_compilation_unit std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 3.12.1: parameters, typedefs, variables and functions
 // declared in the compilation-unit scope are visible to later design units.
 parameter int WIDTH = 8;

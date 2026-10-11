@@ -1,4 +1,5 @@
 -- fsim: top=vhdl_time_literals_and_scalar_types(sim) std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 5.2.4.3: the resolution limit lets every TIME literal of
 -- the design be represented (here 1500 ps outside any delay); 5.2.3:
 -- integer type definitions declare distinct types; 10.9: case choices given

@@ -1,4 +1,5 @@
 -- fsim: top=vhdl_signal_formals(sim) std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 4.2.2.3: signal-class procedure formals denote the actual.
 library ieee;
 use ieee.std_logic_1164.all;

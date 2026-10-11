@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Add this target inside the existing `if(FSIM_WITH_LLVM)` test block.
 add_executable(
   fsim_application_native_frontier_retained_stop_resume_tests

@@ -667,6 +667,24 @@ entity Mixed_Conversion_Vhdl_Middle is
 end entity;
 
 architecture rtl of Mixed_Conversion_Vhdl_Middle is
+  component mixed_conversion_sv_leaf is
+    port (
+      width_value : in unsigned(7 downto 0);
+      width_result : out unsigned(7 downto 0);
+      unsigned_to_signed_value : in signed(7 downto 0);
+      unsigned_to_signed_result : out signed(7 downto 0);
+      signed_to_unsigned_value : in unsigned(7 downto 0);
+      signed_to_unsigned_result : out unsigned(7 downto 0);
+      boolean_value : in boolean;
+      boolean_result : out boolean;
+      integer_value : in integer range -8 to 7;
+      integer_result : out integer range -8 to 7;
+      bit_value : in bit_vector(3 downto 0);
+      bit_result : out bit_vector(3 downto 0);
+      state_value : in std_ulogic_vector(3 downto 0);
+      state_result : out std_logic_vector(3 downto 0)
+    );
+  end component mixed_conversion_sv_leaf;
 begin
   leaf : mixed_conversion_sv_leaf
     port map (

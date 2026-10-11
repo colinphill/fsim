@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 module named_event_triggered_nba;
     event changed;
 

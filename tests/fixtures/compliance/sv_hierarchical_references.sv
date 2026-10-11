@@ -1,4 +1,5 @@
 // fsim: top=sv_hierarchical_references std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 23.6-23.8: downward, upward, and $root hierarchical
 // references for reads and writes.
 module sv_hierarchical_references_leaf(input logic [31:0] value);

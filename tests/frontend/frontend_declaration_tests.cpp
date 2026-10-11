@@ -770,7 +770,7 @@ end architecture;
       R"(
 entity invalid_functions is
   generic (
-    function bad(signal value : out integer := 1)
+    function bad(variable value : out integer := 1)
       return integer is "not_a_name";
     procedure bad_procedure(signal value : buffer integer));
 end entity;

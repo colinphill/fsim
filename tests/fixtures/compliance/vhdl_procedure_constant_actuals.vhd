@@ -1,4 +1,5 @@
 -- fsim: top=vhdl_procedure_constant_actuals(sim) std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- Each call of a procedure receives its own actual values (IEEE 1076-2008
 -- 4.2.2.2), including locally static ones.
 entity vhdl_procedure_constant_actuals is

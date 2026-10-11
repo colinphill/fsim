@@ -1,4 +1,5 @@
 // fsim: top=sv_string_containers std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 6.18: a typedef of a string-element unpacked container;
 // 7.9.1: num() of an associative array is its number of entries.
 module sv_string_containers;

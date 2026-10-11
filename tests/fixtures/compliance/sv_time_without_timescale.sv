@@ -1,4 +1,5 @@
 // fsim: top=sv_time_without_timescale std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 20.3: $time, $stime and $realtime in a design unit without
 // a timescale return time in the unit used by its delays.
 module sv_time_without_timescale;

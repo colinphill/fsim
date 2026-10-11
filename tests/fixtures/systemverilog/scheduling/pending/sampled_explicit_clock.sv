@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: Apache-2.0
 module sampled_explicit_clock;
   logic clock;
   logic data;

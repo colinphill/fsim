@@ -1,4 +1,5 @@
 -- fsim: top=formal_element_constraints(sim) std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 4.2.2.2 and 5.3.2.2: an unbounded array formal takes its
 -- index ranges and element constraints from its actual; 8.4: indexed names
 -- of record elements of array elements; 5.3.2.1: a table indexed by

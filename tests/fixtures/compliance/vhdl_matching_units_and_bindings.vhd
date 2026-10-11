@@ -1,4 +1,5 @@
 -- fsim: top=matching_units_and_bindings(sim) std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 9.2.3: matching ordering operators of STD_ULOGIC and
 -- BIT; 5.2.4.1: a physical unit name alone denotes one unit; 6.5.6.2:
 -- REAL generics with static actuals; 6.5.7.1: a port actual with a

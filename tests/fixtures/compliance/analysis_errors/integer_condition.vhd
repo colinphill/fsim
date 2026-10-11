@@ -1,4 +1,5 @@
 -- fsim-expect: FSIM-ELAB-048 std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 10.8: an if condition has type BOOLEAN.
 entity integer_condition is
 end entity;

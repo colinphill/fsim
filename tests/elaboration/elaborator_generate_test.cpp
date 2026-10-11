@@ -759,6 +759,9 @@ package generated_math is
   constant selected_value : natural := bias + 1;
 end package;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_leaf is
   generic (
     value : natural := 1
@@ -769,9 +772,12 @@ entity generated_vhdl_leaf is
 end entity;
 architecture rtl of generated_vhdl_leaf is
 begin
-  q <= value;
+  q <= to_unsigned(value, q'length);
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_internal_leaf is
   generic (
     value : natural := 0
@@ -780,9 +786,12 @@ end entity;
 architecture rtl of generated_vhdl_internal_leaf is
   signal q : unsigned(3 downto 0);
 begin
-  q <= value;
+  q <= to_unsigned(value, q'length);
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_top is
   generic (
     enabled : boolean := true
@@ -822,6 +831,9 @@ begin
   end generate selection;
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_loop_top is
   generic (
     count : positive := 3
@@ -838,6 +850,9 @@ begin
   end generate lanes;
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_case_top is
   generic (
     mode : integer := 6
@@ -882,6 +897,9 @@ package generated_choice_types is
   constant foreign_choice : foreign_state_t := hot;
 end package;
 use work.generated_choice_types.all;
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_enum_case is
   generic (mode : state_t := 'Z');
   port (observed : out unsigned(3 downto 0));
@@ -890,20 +908,23 @@ architecture rtl of generated_vhdl_enum_case is
 begin
   selection: case mode generate
     idle_choice: when idle =>
-      observed <= 1;
+      observed <= to_unsigned(1, 4);
     selected: when ready | 'Z' to done =>
       signal selected_value : unsigned(3 downto 0);
     begin
-      selected_value <= 9;
+      selected_value <= to_unsigned(9, 4);
       observed <= selected_value;
     empty_range: when 'Z' downto done =>
-      observed <= 15;
+      observed <= to_unsigned(15, 4);
     fallback: when others =>
-      observed <= 3;
+      observed <= to_unsigned(3, 4);
   end generate selection;
 end architecture;
 
 use work.generated_choice_types.all;
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_enum_overlap is generic (mode : state_t := 'Z'); end;
 architecture rtl of generated_vhdl_enum_overlap is
 begin
@@ -913,6 +934,9 @@ begin
   end generate selection;
 end architecture;
 use work.generated_choice_types.all;
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_enum_bad_choice is generic (mode : state_t := 'Z'); end;
 architecture rtl of generated_vhdl_enum_bad_choice is
 begin
@@ -921,6 +945,9 @@ begin
   end generate selection;
 end architecture;
 use work.generated_choice_types.all;
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_enum_wrong_domain is generic (mode : state_t := 'Z'); end;
 architecture rtl of generated_vhdl_enum_wrong_domain is
 begin
@@ -928,6 +955,9 @@ begin
     invalid_choice: when foreign_choice =>
   end generate selection;
 end architecture;
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_overlapping_ranges is
 end entity;
 architecture rtl of generated_vhdl_overlapping_ranges is
@@ -938,6 +968,9 @@ begin
   end generate selection;
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_bad_range is
 end entity;
 architecture rtl of generated_vhdl_bad_range is
@@ -947,6 +980,9 @@ begin
   end generate selection;
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_behavior is
   generic (
     enabled : boolean := true
@@ -1052,10 +1088,13 @@ begin
       mapped_drive(observed, process_alias);
     end process;
   else generate
-    observed <= 1;
+    observed <= to_unsigned(1, 4);
   end generate chosen;
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_loop_behavior is
 end entity;
 architecture rtl of generated_vhdl_loop_behavior is
@@ -1090,6 +1129,9 @@ end generate lanes;
 end architecture;
 )";
     generated_vhdl_source += R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_scope_visibility is
   port (
     nested_parent_visible : out bit_vector(3 downto 0);
@@ -1134,6 +1176,9 @@ begin
 end architecture;
 )";
     generated_vhdl_source += R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_slice_port_leaf is
   port (
     slice_value : in bit_vector(1 downto 0);
@@ -1145,6 +1190,9 @@ begin
   captured_value <= slice_value;
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_iterative_slice_actual is
 end entity;
 architecture rtl of generated_vhdl_iterative_slice_actual is
@@ -1163,6 +1211,9 @@ begin
 end architecture;
 )";
     generated_vhdl_source += R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_block_behavior is
   port (
     observed : out unsigned(3 downto 0)
@@ -1175,7 +1226,7 @@ begin
     constant local_value : natural := base_value + 1;
     signal generated_value : unsigned(3 downto 0);
   begin
-    generated_value <= local_value;
+    generated_value <= to_unsigned(local_value, 4);
     worker: process(generated_value)
     begin
       observed <= generated_value + 1;
@@ -1183,6 +1234,9 @@ begin
   end block static_scope;
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_block_interface is
   port (
     source_value : in unsigned(3 downto 0);
@@ -1228,6 +1282,9 @@ package body generated_vhdl_block_math is
   end function;
 end package body;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_block_package_leaf is
   generic (
     package api is new work.generated_vhdl_block_math
@@ -1243,6 +1300,9 @@ begin
   end process;
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_block_nonvalue is
   port (result_value : out integer);
 end entity;
@@ -1292,6 +1352,9 @@ package generated_vhdl_other_block_math is
   constant offset : integer := bias;
 end package;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_bad_block_nonvalue is
 end entity;
 architecture rtl of generated_vhdl_bad_block_nonvalue is
@@ -1340,6 +1403,9 @@ begin
   end block wrong_package_scope;
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_bad_block_generic is
 end entity;
 architecture rtl of generated_vhdl_bad_block_generic is
@@ -1351,6 +1417,9 @@ begin
   end block invalid_scope;
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_bad_block_port is
   port (source_value : in unsigned(7 downto 0));
 end entity;
@@ -1367,6 +1436,9 @@ begin
   end block invalid_scope;
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_bad_block_profile is
   port (source_value : in unsigned(7 downto 0));
 end entity;
@@ -1379,6 +1451,9 @@ begin
   end block invalid_scope;
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_guarded_behavior is
   port (
     enabled : in boolean;
@@ -1393,15 +1468,9 @@ begin
   end block guarded_scope;
 end architecture;
 
-entity generated_vhdl_bad_guard is
-end entity;
-architecture rtl of generated_vhdl_bad_guard is
-begin
-  guarded_scope: block (1) is
-  begin
-  end block guarded_scope;
-end architecture;
-
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_bad_constant is
 end entity;
 architecture rtl of generated_vhdl_bad_constant is
@@ -1412,6 +1481,9 @@ begin
   end block invalid_scope;
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_packed_array_constant is
   port (
     index_value : in integer range 3 to 4;
@@ -1434,6 +1506,9 @@ begin
   end generate selected;
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_bad_packed_array_constant is
 end entity;
 architecture rtl of generated_vhdl_bad_packed_array_constant is
@@ -1450,6 +1525,9 @@ begin
   end generate selected;
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_forward_generated_type is
 end entity;
 architecture rtl of generated_vhdl_forward_generated_type is
@@ -1461,6 +1539,9 @@ begin
   end generate selected;
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_duplicate_callable is
   port (observed : out integer);
 end entity;
@@ -1493,6 +1574,9 @@ begin
   end generate selected;
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_forward_callable is
   port (observed : out integer);
 end entity;
@@ -1512,6 +1596,9 @@ begin
   end generate selected;
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generated_vhdl_forward_generic_callable is
   port (observed : out integer);
 end entity;
@@ -1534,6 +1621,9 @@ end architecture;
         "generated-mixed.vhd", generated_vhdl_source,
         fsim::frontend::Language::Vhdl2008);
     assert(generated_sv.ok());
+    for (const auto& diagnostic : generated_vhdl.diagnostics) {
+        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
     assert(generated_vhdl.ok());
     fsim::frontend::ParsedDesign generated_design =
         std::move(generated_sv.design);
@@ -2322,6 +2412,9 @@ end architecture;
         compile_and_elaborate(
             generated_design,
             "vhdl:work.generated_vhdl_block_behavior(rtl)");
+    for (const auto& diagnostic : generated_vhdl_block_behavior.diagnostics) {
+        std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
     assert(generated_vhdl_block_behavior.ok());
     const auto generated_vhdl_block_local =
         generated_vhdl_block_behavior.design->find_signal(
@@ -2622,11 +2715,26 @@ endmodule
             == expected);
     }
 
-    const auto bad_guard = compile_and_elaborate(
-        generated_design,
-        "vhdl:work.generated_vhdl_bad_guard(rtl)");
+    // A guard expression that is not BOOLEAN is rejected when parsed
+    // (IEEE 1076-2008 11.2).
+    const auto bad_guard = fsim::frontend::parse_text(
+        "generated-bad-guard.vhd",
+        R"(
+entity generated_vhdl_bad_guard is
+end entity;
+architecture rtl of generated_vhdl_bad_guard is
+begin
+  guarded_scope: block (1) is
+  begin
+  end block guarded_scope;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
     assert(!bad_guard.ok());
-    assert(has_diagnostic(bad_guard, "FSIM-ELAB-GEN-013"));
+    assert(std::ranges::any_of(bad_guard.diagnostics,
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-VHDL-SEM-128";
+        }));
 
     const auto generated_sv_bad_constant =
         compile_and_elaborate(

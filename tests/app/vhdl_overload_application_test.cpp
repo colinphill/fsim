@@ -483,7 +483,7 @@ void verify_vhdl_1993_expression_execution(
             << "use ieee.numeric_std.all;\n"
             << "entity Revision_Expression is end entity;\n"
             << "architecture rtl of revision_expression is\n"
-            << "  subtype Wide_T is bit_vector(105 downto -31);\n"
+            << "  subtype Wide_T is bit_vector(136 downto 0);\n"
             << "  type Empty_T is array (0 downto 1) of bit;\n"
             << "  function Contextual(Value : Wide_T) return Wide_T is\n"
             << "  begin return Value; end function;\n"
@@ -586,15 +586,15 @@ int main() {
     std::ofstream output(package_declaration, std::ios::binary);
     output << R"(
 package overload_pkg is
-  type package_bit_pair is array (0 to 1) of bit;
+  type package_bit_pair is array (natural range <>) of bit;
   function choose(value : integer) return integer;
   function choose(value : boolean) return boolean;
   procedure assign_value(
     source : in integer;
-    variable target : out integer);
+    signal target : out integer);
   procedure assign_value(
     source : in boolean;
-    variable target : out boolean);
+    signal target : out boolean);
   function static_select(value : boolean) return integer;
   function static_select(value : integer) return integer;
   subtype static_range_t is integer range 2 to 9;
@@ -637,15 +637,15 @@ package body overload_pkg is
   end function;
   procedure assign_value(
     source : in integer;
-    variable target : out integer) is
+    signal target : out integer) is
   begin
-    target := source + )" << (bias + 10U) << R"(;
+    target <= source + )" << (bias + 10U) << R"(;
   end procedure;
   procedure assign_value(
     source : in boolean;
-    variable target : out boolean) is
+    signal target : out boolean) is
   begin
-    target := )" << (boolean_passthrough ? "source" : "not source") << R"(;
+    target <= )" << (boolean_passthrough ? "source" : "not source") << R"(;
   end procedure;
   function static_select(value : boolean) return integer is
   begin
@@ -706,8 +706,8 @@ architecture rtl of overload_app is
   signal converted_enum : integer;
   type first_kind is (shared, first_only);
   type second_kind is (shared, second_only);
-  type bit_pair is array (0 to 1) of bit;
-  type logic_pair is array (0 to 1) of std_logic;
+  type bit_pair is array (natural range <>) of bit;
+  type logic_pair is array (natural range <>) of std_logic;
   function local_choose(value : integer) return integer is
   begin
     return value + 30;
@@ -718,15 +718,15 @@ architecture rtl of overload_app is
   end function;
   procedure local_assign(
     source : in integer;
-    variable target : out integer) is
+    signal target : out integer) is
   begin
-    target := source + 40;
+    target <= source + 40;
   end procedure;
   procedure local_assign(
     source : in boolean;
-    variable target : out boolean) is
+    signal target : out boolean) is
   begin
-    target := not source;
+    target <= not source;
   end procedure;
   function contextual(value : integer) return integer is
   begin
@@ -766,17 +766,17 @@ architecture rtl of overload_app is
   end function;
   procedure named_assign(
     integer_source : in integer;
-    variable target : out integer;
+    signal target : out integer;
     flag : in boolean := false) is
   begin
-    target := integer_source + 90;
+    target <= integer_source + 90;
   end procedure;
   procedure named_assign(
     flag : in boolean;
-    variable target : out boolean;
+    signal target : out boolean;
     number : in integer := 0) is
   begin
-    target := flag;
+    target <= flag;
   end procedure;
   function enum_select(value : first_kind) return integer is
   begin

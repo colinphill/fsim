@@ -58,6 +58,14 @@ architecture rtl of Boolean_Vhdl_Parent is
   signal Bit_Source : boolean;
   signal Logic_Result : boolean;
   signal Bit_Result : boolean;
+  component boolean_sv_child is
+    port (
+      from_boolean_logic : in boolean;
+      from_boolean_bit : in boolean;
+      to_boolean_logic : out boolean;
+      to_boolean_bit : out boolean
+    );
+  end component;
 begin
   drive : process
   begin
@@ -256,6 +264,12 @@ end entity;
 architecture rtl of Integer_Vhdl_Parent is
   signal Source : integer range -4 to 4;
   signal Result : integer range -4 to 2;
+  component integer_sv_child is
+    port (
+      value : in integer range -4 to 4;
+      result : out integer range -4 to 2
+    );
+  end component;
 begin
   Source <= -2;
   child : integer_sv_child
@@ -464,6 +478,14 @@ architecture rtl of Bit_Vhdl_Parent is
   signal Scalar_Source : bit;
   signal Result : bit_vector(3 to 6);
   signal Scalar_Result : bit;
+  component bit_sv_child is
+    port (
+      data : in bit_vector(1 to 4);
+      scalar_data : in bit;
+      result : out bit_vector(9 downto 6);
+      scalar_result : out bit
+    );
+  end component;
 begin
   drive : process
   begin
@@ -652,6 +674,12 @@ end entity;
 architecture rtl of Lossy_Bit_Vhdl_Parent is
   signal Source : bit;
   signal Result : bit;
+  component lossy_bit_sv_child is
+    port (
+      data : in bit;
+      result : out bit
+    );
+  end component;
 begin
   child : lossy_bit_sv_child
     port map (Data => Source, Result => Result);
@@ -752,6 +780,8 @@ end architecture;
   const auto logic9_vhdl_parent = fsim::frontend::parse_text(
       "logic9_vhdl_parent.vhd",
       R"(
+library ieee;
+use ieee.std_logic_1164.all;
 entity Logic9_Vhdl_Parent is
 end entity;
 architecture rtl of Logic9_Vhdl_Parent is
@@ -759,6 +789,14 @@ architecture rtl of Logic9_Vhdl_Parent is
   signal Scalar_Source : std_ulogic;
   signal Result : std_ulogic_vector(20 to 28);
   signal Scalar_Result : std_logic;
+  component logic4_sv_child is
+    port (
+      data : in std_logic_vector(1 to 9);
+      scalar_data : in std_ulogic;
+      result : out std_ulogic_vector(9 downto 1);
+      scalar_result : out std_logic
+    );
+  end component;
 begin
   drive : process
   begin
@@ -862,6 +900,8 @@ endmodule
   const auto logic9_vhdl_child = fsim::frontend::parse_text(
       "logic9_vhdl_child.vhd",
       R"(
+library ieee;
+use ieee.std_logic_1164.all;
 entity Logic9_Vhdl_Child is
   port (
     Data : in std_ulogic_vector(20 to 23);
@@ -930,11 +970,19 @@ end architecture;
   const auto wide_vhdl_parent = fsim::frontend::parse_text(
       "wide_vhdl_parent.vhd",
       R"(
+library ieee;
+use ieee.std_logic_1164.all;
 entity Wide_Vhdl_Parent is
 end entity;
 architecture rtl of Wide_Vhdl_Parent is
   signal Source : std_logic_vector(128 downto 0);
   signal Result : std_logic_vector(136 downto 0);
+  component wide_sv_child is
+    port (
+      data : in std_logic_vector(128 downto 0);
+      result : out std_logic_vector(136 downto 0)
+    );
+  end component;
 begin
   Source <= (128 => '1', 0 => '1', others => '0');
   child : wide_sv_child
@@ -998,10 +1046,15 @@ endmodule
   const auto lossy_logic9_vhdl_parent = fsim::frontend::parse_text(
       "lossy_logic9_vhdl_parent.vhd",
       R"(
+library ieee;
+use ieee.std_logic_1164.all;
 entity Lossy_Logic9_Vhdl_Parent is
 end entity;
 architecture rtl of Lossy_Logic9_Vhdl_Parent is
   signal Source : std_logic;
+  component bit_sv_sink is
+    port (data : in std_logic);
+  end component;
 begin
   child : bit_sv_sink port map (Data => Source);
 end architecture;
@@ -1046,6 +1099,8 @@ endmodule
   const auto nested_domain_vhdl_parent = fsim::frontend::parse_text(
       "nested_domain_vhdl_parent.vhd",
       R"(
+library ieee;
+use ieee.std_logic_1164.all;
 entity nested_domain_vhdl_parent is
   port (
     clk : in std_logic;
@@ -1062,6 +1117,8 @@ end architecture;
   const auto nested_domain_vhdl_leaf = fsim::frontend::parse_text(
       "nested_domain_vhdl_leaf.vhd",
       R"(
+library ieee;
+use ieee.std_logic_1164.all;
 entity nested_domain_vhdl_leaf is
   port (
     clk : in std_logic;

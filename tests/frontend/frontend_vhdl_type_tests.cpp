@@ -417,11 +417,12 @@ end architecture;
                                    R"(
 package Composite_Arrays is
   type Matrix_T is array
-    (natural range <>, 3 downto 1) of bit;
+    (natural range <>, natural range <>) of bit;
   type Packed_Rows_T is array (0 to 1)
     of bit_vector(3 downto 0);
   type Row_T is array (natural range <>) of bit;
   type Nested_Rows_T is array (0 to 1) of Row_T;
+  type Fixed_Matrix_T is array (0 to 1, 3 downto 1) of bit;
   function Read_Cell(
     Value : Matrix_T;
     Row : integer;
@@ -451,9 +452,9 @@ begin
     variable Pair : bit_vector(1 downto 0);
   begin
     Cell := Local_Matrix(1, 2);
-    Pair := Local_Matrix(1, 3 downto 2);
+    Pair := Nested(1)(3 downto 2);
     Local_Matrix(1, 2) <= '1';
-    Local_Matrix(0, 3 downto 2) <= "10";
+    Nested(0)(3 downto 2) := "10";
     Nested(1)(2) := '0';
     Packed_Rows <= Nested;
     wait;
@@ -466,7 +467,7 @@ end architecture;
   const auto *composite_package =
       retained.design.find(UnitKind::VhdlPackage, "composite_arrays");
   require(composite_package != nullptr &&
-              composite_package->type_aliases.size() == 4 &&
+              composite_package->type_aliases.size() == 5 &&
               composite_package->functions.size() == 1 &&
               composite_package->functions[0].arguments.size() == 3 &&
               composite_package->functions[0].arguments[0].type.named_type ==
@@ -482,14 +483,22 @@ end architecture;
   require(matrix.vhdl_array && matrix.vhdl_array->dimensions.size() == 2 &&
               matrix.vhdl_array->dimensions[0].index_subtype == "natural" &&
               matrix.vhdl_array->dimensions[0].unconstrained &&
-              matrix.vhdl_array->dimensions[1].constraint &&
-              matrix.vhdl_array->dimensions[1].constraint->descending &&
-              matrix.vhdl_array->dimensions[1].constraint->span.source_name ==
-                  "multidimensional_array_types.vhd" &&
+              matrix.vhdl_array->dimensions[1].index_subtype == "natural" &&
+              matrix.vhdl_array->dimensions[1].unconstrained &&
               matrix.vhdl_array->element_types.size() == 1 &&
               matrix.vhdl_array->element_types[0].domain == ValueDomain::Bit2 &&
               !matrix.width(),
           "array HIR retains ordered dimensions and the complete element type");
+  const auto &fixed_matrix = composite_package->type_aliases[4].type;
+  require(fixed_matrix.vhdl_array &&
+              fixed_matrix.vhdl_array->dimensions.size() == 2 &&
+              fixed_matrix.vhdl_array->dimensions[0].constraint &&
+              !fixed_matrix.vhdl_array->dimensions[0].constraint->descending &&
+              fixed_matrix.vhdl_array->dimensions[1].constraint &&
+              fixed_matrix.vhdl_array->dimensions[1].constraint->descending &&
+              fixed_matrix.vhdl_array->dimensions[1].constraint->span.source_name ==
+                  "multidimensional_array_types.vhd",
+          "constrained array dimensions retain their direction and source");
   const auto &packed_rows = composite_package->type_aliases[1].type;
   require(packed_rows.vhdl_array &&
               packed_rows.vhdl_array->element_types.size() == 1 &&
@@ -523,9 +532,10 @@ end architecture;
   require(selection_statements.size() == 7 &&
               selection_statements[0].value.kind == ExpressionKind::Call &&
               selection_statements[0].value.operands.size() == 2 &&
-              selection_statements[1].value.operands[1].kind ==
-                  ExpressionKind::Binary &&
-              selection_statements[1].value.operands[1].text == "downto",
+              selection_statements[1].value.kind == ExpressionKind::Slice &&
+              selection_statements[1].value.operands[0].kind ==
+                  ExpressionKind::Call &&
+              selection_statements[1].value.text == "downto",
           "multidimensional reads and subarray slices retain HIR");
   require(selection_statements[2].target.kind == ExpressionKind::Index &&
               selection_statements[2].target.operands[0].kind ==

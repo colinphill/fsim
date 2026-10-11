@@ -1,3 +1,4 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
 # VHDL delayed-signal zero-wait probe
 
 This reduced VHDL-2008 fixture preserves the clock transitions and the

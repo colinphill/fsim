@@ -1,4 +1,5 @@
 -- fsim: top=individual_association(sim) std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 6.5.7.1: subelements of a record or array formal of mode
 -- in, out or inout associated individually; out actuals that are a record
 -- element or an element of a two-dimensional array; 8.3: expanded names

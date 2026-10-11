@@ -1,4 +1,5 @@
 -- fsim: top=tables_cases_and_subtypes(sim) std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 10.9: case choices given by character literals of a BIT
 -- selector; 9.3.3: a two-dimensional constant table indexed by character
 -- literals; 16.2.3: 'LENGTH, 'LEFT and 'RIGHT of a STRING variable whose

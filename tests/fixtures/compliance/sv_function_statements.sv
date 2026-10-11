@@ -1,4 +1,5 @@
 // fsim: top=sv_function_statements std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 13.4.1: a void function called as a statement, and a
 // non-void function result discarded with void'(); 6.5: a variable written
 // by procedural statements in several processes takes the last write.

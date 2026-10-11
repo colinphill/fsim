@@ -1,4 +1,5 @@
 // fsim: top=sv_array_sizes_and_methods
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 7.4.2: an unpacked dimension given by a constant size
 // expression; 7.8.1: wildcard associative-array indices; 7.12 and 13.4.1:
 // built-in array methods called without parentheses; 14.4: `#1step`;

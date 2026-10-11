@@ -1,4 +1,5 @@
 // fsim: top=verilog_2005_begin_keywords lang=verilog std=2005
+// SPDX-License-Identifier: Apache-2.0
 `begin_keywords "1364-2005"
 // IEEE 1364-2005 19.11: keyword directives are part of Verilog-2005.
 module verilog_2005_begin_keywords;

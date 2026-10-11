@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Allocation-failure and exclusion controls for parsed A2 WriteBlocking.
 add_executable(
   fsim_application_native_frontier_a2_blocking_failure_tests

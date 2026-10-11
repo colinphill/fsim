@@ -1,4 +1,5 @@
 // fsim: top=sv_string_methods_and_updates
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 8.10: class methods that return a string; 11.4.1:
 // compound assignments and increments of unpacked array elements selected
 // by variable indices; 8.21: a virtual method called through a pure

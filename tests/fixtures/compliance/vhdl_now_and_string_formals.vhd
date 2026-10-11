@@ -1,4 +1,5 @@
 -- fsim: top=vhdl_now_and_string_formals(sim) std=2008
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 16.3 (NOW) and 4.2.2.2: STRING-class procedure formals.
 entity vhdl_now_and_string_formals is
 end entity;

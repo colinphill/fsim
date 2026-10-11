@@ -306,7 +306,7 @@ end entity;
 
 architecture rtl of slice_sharing_leaf is
 begin
-  descending : if not ASCENDING generate
+  descending_order : if not ASCENDING generate
     writer : process(payload, position)
       variable local_value : std_logic_vector(7 downto 0) := (others => '0');
     begin
@@ -314,7 +314,7 @@ begin
       result <= local_value;
     end process;
   end generate;
-  ascending : if ASCENDING generate
+  ascending_order : if ASCENDING generate
     writer : process(payload, position)
       variable local_value : std_logic_vector(0 to 8) := (others => '0');
     begin

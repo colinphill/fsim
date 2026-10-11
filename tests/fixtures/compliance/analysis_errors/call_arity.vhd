@@ -1,4 +1,5 @@
 -- fsim-expect: FSIM-ELAB-VHCALL-001 std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 4.2.2.1: every formal without a default has an actual.
 entity call_arity is
 end entity;

@@ -1,4 +1,5 @@
 // fsim: top=sv_generate_interfaces_and_upward_names
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 25.3 and 27.4: members of an interface instance declared in
 // a generate block, driven by continuous and procedural assignments in the
 // block; 23.8: functions of module instance array elements called by

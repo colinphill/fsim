@@ -207,6 +207,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-FE-VHORDER-003` | error | A VHDL context reference names a context that has not yet been analyzed. |
 | `FSIM-FE-VHORDER-004` | error | A VHDL use clause names a project package, or (`use lib.unit;`) a primary unit, that has not yet been analyzed; an architecture is not a primary unit. |
 | `FSIM-FE-VHORDER-005` | error | A VHDL configuration declaration appears before its configured entity. |
+| `FSIM-FE-VHCONFIG-001` | error | A block configuration names a label that is not a block or generate statement of the configured architecture (IEEE 1076-2008 3.4.2). |
 | `FSIM-FE-VHORDER-006` | error | A VHDL configuration declaration or binding names an architecture that has not yet been analyzed. |
 | `FSIM-FE-VHORDER-007` | error | A VHDL entity binding names an entity that has not yet been analyzed. |
 | `FSIM-FE-VHORDER-008` | error | A VHDL configuration binding names a configuration that has not yet been analyzed. |
@@ -2151,6 +2152,8 @@ scheduler.
 | `FSIM-ELAB-VHNAME-002` | error | A simple name used as a value (an operand, an assignment value, a condition or an initial value) denotes no visible declaration, for example a statement label, a design-unit name or a record element name (IEEE 1076-2008 12.3). |
 | `FSIM-ELAB-VHNAME-003` | error | A selected name whose prefix is an object names something other than an element of the object's record type, for example a selection from an array or scalar object (IEEE 1076-2008 8.3). |
 | `FSIM-ELAB-VHNAME-004` | error | A name used as a value denotes a type, subtype, component, package instance, or block or generate label (IEEE 1076-2008 9.1). |
+| `FSIM-ELAB-VHNAME-014` | error | An expanded name prefixed by an entity or architecture name does not denote a declaration of that design unit (IEEE 1076-2008 8.3). |
+| `FSIM-ELAB-VHNAME-015` | error | A generic or port map actual is a statement label or design-unit name rather than an expression (IEEE 1076-2008 6.5.7.1). |
 | `FSIM-ELAB-VHOPER-001` | error | A predefined VHDL adding, multiplying, `mod`, `rem`, `**`, sign or `abs` operator is applied to operands outside its numeric type rules and no visible overload applies (IEEE 1076-2008 9.2.6-9.2.8). |
 | `FSIM-ELAB-VHOPER-002` | error | A VHDL division, MOD or REM has a static zero divisor (IEEE 1076-2008 9.2.7). |
 | `FSIM-ELAB-VHOVER-001` | error | A VHDL function call is ambiguous among the visible overloads after result and actual-profile filtering. |
@@ -2208,7 +2211,7 @@ scheduler.
 | `FSIM-ELAB-VHTEXTIO-006` | error | A TextIO `read` `good` actual is not a writable Boolean. |
 | `FSIM-ELAB-VHTEXTIO-007` | error | A TextIO `write` justification is not the static `left` or `right` value. |
 | `FSIM-ELAB-VHTEXTIO-008` | error | A TextIO `write` field is not a static value in the bounded range 0 through 4096. |
-| `FSIM-ELAB-VHTEXTIO-009` | error | A TextIO `write` value is of a user-declared enumeration type, for which STD.TEXTIO declares no WRITE, or has no runtime image. |
+| `FSIM-ELAB-VHTEXTIO-009` | error | A TextIO `write` value is of a user-declared enumeration type or of SEVERITY_LEVEL, FILE_OPEN_KIND or FILE_OPEN_STATUS, for which STD.TEXTIO declares no WRITE, or has no runtime image. |
 | `FSIM-ELAB-VHTEXTIO-010` | error | The UNIT actual of a TextIO `write` of TIME is not a static time unit name. |
 | `FSIM-ELAB-VHTEXTIO-011` | error | The DIGITS actual of a TextIO `write` of REAL is not a static value from 0 through 64. |
 | `FSIM-ELAB-VHTIME-001` | error | A VHDL delay or physical-time literal does not have a locally static integral magnitude. |
@@ -2731,6 +2734,7 @@ scheduler.
 | `FSIM-ELAB-SVAGG-005` | error | A two-state aggregate assignment-pattern member receives a four-state value without conversion. |
 | `FSIM-ELAB-SVAGG-006` | error | A packed-union assignment pattern does not select exactly one member or uses `default`. |
 | `FSIM-ELAB-SVAGG-007` | error | A packed aggregate member initializer is not a valid contextual constant. |
+| `FSIM-ELAB-SVAGG-008` | error | A structure assignment pattern without `default` omits a member (IEEE 1800-2017 10.9.2). |
 | `FSIM-ELAB-SVCONCAT-002` | error | A real, shortreal or realtime value is an operand of a SystemVerilog concatenation (IEEE 1800-2017 11.4.12). |
 | `FSIM-ELAB-SVCAST-001` | error | Malformed cast HIR does not contain exactly one operand. |
 | `FSIM-ELAB-SVCAST-002` | error | A SystemVerilog cast names a type that is not visible. |
@@ -2777,9 +2781,9 @@ scheduler.
 | `FSIM-ELAB-GENERIC-006` | error | A generic-dependent packed range cannot be evaluated. |
 | `FSIM-ELAB-GENERIC-007` | error | A generic-dependent packed range width overflows the supported range. |
 | `FSIM-ELAB-GENERIC-008` | error | A generic value violates its bounded scalar subtype constraint. |
-| `FSIM-ELAB-GENERIC-009` | error | A top-level generic override (`--generic NAME=VALUE`) is not a STRING, integer or BOOLEAN value for the generic's type. |
 | `FSIM-ELAB-GENERIC-009` | error | An architecture signal conflicts with an entity generic. |
 | `FSIM-ELAB-GENERIC-010` | error | A bounded subtype-typed VHDL generic resolves outside the supported scalar, physical-time, packed, or statically constrained composite value set. |
+| `FSIM-ELAB-GENERIC-011` | error | A top-level generic override (`--generic NAME=VALUE`) is not a STRING, integer or BOOLEAN value for the generic's type. |
 | `FSIM-ELAB-GENTYPE-001` | error | A required VHDL interface type generic has no associated subtype indication. |
 | `FSIM-ELAB-GENTYPE-002` | error | A VHDL interface type generic actual is not syntactically a subtype indication. |
 | `FSIM-ELAB-GENTYPE-003` | error | A VHDL interface type generic actual names a type that is not visible at the association. |

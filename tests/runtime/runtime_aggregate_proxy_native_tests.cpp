@@ -1209,18 +1209,18 @@ void test_sparse_element_alias_dispatch()
         LoadConstant { 1U, PackedLogic4::from_msb_string("1010") },
         WriteContainerObjectElement {
             plain_object, 0U, 1U, true, false, false,
-            std::nullopt, std::nullopt },
+            std::nullopt, std::nullopt, { } },
         LoadConstant { 0U, packed_index(0U) },
         LoadConstant { 1U, PackedLogic4::from_msb_string("1100") },
         WriteContainerObjectElement {
             plain_object, 0U, 1U, true, false, false,
-            std::nullopt, std::nullopt },
+            std::nullopt, std::nullopt, { } },
         LoadConstant { 0U, packed_index(0U) },
         LoadConstant { 1U, PackedLogic4::from_msb_string("10") },
         LoadConstant { 2U, packed_index(0U) },
         WriteContainerObjectElement {
             plain_object, 0U, 1U, true, false, false,
-            std::nullopt, DynamicPartIndex { 2U, 3, 0, 0U, 2U, true, true } },
+            std::nullopt, DynamicPartIndex { 2U, 3, 0, 0U, 2U, true, true }, { } },
         Halt { },
     };
     (void)unaliased.add_process(std::move(plain_process));
@@ -1307,18 +1307,18 @@ void test_sparse_element_alias_dispatch()
         LoadConstant { 1U, PackedLogic4::from_msb_string("1010") },
         WriteContainerObjectElement {
             partial_object, 0U, 1U, true, false, false,
-            std::nullopt, std::nullopt },
+            std::nullopt, std::nullopt, { } },
         LoadConstant { 0U, packed_index(0U) },
         LoadConstant { 1U, PackedLogic4::from_msb_string("1100") },
         WriteContainerObjectElement {
             partial_object, 0U, 1U, true, false, false,
-            std::nullopt, std::nullopt },
+            std::nullopt, std::nullopt, { } },
         LoadConstant { 0U, packed_index(0U) },
         LoadConstant { 1U, PackedLogic4::from_msb_string("10") },
         LoadConstant { 2U, packed_index(0U) },
         WriteContainerObjectElement {
             partial_object, 0U, 1U, true, false, false,
-            std::nullopt, DynamicPartIndex { 2U, 3, 0, 0U, 2U, true, true } },
+            std::nullopt, DynamicPartIndex { 2U, 3, 0, 0U, 2U, true, true }, { } },
         Halt { },
     };
     (void)partial.add_process(std::move(partial_process));

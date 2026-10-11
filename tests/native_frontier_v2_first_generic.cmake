@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 # Verify V2-first Generic runtime construction with the real LLVM providers.
 add_executable(
   fsim_application_native_frontier_v2_first_generic_tests

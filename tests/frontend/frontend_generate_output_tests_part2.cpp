@@ -432,7 +432,7 @@ endmodule
       R"(
 module unsupported_format;
   logic q;
-  initial $display("%v", q);
+  initial $display("%y", q);
 endmodule
 )",
       Language::SystemVerilog2017);

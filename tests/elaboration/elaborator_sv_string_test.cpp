@@ -343,9 +343,13 @@ entity string_boundary_top is
 end entity;
 architecture rtl of string_boundary_top is
   signal value : bit;
+  component foreign_string_child
+    generic (TEXT : string := "default");
+    port (value : in bit);
+  end component;
 begin
   child: foreign_string_child
-    generic map (LABEL => "mixed")
+    generic map (TEXT => "mixed")
     port map (value => value);
 end architecture;
 )",
@@ -354,7 +358,7 @@ end architecture;
         "sv-string-boundary.sv",
         R"(
 module foreign_string_child #(
-  parameter string LABEL = "default"
+  parameter string TEXT = "default"
 ) (
   input logic value
 );
@@ -384,7 +388,7 @@ endmodule
     assert(child != boundary.design->specializations().end());
     assert((child->parameter_values
         == std::vector<std::pair<std::string, std::string>>{
-            {"LABEL", "\"mixed\""}}));
+            {"TEXT", "\"mixed\""}}));
     assert(
         child->parameter_identity_values.front().second
             .starts_with("svstring-v1;"));

@@ -1,4 +1,5 @@
 // fsim: top=sv_force_switches_and_strengths
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 10.6.2: a force keeps its expression applied until it is
 // released, and overrides a procedural assign; 23.3.3: an inout port
 // connected to a bit-select joins the selected net; 28.8: a tran passes

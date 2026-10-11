@@ -224,6 +224,10 @@ entity type_boundary_top is
 end entity;
 architecture rtl of type_boundary_top is
   signal value : bit;
+  component foreign_child is
+    generic (T : integer);
+    port (value : in bit);
+  end component;
 begin
   child: foreign_child
     generic map (T => 1)

@@ -1684,6 +1684,9 @@ endmodule
     auto mixed_actual_vhdl = fsim::frontend::parse_text(
         "mixed-actuals.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity vhdl_generic_child is
   generic (
     width : positive := 1;
@@ -1696,9 +1699,12 @@ entity vhdl_generic_child is
 end entity;
 architecture rtl of vhdl_generic_child is
 begin
-  q <= value;
+  q <= to_unsigned(value, q'length);
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity vhdl_parameter_host is
   port (
     q : out unsigned(3 downto 0)
@@ -1716,6 +1722,9 @@ begin
     );
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity ambiguous_parameter_host is
   port (
     q : out std_logic

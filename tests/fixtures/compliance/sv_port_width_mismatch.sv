@@ -1,4 +1,5 @@
 // fsim: top=sv_port_width_mismatch std=2017
+// SPDX-License-Identifier: Apache-2.0
 // IEEE 1800-2017 23.3.3: each port connection is a continuous assignment
 // from source to sink under the assignment-compatibility rules of 6.22.3, so
 // an actual of a different packed width is zero-extended or truncated.

@@ -47,8 +47,13 @@ architecture rtl of procedure_leaf is
   end procedure;
 begin
   process(input_value)
+    variable destination : integer;
+    variable accumulator : integer;
   begin
-    invoke(input_value, output_value, total_value);
+    accumulator := total_value;
+    invoke(input_value, destination, accumulator);
+    output_value <= destination;
+    total_value <= accumulator;
   end process;
 end architecture;
 
@@ -66,8 +71,13 @@ end entity;
 architecture rtl of boxed_leaf is
 begin
   process(input_value)
+    variable destination : integer;
+    variable accumulator : integer;
   begin
-    selected(input_value, output_value, total_value);
+    accumulator := total_value;
+    selected(input_value, destination, accumulator);
+    output_value <= destination;
+    total_value <= accumulator;
   end process;
 end architecture;
 

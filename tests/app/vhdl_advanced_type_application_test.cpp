@@ -122,7 +122,7 @@ begin
            << increment << R"( um;
     Shared_Counter.Add()"
            << increment << R"();
-    Shared_Counter.Add(Shared_Counter.Read());
+    Shared_Counter.Add(Shared_Counter.Read);
     wait;
   end process;
 

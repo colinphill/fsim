@@ -1,4 +1,5 @@
 -- fsim-expect: FSIM-ELAB-VHOPER-001 std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 9.2.5: no predefined "+" exists for a record type.
 entity record_addition is
 end entity;

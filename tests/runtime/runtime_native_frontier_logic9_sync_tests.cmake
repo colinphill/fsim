@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 add_executable(
   fsim_runtime_native_frontier_logic9_sync_tests
   runtime_native_frontier_logic9_sync_tests.cpp)

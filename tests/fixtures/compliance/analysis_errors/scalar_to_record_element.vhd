@@ -1,4 +1,5 @@
 -- fsim-expect: FSIM-ELAB-VHASSIGN-001 std=1993
+-- SPDX-License-Identifier: Apache-2.0
 -- IEEE 1076-2008 10.6.2.1: an integer is not a value of a record element
 -- whose type is a record.
 entity scalar_to_record_element is
