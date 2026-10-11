@@ -841,7 +841,7 @@ begin
   static_vector_value <= (others => '1');
   static_overload_value <= static_overload;
   operator_value <=
-    first_kind(shared) + first_kind(shared);
+    first_kind'(shared) + first_kind'(shared);
   attribute_value <= enum_select(first_kind'val(0));
   static_converted_value <= static_converted;
   static_attribute_value <= static_attribute;
@@ -869,7 +869,7 @@ begin
     nested_integer <= outer(inner(integer_input));
     nested_boolean <= outer(inner(boolean_input));
     converted_integer <= named_select(positive(integer_input));
-    converted_enum <= enum_select(first_kind(shared));
+    converted_enum <= enum_select(first_kind'(shared));
     assign_value(integer_input, package_proc_integer);
     overload_pkg.assign_value(
       integer_input, selected_proc_integer);

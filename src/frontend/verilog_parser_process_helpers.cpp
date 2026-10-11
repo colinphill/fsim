@@ -86,6 +86,17 @@ Statement VerilogParser::parse_case_statement(
     };
     std::function<Expression()> parse_match_pattern;
     parse_match_pattern = [&]() -> Expression {
+        // A parenthesized pattern (`tagged Jmp (tagged JmpU .a)`, IEEE
+        // 1800-2017 12.6).
+        if (at(TokenKind::LeftParen)
+            && (keyword("tagged", 1) || at(TokenKind::Dot, 1)
+                || (at(TokenKind::Apostrophe, 1) && at(TokenKind::LeftBrace, 2)))) {
+            (void)advance();
+            auto inner = parse_match_pattern();
+            expect(TokenKind::RightParen, "')' after a parenthesized pattern",
+                "FSIM-SV-PARSE-192");
+            return inner;
+        }
         if (match(TokenKind::Dot)) {
             const auto pattern_start = previous();
             if (match(TokenKind::Star)) {

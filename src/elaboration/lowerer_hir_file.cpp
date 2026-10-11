@@ -515,10 +515,10 @@ Lowerer::hir_string_format_expression_status(
         if (conversion.format == frontend::OutputFormat::Pattern) {
             continue;
         }
-        if ((conversion.format == frontend::OutputFormat::String
-                && !hir_expression_is_string(value, process_scope))
-            || (conversion.format != frontend::OutputFormat::String
-                && !hir_expression_width(value, process_scope))) {
+        // `%s` of an integral value shows its 8-bit characters.
+        if (!hir_expression_width(value, process_scope)
+            && (conversion.format != frontend::OutputFormat::String
+                || !hir_expression_is_string(value, process_scope))) {
             return HirStringFormatStatus::invalid;
         }
     }
@@ -1217,8 +1217,18 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                                 + " handle must be an integer expression");
                     }
                 } else if (call.text == "$ungetc") {
+                    // A string literal ("x") is an integral value (IEEE
+                    // 1800-2017 5.9).
+                    const auto literal_character = call.operands.size() == 2U
+                        && [&] {
+                               const auto found = specialized_hir_unit_->find_expression(
+                                   call.operands[0]);
+                               return found && found->systemverilog != nullptr
+                                   && found->systemverilog->kind
+                                       == semantic::sv::ExpressionKind::string_literal;
+                           }();
                     if (call.operands.size() != 2U
-                        || !integral_expression(call.operands[0])
+                        || (!integral_expression(call.operands[0]) && !literal_character)
                         || !file_handle(call.operands[1])) {
                         fail("FSIM-ELAB-SVFILE-010",
                             "$ungetc requires a character and integer "
@@ -1271,7 +1281,12 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                                     [](const auto& conversion) {
                                         return !conversion.suppress;
                                     }));
-                            if (!parsed.valid || parsed.conversions.empty()
+                            if ((string_source || parsed.trailing_text.empty())
+                                && parsed.valid
+                                && parsed.conversions.empty()
+                                && call.operands.size() == 2U) {
+                                // No conversions: the call is 0.
+                            } else if (!parsed.valid || parsed.conversions.empty()
                                 || parsed.conversions.size() > 64U
                                 || required != call.operands.size() - 2U
                                 || parsed.trailing_text.size()
@@ -2181,6 +2196,16 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
         }
         const auto parsed = frontend::parse_input_format(
             *format->systemverilog->decoded_string);
+        // A format without conversions assigns nothing: `$sscanf("x", "")`
+        // is 0 (IEEE 1800-2017 21.3.4.3).
+        if ((string_source || parsed.trailing_text.empty()) && parsed.valid
+            && parsed.conversions.empty() && call.operands.size() == 2U) {
+            const auto destination = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(LoadConstant {
+                destination, unsigned_value(0U, 32U) });
+            return finish(destination);
+        }
         const auto required = static_cast<std::size_t>(std::ranges::count_if(
             parsed.conversions,
             [](const auto& conversion) { return !conversion.suppress; }));

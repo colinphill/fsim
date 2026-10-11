@@ -226,6 +226,16 @@ void SystemVerilogConstraintSolver::replace_domain(
   variables_[variable].domain = std::move(domain);
 }
 
+void SystemVerilogConstraintSolver::discard_soft_clauses(
+    const std::span<const SystemVerilogConstraintVariableId> variables) {
+  std::erase_if(clauses_, [&](const SystemVerilogConstraintClause& clause) {
+    return clause.soft
+        && std::ranges::any_of(clause.variables, [&](const auto variable) {
+             return std::ranges::find(variables, variable) != variables.end();
+           });
+  });
+}
+
 void SystemVerilogConstraintSolver::add_clause(
     SystemVerilogConstraintClause clause) {
   if (clauses_.size() >= limits_.maximum_clauses) {

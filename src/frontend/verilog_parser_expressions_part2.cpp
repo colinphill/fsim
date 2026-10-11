@@ -152,6 +152,16 @@ Expression VerilogParser::parse_postfix(Expression expression)
             // (IEEE 1800-2017 18.7).
             const ImplicitNetDiscard member_scope { implicit_net_references_,
                 implicit_net_references_.size(), true };
+            // `with (x, y)` names the identifiers that denote members of the
+            // randomized object (IEEE 1800-2017 18.7); unqualified names
+            // resolve to members first, so the list is accepted.
+            if (match(TokenKind::LeftParen)) {
+                while (!at_end() && !at(TokenKind::RightParen)) {
+                    (void)advance();
+                }
+                expect(TokenKind::RightParen, "')' after randomize with identifiers",
+                    "FSIM-SV-PARSE-334");
+            }
             if (!match(TokenKind::LeftBrace)) {
                 error(
                     current(),

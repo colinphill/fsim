@@ -301,6 +301,9 @@ class SystemVerilogConstraintSolver final {
       SystemVerilogConstraintVariableId variable,
       std::vector<PackedLogic4> domain);
   void add_clause(SystemVerilogConstraintClause clause);
+  // `disable soft v` (IEEE 1800-2017 18.5.14.2): drops the soft clauses
+  // added so far that depend on one of the variables.
+  void discard_soft_clauses(std::span<const SystemVerilogConstraintVariableId> variables);
   void add_distribution(SystemVerilogConstraintDistribution distribution);
   void add_solve_before(
       SystemVerilogConstraintVariableId earlier,

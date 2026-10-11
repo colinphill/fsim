@@ -1744,18 +1744,35 @@ Logic9 Interpreter::Impl::execute_vital_timing_check(
     return stamp && stamp->first == scheduler.now()
         && stamp->second == scheduler.delta();
   };
+  // An event of the current time that the check has not seen yet: the
+  // VITAL procedures compare event times, not delta cycles, so a test
+  // event one delta before the reference event is simultaneous with it.
+  const auto unseen_event = [&](const SignalId signal,
+                                auto& seen) {
+    (void)get_signal(signal);
+    const auto& stamp = signal_events[signal];
+    if (!stamp || stamp->first != scheduler.now() || seen == stamp) {
+      return false;
+    }
+    seen = stamp;
+    return true;
+  };
   const auto& test_value = get_signal(operation.test_signal).initial_value;
   const auto reference_signal =
       operation.reference_signal.value_or(operation.test_signal);
   const auto& reference_value = get_signal(reference_signal).initial_value;
+  const bool test_event
+      = unseen_event(operation.test_signal, state.seen_test_event);
+  const bool reference_event = operation.reference_signal
+      && unseen_event(reference_signal, state.seen_reference_event);
   const auto result = simir::evaluate_vital_timing_check(
       operation,
       state,
       scheduler.now(),
       test_value.get_logic9(operation.test_offset),
-      event(operation.test_signal),
+      test_event,
       reference_value.get_logic9(operation.reference_offset),
-      operation.reference_signal && event(reference_signal),
+      reference_event,
       operation.trigger_signal && event(*operation.trigger_signal));
   if (operation.trigger_signal && state.trigger_request) {
     PackedLogic4 trigger(1U);

@@ -144,7 +144,10 @@ void test_logic9_at_level(
     assert(runtime.signals[2] == encode(collapsed));
     assert(runtime.logic9_signals[3] == planes(reexpanded));
     assert(runtime.signals[5] == encode(PackedLogic4::from_msb_string("1")));
-    assert(runtime.signals[6] == encode(PackedLogic4::from_msb_string("0")));
+    // "U01ZWLH-" ?= itself is 'U' (IEEE 1076-2008 9.2.3): no element pair
+    // differs, but U, Z and W are metavalues. A four-state signal holds it
+    // as X.
+    assert(runtime.signals[6] == encode(PackedLogic4::from_msb_string("x")));
     assert(runtime.formatted_logic9_values.size() == 1);
     assert(runtime.formatted_logic9_values.front() == planes(source));
 

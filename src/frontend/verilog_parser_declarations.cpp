@@ -226,7 +226,15 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
         } else if (is_named_type_reference_start()) {
           spec.type = parse_named_type();
         } else {
+          const auto default_spelling = spec.type.spelling;
           parse_optional_net_type(spec.type);
+          // `output var b` declares a variable of type logic (IEEE 1800-2017
+          // 6.8), not the default net.
+          if (explicit_variable && spec.type.spelling == default_spelling) {
+            spec.type.spelling = "logic";
+            spec.type.domain = ValueDomain::Logic4;
+            spec.type.systemverilog_net_type.clear();
+          }
           // `input wire T x`: a net port whose data type is a type name
           // (IEEE 1800-2017 23.2.2.3).
           if (is_named_type_reference_start()
@@ -936,7 +944,16 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     } else if (is_named_type_reference_start()) {
       spec.type = parse_named_type();
     } else {
+      const auto default_spelling = spec.type.spelling;
       parse_optional_net_type(spec.type);
+      // `output var b` declares a variable of type logic (IEEE 1800-2017
+      // 6.8), not the default net.
+      if (explicit_variable && spec.type.spelling == default_spelling
+          && !spec.type.packed_range && !spec.type.packed_range_expression) {
+        spec.type.spelling = "logic";
+        spec.type.domain = ValueDomain::Logic4;
+        spec.type.systemverilog_net_type.clear();
+      }
     }
     require_default_port_net_type(current(), explicit_type);
   } else if (keyword("string") || keyword("chandle")
@@ -1382,10 +1399,16 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
 
 void VerilogParser::parse_procedural_declaration(Statement& block) {
   const auto start = current();
+  // A parameter of a block, function or task is a local parameter (IEEE
+  // 1800-2017 6.20.1); it is kept as a local initialized by its value.
+  const bool local_parameter = match_keyword("parameter") || match_keyword("localparam");
   (void)match_keyword("static");
   const bool automatic = match_keyword("automatic");
   Type type = default_verilog_type();
-  if (keyword("string") || keyword("chandle") || keyword("event")
+  if (local_parameter && at(TokenKind::Identifier) && at(TokenKind::Assign, 1)) {
+    // An untyped parameter takes an integer value.
+    type = Type{ValueDomain::Logic4, "integer", PackedRange{31, 0, true}, true};
+  } else if (keyword("string") || keyword("chandle") || keyword("event")
       || keyword("process")
       || keyword("struct") || keyword("union") || keyword("enum")) {
     type = parse_parameter_type();
@@ -1395,6 +1418,9 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
     type = parse_named_type();
   } else {
     parse_optional_net_type(type);
+  }
+  if (local_parameter && type.named_type.empty() && type.spelling == "wire") {
+    type.spelling = "logic";
   }
   if (type.named_type.empty() && type.spelling == "wire") {
     error(
@@ -1546,7 +1572,10 @@ std::vector<Statement> VerilogParser::parse_continuous_assignments(
             skip_to_semicolon();
             return statements;
         }
-        const auto saved_context = std::exchange(implicit_net_context_, true);
+        // A continuous-assignment target declares an implicit net since
+        // IEEE 1364-2001 (3.6); in Verilog-1995 only connections do.
+        const auto saved_context = std::exchange(implicit_net_context_,
+            standard_revision_ != StandardRevision::Verilog1995);
         Expression target = parse_lvalue();
         implicit_net_context_ = saved_context;
         expect(
@@ -1853,6 +1882,36 @@ void VerilogParser::parse_gate_primitive(
               terminal.kind == ExpressionKind::LogicLiteral
               && terminal.text.starts_with("1'")) {
             return terminal;
+          } else {
+            // A sized literal or a constant part-select has a known width,
+            // which must be 1 or the instance count (IEEE 1364-2005 7.1.6).
+            std::optional<std::uint64_t> width;
+            if (terminal.kind == ExpressionKind::LogicLiteral) {
+              if (const auto quote = terminal.text.find('\'');
+                  quote != std::string::npos && quote != 0U) {
+                if (const auto size = detail::decimal_i64(terminal.text.substr(0U, quote))) {
+                  width = static_cast<std::uint64_t>(*size);
+                }
+              }
+            } else if (terminal.kind == ExpressionKind::Slice
+                && terminal.operands.size() == 3U
+                && terminal.operands[1].kind == ExpressionKind::IntegerLiteral
+                && terminal.operands[2].kind == ExpressionKind::IntegerLiteral) {
+              const auto left = detail::decimal_i64(terminal.operands[1].text);
+              const auto right = detail::decimal_i64(terminal.operands[2].text);
+              if (left && right) {
+                width = static_cast<std::uint64_t>(
+                    (*left > *right ? *left - *right : *right - *left) + 1);
+              }
+            }
+            if (width && *width != 1U && *width != instance_indices.size()) {
+              error(
+                  instance_start,
+                  "FSIM-SV-SEM-114",
+                  "a gate-array terminal must be scalar or match the "
+                  "instance count");
+              return terminal;
+            }
           }
           Expression index{
               ExpressionKind::IntegerLiteral,
@@ -2042,6 +2101,7 @@ Process VerilogParser::parse_always() {
     error(start, "FSIM-VERILOG-SEM-003",
           "always_latch requires SystemVerilog");
   }
+  std::optional<Expression> process_event_guard;
   const bool implicit_sensitivity =
       process.kind == ProcessKind::SystemVerilogAlwaysComb
       || process.kind == ProcessKind::SystemVerilogAlwaysLatch;
@@ -2060,6 +2120,7 @@ Process VerilogParser::parse_always() {
         Sensitivity{EdgeKind::Any, "*", start.span, {}});
   } else if (match(TokenKind::At)) {
     process.sensitivities = parse_sensitivity();
+    process_event_guard = std::exchange(event_guard_, std::nullopt);
   } else if (process.kind != ProcessKind::VerilogAlways) {
     error(current(), "FSIM-SV-PARSE-012",
           "always process requires an event control in this frontend "
@@ -2074,6 +2135,17 @@ Process VerilogParser::parse_always() {
     } else {
       process.statements.push_back(std::move(*body));
     }
+  }
+  // `always @(e iff g) S` runs S at the occurrences of e at which g holds
+  // (IEEE 1800-2017 9.4.2.3).
+  if (process_event_guard) {
+    Statement guarded;
+    guarded.kind = StatementKind::If;
+    guarded.condition = std::move(*process_event_guard);
+    guarded.statements = std::move(process.statements);
+    guarded.span = start.span;
+    process.statements.clear();
+    process.statements.push_back(std::move(guarded));
   }
   if (process.kind == ProcessKind::VerilogAlways
       && process.sensitivities.empty()

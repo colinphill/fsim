@@ -247,9 +247,13 @@ namespace fsim::runtime::simir {
     }
     case OutputFormat::string: {
         const auto byte_count = (value.width() + 7U) / 8U;
+        // Each 8 bits is one character, and a zero byte (such as the
+        // padding of a wider variable holding a string) is shown as a
+        // space, as other simulators do (IEEE 1800-2017 21.2.1.7); `%0s`
+        // drops the leading padding.
         std::string text;
         text.reserve(byte_count);
-        bool leading_padding = true;
+        bool leading_padding = suppress_leading_zero;
         for (std::size_t byte = byte_count; byte-- > 0;) {
             const auto offset = byte * 8U;
             const auto bit_count = std::min<std::size_t>(8U, value.width() - offset);
@@ -266,7 +270,7 @@ namespace fsim::runtime::simir {
                 text.push_back('x');
                 leading_padding = false;
             } else if (character != 0U || !leading_padding) {
-                text.push_back(static_cast<char>(character));
+                text.push_back(character == 0U ? ' ' : static_cast<char>(character));
                 leading_padding = false;
             }
         }

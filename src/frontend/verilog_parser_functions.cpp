@@ -390,7 +390,8 @@ FunctionDeclaration VerilogParser::parse_function(
           TokenKind::Semicolon,
           "';' after classic function argument declaration",
           "FSIM-SV-PARSE-197");
-    } else if (is_declaration_start()) {
+    } else if (is_declaration_start() || keyword("parameter")
+        || keyword("localparam")) {
       parse_procedural_declaration(body);
     } else if (auto statement = parse_statement()) {
       body.statements.push_back(std::move(*statement));
@@ -922,7 +923,8 @@ TaskDeclaration VerilogParser::parse_task(
           TokenKind::Semicolon,
           "';' after classic task argument declaration",
           "FSIM-SV-PARSE-198");
-    } else if (is_declaration_start()) {
+    } else if (is_declaration_start() || keyword("parameter")
+        || keyword("localparam")) {
       parse_procedural_declaration(body);
     } else if (auto statement = parse_statement()) {
       body.statements.push_back(std::move(*statement));

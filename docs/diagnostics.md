@@ -1829,6 +1829,9 @@ scheduler.
 | `FSIM-SV-SEM-413` | error | A Verilog concatenation has an unsized constant number operand (IEEE 1364-2005 5.1.14). |
 | `FSIM-SV-SEM-414` | error | A port named in a non-ANSI port list is not declared with a direction in the module body (IEEE 1364-2005 12.3.3, IEEE 1800-2017 23.2.2.1). |
 | `FSIM-SV-SEM-415` | error | `$signed` or `$unsigned` is applied to a real literal; its argument is integral (IEEE 1364-2005 5.5.1, IEEE 1800-2017 11.7). |
+| `FSIM-SV-SEM-416` | error | A named block of a process has the name of a generate block of the same module (IEEE 1364-2005 12.4.3, IEEE 1800-2017 27.6). |
+| `FSIM-SV-SEM-417` | error | An attribute value names something other than a parameter or genvar; it must be a constant expression (IEEE 1364-2005 3.8). |
+| `FSIM-SV-SEM-418` | error | A compilation-unit type declaration names an undeclared type, or a forward type declaration is never completed (IEEE 1800-2017 6.18). |
 | `FSIM-SV-SEM-073` | error | A module or package declares the same bounded task name more than once. |
 | `FSIM-SV-SEM-075` | error | A bounded text-file system function has the wrong argument count. |
 | `FSIM-SV-SEM-076` | error | `$fdisplay` or `$fwrite` has a nonliteral, malformed, unsupported, or multi-value format. |
@@ -1886,6 +1889,7 @@ scheduler.
 | `FSIM-SV-UNSUPPORTED-045` | error | A class member is outside the current property, method, constraint, typedef, or nested-class foundation. |
 | `FSIM-SV-UNSUPPORTED-046` | error | A `randsequence` production is recursive or returns a value; productions expand inline and only `void` productions are supported. |
 | `FSIM-SV-UNSUPPORTED-047` | error | An assignment within an expression (IEEE 1800-2017 11.3.6) appears in a loop control expression; such assignments run once before their statement. |
+| `FSIM-SV-UNSUPPORTED-048` | error | An event control with an `iff` guard has more than one event, or more than one guard; only a single guarded event is executable. |
 
 ## Elaboration and SimIR lowering
 
@@ -2134,7 +2138,7 @@ scheduler.
 | `FSIM-ELAB-VHCONV-002` | error | A visible VHDL conversion target has no positive SimIR-representable executable width. |
 | `FSIM-ELAB-VHCONV-003` | error | A VHDL conversion operand is not a supported closely related type or would change packed width or state domain. |
 | `FSIM-ELAB-VHCONV-004` | error | A VHDL conversion result is incompatible with its contextual type. |
-| `FSIM-ELAB-VHCONV-005` | error | The operand of a VHDL type conversion is a string literal, aggregate, allocator or null (IEEE 1076-2008 9.3.6). |
+| `FSIM-ELAB-VHCONV-005` | error | The operand of a VHDL type conversion is a string literal, aggregate, allocator, null, or an enumeration literal of more than one visible type (IEEE 1076-2008 9.3.6). |
 | `FSIM-ELAB-VHCONV-006` | error | A conversion between array types whose index types are not closely related: neither the same type nor both integer types (IEEE 1076-1993 7.3.5). |
 | `FSIM-ELAB-VHASSIGN-001` | error | The value of a VHDL variable or signal assignment to a scalar target has another type than the target (IEEE 1076-2008 10.5.2.1, 10.6.2.1). |
 | `FSIM-ELAB-VHASSIGN-002` | error | The target of a VHDL signal assignment is a variable or constant (IEEE 1076-2008 10.5.2.1). |
@@ -2144,6 +2148,7 @@ scheduler.
 | `FSIM-ELAB-VHACCESS-031` | error | The subtype indication of an allocator names an unconstrained array type without an index constraint (IEEE 1076-2008 9.3.7). |
 | `FSIM-ELAB-VHACCESS-032` | error | A VHDL access type designates a file type (IEEE 1076-2008 5.4.1). |
 | `FSIM-ELAB-VHACCESS-033` | error | The prefix of a VHDL `.all` name is not of an access type (IEEE 1076-2008 8.3). |
+| `FSIM-ELAB-VHACCESS-034` | error | Before VHDL-2008, a formal of mode out of an access type is read to designate an object (IEEE 1076-1993 2.1.1.1). |
 | `FSIM-ELAB-VHLOOP-001` | error | A VHDL loop parameter range has floating-point or physical bounds; it must be discrete (IEEE 1076-2008 10.10). |
 | `FSIM-ELAB-VHATTR-012` | error | The attribute 'STABLE, 'QUIET, 'TRANSACTION or 'DELAYED is read of a formal signal parameter of a subprogram (IEEE 1076-2008 4.2.2.2). |
 | `FSIM-ELAB-VHATTR-013` | error | 'EVENT of a signal element is supported only for a static index into a whole signal. |
@@ -2494,6 +2499,7 @@ scheduler.
 | `FSIM-ELAB-VHPORT-003` | error | A port of mode out is read through a signal attribute or a sensitivity list before VHDL-2008 (IEEE 1076-1993 1.1.1.2), or a port of mode linkage through a signal attribute. |
 | `FSIM-ELAB-VHPORT-004` | error | A port of mode linkage is read or updated other than as the actual of a port association (IEEE 1076-1993 4.3.2). |
 | `FSIM-ELAB-VHPORT-005` | error | The actual of a VHDL port association is a name whose index expressions read a signal, port or variable; it must be a static name (IEEE 1076-1993 1.1.1.2). |
+| `FSIM-ELAB-VHPORT-006` | error | A positional actual of a VHDL component port is an array where the formal is scalar, or a scalar where the formal is an array (IEEE 1076-2008 6.5.7.1). |
 | `FSIM-ELAB-VHVIEW-001` | error | A VHDL view-based interface names no unique visible mode-view declaration during elaboration. |
 | `FSIM-ELAB-VHVIEW-002` | error | A VHDL view-based interface has a recursive composed leaf-direction map. |
 | `FSIM-ELAB-VHVIEW-003` | error | A VHDL view root is invalid or incomplete, or a nested view is incompatible with its record member or array element subtype. |

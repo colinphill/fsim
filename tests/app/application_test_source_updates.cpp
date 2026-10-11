@@ -52,6 +52,9 @@ void ApplicationTestFixture::write_vhdl_generic_entity(
     const std::string_view revision) {
   std::ofstream output(vhdl_generic_entity_source);
   output << R"(
+library ieee;
+use ieee.numeric_std.all;
+
 entity vhdl_generic_child is
   generic (
     width : positive := 1;

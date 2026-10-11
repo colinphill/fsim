@@ -921,25 +921,37 @@ void store_register(llvm::IRBuilder<>& builder,
                 builder.CreateOr(
                     builder.CreateAnd(left_zero, right_zero),
                     builder.CreateAnd(left_one, right_one)));
-            auto* equal = builder.CreateICmpEQ(
-                builder.CreateAnd(builder.CreateNot(matched), mask),
-                zero);
+            // A known differing pair gives '0'; otherwise a metavalue
+            // other than '-' gives 'X' (IEEE 1076-2008 9.2.3).
+            auto* known_differ = builder.CreateAnd(
+                builder.CreateOr(
+                    builder.CreateAnd(left_zero, right_one),
+                    builder.CreateAnd(left_one, right_zero)),
+                mask);
+            auto* unknown_bits = builder.CreateAnd(
+                builder.CreateAnd(builder.CreateNot(matched),
+                    builder.CreateNot(known_differ)),
+                mask);
+            auto* same = builder.CreateICmpEQ(known_differ, zero);
+            auto* unknown = builder.CreateAnd(
+                same, builder.CreateICmpNE(unknown_bits, zero));
             return {
-                builder.CreateZExt(equal, llvm::Type::getInt64Ty(context)),
-                constant_i64(context, 0),
+                builder.CreateZExt(same, llvm::Type::getInt64Ty(context)),
+                builder.CreateZExt(unknown, llvm::Type::getInt64Ty(context)),
                 1
             };
         }
-        auto* mismatch = builder.CreateAnd(
-            builder.CreateOr(
-                builder.CreateXor(lhs.aval, rhs.aval),
-                builder.CreateOr(lhs.bval, rhs.bval)),
-            mask);
-        auto* equal = builder.CreateICmpEQ(
-            mismatch, zero);
+        auto* unknown_bits = builder.CreateAnd(
+            builder.CreateOr(lhs.bval, rhs.bval), mask);
+        auto* known_differ = builder.CreateAnd(
+            builder.CreateXor(lhs.aval, rhs.aval),
+            builder.CreateAnd(builder.CreateNot(unknown_bits), mask));
+        auto* same = builder.CreateICmpEQ(known_differ, zero);
+        auto* unknown = builder.CreateAnd(
+            same, builder.CreateICmpNE(unknown_bits, zero));
         return {
-            builder.CreateZExt(equal, llvm::Type::getInt64Ty(context)),
-            constant_i64(context, 0),
+            builder.CreateZExt(same, llvm::Type::getInt64Ty(context)),
+            builder.CreateZExt(unknown, llvm::Type::getInt64Ty(context)),
             1
         };
     }

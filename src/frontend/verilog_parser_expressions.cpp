@@ -550,14 +550,12 @@ Expression VerilogParser::parse_primary()
             || at(TokenKind::RightParen)
             || at(TokenKind::RightBrace)
             || at(TokenKind::EndOfFile)) {
-            error(
-                current(),
-                "FSIM-SV-PARSE-031",
-                "tagged-union construction requires a member value");
+            // `tagged Invalid` selects a void member, which has no value
+            // (IEEE 1800-2017 11.9).
             return Expression {
                 ExpressionKind::Call,
                 "@sv-tagged:" + member.text,
-                { },
+                { Expression { ExpressionKind::LogicLiteral, "1'b0", { }, member.span } },
                 cover(tagged.span, member.span)
             };
         }

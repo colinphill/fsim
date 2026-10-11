@@ -982,7 +982,7 @@ end entity;
 architecture rtl of reporter is
 begin
   process
-    variable prefix : string := "dynamic";
+    variable prefix : string(1 to 7) := "dynamic";
     variable level : severity_level := warning;
   begin
     report "vhdl ""quote""" severity note;
@@ -1009,7 +1009,7 @@ end entity;
 architecture rtl of failure_reporter is
 begin
   process
-    variable prefix : string := "dynamic";
+    variable prefix : string(1 to 7) := "dynamic";
     variable level : severity_level := failure;
   begin
     report prefix & " failure" severity level;

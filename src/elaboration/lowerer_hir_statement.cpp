@@ -2547,7 +2547,9 @@ bool Lowerer::lower_hir_statement(
                 && (record->systemverilog->form
                         == semantic::sv::DeclarationForm::variable
                     || record->systemverilog->form
-                        == semantic::sv::DeclarationForm::net)
+                        == semantic::sv::DeclarationForm::net
+                    || record->systemverilog->form
+                        == semantic::sv::DeclarationForm::port)
                 && record->systemverilog->type
                 && (std::ranges::find(net_keywords,
                         record->systemverilog->type->target.spelling)
@@ -11028,8 +11030,14 @@ bool Lowerer::lower_hir_statement(
             && expression_source->systemverilog->kind
                 == semantic::sv::ExpressionKind::call
             && expression_source->systemverilog->text == "$typename";
+        // A string literal given to `%d` is its packed value: a literal
+        // display argument is otherwise a format string.
+        const bool literal_value = expression_source
+            && expression_source->systemverilog != nullptr
+            && expression_source->systemverilog->kind
+                == semantic::sv::ExpressionKind::string_literal;
         if ((format == semantic::sv::OutputFormat::string
-                || format == semantic::sv::OutputFormat::decimal)
+                || (format == semantic::sv::OutputFormat::decimal && !literal_value))
             && (typename_call || hir_expression_is_string(
                     *expression, hir_process_scope_))) {
             const auto displayed_string
@@ -15461,3 +15469,4 @@ void Lowerer::materialize_hir_monitor_drivers()
     pending_monitor_drivers_.clear();
 }
 } // namespace fsim::elaboration
+

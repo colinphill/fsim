@@ -1036,7 +1036,7 @@ void Interpreter::Impl::handle_external_boundary(
                 process.pc = instruction;
                 fail(process, "simulation time overflow in dynamic wait");
             }
-            queue_at(process.id, scheduler.now() + suspension.delay);
+            queue_timeout(process, scheduler.now() + suspension.delay);
         }
         break;
     case ExternalSuspendKind::wait_on: {

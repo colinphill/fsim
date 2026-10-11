@@ -4617,6 +4617,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     void report_update_profile();
 
     void queue_at(ProcessId id, SimulationTick time);
+    // Resume a process after a timed wait. A VHDL process resumes after the
+    // driver updates of that time, with the processes they wake.
+    void queue_timeout(ProcessState& process, SimulationTick time);
 
     void queue_next_delta(
         ProcessId id,

@@ -21,6 +21,22 @@
 
 namespace fsim::test {
 
+namespace {
+
+// Source dependencies outside the predefined standard libraries.
+std::vector<std::string> design_source_dependencies(
+    const std::vector<std::string>& dependencies) {
+  std::vector<std::string> result;
+  for (const auto& dependency : dependencies) {
+    if (!dependency.starts_with("fsim-standard/")) {
+      result.push_back(dependency);
+    }
+  }
+  return result;
+}
+
+} // namespace
+
 void ApplicationTestFixture::test_specialization_and_packages() {
   auto config = base_config();
 auto provenance_config = config;
@@ -472,9 +488,12 @@ const auto run_generic_specializations =
                   {"width", "4"},
                   {"value", std::string{narrow_value}},
                   {"last", "3"}}));
-          assert(specialization.source_dependencies.size() == 1);
+          // The IEEE packages the entity uses are dependencies too.
+          const auto design_dependencies = design_source_dependencies(
+              specialization.source_dependencies);
+          assert(design_dependencies.size() == 1);
           assert(same_source_path(
-              specialization.source_dependencies.front(),
+              design_dependencies.front(),
               vhdl_generic_entity_source));
         } else if (
             specialization.instance
@@ -486,9 +505,12 @@ const auto run_generic_specializations =
                   {"width", "8"},
                   {"value", "3"},
                   {"last", "7"}}));
-          assert(specialization.source_dependencies.size() == 1);
+          // The IEEE packages the entity uses are dependencies too.
+          const auto design_dependencies = design_source_dependencies(
+              specialization.source_dependencies);
+          assert(design_dependencies.size() == 1);
           assert(same_source_path(
-              specialization.source_dependencies.front(),
+              design_dependencies.front(),
               vhdl_generic_entity_source));
         }
       }
@@ -675,6 +697,9 @@ write_unused_package("unused revision 1");
 {
   std::ofstream output(package_constant_user_source);
   output << R"(
+library ieee;
+use ieee.numeric_std.all;
+
 entity package_constant_user is
 port (
   observed : out unsigned(
@@ -686,7 +711,7 @@ context support.package_context;
 architecture rtl of package_constant_user is
 signal local_value : unsigned(width - 1 downto 0);
 begin
-local_value <= next_value;
+local_value <= to_unsigned(next_value, local_value'length);
 observed <= local_value + 1;
 end architecture rtl;
 )";

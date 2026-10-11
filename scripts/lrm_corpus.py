@@ -560,7 +560,8 @@ def ivtest_cases(root: Path) -> list[Case]:
                 standard = {"-g2005-sv": "2005", "-g2009": "2009", "-g2012": "2012"}[arg]
             elif arg == "-g2001":
                 standard = "2001"
-            elif arg == "-g1995":
+            elif arg in ("-g1995", "-g1"):
+                # iverilog's -g1 selects IEEE 1364-1995.
                 standard = "1995"
             elif arg.startswith("-D"):
                 compile_args += ["-D", arg[2:]]

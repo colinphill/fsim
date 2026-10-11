@@ -642,7 +642,8 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                             : std::optional<Type> { prior->second } });
                     current_procedural_types_.insert_or_assign(alias.name, alias.type);
                 }
-            } else if (is_declaration_start()) {
+            } else if (is_declaration_start() || keyword("parameter")
+                || keyword("localparam")) {
               // Verilog declares block items only in named blocks
               // (IEEE 1364-2005 9.8.3).
               if (language_ != Language::SystemVerilog2017
@@ -692,6 +693,66 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
 
     if (match_keyword("if")) {
         const auto start = previous();
+        // `if (e matches p [&&& g]) s1 else s2` (IEEE 1800-2017 12.6.2) is the
+        // case statement `case (e) matches p [&&& g]: s1 default: s2`.
+        if (language_ == Language::SystemVerilog2017 && at(TokenKind::LeftParen)) {
+            std::size_t depth { };
+            std::optional<std::size_t> matches_offset;
+            std::size_t offset { };
+            for (;; ++offset) {
+                const auto& token = current(offset);
+                if (token.kind == TokenKind::EndOfFile) {
+                    break;
+                }
+                if (token.kind == TokenKind::LeftParen) {
+                    ++depth;
+                } else if (token.kind == TokenKind::RightParen) {
+                    if (--depth == 0U) {
+                        break;
+                    }
+                } else if (depth == 1U && token.kind == TokenKind::Identifier
+                    && token.text == "matches" && !matches_offset) {
+                    matches_offset = offset;
+                }
+            }
+            if (matches_offset && current(offset).kind == TokenKind::RightParen) {
+                std::vector<Token> tokens = synthetic_tokens("case (", start.span);
+                for (std::size_t index = 1U; index < *matches_offset; ++index) {
+                    tokens.push_back(current(index));
+                }
+                for (auto& token : synthetic_tokens(") matches", start.span)) {
+                    tokens.push_back(std::move(token));
+                }
+                for (std::size_t index = *matches_offset + 1U; index < offset; ++index) {
+                    tokens.push_back(current(index));
+                }
+                for (auto& token : synthetic_tokens(": ; endcase", start.span)) {
+                    tokens.push_back(std::move(token));
+                }
+                index_ += offset + 1U;
+                auto selection = parse_generated_statement(std::move(tokens), start.span);
+                if (selection && selection->kind == StatementKind::Case
+                    && selection->case_alternatives.size() == 1U) {
+                    auto& matched = selection->case_alternatives.front();
+                    matched.statements.clear();
+                    if (auto true_branch = parse_statement()) {
+                        matched.statements.push_back(std::move(*true_branch));
+                    }
+                    if (match_keyword("else")) {
+                        CaseAlternative otherwise;
+                        otherwise.is_default = true;
+                        if (auto false_branch = parse_statement()) {
+                            otherwise.statements.push_back(std::move(*false_branch));
+                        }
+                        selection->case_alternatives.push_back(std::move(otherwise));
+                    }
+                    selection->span = span_from(start, previous());
+                    return *selection;
+                }
+                error(start, "FSIM-SV-PARSE-019", "malformed if-matches statement");
+                return std::nullopt;
+            }
+        }
         Statement statement;
         statement.kind = StatementKind::If;
         expect(TokenKind::LeftParen, "'(' after if", "FSIM-SV-PARSE-018");
@@ -728,12 +789,38 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         Statement statement;
         statement.kind = StatementKind::WaitOn;
         statement.sensitivities = parse_sensitivity();
+        auto guard = std::exchange(event_guard_, std::nullopt);
         if (!match(TokenKind::Semicolon)) {
             if (auto controlled = parse_statement()) {
                 statement.statements.push_back(std::move(*controlled));
             }
         }
         statement.span = span_from(start, previous());
+        if (guard) {
+            // `@(e iff g) S` waits for an occurrence of e at which g holds:
+            // `do @(e); while (!g); S` (IEEE 1800-2017 9.4.2.3).
+            auto controlled = std::move(statement.statements);
+            statement.statements.clear();
+            Statement wait;
+            wait.kind = StatementKind::Loop;
+            wait.loop_runtime = true;
+            wait.loop_post_test = true;
+            wait.condition = Expression { ExpressionKind::Unary, "!",
+                { std::move(*guard) }, statement.span };
+            wait.statements.push_back(std::move(statement));
+            wait.span = span_from(start, previous());
+            if (controlled.empty()) {
+                return wait;
+            }
+            Statement block;
+            block.kind = StatementKind::Block;
+            block.statements.push_back(std::move(wait));
+            for (auto& item : controlled) {
+                block.statements.push_back(std::move(item));
+            }
+            block.span = span_from(start, previous());
+            return block;
+        }
         return statement;
     }
 
@@ -887,11 +974,16 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             "'(' after " + task_name,
             "FSIM-SV-PARSE-151");
         statement.file_handle = parse_expression();
-        expect(
-            TokenKind::Comma,
-            "',' after " + task_name + " file handle",
-            "FSIM-SV-PARSE-152");
-        if (!at(TokenKind::StringLiteral)) {
+        // `$fdisplay(fd)` writes only the newline (IEEE 1800-2017 21.3.2).
+        const bool has_arguments = !at(TokenKind::RightParen);
+        if (has_arguments) {
+            expect(
+                TokenKind::Comma,
+                "',' after " + task_name + " file handle",
+                "FSIM-SV-PARSE-152");
+        }
+        if (!has_arguments) {
+        } else if (!at(TokenKind::StringLiteral)) {
             do {
                 statement.output_values.push_back(
                     OutputValue {
@@ -1594,6 +1686,7 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             return statement;
         }
         if (at(TokenKind::LeftParen, lookahead) || at(TokenKind::Semicolon, lookahead)) {
+            const auto task_start_index = index_;
             const auto start = advance();
             std::string name = start.text;
             if (match(TokenKind::Hash)) {
@@ -1681,6 +1774,20 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                 }
                 expect(TokenKind::RightParen, "')' after task call arguments",
                     "FSIM-SV-PARSE-146");
+            }
+            // `obj.randomize() with {...};` discards the result of a call
+            // with inline constraints (IEEE 1800-2017 18.7).
+            if (keyword("with")
+                && (statement.task_name == "randomize"
+                    || statement.task_name.ends_with(".randomize"))) {
+                index_ = task_start_index;
+                Statement call;
+                call.kind = StatementKind::ContainerMethod;
+                call.value = parse_expression();
+                expect(TokenKind::Semicolon, "';' after randomize call",
+                    "FSIM-SV-PARSE-147");
+                call.span = span_from(start, previous());
+                return call;
             }
             expect(TokenKind::Semicolon, "';' after task call", "FSIM-SV-PARSE-147");
             statement.span = span_from(start, previous());

@@ -93,6 +93,11 @@ struct VitalTimingState {
   std::optional<SimulationTick> scheduled_trigger;
   std::optional<SimulationTick> trigger_request;
   bool trigger_level{};
+  // The last test and reference events the check has seen, as
+  // (time, delta), so an earlier-delta event of the current time that did
+  // not wake the check (a 'DELAYED test signal) still counts.
+  std::optional<std::pair<SimulationTick, std::uint64_t>> seen_test_event;
+  std::optional<std::pair<SimulationTick, std::uint64_t>> seen_reference_event;
 };
 
 enum class VitalDelayKind : std::uint8_t { signal, wire, path };

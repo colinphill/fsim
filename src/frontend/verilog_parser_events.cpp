@@ -4,6 +4,22 @@
 namespace fsim::frontend {
 
 std::vector<Sensitivity> VerilogParser::parse_sensitivity() {
+  event_guard_.reset();
+  bool guard_error = false;
+  const auto parse_guard = [&] {
+    if (language_ == Language::SystemVerilog2017 && match_keyword("iff")) {
+      const auto keyword_token = previous();
+      auto guard = parse_expression();
+      if (event_guard_) {
+        if (!guard_error) {
+          error(keyword_token, "FSIM-SV-UNSUPPORTED-048",
+              "only one event of an event control may have an iff guard");
+        }
+        guard_error = true;
+      }
+      event_guard_ = std::move(guard);
+    }
+  };
   std::vector<Sensitivity> sensitivities;
   if (match(TokenKind::Star)) {
     (void)require_standard(
@@ -61,6 +77,7 @@ std::vector<Sensitivity> VerilogParser::parse_sensitivity() {
       both_edges = true;
     }
     auto expression = parse_expression();
+    parse_guard();
     if (both_edges) {
       Sensitivity rising;
       rising.edge = EdgeKind::Positive;
@@ -106,6 +123,14 @@ std::vector<Sensitivity> VerilogParser::parse_sensitivity() {
   }
   expect(TokenKind::RightParen, "')' after sensitivity list",
          "FSIM-SV-PARSE-016");
+  // A guard of one event among several (`@(a iff g or b)`) is not modelled.
+  if (event_guard_ && sensitivities.size() > (sensitivities.size() == 2U
+          && sensitivities[0].edge == EdgeKind::Positive
+          && sensitivities[1].edge == EdgeKind::Negative ? 2U : 1U)
+      && !guard_error) {
+    error(previous(), "FSIM-SV-UNSUPPORTED-048",
+        "an iff guard is supported on an event control with one event");
+  }
   if (sensitivities.empty()) {
     error(
         previous(), "FSIM-SV-PARSE-136",

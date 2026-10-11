@@ -239,6 +239,17 @@ class VerilogParser final : private detail::ParserBase {
     bool declares { true };
   };
   bool implicit_net_context_ { };
+  // The `iff` guard of the single event of the last event control parsed
+  // (IEEE 1800-2017 9.4.2.3).
+  std::optional<Expression> event_guard_;
+  // Compilation-unit forward type declarations awaiting their definition.
+  std::vector<Token> compilation_unit_forward_types_;
+  // Reports undeclared names a compilation-unit subprogram noted since
+  // `first` (it declares no implicit nets) and drops the references.
+  void resolve_compilation_unit_references(std::size_t first, const std::string& callable);
+  // Value parameters declared so far in the current unit: `[N]` with a
+  // parameter N is a constant array size, not an associative index type.
+  std::unordered_set<std::string> unit_value_parameter_names_;
   // Discards the implicit-net references noted while it lives: names in a
   // class body or an out-of-block method (`C::m`) resolve to class members
   // (IEEE 1800-2017 6.10, 8.24).

@@ -8640,8 +8640,59 @@ namespace {
         const auto expression_type = [&](const semantic::ExpressionId id)
             -> const semantic::sv::TypeReference* {
             const auto expression = compiled.find_expression(id);
-            if (!expression || expression->systemverilog == nullptr
-                || !expression->systemverilog->referenced_name) {
+            if (!expression || expression->systemverilog == nullptr) {
+                return nullptr;
+            }
+            // A member of a structure variable (`s.e`) has the member's type.
+            if (expression->systemverilog->kind == ExpressionKind::name
+                && std::ranges::count(expression->systemverilog->text, '.') == 1) {
+                const auto& text = expression->systemverilog->text;
+                const auto dot = text.find('.');
+                const auto base = semantic::CompiledDesignResolver {
+                    compiled, unit.id, unit_specialized }
+                                      .resolve_systemverilog(text.substr(0U, dot),
+                                          expression->systemverilog->scope)
+                                      .unique();
+                const auto base_declaration = base
+                    ? (unit_specialized != nullptr ? unit_specialized->find_declaration(*base)
+                                                   : compiled.find_declaration(*base))
+                    : std::nullopt;
+                if (base_declaration && base_declaration->systemverilog != nullptr
+                    && base_declaration->systemverilog->type) {
+                    const auto nominal = nominal_type_of(*base_declaration->systemverilog->type);
+                    const auto structure = nominal ? compiled.find_type(*nominal) : std::nullopt;
+                    if (structure && structure->systemverilog != nullptr
+                        && (structure->systemverilog->form == TypeForm::packed_structure
+                            || structure->systemverilog->form == TypeForm::unpacked_structure)) {
+                        const auto member_name = text.substr(dot + 1U);
+                        for (const auto& member : structure->systemverilog->members) {
+                            if (member.name == member_name) {
+                                return &member.type;
+                            }
+                        }
+                    }
+                    // A property of a class object (`c.e`), when one class
+                    // has the handle's type name.
+                    const auto& class_name = base_declaration->systemverilog->type->target.spelling;
+                    const semantic::sv::ClassDeclaration* owner = nullptr;
+                    bool ambiguous { };
+                    for (const auto& candidate : compiled.systemverilog_hir.classes()) {
+                        if (!class_name.empty() && candidate.name == class_name) {
+                            ambiguous = owner != nullptr;
+                            owner = &candidate;
+                        }
+                    }
+                    if (owner != nullptr && !ambiguous) {
+                        const auto property_name = text.substr(dot + 1U);
+                        for (const auto& property : owner->properties) {
+                            if (property.name == property_name) {
+                                return &property.type;
+                            }
+                        }
+                    }
+                }
+            }
+            if (!expression->systemverilog->referenced_name) {
                 return nullptr;
             }
             const auto& reference

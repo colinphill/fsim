@@ -362,7 +362,9 @@ ParseResult VerilogParser::run() {
             } else {
                 // A compilation-unit function (IEEE 1800-2017 3.12.1).
                 auto& unit = compilation_unit_package(declaration);
+                const auto references = implicit_net_references_.size();
                 unit.functions.push_back(parse_function(declaration));
+                resolve_compilation_unit_references(references, unit.functions.back().name);
             }
         } else if (match_keyword("task")) {
             compilation_unit_has_design_item_ = true;
@@ -396,7 +398,9 @@ ParseResult VerilogParser::run() {
             } else {
                 // A compilation-unit task (IEEE 1800-2017 3.12.1).
                 auto& unit = compilation_unit_package(declaration);
+                const auto references = implicit_net_references_.size();
                 unit.tasks.push_back(parse_task(declaration));
+                resolve_compilation_unit_references(references, unit.tasks.back().name);
             }
         } else if (match_keyword("primitive")) {
             compilation_unit_has_design_item_ = true;
@@ -541,6 +545,43 @@ ParseResult VerilogParser::run() {
         }
     }
     link_out_of_block_constraints(design);
+    // A compilation-unit type names a declared type (IEEE 1800-2017 6.18),
+    // and a forward type declaration is completed.
+    if (compilation_unit_package_) {
+        std::unordered_set<std::string> types(
+            known_class_names_.begin(), known_class_names_.end());
+        for (const auto& alias : compilation_unit_package_->type_aliases) {
+            types.insert(alias.name);
+        }
+        for (const auto& item : compilation_unit_package_->systemverilog_classes) {
+            types.insert(item.name);
+        }
+        for (const auto& unit : design.units) {
+            for (const auto& alias : unit.type_aliases) {
+                types.insert(alias.name);
+            }
+        }
+        for (const auto& forward : compilation_unit_forward_types_) {
+            if (!types.contains(forward.text)) {
+                error(forward, "FSIM-SV-SEM-418",
+                    "forward type '" + forward.text + "' is never defined");
+            }
+        }
+        // (A type may come from an imported package; STD's import is implicit.)
+        if (std::ranges::all_of(compilation_unit_imports_, [](const SystemVerilogImport& item) {
+                return item.package == "std" || item.package.starts_with("fsim_unit_");
+            })) {
+            for (const auto& alias : compilation_unit_package_->type_aliases) {
+                const auto& named = alias.type.named_type;
+                if (!named.empty() && named.find_first_of(":.#") == std::string::npos
+                    && !types.contains(named)) {
+                    diagnostics_.push_back({ DiagnosticSeverity::Error, "FSIM-SV-SEM-418",
+                        "type '" + named + "' is not declared", alias.span, { } });
+                }
+            }
+        }
+    }
+    compilation_unit_forward_types_.clear();
     if (compilation_unit_package_) {
         compilation_unit_package_->span = cover(
             compilation_unit_package_->span, previous().span);
@@ -803,6 +844,24 @@ void VerilogParser::parse_verilog_attribute_instances()
                         in_verilog_attribute_ = true;
                         value = parse_expression();
                         in_verilog_attribute_ = false;
+                        // IEEE 1364-2005 3.8: an attribute value is a constant
+                        // expression; a name in it is a parameter.
+                        const auto names_object = [&](const auto& self,
+                                                      const Expression& expression) -> bool {
+                            if (expression.kind == ExpressionKind::Identifier) {
+                                return expression.text.find('.') == std::string::npos
+                                    && !unit_value_parameter_names_.contains(expression.text)
+                                    && !declared_genvars_.contains(expression.text);
+                            }
+                            return std::ranges::any_of(expression.operands,
+                                [&](const Expression& operand) { return self(self, operand); });
+                        };
+                        if (!fsm_kind(name.text)
+                            && names_object(names_object, *value)) {
+                            error(name, "FSIM-SV-SEM-417",
+                                "the value of attribute '" + name.text
+                                    + "' is not a constant expression");
+                        }
                     }
                 }
                 if (language_ == Language::SystemVerilog2017) {
@@ -1205,3 +1264,4 @@ void VerilogParser::parse_begin_keywords(
 }
 
 } // namespace fsim::frontend
+

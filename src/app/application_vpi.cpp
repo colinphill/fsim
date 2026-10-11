@@ -2176,14 +2176,20 @@ runtime::PackedLogic4 systemverilog_vpi_packed_value(
 runtime::SystemVerilogVpiTimeProfile systemverilog_vpi_time_profile(
     const std::string_view resolution)
 {
+    // VHDL resolutions may also be SEC, MIN or HR (IEEE 1076-2008 5.2.4.2).
     const auto suffix = resolution.ends_with("fs") ? std::string_view { "fs" }
         : resolution.ends_with("ps")               ? std::string_view { "ps" }
         : resolution.ends_with("ns")               ? std::string_view { "ns" }
         : resolution.ends_with("us")               ? std::string_view { "us" }
         : resolution.ends_with("ms")               ? std::string_view { "ms" }
+        : resolution.ends_with("sec")              ? std::string_view { "sec" }
+        : resolution.ends_with("min")              ? std::string_view { "min" }
+        : resolution.ends_with("hr")               ? std::string_view { "hr" }
         : resolution.ends_with('s')                ? std::string_view { "s" }
                                                    : std::string_view { };
-    auto exponent = suffix == "s" ? 0
+    auto exponent = suffix == "s" || suffix == "sec" || suffix == "min"
+            || suffix == "hr"
+        ? 0
         : suffix == "ms"          ? -3
         : suffix == "us"          ? -6
         : suffix == "ns"          ? -9
@@ -2199,6 +2205,9 @@ runtime::SystemVerilogVpiTimeProfile systemverilog_vpi_time_profile(
     if (suffix.empty() || error != std::errc { }
         || end != magnitude.data() + magnitude.size() || multiplier == 0U) {
         throw std::invalid_argument { "invalid VPI time resolution" };
+    }
+    if (suffix == "min" || suffix == "hr") {
+        multiplier *= suffix == "min" ? 60U : 3600U;
     }
     while (multiplier % 10U == 0U && exponent < 0) {
         multiplier /= 10U;

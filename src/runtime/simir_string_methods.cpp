@@ -460,8 +460,40 @@ std::string vhdl_time_text(const PackedLogic4& value,
             fraction += static_cast<char>('0' + remainder / scale);
             remainder %= scale;
         }
-        text += '.';
-        text += fraction;
+        // The fraction is written like a REAL image, to 15 significant
+        // digits.
+        auto number = digits + fraction;
+        const auto first = number.find_first_not_of('0');
+        constexpr std::size_t significant = 15U;
+        if (first != std::string::npos && number.size() - first > significant) {
+            const auto keep = first + significant;
+            bool carry = number[keep] >= '5';
+            number.resize(keep);
+            for (auto index = keep; carry && index-- > 0U;) {
+                if (number[index] == '9') {
+                    number[index] = '0';
+                } else {
+                    ++number[index];
+                    carry = false;
+                }
+            }
+            if (carry) {
+                number.insert(number.begin(), '1');
+                digits.insert(digits.begin(), '0');
+            }
+            number.resize(std::max(number.size(), digits.size()), '0');
+        }
+        auto whole_text = number.substr(0U, digits.size());
+        auto fraction_text = number.substr(digits.size());
+        while (!fraction_text.empty() && fraction_text.back() == '0') {
+            fraction_text.pop_back();
+        }
+        text = negative ? "-" : "";
+        text += whole_text;
+        if (!fraction_text.empty()) {
+            text += '.';
+            text += fraction_text;
+        }
     }
     text += ' ';
     text += unit.first;

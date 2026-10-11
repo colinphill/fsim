@@ -375,6 +375,17 @@ std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
     std::function<Expression()> parse_constraint_item;
     std::function<Expression()> parse_constraint_set;
     const auto parse_plain_constraint = [&]() {
+        // `disable soft v;` (IEEE 1800-2017 18.5.14.2).
+        if (keyword("disable") && current(1).text == "soft") {
+            const auto disable_token = advance();
+            (void)advance();
+            auto target = parse_expression();
+            expect(TokenKind::Semicolon, "';' after disable soft",
+                "FSIM-SV-PARSE-265");
+            const auto span = cover(disable_token.span, previous().span);
+            return Expression { ExpressionKind::Call, "@disable-soft",
+                { std::move(target) }, span };
+        }
         const auto soft = keyword("soft")
             || (at(TokenKind::Identifier)
                 && current().text == "soft"
@@ -841,6 +852,16 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
       } else {
         DesignUnit type_owner;
         parse_typedef(type_owner, nested_start);
+        // A class scope declares each name once (IEEE 1800-2017 8.3).
+        for (const auto& alias : type_owner.type_aliases) {
+          if (std::ranges::any_of(declaration.properties,
+                  [&](const SystemVerilogClassProperty& property) {
+                    return property.declaration.name == alias.name;
+                  })) {
+            error(nested_start, "FSIM-SV-SEM-170",
+                "class type '" + alias.name + "' has the name of a class property");
+          }
+        }
         declaration.type_aliases.insert(
             declaration.type_aliases.end(),
             std::make_move_iterator(type_owner.type_aliases.begin()),

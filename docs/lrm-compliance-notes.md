@@ -1103,3 +1103,53 @@ gives fsim's result in each case checked.
   a scalar prefix is rejected (`VHARRAYSEL-005`).
 - A string literal or positional aggregate actual of an unconstrained
   array formal has the index range of the formal's index subtype.
+
+## Tagged unions, guarded events and VHDL predefined operations (batch 42)
+
+- `@(e iff g) S` waits for `e` until `g` holds, then runs `S` (IEEE
+  1800-2017 9.4.2). It lowers to `do @(e); while (!g);`, so one guarded
+  event per control is supported; several are reported
+  (`FSIM-SV-UNSUPPORTED-048`).
+- `if (e matches p) s1 else s2` is parsed as `case (e) matches p: s1;
+  default: s2; endcase` with generated tokens (12.6.2). Pattern variables
+  are procedural names of the item, so they are not undeclared
+  identifiers.
+- A tagged union `void` member is a one-bit placeholder; `tagged X`
+  without a value stores only the tag. Reading a member other than the
+  current tag asserts with severity error (11.9).
+- `disable soft v` lowers to a call `@disable-soft` that drops the soft
+  constraints on `v` from the solver (18.5.14.2).
+- Compilation-unit checks: duplicate generate or block names (`SEM-416`),
+  attribute values that are not constant (`SEM-417`; FSM pragma names
+  are exempt), and `$unit` typedefs naming undefined types (`SEM-418`).
+  The typedef check runs only when the unit imports nothing but `std`, so
+  names from other packages are not falsely reported.
+- VHDL MINIMUM and MAXIMUM (1076-2008 5.3.2.4) are lowered when no
+  user-visible function of that name exists: two scalars through a
+  compare-and-select, or a reduction over the elements of a
+  one-dimensional array. A null array gives the element type's HIGH
+  (MINIMUM) or LOW (MAXIMUM). Two array operands (lexicographic order)
+  are not yet supported (nvc `predef2`).
+- TO_STRING (5.7): REAL with DIGITS or a printf FORMAT, TIME with UNIT
+  (the fraction is written to 15 significant digits, like a REAL image),
+  user physical types (value in the primary unit), and arrays of
+  character-enumeration literals (each element's character).
+- A string literal of an array of a character enumeration holds each
+  character's position; without a contextual type it uses the one
+  encoding all such array types of the unit agree on.
+- `?=` gives `'X'` when an element pair holds a metavalue and none
+  differs (9.2.3); the interpreter, word kernel and JIT agree.
+- A logical operator with one BIT or STD_ULOGIC operand and one array
+  operand replicates the scalar across the array (9.2.2).
+- An array whose element is a constrained STRING subtype is valid before
+  VHDL-2008. Its elements are packed CHARACTER positions; reading one as a
+  STRING formats those bytes, and a static concatenation of literals in
+  that context is folded to the bytes.
+- Timeout order (14.7.5.3): a VHDL process resuming from `wait for` is
+  queued from the update phase of its time, after that time's driver
+  updates, with the processes they wake. It used to resume first, so it
+  read the old values. VITAL timing checks compare event times: a test or
+  reference event earlier in the current time that did not wake the check
+  (a `'DELAYED` copy) still counts.
+- A sec, min or hr design time resolution is accepted by the VPI time
+  profile.

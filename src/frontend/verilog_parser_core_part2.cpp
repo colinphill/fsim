@@ -489,6 +489,45 @@ void VerilogParser::note_implicit_net_reference(const Token& name) {
   }
 }
 
+void VerilogParser::resolve_compilation_unit_references(
+    const std::size_t first, const std::string& callable) {
+  if (implicit_net_references_.size() <= first) {
+    return;
+  }
+  std::unordered_set<std::string> known{callable};
+  known.insert(known_class_names_.begin(), known_class_names_.end());
+  if (compilation_unit_package_) {
+    const auto& outer = *compilation_unit_package_;
+    for (const auto& item : outer.parameters) known.insert(item.name);
+    for (const auto& item : outer.signals) known.insert(item.name);
+    for (const auto& item : outer.variables) known.insert(item.name);
+    for (const auto& item : outer.type_aliases) known.insert(item.name);
+    for (const auto& item : outer.functions) known.insert(item.name);
+    for (const auto& item : outer.tasks) known.insert(item.name);
+    for (const auto& item : outer.systemverilog_classes) known.insert(item.name);
+    for (const auto& item : outer.systemverilog_lets) known.insert(item.name);
+    for (const auto& item : outer.systemverilog_dpi_declarations) {
+      known.insert(item.systemverilog_name);
+    }
+  }
+  std::unordered_set<std::string> reported;
+  for (auto index = first; index < implicit_net_references_.size(); ++index) {
+    const auto& reference = implicit_net_references_[index];
+    if (reference.declares || known.contains(reference.name)
+        || reference.name.find('.') != std::string::npos
+        || !reported.insert(reference.name).second) {
+      continue;
+    }
+    diagnostics_.push_back({
+        DiagnosticSeverity::Error,
+        "FSIM-SV-SEM-411",
+        "identifier '" + reference.name + "' is not declared",
+        reference.span,
+        reference.expansion_stack});
+  }
+  implicit_net_references_.resize(first);
+}
+
 void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
   std::unordered_set<std::string> known;
   known.insert(
@@ -632,6 +671,7 @@ DesignUnit VerilogParser::parse_module(
     const bool extern_declaration)
 {
     non_ansi_ports_.clear();
+    unit_value_parameter_names_.clear();
     explicit_port_types_.clear();
     body_port_declarations_.clear();
     unit_container_names_.clear();
@@ -1403,6 +1443,37 @@ DesignUnit VerilogParser::parse_module(
                 + std::string { unit_kind } + " body",
             port.span,
             {}});
+      }
+    }
+    // A generate block and a named block of a process share the module's
+    // name space (IEEE 1364-2005 12.4.3, IEEE 1800-2017 27.6).
+    {
+      std::unordered_set<std::string> generate_names;
+      const auto remember = [&](const std::string& scope) {
+        if (!scope.empty() && !scope.starts_with('@')) {
+          generate_names.insert(scope);
+        }
+      };
+      for (const auto& region : unit.generate_regions) {
+        remember(region.then_scope);
+        remember(region.else_scope);
+        for (const auto& alternative : region.alternatives) {
+          remember(alternative.scope);
+        }
+      }
+      for (const auto& process : unit.processes) {
+        for (const auto& statement : process.statements) {
+          if (statement.kind == StatementKind::Block && !statement.label.empty()
+              && generate_names.contains(statement.label)) {
+            diagnostics_.push_back({
+                DiagnosticSeverity::Error,
+                "FSIM-SV-SEM-416",
+                "named block '" + statement.label
+                    + "' has the name of a generate block in the same scope",
+                statement.span,
+                {}});
+          }
+        }
       }
     }
     normalize_systemverilog_generate_names(unit);

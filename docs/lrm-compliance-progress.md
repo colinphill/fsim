@@ -253,6 +253,83 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 42: compilation-unit checks, tagged unions, VHDL predefined operations, timeout ordering
+
+Fixtures: `vhdl_predefined_min_max_to_string.vhd` and
+`sv_event_iff_and_local_parameters.sv` (passes on xsim). xsim gets array
+MINIMUM/MAXIMUM and TO_STRING of character-enumeration arrays wrong (it
+prints positions), so the VHDL fixture follows nvc's `predef1` and
+`predef4` expectations instead.
+
+- SystemVerilog and Verilog:
+  - duplicate generate and named-block names (`FSIM-SV-SEM-416`),
+    non-constant attribute values (`-417`), and compilation-unit typedefs
+    that name undefined types or forward types never defined (`-418`);
+  - `$unit` functions and tasks report undeclared identifiers;
+  - event controls with an `iff` guard (`@(e iff g)`); several guarded
+    events in one control are reported (`FSIM-SV-UNSUPPORTED-048`);
+  - tagged unions: `void` members, `tagged X` without a value, `if (e
+    matches p)`, and a run-time error for reading a member other than
+    the current tag;
+  - `disable soft`, `randomize() with (idlist)` and `.randomize() with
+    {...};` as a statement;
+  - procedural `parameter`/`localparam` without a type are integers;
+    `output var` ports are variables; a procedural assignment to a port
+    declared as a net is reported;
+  - gate-array terminal widths, `$fdisplay(fd)`, `$ungetc` of a string
+    literal, `%s` of packed values, and `$sscanf`/`$fscanf` corner cases.
+- VHDL:
+  - predefined MINIMUM and MAXIMUM of scalars, of one-dimensional arrays
+    (including null arrays and qualified aggregates), and TO_STRING of
+    REAL with DIGITS or FORMAT, of TIME with UNIT, of physical values and
+    of character-enumeration arrays;
+  - string literals of character-enumeration arrays, `?=` with
+    metavalues (`'X'`), and logical operators with one BIT/STD_ULOGIC and
+    one array operand;
+  - arrays of constrained STRING subtypes before VHDL-2008;
+  - a process resuming from `wait for` sees the driver updates of that
+    time (IEEE 1076-2008 14.7.5.3); it used to run before them. The VITAL
+    timing checks now compare event times, not delta cycles;
+  - sec, min and hr design time resolutions;
+  - analysis checks: resolution function return type (`VHRESOLVE-002`),
+    `out` access formals before 2008 (`VHACCESS-034`), positional
+    component port actual types (`VHPORT-006`), out-port reads before
+    2008, record aggregate and slice checks.
+- Test sources fixed to legal code: an ambiguous enumeration literal in a
+  type conversion, unconstrained STRING variables in a VHDL-2008 test,
+  NATURAL values assigned to UNSIGNED without NUMERIC_STD, and a forced
+  bit-select with a variable index.
+
+Out of scope: Verilator `t_langext_2`, `t_langext_4`,
+`t_langext_2012ext`, `t_langext_2017ext`, `t_langext_2023ext` (procedural
+assignment to a non-ANSI output port with no data declaration, which is a
+net; IEEE 1800-2017 23.2.2.3) and `t_math_pow6` (a non-constant
+initializer on a net output port). xsim rejects all six.
+
+Still failing outside the corpora: `fsim.application.resolution`
+(the restored switch topology names a different control signal) and the
+`wildcard_nba` expectation in `procedural_assignments`, which depends on
+initial-block order; both were hidden behind earlier failures.
+
+The full run b43 used wip32; the VHDL suites were rerun as b43v on wip33,
+which adds the timeout ordering, the VITAL event times, arrays of STRING
+elements and the JIT `?=` fix. The tagged-union run-time error came after
+wip32 and passes in a targeted rerun.
+
+Corpus (passed/total, unique case ids; against b42):
+
+| Suite | Batch 41 | Batch 42 |
+|---|---:|---:|
+| VESTs | 3297/3648 | 3337/3648 |
+| nvc regress | 617/1482 | 630/1482 |
+| VHDL Compliance-Tests | 33/72 | 33/72 |
+| ivtest | 2144/2826 | 2157/2826 |
+| Verilator test_regress | 1028/2415 | 1023/2415 |
+| sv-tests | 1337/1497 | 1358/1497 (1357 in b43) |
+
+No case that passed in b42 fails, except the six out-of-scope Verilator
+cases above.
+
 ### Batch 41: undeclared identifiers, VHDL analysis checks, interface members
 
 Fixtures: eleven `analysis_errors` cases (`case_variable_choice`,

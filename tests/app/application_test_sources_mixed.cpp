@@ -73,7 +73,7 @@ vhdl_generic_architecture_source =
   output << R"(
 architecture rtl of vhdl_generic_child is
 begin
-  q <= value;
+  q <= to_unsigned(value, q'length);
 end architecture;
 )";
 }
@@ -177,6 +177,9 @@ generated_loop_vhdl_source =
 {
   std::ofstream output(generated_loop_vhdl_source);
   output << R"(
+library ieee;
+use ieee.numeric_std.all;
+
 entity generated_loop_child is
   generic (
     value : natural := 0
@@ -186,7 +189,7 @@ end entity;
 architecture rtl of generated_loop_child is
   signal q : unsigned(3 downto 0);
 begin
-  q <= value;
+  q <= to_unsigned(value, q'length);
 end architecture;
 )";
 }

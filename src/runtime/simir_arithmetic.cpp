@@ -316,15 +316,23 @@ namespace fsim::runtime::simir {
       }
       return 2;
     };
+    // Each element pair matches as '1', '0', or 'X' when either holds a
+    // metavalue other than '-'; the array result is their AND (IEEE
+    // 1076-2008 9.2.3).
+    bool unknown{};
     for (std::size_t index = 0; index < lhs.width(); ++index) {
       const auto left = match_class(lhs.get_logic9(index));
       const auto right = match_class(rhs.get_logic9(index));
-      if (left != -1 && right != -1
-          && (left == 2 || right == 2 || left != right)) {
+      if (left == -1 || right == -1) {
+        continue;
+      }
+      if (left == 2 || right == 2) {
+        unknown = true;
+      } else if (left != right) {
         return PackedLogic4(1, Logic4::zero);
       }
     }
-    return PackedLogic4(1, Logic4::one);
+    return PackedLogic4(1, unknown ? Logic4::x : Logic4::one);
   }
   if (operation == BinaryOperator::not_equal) {
     const auto state

@@ -388,10 +388,12 @@ struct Logic9Planes {
         return scalar(result ? Logic4::one : Logic4::zero);
     }
     case BinaryOperator::vhdl_match_equal:
-        // Over {0, 1, X, Z} the VHDL matching relation is true exactly when
-        // every element pair is a known equal bit.
-        return scalar(((l.b | r.b | (l.a ^ r.a)) & m) != 0U ? Logic4::zero
-                                                          : Logic4::one);
+        // Over {0, 1, X, Z} the VHDL matching relation is '0' for a known
+        // differing pair, else 'X' for a metavalue, else '1' (IEEE
+        // 1076-2008 9.2.3).
+        return scalar(((l.a ^ r.a) & ~(l.b | r.b) & m) != 0U ? Logic4::zero
+                : ((l.b | r.b) & m) != 0U                ? Logic4::x
+                                                         : Logic4::one);
     default:
         break;
     }

@@ -5671,6 +5671,12 @@ Lowerer::lower_hir_function_call_value(
             const auto candidates = hir_vhdl_callable_candidates(
                 *expression->vhdl->referenced_name,
                 expression->vhdl->scope);
+            if (candidates.empty()) {
+                if (const auto extreme = lower_hir_vhdl_min_max(
+                        expression_id, expected_width)) {
+                    return HirFunctionCallValue { *extreme, std::nullopt };
+                }
+            }
             report(
                 candidates.size() > 1U
                     ? "FSIM-ELAB-VHOVER-001"

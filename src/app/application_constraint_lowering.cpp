@@ -762,6 +762,19 @@ void configure_class_constraints(
         continue;
       }
       std::vector<runtime::SystemVerilogConstraintVariableId> dependencies;
+      // `disable soft v` discards the lower-priority (earlier) soft
+      // constraints on v (IEEE 1800-2017 18.5.14.2).
+      if (expression.kind == semantic::sv::ConstraintExpressionKind::call
+          && expression.text == "@disable-soft" && expression.operands.size() == 1U) {
+        if (!lower_systemverilog_constraint_expression(
+                expression.operands.front(), specialization.specialization_identity,
+                variables, dependencies, error)) {
+          throw std::invalid_argument{
+              "cannot lower class constraint '" + identity + "': " + error};
+        }
+        solver.discard_soft_clauses(dependencies);
+        continue;
+      }
       auto lowered = lower_systemverilog_constraint_expression(
           expression, specialization.specialization_identity, variables,
           dependencies, error);

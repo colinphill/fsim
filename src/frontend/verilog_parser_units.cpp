@@ -1554,6 +1554,9 @@ void VerilogParser::add_parameter(
         "duplicate parameter declaration '" + parameter.name + "'");
     return;
   }
+  if (parameter.kind == ParameterKind::Value) {
+    unit_value_parameter_names_.insert(parameter.name);
+  }
   unit.parameters.push_back(std::move(parameter));
 }
 

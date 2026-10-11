@@ -2194,6 +2194,29 @@ void Interpreter::Impl::queue_at(ProcessId id, SimulationTick time)
     }
 }
 
+void Interpreter::Impl::queue_timeout(
+    ProcessState& process, const SimulationTick time)
+{
+    // IEEE 1076-2008 14.7.5.3: in a simulation cycle every active signal is
+    // updated before the processes that resume in it run, including those
+    // whose timeout expires. Queue the resumption from the update phase so
+    // it joins the processes the updates wake.
+    if (process.program().scheduling_domain()
+            == ProcessSchedulingDomain::systemverilog
+        || process.program().postponed() || process.halted
+        || process.queued || time <= scheduler.now()) {
+        queue_at(process.id, time);
+        return;
+    }
+    process.queued = true;
+    scheduler.schedule_after(time - scheduler.now(), SchedulerPhase::update,
+        process.id, [this, id = process.id](Scheduler&) {
+            auto& state = get_process(id);
+            state.queued = false;
+            queue_next_delta(id);
+        });
+}
+
 void Interpreter::Impl::queue_next_delta(
     const ProcessId id,
     const SignalChangeOrigin origin)

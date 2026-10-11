@@ -959,7 +959,7 @@ void Interpreter::Impl::handle_boundary(
             process.pc = instruction;
             fail(process, "simulation time overflow in WaitFor");
         }
-        queue_at(process.id, scheduler.now() + delay);
+        queue_timeout(process, scheduler.now() + delay);
         process.status = ProcessStatus::waiting;
         notify_execution_point(
             process, instruction, ExecutionPointKind::process_suspend,

@@ -489,8 +489,11 @@ void VerilogParser::parse_typedef(
             || keyword("struct") || keyword("union") || keyword("enum")) {
             (void)advance();
         }
+        const auto forward_name = advance();
         (void)advance();
-        (void)advance();
+        if (compilation_unit_package_ && &unit == &*compilation_unit_package_) {
+            compilation_unit_forward_types_.push_back(forward_name);
+        }
         return;
     }
     if (keyword("struct") || keyword("union")) {
@@ -544,7 +547,12 @@ void VerilogParser::parse_typedef(
             }
             const auto member_start = current();
             Type member_type;
-            if (keyword("struct") || keyword("union")) {
+            if (tagged && keyword("void")) {
+                // A void member of a tagged union carries no value (IEEE
+                // 1800-2017 7.3.2); it is held as one unused bit.
+                (void)advance();
+                member_type = Type{ValueDomain::Bit2, "bit", PackedRange{0, 0, true}, false};
+            } else if (keyword("struct") || keyword("union")) {
                 member_type = parse_systemverilog_aggregate_type();
             } else if (!packed) {
                 member_type = parse_parameter_type();
@@ -1231,7 +1239,8 @@ bool VerilogParser::parse_optional_container_dimension(Type& type)
                                 size_span },
                             cover(start.span, previous().span),
                             std::nullopt });
-                } else if (left.kind == ExpressionKind::Identifier) {
+                } else if (left.kind == ExpressionKind::Identifier
+                    && !unit_value_parameter_names_.contains(left.text)) {
                     // `[key_t]` names an index type, not a net.
                     if (implicit_net_references_.size() > references_before) {
                         implicit_net_references_.resize(references_before);

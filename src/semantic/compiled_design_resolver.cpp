@@ -3135,6 +3135,35 @@ CompiledDesignResolver::effective_vhdl_subtype(
                     }
                 }
             }
+            // A bound of a CHARACTER-indexed dimension written as a
+            // character literal is its CHARACTER position (`'0' to '9'`).
+            const auto dimension_boundary = [&](const std::size_t dimension,
+                                                const std::optional<std::int64_t> folded,
+                                                const std::optional<ExpressionId> residual,
+                                                const std::span<const CompiledBindingFrame> active)
+                -> std::optional<std::int64_t> {
+                // (An earlier fold may have taken '0' as a BIT value.)
+                if (residual && dimension < definition.array_dimensions.size()) {
+                    auto index = std::string_view {
+                        definition.array_dimensions[dimension].index_subtype.spelling };
+                    if (const auto separator = index.find_last_of(".:");
+                        separator != std::string_view::npos) {
+                        index.remove_prefix(separator + 1U);
+                    }
+                    const auto expression = effective_ != nullptr
+                        ? effective_->find_expression(*residual)
+                        : design_->find_expression(*residual);
+                    if (same_vhdl_identifier(index, "character") && expression
+                        && expression->vhdl != nullptr
+                        && expression->vhdl->kind == vhdl::ExpressionKind::logic_literal
+                        && expression->vhdl->text.size() == 3U
+                        && expression->vhdl->text.front() == '\'') {
+                        return static_cast<std::int64_t>(
+                            static_cast<unsigned char>(expression->vhdl->text[1]));
+                    }
+                }
+                return evaluate_boundary(folded, residual, active);
+            };
             std::uint64_t count { 1U };
             bool concrete = element && element->executable_width
                 && *element->executable_width != 0U;
@@ -3150,13 +3179,19 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 ? definition.array_dimensions
                 : std::vector<vhdl::ArrayDimension> { };
             if (!result.constraints.empty()) {
-                for (const auto& constraint : result.constraints) {
-                    const auto left = evaluate_boundary(
+                for (std::size_t dimension_index { };
+                     dimension_index < result.constraints.size(); ++dimension_index) {
+                    auto& constraint = result.constraints[dimension_index];
+                    const auto left = dimension_boundary(dimension_index,
                         constraint.left, constraint.left_expression,
                         active_frames);
-                    const auto right = evaluate_boundary(
+                    const auto right = dimension_boundary(dimension_index,
                         constraint.right, constraint.right_expression,
                         active_frames);
+                    if (left && right) {
+                        constraint.left = left;
+                        constraint.right = right;
+                    }
                     if (!left || !right) {
                         concrete = false;
                         break;
@@ -3186,16 +3221,18 @@ CompiledDesignResolver::effective_vhdl_subtype(
                     count *= dimension;
                 }
             } else {
-                for (const auto& dimension : constraints) {
+                for (std::size_t dimension_index { };
+                     dimension_index < constraints.size(); ++dimension_index) {
+                    const auto& dimension = constraints[dimension_index];
                     if (!dimension.constraint) {
                         concrete = false;
                         break;
                     }
-                    const auto left = evaluate_boundary(
+                    const auto left = dimension_boundary(dimension_index,
                         dimension.constraint->left,
                         dimension.constraint->left_expression,
                         active_frames);
-                    const auto right = evaluate_boundary(
+                    const auto right = dimension_boundary(dimension_index,
                         dimension.constraint->right,
                         dimension.constraint->right_expression,
                         active_frames);

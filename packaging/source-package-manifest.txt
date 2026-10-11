@@ -2012,6 +2012,7 @@ tests/fixtures/compliance/sv_declarations_and_calls.sv
 tests/fixtures/compliance/sv_delays_packages_and_classes.sv
 tests/fixtures/compliance/sv_display_arguments.sv
 tests/fixtures/compliance/sv_enum_methods.sv
+tests/fixtures/compliance/sv_event_iff_and_local_parameters.sv
 tests/fixtures/compliance/sv_expression_widths.sv
 tests/fixtures/compliance/sv_final_procedure_termination.sv
 tests/fixtures/compliance/sv_force_switches_and_strengths.sv
@@ -2063,6 +2064,7 @@ tests/fixtures/compliance/vhdl_operator_overloads.vhd
 tests/fixtures/compliance/vhdl_package_instances_and_blocks.vhd
 tests/fixtures/compliance/vhdl_package_shared_variables.vhd
 tests/fixtures/compliance/vhdl_package_signals.vhd
+tests/fixtures/compliance/vhdl_predefined_min_max_to_string.vhd
 tests/fixtures/compliance/vhdl_procedure_constant_actuals.vhd
 tests/fixtures/compliance/vhdl_qualified_aggregates_and_imports.vhd
 tests/fixtures/compliance/vhdl_range_constraints.vhd

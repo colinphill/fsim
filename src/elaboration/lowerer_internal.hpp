@@ -834,6 +834,39 @@ private:
         const semantic::vhdl::SubtypeIndication& subtype) const;
     [[nodiscard]] bool hir_vhdl_expression_is_real(
         semantic::ExpressionId expression) const;
+    // The predefined MINIMUM and MAXIMUM of scalar values, and the array
+    // reduction forms (IEEE 1076-2008 5.2.6, 5.3.2.4).
+    [[nodiscard]] std::optional<StringRegisterId> lower_hir_vhdl_real_to_string(
+        semantic::ExpressionId expression);
+    [[nodiscard]] std::optional<RegisterId>
+    lower_hir_vhdl_static_string_concatenation(
+        semantic::ExpressionId expression, std::size_t expected_width);
+    [[nodiscard]] std::optional<std::size_t> hir_vhdl_string_element_width(
+        semantic::ExpressionId expression) const;
+    struct HirVhdlCharacterElements {
+        std::vector<std::string> images;
+        std::size_t element_width { };
+    };
+    [[nodiscard]] std::optional<HirVhdlCharacterElements>
+    hir_vhdl_character_enumeration_elements(
+        const semantic::vhdl::TypeDefinition& array) const;
+    [[nodiscard]] std::optional<std::size_t>
+    hir_vhdl_qualified_enumeration_string_width(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_enumeration_string(
+        semantic::ExpressionId expression, std::size_t expected_width);
+    struct HirVhdlMinMaxShape {
+        bool maximum { };
+        bool real { };
+        bool array { };
+        std::size_t element_width { };
+        std::size_t array_width { };
+        std::optional<std::int64_t> null_value;
+    };
+    [[nodiscard]] std::optional<HirVhdlMinMaxShape> hir_vhdl_min_max_shape(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_min_max(
+        semantic::ExpressionId expression, std::size_t expected_width);
     enum class HirVhdlAttributeKind : std::uint8_t {
         length,
         position,
