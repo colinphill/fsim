@@ -421,6 +421,9 @@ Statement VerilogParser::parse_procedural_for_statement_body(
         const auto variable = expect_identifier("procedural loop variable");
         statement.loop_variable = variable.text;
         statement.loop_variable_declared = inline_variable;
+        if (inline_type) {
+            statement.loop_variable_type = *inline_type;
+        }
         statement.target = Expression {
             ExpressionKind::Identifier,
             variable.text,

@@ -5064,6 +5064,55 @@ bool Lowerer::lower_hir_statement(
                     span);
                 return true;
             }
+            if (element->selected_type != nullptr
+                && element->selected_type != element->type
+                && !nonblocking && !delayed_nonblocking_element) {
+                // An element of a nested container (`q[i][j] = v` of
+                // `int q[$][$]`): update the leaf container, then write each
+                // enclosing level back.
+                const auto path = lower_hir_container_element_path(*element);
+                if (!path) {
+                    return assignment_rejected(__LINE__);
+                }
+                HirContainerElementBinding level = *element;
+                level.local = path->container;
+                level.type = path->type;
+                level.selected_type = path->type;
+                level.indices = path->indices;
+                const auto leaf_index
+                    = lower_hir_container_element_index(level);
+                const auto scalar_kind = hir_systemverilog_scalar_kind(*target);
+                auto lowered = lower_hir_expression(
+                    *value, element->width,
+                    frontend::is_real_scalar_kind(scalar_kind)
+                        ? scalar_kind
+                        : frontend::SystemVerilogScalarKind::None);
+                if (!leaf_index || !lowered) {
+                    return assignment_rejected(__LINE__);
+                }
+                if (register_width(*lowered) != element->width) {
+                    lowered = resize_register(
+                        *lowered, element->width,
+                        hir_expression_signed(*value));
+                }
+                if (register_domain(*lowered) != element->domain) {
+                    const auto converted = allocate_register(
+                        element->width, element->domain);
+                    process_.operations.emplace_back(CopyRegister {
+                        converted, *lowered });
+                    lowered = converted;
+                }
+                process_.operations.emplace_back(ContainerWrite {
+                    path->container,
+                    *leaf_index,
+                    *lowered,
+                    level.indices.size() > 1U || path->type->signed_indices,
+                    level.indices.size() > 1U,
+                    path->type->string_indices,
+                });
+                publish_hir_container_element_path(*element, *path);
+                return true;
+            }
             const auto element_index
                 = lower_hir_container_element_index(*element);
             const auto value_expression
@@ -5429,46 +5478,16 @@ bool Lowerer::lower_hir_statement(
                 // A write through a virtual interface handle reaches the
                 // member of the instance it names (IEEE 1800-2017 25.9).
                 auto lowered = lower_hir_expression(*value, member->width);
-                const auto handle = lowered
-                    ? lower_hir_virtual_interface_handle(member->receiver)
-                    : std::nullopt;
-                if (!lowered || !handle
-                    || !lower_intra_assignment_control()) {
+                if (!lowered || !lower_intra_assignment_control()) {
                     return assignment_rejected(__LINE__);
                 }
                 if (register_width(*lowered) != member->width) {
                     lowered = resize_register(*lowered, member->width,
                         hir_expression_signed(*value));
                 }
-                for (const auto& [identity, signal] : member->candidates) {
-                    const auto constant = allocate_register(
-                        64U, frontend::ValueDomain::Bit2);
-                    process_.operations.emplace_back(LoadConstant {
-                        constant, unsigned_value(identity, 64U) });
-                    const auto selected = allocate_register(
-                        1U, frontend::ValueDomain::Bit2);
-                    process_.operations.emplace_back(Binary {
-                        BinaryOperator::case_equal, selected, *handle,
-                        constant });
-                    const auto branch = static_cast<InstructionIndex>(
-                        process_.operations.size());
-                    process_.operations.emplace_back(Branch {
-                        selected, branch + 1U, 0U,
-                        UnknownBranchPolicy::when_false });
-                    if (nonblocking) {
-                        process_.operations.emplace_back(WriteUpdate {
-                            signal, *lowered, update_domain });
-                    } else {
-                        process_.operations.emplace_back(WriteBlocking {
-                            signal, *lowered });
-                    }
-                    process_.operations[branch] = Branch {
-                        selected,
-                        branch + 1U,
-                        static_cast<InstructionIndex>(
-                            process_.operations.size()),
-                        UnknownBranchPolicy::when_false,
-                    };
+                if (!lower_hir_virtual_interface_write(
+                        *member, *lowered, nonblocking, update_domain)) {
+                    return assignment_rejected(__LINE__);
                 }
                 return true;
             }
@@ -7970,7 +7989,29 @@ bool Lowerer::lower_hir_statement(
                         return self(self, operand);
                     });
             };
+            // A user function call is evaluated at run time: it may write
+            // its output arguments or other variables (13.4).
+            const auto user_call = [&](const auto& self,
+                                       const semantic::ExpressionId id)
+                -> bool {
+                const auto expression
+                    = specialized_hir_unit_->find_expression(id);
+                if (!expression || expression->systemverilog == nullptr) {
+                    return false;
+                }
+                const auto& source = *expression->systemverilog;
+                if (source.kind == semantic::sv::ExpressionKind::call
+                    && !source.text.starts_with('$')
+                    && hir_referenced_declaration(id)) {
+                    return true;
+                }
+                return std::ranges::any_of(source.operands,
+                    [&](const semantic::ExpressionId operand) {
+                        return self(self, operand);
+                    });
+            };
             const auto constant = arithmetic(arithmetic, *condition)
+                    || user_call(user_call, *condition)
                 ? std::optional<std::int64_t> { }
                 : specialized_hir_unit_->evaluate_integral_expression(
                       *condition);
@@ -16068,5 +16109,44 @@ void Lowerer::materialize_hir_monitor_drivers()
     }
     pending_monitor_drivers_.clear();
 }
+bool Lowerer::lower_hir_virtual_interface_write(
+    const HirVirtualInterfaceMember& member,
+    const RegisterId value,
+    const bool nonblocking,
+    const SignalUpdateDomain update_domain)
+{
+    const auto handle = lower_hir_virtual_interface_handle(member.receiver);
+    if (!handle) {
+        return false;
+    }
+    for (const auto& [identity, signal] : member.candidates) {
+        const auto constant = allocate_register(
+            64U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            constant, unsigned_value(identity, 64U) });
+        const auto selected = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::case_equal, selected, *handle, constant });
+        const auto branch = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch {
+            selected, branch + 1U, 0U, UnknownBranchPolicy::when_false });
+        if (nonblocking) {
+            process_.operations.emplace_back(WriteUpdate {
+                signal, value, update_domain });
+        } else {
+            process_.operations.emplace_back(WriteBlocking { signal, value });
+        }
+        process_.operations[branch] = Branch {
+            selected,
+            branch + 1U,
+            static_cast<InstructionIndex>(process_.operations.size()),
+            UnknownBranchPolicy::when_false,
+        };
+    }
+    return true;
+}
+
 } // namespace fsim::elaboration
 

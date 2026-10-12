@@ -957,9 +957,20 @@ Lowerer::hir_systemverilog_enumeration_method(
         }
         const auto receiver = specialized_hir_unit_->find_expression(
             source.operands.front());
+        // A chained call (`e.next(1).next(1)`) has the enumeration type of
+        // the inner method's receiver.
+        if (receiver && receiver->systemverilog != nullptr
+            && receiver->systemverilog->kind
+                != semantic::sv::ExpressionKind::name) {
+            const auto inner = hir_systemverilog_enumeration_method(
+                source.operands.front());
+            if (!inner || inner->method == "name" || inner->method == "num") {
+                return std::nullopt;
+            }
+            return hir_systemverilog_enumeration_profile(
+                std::move(result), inner->receiver_declaration);
+        }
         if (!receiver || receiver->systemverilog == nullptr
-            || receiver->systemverilog->kind
-                != semantic::sv::ExpressionKind::name
             || receiver->systemverilog->text.find('.')
                 != std::string::npos) {
             return std::nullopt;
@@ -996,10 +1007,15 @@ Lowerer::hir_systemverilog_enumeration_method(
         const auto declaration = declaration_id
             ? specialized_hir_unit_->find_declaration(*declaration_id)
             : std::nullopt;
-        // Only a direct `variable.method`; a member path is not a method.
+        // Only a direct `variable.method`, or `P::variable.method` for a
+        // package variable; a member path is not a method.
+        auto root = std::string_view { source.text }.substr(0U, separator);
+        if (const auto scope = root.rfind("::");
+            scope != std::string_view::npos) {
+            root.remove_prefix(scope + 2U);
+        }
         if (!declaration || declaration->systemverilog == nullptr
-            || declaration->systemverilog->name.size() != separator
-            || !source.text.starts_with(declaration->systemverilog->name)) {
+            || declaration->systemverilog->name != root) {
             return std::nullopt;
         }
     } else {

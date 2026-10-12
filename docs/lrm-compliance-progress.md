@@ -253,6 +253,45 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 48: nested containers, package arrays, out-of-range selects, instance-array slices
+
+Fixture: `sv_language_details_batch48.sv` (passes on xsim).
+
+- SystemVerilog and Verilog:
+  - reads and writes of elements of nested containers (dynamic arrays of
+    fixed arrays, associative arrays of associative arrays, queues of
+    queues), with defaults for out-of-range nested reads (7.4.6);
+  - package unpacked arrays indexed at run time and shared by modules;
+    package structure members (`P::s.x[N]`) (26.3);
+  - constant bit- and part-selects outside the declared range read X
+    (11.5.1);
+  - `$bits`/`$size`/bound queries as constants, on strings and container
+    elements, and `$bits` of typedefs in parameter overrides (20.6, 20.7);
+  - `super.x`, package-qualified and chained enumeration methods, and
+    for-loop variables of their declared type (8.15, 6.19.5, 12.7.1);
+  - function output arguments written from an `if` condition and through
+    virtual interface members; `real` outputs converted to integral
+    actuals (13.4, 6.12.2);
+  - constant functions reading their own name (13.4.1);
+  - instance arrays connected to slices of wide actuals (23.3.3.5);
+  - typedef'd local dynamic arrays; `FSIM-SV-CLASS-INHERIT-013` for type
+    parameters conflicting across extended interface classes (8.26.6.2).
+
+Out of scope: Verilator `t_enum_type_methods` line 71 prints an
+enumeration with `%s` as its name ("non-standard but majority");
+`t_package_export` reads `pkg11::PARAM1`, which `pkg11` imports but does not
+export (26.6); `t_foreach` iterates a string, which IEEE 1800-2023 adds.
+
+Investigated and left open: nvc `bounds23` needs a run-time check that a
+VHDL composite value's length matches its target; a static task's output
+formal is reset on each call instead of keeping its value (13.3.1);
+an array of unpacked structures with a constant pattern initializer
+(`5.10-structure-arrays`); `$bits` of a typedef reached through an
+interface instance (`types.cc_index_t`); 97-bit parameter arithmetic
+(`t_param_wide_io`).
+
+The full corpus run b49 used wip42 and is recorded with batch 49.
+
 ### Batch 47: class-scoped types, process handles, floating inputs, out-of-range writes
 
 Fixture: `sv_language_details_batch47.sv` (passes on xsim, which dispatches
@@ -297,8 +336,21 @@ wide (>64-bit) parameter arithmetic; `job[i].status`; object
 `get_randstate`/`set_randstate`; unconstrained `rand int` randomization
 enumerates the whole domain.
 
-The full corpus run b48 (wip41) for batches 46 and 47 is recorded with
-batch 48.
+The full run b48 used wip41 (88eda230). Its losses: Verilator
+`t_constraint_dist_randmode_unsup` (out of scope above), and nvc `bounds23`
+and sv-tests `8.26.6.2--parameter_type_conflict_unresolved`, investigated
+in batch 48.
+
+Corpus (passed/total, unique case ids; against b47):
+
+| Suite | Batch 46 | Batch 47 |
+|---|---:|---:|
+| VESTs | 3337/3648 | 3337/3648 |
+| nvc regress | 639/1482 | 639/1482 |
+| VHDL Compliance-Tests | 33/72 | 33/72 |
+| ivtest | 2232/2826 | 2246/2826 |
+| Verilator test_regress | 1155/2415 | 1175/2415 |
+| sv-tests | 1391/1497 | 1409/1497 |
 
 ### Batch 46: interface arrays, interface port parameters, seeded random, time-zero order
 

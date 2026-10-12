@@ -13198,6 +13198,12 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
                 *specialized, declaration, packed_type_resolver,
                 packed_default_resolver, packed_fallback_resolver);
         });
+    lowerer.set_package_container_object(
+        [&](const semantic::DeclarationId declaration) {
+            return compiled_systemverilog_package_container_object(
+                *specialized, declaration, packed_type_resolver,
+                packed_default_resolver, packed_fallback_resolver);
+        });
     lowerer.set_systemverilog_interface_handles(
         &systemverilog_interface_handles_, &systemverilog_interface_types_);
     lowerer.set_hir_container_declaration_bindings(
@@ -14126,6 +14132,24 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_instance_worklist(
                     .child_boundary_processes
                     = child_boundary_processes,
                     .child_ports_valid = child_ports_valid,
+                    .array_position = [&]()
+                        -> std::optional<std::pair<std::size_t, std::size_t>> {
+                        if (!materialization.array_index) {
+                            return std::nullopt;
+                        }
+                        const auto indices = compiled_instance_array_indices(
+                            record, working_specialization);
+                        const auto found = std::ranges::find(
+                            indices, *materialization.array_index);
+                        if (found == indices.end()) {
+                            return std::nullopt;
+                        }
+                        return std::pair {
+                            static_cast<std::size_t>(
+                                std::distance(indices.begin(), found)),
+                            indices.size(),
+                        };
+                    }(),
                 })) {
             return false;
         }
@@ -15457,6 +15481,12 @@ HierarchyBuilder::compiled_systemverilog_package_variable_signal(
             packed_fallback_resolver)) {
         return std::nullopt;
     }
+    if (const auto container = materialization.container_objects.find(
+            declaration->systemverilog->name);
+        container != materialization.container_objects.end()) {
+        systemverilog_package_container_objects_.insert_or_assign(
+            declaration_id.value(), container->second);
+    }
     const auto found = materialization.signals.find(
         declaration->systemverilog->name);
     if (found == materialization.signals.end()) {
@@ -15465,6 +15495,24 @@ HierarchyBuilder::compiled_systemverilog_package_variable_signal(
     systemverilog_package_variable_signals_[declaration_id.value()]
         = found->second;
     return found->second;
+}
+
+std::optional<ContainerObjectId>
+HierarchyBuilder::compiled_systemverilog_package_container_object(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::DeclarationId declaration_id,
+    const SystemVerilogPackedTypeResolver& packed_type_resolver,
+    const SystemVerilogPackedDefaultResolver& packed_default_resolver,
+    const SystemVerilogPackedFallbackResolver& packed_fallback_resolver)
+{
+    static_cast<void>(compiled_systemverilog_package_variable_signal(
+        specialization, declaration_id, packed_type_resolver,
+        packed_default_resolver, packed_fallback_resolver));
+    const auto found = systemverilog_package_container_objects_.find(
+        declaration_id.value());
+    return found != systemverilog_package_container_objects_.end()
+        ? std::optional { found->second }
+        : std::nullopt;
 }
 
 bool HierarchyBuilder::bind_compiled_vhdl_package_objects(

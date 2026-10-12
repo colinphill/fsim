@@ -5338,6 +5338,11 @@ public:
                 value != frame->values.end()) {
                 return value->second;
             }
+            // A function's name inside its body is its result variable
+            // (IEEE 1800-2017 13.4.1).
+            if (frame->callable == declaration && frame->result) {
+                return frame->result;
+            }
         }
         ensure_actual(declaration);
         if (const auto actual = actuals_.find(declaration);
@@ -5499,6 +5504,73 @@ private:
             return nullptr;
         }
         return &definition->systemverilog->members;
+    }
+
+    /// The packed width of the typedef or object a name denotes,
+    /// following typedefs and enumeration base types.
+    [[nodiscard]] std::optional<std::size_t> systemverilog_named_bits(
+        const ExpressionId operand)
+    {
+        const auto view = unit_.find_expression(operand);
+        if (!view || view->systemverilog == nullptr
+            || view->systemverilog->kind != sv::ExpressionKind::name) {
+            return std::nullopt;
+        }
+        const CompiledDesignResolver resolver { unit_ };
+        auto declaration_id = expression_declaration(operand);
+        if (!declaration_id) {
+            declaration_id
+                = resolver.resolve_systemverilog_expression(operand).unique();
+        }
+        const auto declaration = declaration_id
+            ? unit_.find_declaration(*declaration_id) : std::nullopt;
+        if (!declaration || declaration->systemverilog == nullptr) {
+            return std::nullopt;
+        }
+        // An untyped parameter takes its width from its value (6.20.2).
+        if ((declaration->systemverilog->form == sv::DeclarationForm::parameter
+                || declaration->systemverilog->form
+                    == sv::DeclarationForm::local_parameter)
+            && (!declaration->systemverilog->type
+                || (declaration->systemverilog->type->target.spelling
+                        == "implicit"
+                    && !declaration->systemverilog->type->packed_range))) {
+            return std::nullopt;
+        }
+        std::optional<sv::TypeReference> type;
+        if (declaration->systemverilog->type) {
+            type = declaration->systemverilog->type;
+        } else if (declaration->systemverilog->declared_type) {
+            sv::TypeReference reference;
+            reference.target.target = *declaration->systemverilog->declared_type;
+            type = std::move(reference);
+        }
+        if (!type || type->container_form) {
+            return std::nullopt;
+        }
+        for (int depth = 0; depth < 32; ++depth) {
+            if (const auto width = systemverilog_type_bit_width(*type)) {
+                return width;
+            }
+            if (type->target.target.valid()) {
+                const auto definition = unit_.find_type(type->target.target);
+                if (definition && definition->systemverilog != nullptr
+                    && (definition->systemverilog->form
+                            == sv::TypeForm::alias
+                        || definition->systemverilog->form
+                            == sv::TypeForm::enumeration)) {
+                    type = definition->systemverilog->base;
+                    continue;
+                }
+            }
+            const auto effective = resolver.effective_systemverilog_type(
+                *type, declaration->systemverilog->scope);
+            if (!effective || *effective == *type) {
+                return std::nullopt;
+            }
+            type = *effective;
+        }
+        return std::nullopt;
     }
 
     /// The bit width of a packed type, when evident.
@@ -8146,6 +8218,16 @@ private:
                     }
                 }
                 return result;
+            }
+            // `$bits` of a typedef or a variable is its packed width
+            // (IEEE 1800-2017 20.6.2).
+            if (expression.kind == Kind::call
+                && expression.text == "$bits"
+                && expression.operands.size() == 1U) {
+                if (const auto bits = systemverilog_named_bits(
+                        expression.operands.front())) {
+                    return static_cast<std::int64_t>(*bits);
+                }
             }
             if (expression.kind == Kind::call) {
                 return evaluate_callable(expression);

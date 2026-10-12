@@ -199,12 +199,15 @@ void Interpreter::Impl::execute_container(
                   process.id, process.pc,
                   get_register(process, operation.index),
                   operation.signed_index, "container index");
-        if (at >= source.nested_elements.size()) {
-            container_error(
-                process.id, process.pc,
-                "nested container index is out of range");
+        if (at < source.nested_elements.size()) {
+            selected = &source.nested_elements[at];
+        } else {
+            // Reading through an invalid index yields the element type's
+            // default (IEEE 1800-2017 7.4.6).
+            missing = default_container_value(
+                source.type.element_types.front());
+            selected = &*missing;
         }
-        selected = &source.nested_elements[at];
     }
     auto& destination = get_container_register(process, operation.destination);
     if (destination.type != selected->type) {

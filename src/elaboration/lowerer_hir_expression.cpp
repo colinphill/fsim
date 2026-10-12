@@ -8637,7 +8637,42 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             : std::optional { destination };
     } else if (const auto element
         = hir_container_element_binding(expression_id)) {
-        if (const auto selected
+        if (element->selected_type != nullptr
+            && element->selected_type != element->type) {
+            // An element of a nested container (`q[i][j]` of `int q[$][$]`):
+            // read each enclosing level's element container, then the leaf.
+            const auto path = lower_hir_container_element_path(*element);
+            if (!path) {
+                return std::nullopt;
+            }
+            HirContainerElementBinding level = *element;
+            level.local = path->container;
+            level.type = path->type;
+            level.selected_type = path->type;
+            level.indices = path->indices;
+            level.runtime_read_profile.reset();
+            const auto index = lower_hir_container_element_index(level);
+            if (!index) {
+                return std::nullopt;
+            }
+            const auto destination = allocate_register(
+                element->width, element->domain);
+            process_.operations.emplace_back(ContainerRead {
+                destination,
+                path->container,
+                *index,
+                level.indices.size() > 1U || path->type->signed_indices,
+                level.indices.size() > 1U,
+                path->type->string_indices,
+            });
+            if (!element->local) {
+                record_container_object_dependency(element->object);
+            }
+            result = expected_width != 0U && expected_width != element->width
+                ? std::optional { resize_register(
+                      destination, expected_width, element->signed_value) }
+                : std::optional { destination };
+        } else if (const auto selected
             = hir_static_element_signal_extract(*element)) {
             const auto destination = allocate_register(
                 selected->width, element->domain);
@@ -9443,6 +9478,103 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     : std::optional { destination };
                 return result;
             }
+            const auto constant_answer = [&](const std::int64_t answer) {
+                const auto destination = allocate_register(
+                    32U, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(LoadConstant {
+                    destination,
+                    PackedLogic4::from_aval_bval(32U,
+                        std::bit_cast<std::uint64_t>(answer)
+                            & UINT64_C(0xffffffff),
+                        0U),
+                });
+                return expected_width != 0U && expected_width != 32U
+                    ? std::optional { resize_register(
+                          destination, expected_width, true) }
+                    : std::optional { destination };
+            };
+            // A string is a one-dimensional array of its characters, indexed
+            // from 0 (IEEE 1800-2017 6.16, 20.7).
+            if (!receiver_type
+                && hir_expression_is_string(
+                    call.operands.front(), hir_process_scope_)
+                && call.text != "$bits") {
+                if (call.text == "$left" || call.text == "$low") {
+                    return constant_answer(0);
+                }
+                if (call.text == "$increment") {
+                    return constant_answer(-1);
+                }
+                const auto text = lower_hir_string_expression(
+                    call.operands.front());
+                if (!text) {
+                    return std::nullopt;
+                }
+                auto length = allocate_register(
+                    32U, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(StringLength {
+                    length, *text });
+                if (call.text != "$size") {
+                    const auto one = allocate_register(
+                        32U, frontend::ValueDomain::Integer);
+                    process_.operations.emplace_back(LoadConstant {
+                        one, unsigned_value(1U, 32U) });
+                    const auto last = allocate_register(
+                        32U, frontend::ValueDomain::Integer);
+                    process_.operations.emplace_back(IntegerBinary {
+                        IntegerBinaryOperator::subtract, last, length, one });
+                    length = last;
+                }
+                return expected_width != 0U && expected_width != 32U
+                    ? std::optional { resize_register(
+                          length, expected_width, true) }
+                    : std::optional { length };
+            }
+            // A packed value that is not itself a container (an element
+            // of a dynamic array, `$size(darr[0])`) has its packed range.
+            const auto receiver_expression = specialized_hir_unit_->find_expression(
+                call.operands.front());
+            const bool conditional_receiver = receiver_expression
+                && receiver_expression->systemverilog != nullptr
+                && receiver_expression->systemverilog->kind
+                    == semantic::sv::ExpressionKind::call
+                && receiver_expression->systemverilog->text == "?:";
+            if (!receiver_type && !conditional_receiver
+                && (call.text == "$left" || call.text == "$right"
+                    || call.text == "$low" || call.text == "$high"
+                    || call.text == "$increment" || call.text == "$size")) {
+                if (const auto range = hir_expression_range(
+                        call.operands.front(), hir_process_scope_);
+                    range && hir_systemverilog_packed_shape(
+                                 call.operands.front()).size() <= 1U) {
+                    const auto low = std::min(range->left, range->right);
+                    const auto high = std::max(range->left, range->right);
+                    return constant_answer(call.text == "$left"
+                            ? range->left
+                            : call.text == "$right" ? range->right
+                            : call.text == "$low"   ? low
+                            : call.text == "$high"  ? high
+                            : call.text == "$increment"
+                            ? (range->left >= range->right ? 1 : -1)
+                            : high - low + 1);
+                }
+            }
+            // An expression of a fixed-size unpacked type (an element of a
+            // dynamic array of fixed arrays) has its static first dimension.
+            if (receiver_type && receiver_type->fixed
+                && !receiver_type->dimensions.empty()
+                && call.text != "$bits") {
+                const auto [left, right] = receiver_type->dimensions.front();
+                const std::int64_t low = std::min(left, right);
+                const std::int64_t high = std::max(left, right);
+                return constant_answer(call.text == "$left" ? left
+                        : call.text == "$right" ? right
+                        : call.text == "$low"   ? low
+                        : call.text == "$high"  ? high
+                        : call.text == "$increment"
+                        ? (left >= right ? 1 : -1)
+                        : high - low + 1);
+            }
             const auto container = lower_hir_static_container_value(
                 call.operands.front());
             if (!container || container->type.fixed) {
@@ -9595,7 +9727,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::name
-        && expression->systemverilog->text == "this"
+        && (expression->systemverilog->text == "this"
+            || expression->systemverilog->text == "super")
         && hir_class_receiver_register_) {
         result = *hir_class_receiver_register_;
     } else if (expression->vhdl != nullptr
@@ -12200,8 +12333,50 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             // An element of a multidimensional packed array.
             ? hir_expression_width(expression_id, hir_process_scope_)
             : std::nullopt;
+        // A constant part-select that lies partly or wholly outside the
+        // declared range reads X (0 for two-state) for the bits outside it
+        // (IEEE 1800-2017 11.5.1): the selected bit offsets, low and high.
+        std::optional<std::pair<std::int64_t, std::int64_t>> partial_slice;
+        if (!constant_selection && source.slice
+            && expression->systemverilog != nullptr && source_width
+            && hir_systemverilog_packed_shape(source.operands[0]).size()
+                <= 1U) {
+            const auto first = hir_constant_integer(source.operands[1]);
+            const auto second = hir_constant_integer(source.operands[2]);
+            const auto range = hir_expression_range(
+                source.operands[0], hir_process_scope_);
+            if (first && second && range
+                && index_distance(range->left, range->right) + 1U
+                    == *source_width) {
+                std::int64_t low_index { };
+                std::int64_t high_index { };
+                if (source.text == "+:" || source.text == "-:") {
+                    if (*second > 0 && *second <= 65536) {
+                        low_index = source.text == "+:"
+                            ? *first : *first - *second + 1;
+                        high_index = low_index + *second - 1;
+                    }
+                } else {
+                    low_index = std::min(*first, *second);
+                    high_index = std::max(*first, *second);
+                }
+                const auto offset = [&](const std::int64_t index) {
+                    return range->left >= range->right
+                        ? index - range->right : range->right - index;
+                };
+                if (high_index >= low_index) {
+                    partial_slice = std::pair {
+                        std::min(offset(low_index), offset(high_index)),
+                        std::max(offset(low_index), offset(high_index)),
+                    };
+                }
+            }
+        }
         const auto result_width = constant_selection
             ? std::optional { constant_selection->width }
+            : partial_slice
+            ? std::optional<std::size_t> { static_cast<std::size_t>(
+                  partial_slice->second - partial_slice->first + 1) }
             : source.index
             ? selected_width.value_or(1U)
             : dynamic_part_width
@@ -12255,6 +12430,51 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 static_cast<std::uint32_t>(constant_selection->offset),
                 static_cast<std::uint32_t>(constant_selection->width),
             });
+        } else if (partial_slice) {
+            const auto fill = is_two_state_domain(register_domain(*input))
+                ? runtime::Logic4::zero : runtime::Logic4::x;
+            const auto width = static_cast<std::int64_t>(*source_width);
+            const auto [low, high] = *partial_slice;
+            std::vector<RegisterId> pieces;
+            const auto constant_piece = [&](const std::int64_t count) {
+                const auto piece = allocate_register(
+                    static_cast<std::size_t>(count), register_domain(*input));
+                process_.operations.emplace_back(LoadConstant {
+                    piece,
+                    PackedLogic4(static_cast<std::size_t>(count), fill),
+                });
+                pieces.push_back(piece);
+            };
+            if (high >= width) {
+                constant_piece(high - std::max(low, width) + 1);
+            }
+            const auto inside_low = std::max<std::int64_t>(low, 0);
+            const auto inside_high = std::min<std::int64_t>(high, width - 1);
+            if (inside_high >= inside_low) {
+                const auto piece = allocate_register(
+                    static_cast<std::size_t>(inside_high - inside_low + 1),
+                    register_domain(*input));
+                process_.operations.emplace_back(Extract {
+                    piece,
+                    *input,
+                    static_cast<std::uint32_t>(inside_low),
+                    static_cast<std::uint32_t>(inside_high - inside_low + 1),
+                });
+                pieces.push_back(piece);
+            }
+            if (low < 0) {
+                constant_piece(std::min<std::int64_t>(high, -1) - low + 1);
+            }
+            if (pieces.size() == 1U) {
+                process_.operations.emplace_back(CopyRegister {
+                    destination, pieces.front() });
+            } else {
+                process_.operations.emplace_back(Concatenate {
+                    destination,
+                    std::move(pieces),
+                    static_cast<std::uint32_t>(*result_width),
+                });
+            }
         } else if (vhdl_dynamic_slice) {
             const auto dynamic = lower_hir_vhdl_dynamic_slice(
                 expression_id, *source_width, *result_width);
@@ -12327,12 +12547,33 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     0U,
                 });
             } else {
-                const auto dynamic = lower_hir_dynamic_index(
+                // A constant bit-select outside the declared range reads X,
+                // or 0 for a two-state value (IEEE 1800-2017 11.5.1).
+                const auto constant_index = source.index
+                        && expression->systemverilog != nullptr
+                    ? hir_constant_integer(source.operands[1])
+                    : std::nullopt;
+                const auto range = constant_index
+                    ? hir_expression_range(
+                          source.operands[0], hir_process_scope_)
+                    : std::nullopt;
+                if (constant_index && range
+                    && (*constant_index
+                            < std::min(range->left, range->right)
+                        || *constant_index
+                            > std::max(range->left, range->right))) {
+                    process_.operations.emplace_back(LoadConstant {
+                        destination,
+                        PackedLogic4(*result_width,
+                            is_two_state_domain(register_domain(*input))
+                                ? runtime::Logic4::zero
+                                : runtime::Logic4::x),
+                    });
+                } else if (const auto dynamic = lower_hir_dynamic_index(
                     source.operands[0], source.operands[1], *source_width);
-                if (!dynamic) {
+                    !dynamic) {
                     return std::nullopt;
-                }
-                if (source.index) {
+                } else if (source.index) {
                     process_.operations.emplace_back(DynamicExtract {
                         destination, *input, *dynamic });
                 } else {
@@ -17117,6 +17358,17 @@ bool Lowerer::lower_hir_packed_copy_out(
         : std::nullopt;
     if (!expression) {
         return false;
+    }
+    if (mode != HirPackedCopyOutMode::systemverilog_active_update
+        && expression->systemverilog != nullptr) {
+        // An output actual through a virtual interface (`f(vif.data)`).
+        if (const auto member = hir_virtual_interface_member(target)) {
+            const auto value = register_width(source) == member->width
+                ? source
+                : resize_register(source, member->width, false);
+            return lower_hir_virtual_interface_write(
+                *member, value, false, SignalUpdateDomain { });
+        }
     }
     if (mode == HirPackedCopyOutMode::systemverilog_active_update) {
         if (expression->systemverilog == nullptr

@@ -170,7 +170,9 @@ public:
         std::string_view hierarchy,
         std::size_t order,
         std::optional<semantic::vhdl::SubtypeIndication>
-            vhdl_context = std::nullopt);
+            vhdl_context = std::nullopt,
+        std::optional<std::pair<std::uint32_t, std::uint32_t>>
+            actual_slice = std::nullopt);
     // The nets and constant bit ranges that an inout port actual selects
     // (`bus[0]`, `bus[3:2]`, `{a, b[1]}`), each with its offset in the
     // formal, for bidirectional switch connections.
@@ -182,12 +184,20 @@ public:
     };
     [[nodiscard]] std::optional<std::vector<HirInoutActual>>
     hir_inout_actual(semantic::ExpressionId expression) const;
+    // The self-determined width of a port actual.
+    [[nodiscard]] std::optional<std::size_t> hir_actual_width(
+        const semantic::ExpressionId expression) const
+    {
+        return hir_expression_width(expression, semantic::ScopeId { });
+    }
     [[nodiscard]] std::optional<Process> lower_hir_output_actual(
         SignalId source,
         semantic::ExpressionId expression,
         frontend::Language language,
         std::string_view hierarchy,
-        std::size_t order);
+        std::size_t order,
+        std::optional<std::pair<std::uint32_t, std::uint32_t>>
+            actual_slice = std::nullopt);
 
     // A VHDL resolver program (IEEE 1076-2008 14.7.3.2): the runtime writes
     // the driving values of `signal`'s `driver_count` drivers, leftmost
@@ -215,6 +225,14 @@ public:
     void set_package_constant_signal(PackageConstantSignal materialize)
     {
         package_constant_signal_ = std::move(materialize);
+    }
+    // Materializes a SystemVerilog package unpacked-array variable as a
+    // design-global container object on its first use.
+    using PackageContainerObject = std::function<
+        std::optional<ContainerObjectId>(semantic::DeclarationId)>;
+    void set_package_container_object(PackageContainerObject materialize)
+    {
+        package_container_object_ = std::move(materialize);
     }
 
 private:
@@ -320,6 +338,9 @@ private:
             input_actual_vhdl_context;
         std::optional<SignalId> output_actual_source;
         std::optional<semantic::ExpressionId> output_actual;
+        // The bit offset and width within the actual that one instance of
+        // an instance array connects to (IEEE 1800-2017 23.3.3.5).
+        std::optional<std::pair<std::uint32_t, std::uint32_t>> actual_slice;
         std::optional<SignalId> procedural_assignment_active;
         std::uint32_t procedural_assignment_owner { };
         // The force owner of a procedural assign's target: a force
@@ -507,6 +528,10 @@ private:
         const HirVirtualInterfaceMember& member);
     [[nodiscard]] std::optional<RegisterId> lower_hir_virtual_interface_handle(
         semantic::DeclarationId receiver);
+    // Writes `value` to the member in the instance the handle names.
+    [[nodiscard]] bool lower_hir_virtual_interface_write(
+        const HirVirtualInterfaceMember& member, RegisterId value,
+        bool nonblocking, runtime::simir::SignalUpdateDomain update_domain);
     [[nodiscard]] std::optional<SignalId> hir_direct_signal(
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<SignalId>
@@ -1969,6 +1994,7 @@ private:
     const SignalBindings& signals_;
     const ReadOnlySignalBindings& read_only_signals_;
     PackageConstantSignal package_constant_signal_;
+    PackageContainerObject package_container_object_;
     const StringObjectBindings& string_objects_;
     const ReadOnlyStringBindings& read_only_string_objects_;
     const ContainerObjectBindings& container_objects_;

@@ -3520,13 +3520,47 @@ bool Lowerer::lower_hir_class_task_call(
             if (!packed_copy_outs[index]) {
                 continue;
             }
+            // A real formal copied out to an integral actual is converted
+            // as an assignment converts it (IEEE 1800-2017 6.12.2).
+            auto copied_value = *packed_copy_outs[index];
+            const auto formal_kind = [&] {
+                const auto formal = index < frame.formals.size()
+                    ? specialized_hir_unit_->find_declaration(
+                          frame.formals[index])
+                    : std::nullopt;
+                const auto spelling = formal && formal->systemverilog
+                        && formal->systemverilog->type
+                    ? std::string_view {
+                          formal->systemverilog->type->target.spelling }
+                    : std::string_view { };
+                return spelling == "real"
+                    ? frontend::SystemVerilogScalarKind::Real
+                    : spelling == "shortreal"
+                    ? frontend::SystemVerilogScalarKind::ShortReal
+                    : spelling == "realtime"
+                    ? frontend::SystemVerilogScalarKind::Realtime
+                    : frontend::SystemVerilogScalarKind::None;
+            }();
+            if (frontend::is_real_scalar_kind(formal_kind)
+                && !frontend::is_real_scalar_kind(
+                    hir_systemverilog_scalar_kind(
+                        profile->actuals[index].expression))) {
+                copied_value = convert_hir_real_to_integral(
+                    copied_value, formal_kind);
+                if (const auto width = hir_expression_width(
+                        profile->actuals[index].expression,
+                        hir_process_scope_);
+                    width && *width != 0U
+                    && *width != register_width(copied_value)) {
+                    copied_value = resize_register(
+                        copied_value, *width, true);
+                }
+            }
             const auto copied = packed_copy_out_targets[index]
                 ? write_hir_packed_update_target(
-                      *packed_copy_out_targets[index],
-                      *packed_copy_outs[index])
+                      *packed_copy_out_targets[index], copied_value)
                 : lower_hir_packed_copy_out(
-                      profile->actuals[index].expression,
-                      *packed_copy_outs[index]);
+                      profile->actuals[index].expression, copied_value);
             if (!copied) {
                 return false;
             }

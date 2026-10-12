@@ -1428,6 +1428,72 @@ std::optional<std::int64_t> Lowerer::hir_constant_integer(
                 cast && source.operands.size() == 1U) {
                 return finish(self(self, source.operands.front()));
             }
+            // Array queries of a fixed shape are constants (20.6, 20.7).
+            if (source.kind == semantic::sv::ExpressionKind::call
+                && !source.operands.empty()
+                && (source.text == "$bits" || source.text == "$size"
+                    || source.text == "$left" || source.text == "$right"
+                    || source.text == "$low" || source.text == "$high")) {
+                if (const auto query
+                    = hir_systemverilog_container_query(candidate)) {
+                    return finish(query);
+                }
+                const auto receiver = source.operands.front();
+                if (hir_static_container_expression_type(receiver)
+                    || hir_container_object_binding(receiver)) {
+                    return finish(std::nullopt);
+                }
+                // An untyped parameter's width comes from its value, which
+                // the query lowering resolves.
+                const auto receiver_declaration
+                    = hir_referenced_declaration(receiver);
+                const auto receiver_record = receiver_declaration
+                    ? specialized_hir_unit_->find_declaration(
+                          *receiver_declaration)
+                    : std::nullopt;
+                if (receiver_record && receiver_record->systemverilog != nullptr
+                    && (receiver_record->systemverilog->form
+                            == semantic::sv::DeclarationForm::parameter
+                        || receiver_record->systemverilog->form
+                            == semantic::sv::DeclarationForm::local_parameter)
+                    && (!receiver_record->systemverilog->type
+                        || (receiver_record->systemverilog->type->target
+                                    .spelling == "implicit"
+                            && !receiver_record->systemverilog->type
+                                    ->packed_range))) {
+                    return finish(std::nullopt);
+                }
+                if (source.text == "$bits" && source.operands.size() == 1U) {
+                    const auto width = hir_expression_width(
+                        receiver, hir_process_scope_);
+                    return finish(width && *width != 0U
+                            && *width <= static_cast<std::size_t>(
+                                std::numeric_limits<std::int32_t>::max())
+                        ? std::optional { static_cast<std::int64_t>(*width) }
+                        : std::nullopt);
+                }
+                if (source.text != "$bits"
+                    && (source.operands.size() == 1U
+                        || self(self, source.operands.back())
+                            == std::optional<std::int64_t> { 1 })
+                    && hir_systemverilog_packed_shape(receiver).size()
+                        <= 1U) {
+                    const auto range = hir_expression_range(
+                        receiver, hir_process_scope_);
+                    if (!range) {
+                        return finish(std::nullopt);
+                    }
+                    const auto low = std::min(range->left, range->right);
+                    const auto high = std::max(range->left, range->right);
+                    return finish(source.text == "$size"
+                            ? high - low + 1
+                            : source.text == "$left" ? range->left
+                            : source.text == "$right" ? range->right
+                            : source.text == "$low" ? low
+                                                     : high);
+                }
+                return finish(std::nullopt);
+            }
             if (source.kind != semantic::sv::ExpressionKind::unary
                 && source.kind != semantic::sv::ExpressionKind::binary) {
                 return finish(std::nullopt);
@@ -4977,6 +5043,27 @@ Lowerer::hir_container_object_binding_for_declaration(
     if (vhdl_environment_container) {
         return std::nullopt;
     }
+    if (package_container_object_) {
+        if (const auto package_object
+            = package_container_object_(*declaration_id)) {
+            const auto info = std::ranges::find_if(
+                design_.container_object_info_.rbegin(),
+                design_.container_object_info_.rend(),
+                [&](const ContainerObjectInfo& candidate) {
+                    return candidate.id == *package_object;
+                });
+            if (info != design_.container_object_info_.rend()) {
+                return HirContainerObjectBinding {
+                    *declaration_id,
+                    name,
+                    *package_object,
+                    std::nullopt,
+                    &info->type,
+                    false,
+                };
+            }
+        }
+    }
     const auto object = container_objects_.find(name);
     if (object == container_objects_.end()) {
         return std::nullopt;
@@ -6070,6 +6157,14 @@ Lowerer::hir_static_container_expression_type(
         return binding->type != nullptr
             ? std::optional { *binding->type }
             : std::nullopt;
+    }
+    // An element of a nested container is itself a container.
+    if (const auto element = hir_container_element_binding(expression_id);
+        element && element->selected_type != nullptr
+        && element->selected_type->element_kind
+            == ContainerElementKind::Container
+        && element->selected_type->element_types.size() == 1U) {
+        return element->selected_type->element_types.front();
     }
     const auto expression = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(expression_id)
@@ -8880,7 +8975,7 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
                 source.operands.front(), process_scope);
         }
         if (source.kind == semantic::sv::ExpressionKind::name
-            && source.text == "this"
+            && (source.text == "this" || source.text == "super")
             && hir_class_receiver_register_) {
             return frontend::ValueDomain::Bit2;
         }
@@ -11080,7 +11175,7 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
                 source.operands.front(), process_scope);
         }
         if (source.kind == semantic::sv::ExpressionKind::name
-            && source.text == "this"
+            && (source.text == "this" || source.text == "super")
             && hir_class_receiver_register_) {
             return 64U;
         }
@@ -12561,14 +12656,18 @@ Lowerer::hir_systemverilog_member_selection(
         return std::nullopt;
     }
     const auto& root = declaration->systemverilog->name;
-    if (root.empty() || source.text.size() <= root.size()
-        || !source.text.starts_with(root)
-        || source.text[root.size()] != '.') {
+    // A package-scoped root (`P::s.x`) selects from the package's `s`.
+    auto text = std::string_view { source.text };
+    if (const auto scope = text.substr(0U, text.find('.')).rfind("::");
+        scope != std::string_view::npos) {
+        text.remove_prefix(scope + 2U);
+    }
+    if (root.empty() || text.size() <= root.size()
+        || !text.starts_with(root) || text[root.size()] != '.') {
         return std::nullopt;
     }
 
-    auto remaining = std::string_view { source.text }.substr(
-        root.size() + 1U);
+    auto remaining = text.substr(root.size() + 1U);
     auto current = *declaration->systemverilog->type;
     std::size_t offset { };
     std::optional<HirPackedMemberSelection::TaggedMember> tagged;
@@ -15185,7 +15284,7 @@ bool Lowerer::can_lower_hir_expression(
         }
         switch (source.kind) {
         case semantic::sv::ExpressionKind::name: {
-            if (source.text == "this"
+            if ((source.text == "this" || source.text == "super")
                 && hir_class_receiver_register_) {
                 supported = true;
                 break;

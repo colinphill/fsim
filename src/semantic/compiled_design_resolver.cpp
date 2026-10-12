@@ -5545,9 +5545,21 @@ CompiledDesignResolver::resolve_systemverilog_expression(
     const auto name = package_separator == std::string_view::npos
         ? root
         : root.substr(package_separator + 2U);
+    // The package may carry its library (`work::P::s.x`).
+    const auto simple_package = [](std::string_view qualifier) {
+        while (true) {
+            const auto next = qualifier.find("::");
+            if (!simple_systemverilog_identifier(qualifier.substr(0U, next))) {
+                return false;
+            }
+            if (next == std::string_view::npos) {
+                return true;
+            }
+            qualifier.remove_prefix(next + 2U);
+        }
+    };
     if (!simple_systemverilog_identifier(name)
-        || (!package.empty()
-            && !simple_systemverilog_identifier(package))) {
+        || (!package.empty() && !simple_package(package))) {
         return { CompiledResolutionStatus::invalid, { } };
     }
     const auto member_path = spelling.substr(separator + 1U);
@@ -5574,6 +5586,10 @@ CompiledDesignResolver::resolve_systemverilog_expression(
                   auto definition = effective_ != nullptr
                       ? effective_->find_type(type.target.target)
                       : design_->find_type(type.target.target);
+                  // A package declaration's type belongs to the package.
+                  if (!definition && effective_ != nullptr) {
+                      definition = design_->find_type(type.target.target);
+                  }
                   // A typedef of a structure (for example one imported
                   // from a package) denotes the structure.
                   std::unordered_set<std::uint32_t> aliases;
@@ -5590,6 +5606,9 @@ CompiledDesignResolver::resolve_systemverilog_expression(
                       definition = effective_ != nullptr
                           ? effective_->find_type(base)
                           : design_->find_type(base);
+                      if (!definition && effective_ != nullptr) {
+                          definition = design_->find_type(base);
+                      }
                   }
                   if (!definition
                       || definition->systemverilog == nullptr) {

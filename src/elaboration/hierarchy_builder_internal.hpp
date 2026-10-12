@@ -526,6 +526,9 @@ private:
         ContainerMap& child_container_aliases;
         std::vector<ProcessId>& child_boundary_processes;
         bool& child_ports_valid;
+        // The position (left to right) and count of an instance-array
+        // occurrence, whose wide actuals are sliced (23.3.3.5).
+        std::optional<std::pair<std::size_t, std::size_t>> array_position { };
     };
 
     void add_compiled_vhdl_root(
@@ -1470,6 +1473,15 @@ private:
         const SystemVerilogPackedTypeResolver& packed_type_resolver,
         const SystemVerilogPackedDefaultResolver& packed_default_resolver,
         const SystemVerilogPackedFallbackResolver& packed_fallback_resolver);
+    // The design-global container object of a package unpacked-array
+    // variable, materialized on its first use.
+    std::optional<ContainerObjectId>
+    compiled_systemverilog_package_container_object(
+        const semantic::SpecializedHirUnit& specialization,
+        semantic::DeclarationId declaration,
+        const SystemVerilogPackedTypeResolver& packed_type_resolver,
+        const SystemVerilogPackedDefaultResolver& packed_default_resolver,
+        const SystemVerilogPackedFallbackResolver& packed_fallback_resolver);
     void finalize_systemverilog_whole_aliases(
         SystemVerilogHirMaterialization& materialization);
     void materialize_systemverilog_clocking_blocks(
@@ -1663,6 +1675,8 @@ private:
         vhdl_package_constant_signals_;
     std::unordered_map<std::uint32_t, std::optional<SignalId>>
         systemverilog_package_variable_signals_;
+    std::unordered_map<std::uint32_t, ContainerObjectId>
+        systemverilog_package_container_objects_;
     std::vector<std::pair<std::string, std::string>> root_generic_overrides_;
     std::vector<semantic::SpecializedHirActualIdentity>
     compiled_vhdl_root_generic_actuals(const semantic::vhdl::Unit& root);

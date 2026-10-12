@@ -875,10 +875,21 @@ bool Lowerer::initialize_hir_declarations(
             && aggregate_local->element_kind
                 == ContainerElementKind::Aggregate
             && aggregate_local->aggregate_value;
+        // A typedef of an unpacked array, queue or associative array
+        // (`typedef logic [7:0] bytes_t []; bytes_t a;`).
+        const bool typedef_container_local = aggregate_local
+            && !aggregate_value_local && [&] {
+                   const auto effective = semantic::CompiledDesignResolver {
+                       *specialized_hir_unit_, hir_generic_binding_frames_
+                   }.effective_systemverilog_type(
+                       *declaration->systemverilog->type,
+                       declaration->systemverilog->scope);
+                   return effective && effective->container_form.has_value();
+               }();
         if (declaration->systemverilog != nullptr
             && declaration->systemverilog->type
             && (declaration->systemverilog->type->container_form
-                || aggregate_value_local)) {
+                || aggregate_value_local || typedef_container_local)) {
             const auto& input = *declaration->systemverilog;
             const auto type = aggregate_value_local
                 ? aggregate_local
@@ -2247,7 +2258,8 @@ std::optional<Process> Lowerer::lower_hir_input_actual(
     const frontend::Language language,
     const std::string_view hierarchy,
     const std::size_t order,
-    std::optional<semantic::vhdl::SubtypeIndication> vhdl_context)
+    std::optional<semantic::vhdl::SubtypeIndication> vhdl_context,
+    const std::optional<std::pair<std::uint32_t, std::uint32_t>> actual_slice)
 {
     [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
         *this
@@ -2274,6 +2286,7 @@ std::optional<Process> Lowerer::lower_hir_input_actual(
     description.input_actual = expression;
     description.input_actual_destination = destination;
     description.input_actual_vhdl_context = std::move(vhdl_context);
+    description.actual_slice = actual_slice;
     description.kind = language == frontend::Language::Vhdl2008
         ? frontend::ProcessKind::VhdlProcess
         : frontend::ProcessKind::SystemVerilogAlwaysComb;
@@ -2326,7 +2339,8 @@ std::optional<Process> Lowerer::lower_hir_output_actual(
     const semantic::ExpressionId expression,
     const frontend::Language language,
     const std::string_view hierarchy,
-    const std::size_t order)
+    const std::size_t order,
+    const std::optional<std::pair<std::uint32_t, std::uint32_t>> actual_slice)
 {
     [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
         *this
@@ -2345,6 +2359,7 @@ std::optional<Process> Lowerer::lower_hir_output_actual(
     description.name = "port_result_" + std::to_string(order);
     description.output_actual_source = source;
     description.output_actual = expression;
+    description.actual_slice = actual_slice;
     description.kind = language == frontend::Language::Vhdl2008
         ? frontend::ProcessKind::VhdlProcess
         : frontend::ProcessKind::SystemVerilogAlwaysComb;
@@ -2949,6 +2964,22 @@ std::optional<Process> Lowerer::lower_hir_process_body(
                   signal.width,
                   &*description.input_actual_vhdl_context)
             : std::optional<RegisterId> { };
+        // One instance of an instance array reads its slice of the actual.
+        if (!value && description.actual_slice) {
+            const auto natural = hir_expression_width(
+                actual, hir_process_scope_);
+            const auto [offset, width] = *description.actual_slice;
+            const auto whole = natural
+                ? lower_hir_expression(actual, *natural) : std::nullopt;
+            if (!whole || width != signal.width
+                || offset + width > register_width(*whole)) {
+                process_ = { };
+                return std::nullopt;
+            }
+            value = allocate_register(width, register_domain(*whole));
+            process_.operations.emplace_back(Extract {
+                *value, *whole, offset, width });
+        }
         // A port connection extends a narrower actual by the actual's own
         // signedness, as a continuous assignment does (IEEE 1800-2017
         // 23.3.3.7 and 10.7).
@@ -3008,7 +3039,26 @@ std::optional<Process> Lowerer::lower_hir_process_body(
             signal.width, signal.source_domain);
         process_.operations.emplace_back(ReadSignal { value, source });
         record_implicit_signal_dependency(source);
-        if (!lower_hir_output_actual_write(
+        if (description.actual_slice) {
+            // One instance of an instance array drives its slice of the
+            // actual net.
+            const auto target = hir_direct_signal(*description.output_actual);
+            const auto [offset, width] = *description.actual_slice;
+            if (!target || width != signal.width
+                || offset + width > design_.signal_info_[*target].width) {
+                process_ = { };
+                return std::nullopt;
+            }
+            process_.operations.emplace_back(WriteUpdateSlice {
+                *target,
+                value,
+                offset,
+                process_.scheduling_domain
+                        == ProcessSchedulingDomain::systemverilog
+                    ? SignalUpdateDomain::systemverilog_active
+                    : SignalUpdateDomain::generic,
+            });
+        } else if (!lower_hir_output_actual_write(
                 *description.output_actual, value)) {
             process_ = { };
             return std::nullopt;

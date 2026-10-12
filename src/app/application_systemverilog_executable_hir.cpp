@@ -1231,12 +1231,14 @@ namespace {
                 if (declares_loop_variable) {
                     frontend::VariableDeclaration loop_variable;
                     loop_variable.name = input.loop_variable;
-                    loop_variable.type = frontend::Type {
-                        frontend::ValueDomain::Integer,
-                        "int",
-                        std::nullopt,
-                        true,
-                    };
+                    loop_variable.type = input.loop_variable_type
+                        ? *input.loop_variable_type
+                        : frontend::Type {
+                              frontend::ValueDomain::Integer,
+                              "int",
+                              std::nullopt,
+                              true,
+                          };
                     loop_variable.span = input.target.valid()
                         ? input.target.span
                         : input.span;

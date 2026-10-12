@@ -695,6 +695,17 @@ bool validate_systemverilog_class_inheritance(
           if (const auto parent = classes.find(
                   relation.declaration_identity);
               parent != classes.end()) {
+            // A direct interface parent's type parameters are type
+            // declarations too (8.26.6.2).
+            if (parent->second->is_interface) {
+              for (const auto& parameter : parent->second->parameters) {
+                if (parameter.kind == ParameterKind::Type) {
+                  inherited_interface_declarations[parameter.name].insert(
+                      parent->second->canonical_identity + "::parameter::"
+                      + parameter.name);
+                }
+              }
+            }
             collect_interface_declarations(*parent->second);
           }
         };
@@ -719,6 +730,11 @@ bool validate_systemverilog_class_inheritance(
                   [&](const SystemVerilogClassProperty& property) {
                     return property.is_parameter
                         && property.declaration.name == name;
+                  })
+              || std::ranges::any_of(
+                  declaration->parameters,
+                  [&](const ParameterDeclaration& parameter) {
+                    return parameter.name == name;
                   });
         };
     for (const auto& [name, identities] :

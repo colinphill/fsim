@@ -1358,3 +1358,51 @@ gives fsim's result in each case checked.
   still settling (a resolved net, or one driven by a process with static
   sensitivity or by a port connection).
 - A missing coverage database is an empty load.
+
+## Nested containers, package arrays, out-of-range selects and instance-array slices (batch 48)
+
+- An element of a nested container (`q[i][j]` of `int q[$][2]`, `d[k][m]`
+  of `int d[int][int]`) is read by reading each enclosing level's element
+  container, and written by updating the leaf container and writing each
+  level back. A read through an index outside a nested dynamic array or
+  queue yields the default element container (7.4.6). An element of a
+  nested container is itself a typed container for queries such as
+  `$size(rows[0])`.
+- A package unpacked-array variable or localparam is one design-global
+  container object, materialized on first use, so modules read and write
+  it with run-time indices (26.3).
+- A constant bit-select outside the declared range reads X (0 for a
+  two-state value); a constant part-select partly or wholly outside the
+  range reads X for the bits outside it (11.5.1).
+- `$bits`, `$size`, `$left`, `$right`, `$low` and `$high` of a fixed-shape
+  operand are constants, so they may appear in constant selects
+  (`id[$bits(id_t)-1]`). The queries accept a string (indexed from 0, its
+  length at run time) and a packed element of a container
+  (`$size(darr[0])`). In parameter overrides, `$bits` of a typedef name or
+  of a variable is its packed width (`.W($bits(state_t))`); an untyped
+  parameter keeps the width of its value.
+- A member of a package structure variable (`P::s.x[N]`) is selected like
+  a local one; the index is evaluated in the scope of use.
+- `super.x` reads the base class's property when the derived class
+  declares a property of the same name (8.15).
+- Enumeration methods without parentheses accept a package-qualified
+  receiver (`P::e.first`), and a method result may be the receiver of
+  another (`e.next(1).next(1)`).
+- A variable declared in a `for` header has its declared type; it was
+  always `int`, so enumeration methods of an enumeration loop variable
+  failed (12.7.1).
+- An `if` condition that calls a user function is evaluated at run time,
+  so the function's output arguments and other writes take effect (13.4).
+  An output argument may be a virtual interface member (`f(vif.data)`).
+- A `real` task or function output copied to an integral actual converts
+  as an assignment does (6.12.2).
+- A constant function reads its own name as its result variable inside
+  its body, in loops and conditions (13.4.1).
+- Each instance of an instance array connects to its own slice of an
+  actual as wide as all the instances' ports, the leftmost instance to the
+  most significant bits (23.3.3.5).
+- A block-local variable whose typedef is a dynamic array, queue or
+  associative array is a container.
+- An interface class extending interface classes that both declare a type
+  parameter of the same name must redeclare it
+  (`FSIM-SV-CLASS-INHERIT-013`, 8.26.6.2).

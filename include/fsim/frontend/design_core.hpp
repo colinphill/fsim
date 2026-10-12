@@ -1548,6 +1548,8 @@ struct Statement {
     std::string loop_variable;
     // SystemVerilog procedural for-loop variable declared in its initializer.
     bool loop_variable_declared { };
+    // The data type of a declared for-loop variable (IEEE 1800-2017 12.7.1).
+    support::RareOptional<Type> loop_variable_type;
     // Canonical VHDL opening label for a loop, and the optional label selected
     // by exit/next on a loop-control statement.
     std::string loop_label;

@@ -1304,14 +1304,37 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                     }
                     actual_signal = id;
                     adapted = false;
-                } else if (accepts_input) {
+                }
+                // An instance of an instance array connects to its own
+                // slice of an actual as wide as all the instances' ports,
+                // the leftmost instance to the leftmost bits (23.3.3.5).
+                std::optional<std::pair<std::uint32_t, std::uint32_t>>
+                    actual_slice;
+                if (!joinable && context.array_position
+                    && context.array_position->second > 1U) {
+                    const auto [ordinal, count] = *context.array_position;
+                    const auto natural = actual_lowerer.hir_actual_width(
+                        *binding.expression);
+                    if (natural && *width != 0U
+                        && *natural == *width * count
+                        && *natural <= std::numeric_limits<std::uint32_t>::max()) {
+                        actual_slice = std::pair {
+                            static_cast<std::uint32_t>(
+                                (count - 1U - ordinal) * *width),
+                            static_cast<std::uint32_t>(*width),
+                        };
+                    }
+                }
+                if (!joinable && accepts_input) {
                     adapted = append_adapter(
                         actual_lowerer.lower_hir_input_actual(
                             *binding.expression,
                             id,
                             source_language,
                             working_path,
-                            concurrent_order++));
+                            concurrent_order++,
+                            std::nullopt,
+                            actual_slice));
                 }
                 if (adapted && produces_output && !actual_signal) {
                     adapted = append_adapter(
@@ -1320,7 +1343,8 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                             *binding.expression,
                             source_language,
                             working_path,
-                            concurrent_order++));
+                            concurrent_order++,
+                            actual_slice));
                 }
                 if (adapted && !actual_signal) {
                     actual_signal = id;
