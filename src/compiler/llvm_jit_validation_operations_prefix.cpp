@@ -541,7 +541,8 @@ void validate_prefix_operation(
                     record_use(operation.index, index);
                     record_use(operation.source, index);
                     constrain_width(operation.index, 32U, index);
-                    constrain_width(operation.source, 32U, index);
+                    // The replacement byte is the source's low eight bits,
+                    // whatever its width (`s[i] = 8'h41`).
                 } else if constexpr (std::is_same_v<OperationType, StringMethod>) {
                     result.uses_strings = true;
                     std::vector<PackedRegisterValidation> registers;

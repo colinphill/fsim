@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "hierarchy_builder_internal.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/frontend/systemverilog_scalar_folding.hpp"
 
 #include <algorithm>
 #include <array>
+#include <bit>
+#include <cstdlib>
 #include <charconv>
 #include <cctype>
 #include <cstdint>
@@ -170,6 +173,22 @@ namespace {
                 return std::nullopt;
             }
             const auto& source = *view->systemverilog;
+            // A real specparam (IEEE 1800-2017 6.20.5) keeps its real value.
+            if (source.kind == semantic::sv::ExpressionKind::integer_literal
+                && source.scalar_kind == semantic::sv::ScalarKind::real) {
+                std::string text;
+                std::ranges::copy_if(source.text, std::back_inserter(text),
+                    [](const char value) { return value != '_'; });
+                char* end { };
+                const auto value = std::strtod(text.c_str(), &end);
+                if (end == text.c_str() || *end != '\0') {
+                    return std::nullopt;
+                }
+                return frontend::SystemVerilogScalarConstant {
+                    frontend::SystemVerilogScalarKind::Real,
+                    std::bit_cast<std::uint64_t>(value)
+                }.canonical();
+            }
             if (source.kind == semantic::sv::ExpressionKind::integer_literal
                 || source.kind
                     == semantic::sv::ExpressionKind::logic_literal

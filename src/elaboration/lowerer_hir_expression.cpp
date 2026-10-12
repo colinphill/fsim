@@ -6017,10 +6017,75 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 *actual, *contextual_width,
                 &*formal->vhdl->subtype);
         }
+        // An assignment pattern actual of a typed SystemVerilog parameter
+        // takes the parameter's type (IEEE 1800-2017 10.9, 6.20.2).
+        if (const auto typed = lower_hir_systemverilog_parameter_pattern(
+                expression_id, *actual)) {
+            return typed;
+        }
         return lower_hir_expression(*actual, expected_width, scalar_context);
     }
     if (const auto actual = hir_let_actual(expression_id)) {
         return lower_hir_expression(*actual, expected_width, scalar_context);
+    }
+    // A typed parameter whose value is an assignment pattern.
+    if (const auto declaration_id = hir_referenced_declaration(expression_id)) {
+        const auto declaration = specialized_hir_unit_->find_declaration(
+            *declaration_id);
+        const auto named = specialized_hir_unit_->find_expression(
+            expression_id);
+        const auto member_path = [&]() -> std::optional<std::string_view> {
+            if (!named || named->systemverilog == nullptr
+                || named->systemverilog->kind
+                    != semantic::sv::ExpressionKind::name
+                || declaration->systemverilog == nullptr) {
+                return std::nullopt;
+            }
+            const auto text = std::string_view { named->systemverilog->text };
+            const auto& name = declaration->systemverilog->name;
+            if (text == name) {
+                return std::string_view { };
+            }
+            if (text.size() > name.size() + 1U && text.starts_with(name)
+                && text[name.size()] == '.') {
+                return text.substr(name.size() + 1U);
+            }
+            return std::nullopt;
+        };
+        const auto path = declaration ? member_path() : std::nullopt;
+        if (path && declaration->systemverilog != nullptr
+            && (declaration->systemverilog->form
+                    == semantic::sv::DeclarationForm::parameter
+                || declaration->systemverilog->form
+                    == semantic::sv::DeclarationForm::local_parameter)
+            && declaration->systemverilog->initializer) {
+            // An override's actual replaces the default value.
+            auto value = *declaration->systemverilog->initializer;
+            const auto& actuals
+                = specialized_hir_unit_->specialization().actual_identities;
+            if (const auto bound = std::ranges::find(actuals, *declaration_id,
+                    &semantic::SpecializedHirActualIdentity::declaration);
+                bound != actuals.end() && bound->actual_expression) {
+                value = *bound->actual_expression;
+            }
+            if (const auto typed = lower_hir_systemverilog_parameter_pattern(
+                    expression_id, value)) {
+                if (path->empty()) {
+                    return typed;
+                }
+                // `P.m`: the member's bits of the structure value.
+                if (const auto slice = hir_systemverilog_parameter_member_slice(
+                        expression_id, *path)) {
+                    const auto selected = allocate_register(
+                        slice->second, register_domain(*typed));
+                    process_.operations.emplace_back(Extract {
+                        selected, *typed,
+                        static_cast<std::uint32_t>(slice->first),
+                        static_cast<std::uint32_t>(slice->second) });
+                    return selected;
+                }
+            }
+        }
     }
     if (const auto declaration = hir_let_declaration(expression_id)) {
         if (!push_hir_let_frame(expression_id, *declaration)) {
@@ -6886,16 +6951,22 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             || !declaration->systemverilog->callable->function) {
             return false;
         }
-        if (declaration->systemverilog->callable->lifetime
-                != semantic::sv::Lifetime::automatic
-            && std::ranges::any_of(
+        // A variable that persists across calls (a static function's local
+        // or an explicitly static one) makes each call observable.
+        const bool automatic_callable
+            = declaration->systemverilog->callable->lifetime
+            == semantic::sv::Lifetime::automatic;
+        if (std::ranges::any_of(
                 declaration->systemverilog->children,
                 [&](const semantic::DeclarationId child) {
                     const auto local
                         = specialized_hir_unit_->find_declaration(child);
                     return local && local->systemverilog != nullptr
                         && local->systemverilog->form
-                            == semantic::sv::DeclarationForm::variable;
+                            == semantic::sv::DeclarationForm::variable
+                        && (!automatic_callable
+                            || local->systemverilog->lifetime
+                                == semantic::sv::Lifetime::static_lifetime);
                 })) {
             return false;
         }
@@ -9332,6 +9403,22 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             *rhs,
             expression->systemverilog->text == "!=",
         });
+        result = destination;
+    } else if (const auto folded = expression->systemverilog != nullptr
+                   && expression->systemverilog->kind
+                       == semantic::sv::ExpressionKind::call
+                   && expression->systemverilog->text == "$clog2"
+                   && expression->systemverilog->operands.size() == 1U
+               ? hir_constant_integer(expression_id)
+               : std::nullopt) {
+        // $clog2 of a constant is an integer constant (IEEE 1800-2017
+        // 20.8.1).
+        const auto width = expected_width != 0U ? expected_width : 32U;
+        const auto destination = allocate_register(
+            width, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            destination,
+            unsigned_value(static_cast<std::uint64_t>(*folded), width) });
         result = destination;
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
@@ -15779,7 +15866,23 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             ? specialized_hir_unit_->find_declaration(*declaration_id)
             : std::nullopt;
         std::string text;
+        // A built-in type keyword names that type (IEEE 1800-2017 20.6.1).
+        static constexpr std::array builtin_types {
+            std::string_view { "logic" }, std::string_view { "bit" },
+            std::string_view { "reg" }, std::string_view { "byte" },
+            std::string_view { "shortint" }, std::string_view { "int" },
+            std::string_view { "longint" }, std::string_view { "integer" },
+            std::string_view { "time" }, std::string_view { "real" },
+            std::string_view { "shortreal" }, std::string_view { "realtime" },
+            std::string_view { "string" }, std::string_view { "chandle" },
+            std::string_view { "event" },
+        };
         if (operand_source.kind == semantic::sv::ExpressionKind::name
+            && std::ranges::find(builtin_types,
+                   std::string_view { operand_source.text })
+                != builtin_types.end()) {
+            text = operand_source.text;
+        } else if (operand_source.kind == semantic::sv::ExpressionKind::name
             && declaration && declaration->systemverilog != nullptr
             && (declaration->systemverilog->form
                     == semantic::sv::DeclarationForm::typedef_declaration
@@ -17654,6 +17757,121 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_static_string_concatenation(
     process_.operations.emplace_back(LoadConstant {
         destination, PackedLogic4::from_msb_string(bits) });
     return destination;
+}
+
+std::optional<RegisterId> Lowerer::lower_hir_systemverilog_parameter_pattern(
+    const semantic::ExpressionId parameter,
+    const semantic::ExpressionId given)
+{
+    auto value = given;
+    // The value of a typed SystemVerilog parameter given as an assignment
+    // pattern is a packed value of the parameter's type (IEEE 1800-2017
+    // 10.9, 6.20.2).
+    auto value_expression = specialized_hir_unit_->find_expression(value);
+    // A name of another typed parameter, such as an actual naming the
+    // parent's localparam, denotes that parameter's value.
+    for (int depth = 0; depth < 8 && value_expression
+         && value_expression->systemverilog != nullptr
+         && value_expression->systemverilog->kind
+             == semantic::sv::ExpressionKind::name;
+         ++depth) {
+        const auto named = hir_referenced_declaration(value);
+        const auto declaration = named
+            ? specialized_hir_unit_->find_declaration(*named)
+            : std::nullopt;
+        if (!declaration || declaration->systemverilog == nullptr
+            || declaration->systemverilog->name
+                != value_expression->systemverilog->text
+            || (declaration->systemverilog->form
+                    != semantic::sv::DeclarationForm::parameter
+                && declaration->systemverilog->form
+                    != semantic::sv::DeclarationForm::local_parameter)
+            || !declaration->systemverilog->initializer) {
+            return std::nullopt;
+        }
+        value = *declaration->systemverilog->initializer;
+        value_expression = specialized_hir_unit_->find_expression(value);
+    }
+    if (!value_expression || value_expression->systemverilog == nullptr
+        || value_expression->systemverilog->kind
+            != semantic::sv::ExpressionKind::assignment_pattern) {
+        return std::nullopt;
+    }
+    auto type = hir_systemverilog_parameter_type(parameter);
+    if (!type) {
+        return std::nullopt;
+    }
+    const auto width = hir_systemverilog_type_width(*type);
+    if (!width || *width == 0U) {
+        return std::nullopt;
+    }
+    // A named type such as `pkg::cfg_t` resolves to its definition.
+    const semantic::CompiledDesignResolver type_resolver {
+        *specialized_hir_unit_, hir_generic_binding_frames_
+    };
+    for (int depth = 0; depth < 8 && !type->target.target.valid(); ++depth) {
+        const auto effective = type_resolver.effective_systemverilog_type(
+            *type, specialized_hir_unit_->scope());
+        if (!effective || *effective == *type) {
+            break;
+        }
+        type = *effective;
+    }
+    return lower_hir_systemverilog_packed_pattern(value, *type, *width);
+}
+
+std::optional<std::pair<std::size_t, std::size_t>>
+Lowerer::hir_systemverilog_parameter_member_slice(
+    const semantic::ExpressionId parameter, std::string_view path) const
+{
+    // The bit offset and width of member `path` (`a.b`) of a packed
+    // structure parameter.
+    auto type = hir_systemverilog_parameter_type(parameter);
+    if (!type) {
+        return std::nullopt;
+    }
+    const semantic::CompiledDesignResolver type_resolver {
+        *specialized_hir_unit_, hir_generic_binding_frames_
+    };
+    std::size_t offset { };
+    while (!path.empty()) {
+        const auto separator = path.find('.');
+        const auto segment = path.substr(0U, separator);
+        for (int depth = 0; depth < 8; ++depth) {
+            const auto effective = type_resolver.effective_systemverilog_type(
+                *type, specialized_hir_unit_->scope());
+            if (!effective || *effective == *type) {
+                break;
+            }
+            type = *effective;
+        }
+        const auto definition = type->target.target.valid()
+            ? specialized_hir_unit_->find_type(type->target.target)
+            : std::nullopt;
+        if (!definition || definition->systemverilog == nullptr
+            || (definition->systemverilog->form
+                    != semantic::sv::TypeForm::packed_structure
+                && definition->systemverilog->form
+                    != semantic::sv::TypeForm::packed_union)) {
+            return std::nullopt;
+        }
+        const auto& members = definition->systemverilog->members;
+        const auto member = std::ranges::find(
+            members, segment, &semantic::sv::PackedMember::name);
+        if (member == members.end()) {
+            return std::nullopt;
+        }
+        offset += static_cast<std::size_t>(member->lsb_offset);
+        type = member->type;
+        path = separator == std::string_view::npos
+            ? std::string_view { }
+            : path.substr(separator + 1U);
+    }
+    const auto width = hir_systemverilog_type_width(*type);
+    if (!width || *width == 0U) {
+        return std::nullopt;
+    }
+    return std::pair { offset, *width };
 }
 
 } // namespace fsim::elaboration

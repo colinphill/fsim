@@ -1402,7 +1402,7 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
   // A parameter of a block, function or task is a local parameter (IEEE
   // 1800-2017 6.20.1); it is kept as a local initialized by its value.
   const bool local_parameter = match_keyword("parameter") || match_keyword("localparam");
-  (void)match_keyword("static");
+  const bool static_lifetime = match_keyword("static");
   const bool automatic = match_keyword("automatic");
   Type type = default_verilog_type();
   if (local_parameter && at(TokenKind::Identifier) && at(TokenKind::Assign, 1)) {
@@ -1462,6 +1462,7 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
         std::move(declaration_type),
         std::move(initializer),
         span_from(name, previous())});
+    block.declarations.back().systemverilog_static = static_lifetime;
     if (!match(TokenKind::Comma)) {
       break;
     }
@@ -2198,13 +2199,6 @@ Process VerilogParser::parse_always() {
           start,
           "FSIM-SV-SEM-012",
           "always_comb/always_latch cannot contain timing controls");
-    }
-    if (implicit_sensitivity && has_nonblocking) {
-      error(
-          start,
-          "FSIM-SV-SEM-013",
-          "always_comb/always_latch assignments must be blocking in this "
-          "executable slice");
     }
     // always_ff begins with one event control (IEEE 1800-2017 9.2.2.4),
     // which may list several events (`@(posedge clk or negedge rst)`).

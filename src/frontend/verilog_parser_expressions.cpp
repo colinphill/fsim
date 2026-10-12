@@ -1541,7 +1541,14 @@ Expression VerilogParser::parse_primary()
                 { },
                 direction.span
             };
-            if (!at(TokenKind::LeftBrace)) {
+            if (!at(TokenKind::LeftBrace)
+                && (keyword("bit") || keyword("logic") || keyword("reg"))) {
+                // A one-bit type as the slice size (IEEE 1800-2017
+                // 11.4.14).
+                const auto type = advance();
+                slice_size = Expression {
+                    ExpressionKind::IntegerLiteral, "1", { }, type.span };
+            } else if (!at(TokenKind::LeftBrace)) {
                 if (keyword("byte") || keyword("shortint")
                     || keyword("int") || keyword("longint")
                     || keyword("integer") || keyword("time")) {

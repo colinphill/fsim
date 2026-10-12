@@ -1418,7 +1418,10 @@ private:
             remove();
             return std::nullopt;
         }
-        auto result = evaluate(*view->systemverilog->initializer);
+        auto result = view->systemverilog->type
+            ? evaluate_typed(*view->systemverilog->initializer,
+                  *view->systemverilog->type)
+            : evaluate(*view->systemverilog->initializer);
         if (result && view->systemverilog->type
             && hir_systemverilog_explicit_integral_type(
                 *view->systemverilog->type)) {
@@ -2761,6 +2764,109 @@ private:
         frames_.pop_back();
         return convert_record_type(
             std::move(value), callable.callable->return_type);
+    }
+
+    /// The members of a packed structure or union type, or null.
+    [[nodiscard]] const std::vector<semantic::sv::PackedMember>*
+    packed_members(semantic::sv::TypeReference type) const
+    {
+        if (const auto effective
+            = semantic::CompiledDesignResolver { specialization_ }
+                  .effective_systemverilog_type(
+                      type, specialization_.scope())) {
+            type = *effective;
+        }
+        const auto definition = type.target.target.valid()
+            ? specialization_.find_type(type.target.target)
+            : std::nullopt;
+        if (!definition || definition->systemverilog == nullptr
+            || (definition->systemverilog->form
+                    != semantic::sv::TypeForm::packed_structure
+                && definition->systemverilog->form
+                    != semantic::sv::TypeForm::packed_union)) {
+            return nullptr;
+        }
+        return &definition->systemverilog->members;
+    }
+
+    /// An expression evaluated for a packed structure type: an assignment
+    /// pattern keyed by member names and `default:` places each value in
+    /// its member (IEEE 1800-2017 10.9.2); anything else evaluates as usual.
+    [[nodiscard]] std::optional<Value> evaluate_typed(
+        const semantic::ExpressionId expression,
+        const semantic::sv::TypeReference& type)
+    {
+        const auto view = specialization_.find_expression(expression);
+        const auto* const members = packed_members(type);
+        if (!view || view->systemverilog == nullptr || members == nullptr
+            || view->systemverilog->kind != ExpressionKind::assignment_pattern
+            || std::ranges::all_of(view->systemverilog->associations,
+                [](const auto& association) {
+                    return association.choice_spelling.empty();
+                })) {
+            return evaluate(expression);
+        }
+        std::unordered_set<std::uint32_t> visiting;
+        const auto width = resolved_type_width(
+            type, &specialization_, visiting);
+        if (!width || *width == 0U || *width > (1U << 20U)) {
+            error_ = "keyed assignment pattern requires resolved aggregate layout";
+            return std::nullopt;
+        }
+        PackedLogic4 packed { static_cast<std::size_t>(*width), Logic4::x };
+        std::optional<semantic::ExpressionId> default_value;
+        std::unordered_set<std::string> assigned;
+        const auto place = [&](const semantic::sv::PackedMember& member,
+                               const semantic::ExpressionId value_id) -> bool {
+            std::unordered_set<std::uint32_t> member_visiting;
+            const auto member_width = resolved_type_width(
+                member.type, &specialization_, member_visiting);
+            auto value = evaluate_typed(value_id, member.type);
+            if (!value || !member_width) {
+                return false;
+            }
+            const auto fitted = resized(std::move(*value),
+                static_cast<std::uint32_t>(*member_width));
+            for (std::uint64_t bit = 0U; bit < *member_width; ++bit) {
+                if (member.lsb_offset + bit < packed.width()) {
+                    packed.set(member.lsb_offset + bit,
+                        runtime::to_logic4(fitted.packed.get_logic9(bit)));
+                }
+            }
+            return true;
+        };
+        for (const auto& association : view->systemverilog->associations) {
+            if (association.choice_spelling == "default") {
+                default_value = association.value;
+                continue;
+            }
+            std::string_view member_name = association.choice_spelling;
+            if (member_name == "@key" && association.choices.size() == 1U) {
+                const auto choice = specialization_.find_expression(
+                    association.choices.front());
+                if (choice && choice->systemverilog != nullptr
+                    && choice->systemverilog->kind == ExpressionKind::name) {
+                    member_name = choice->systemverilog->text;
+                }
+            }
+            const auto member = std::ranges::find(*members, member_name,
+                &semantic::sv::PackedMember::name);
+            if (member == members->end() || !place(*member, association.value)) {
+                error_ = "keyed assignment pattern names an unknown member '"
+                    + std::string { member_name } + "'";
+                return std::nullopt;
+            }
+            assigned.insert(member->name);
+        }
+        if (default_value) {
+            for (const auto& member : *members) {
+                if (!assigned.contains(member.name)
+                    && !place(member, *default_value)) {
+                    return std::nullopt;
+                }
+            }
+        }
+        return make_value(std::move(packed), false, false);
     }
 
     /// The bit offset and width of `path` (`a.b`) within a packed

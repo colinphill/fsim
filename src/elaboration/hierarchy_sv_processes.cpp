@@ -204,6 +204,33 @@ void HierarchyBuilder::publish_systemverilog_concurrent_occurrence(
     design_.append_process_record(std::move(process));
 }
 
+const HierarchyBuilder::SystemVerilogDisableLabels&
+HierarchyBuilder::systemverilog_disable_labels()
+{
+    if (systemverilog_disable_labels_) {
+        return *systemverilog_disable_labels_;
+    }
+    auto& labels = systemverilog_disable_labels_.emplace();
+    const auto& hir = compiled_->systemverilog_hir;
+    for (const auto& statement : hir.statements()) {
+        if (statement.kind == semantic::sv::StatementKind::disable) {
+            const auto& spelling = statement.task.spelling;
+            const auto dot = spelling.rfind('.');
+            labels.targets.insert(dot == std::string::npos
+                    ? spelling
+                    : spelling.substr(dot + 1U));
+        } else if (!statement.label.empty()) {
+            labels.declared.insert(statement.label);
+        }
+    }
+    for (const auto& declaration : hir.declarations()) {
+        if (declaration.form == semantic::sv::DeclarationForm::task) {
+            labels.declared.insert(declaration.name);
+        }
+    }
+    return labels;
+}
+
 void HierarchyBuilder::publish_systemverilog_process(Process& lowered,
     const semantic::sv::Unit& unit,
     const bool concurrent_assertion,

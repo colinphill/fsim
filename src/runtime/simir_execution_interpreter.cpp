@@ -1339,16 +1339,26 @@ void Interpreter::Impl::execute(ProcessId id)
                     }
                 } else if constexpr (std::is_same_v<OperationType, WriteDelayed>) {
                     auto value = get_register(process, op.source);
-                    const auto payload
-                        = get_register(process, *op.delay.source);
-                    // An unknown integral delay counts as zero (9.4.1).
-                    const auto delay
-                        = op.delay.source_kind
+                    const auto evaluate_delay = [&](const WaitFor& wait) {
+                        if (!wait.source) {
+                            return wait.delay;
+                        }
+                        const auto payload
+                            = get_register(process, *wait.source);
+                        // An unknown integral delay counts as zero (9.4.1).
+                        return wait.source_kind
                                     == SystemVerilogScalarKind::None
                                 && payload.low_word().bval != 0U
                             ? SimulationTick { 0U }
-                            : normalized_dynamic_wait_delay(
-                                  op.delay, payload);
+                            : normalized_dynamic_wait_delay(wait, payload);
+                    };
+                    const auto delay = evaluate_delay(op.delay);
+                    const auto fall = op.fall
+                        ? evaluate_delay(*op.fall)
+                        : delay;
+                    const auto turnoff = op.turnoff
+                        ? evaluate_delay(*op.turnoff)
+                        : std::min(delay, fall);
                     ++process.pc;
                     if (op.inertial) {
                         schedule_inertial(
@@ -1356,7 +1366,7 @@ void Interpreter::Impl::execute(ProcessId id)
                             op.signal,
                             std::move(value),
                             op.offset,
-                            TransitionDelays { delay, delay, delay },
+                            TransitionDelays { delay, fall, turnoff },
                             op.domain);
                     } else if (op.domain != SignalUpdateDomain::generic) {
                         schedule_systemverilog_update(
@@ -1931,7 +1941,25 @@ void Interpreter::Impl::execute(ProcessId id)
                     }
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, FormatDisplay>) {
-                    auto text = make_formatted_output(
+                    // %t of a time value follows $timeformat (IEEE
+                    // 1800-2017 21.2.1.3, 20.4.3).
+                    const auto time_value = op.format == OutputFormat::time
+                        ? decode_systemverilog_scalar_payload(
+                              get_register(process, op.source), op.scalar_kind)
+                        : decltype(decode_systemverilog_scalar_payload(
+                              get_register(process, op.source),
+                              op.scalar_kind)) { };
+                    const auto tick = op.format == OutputFormat::time
+                            && time_value
+                        ? time_value.value.as_time()
+                        : std::nullopt;
+                    auto text = tick
+                        ? make_time_output(op.prefix, op.suffix, *tick,
+                              time_format,
+                              op.minimum_width == 0
+                                  && !op.suppress_leading_zero,
+                              op.minimum_width, op.left_justify, op.zero_pad)
+                        : make_formatted_output(
                         op.prefix,
                         op.suffix,
                         op.format,

@@ -268,6 +268,14 @@ using namespace runtime::simir;
             = fsim::runtime::simir::operation_get_if<DisableBlock>(&operation)) {
             select(disable->end);
         }
+        // A disable statement in another process may resume this one at the
+        // end of a named block.
+        if (const auto* point
+            = fsim::runtime::simir::operation_get_if<DebugPoint>(&operation);
+            point != nullptr
+            && point->kind == runtime::simir::DebugPointKind::block_exit) {
+            select(static_cast<InstructionIndex>(index));
+        }
     }
 
     std::vector<InstructionIndex> result;

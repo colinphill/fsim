@@ -3436,6 +3436,15 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<ModuleTimingCheckState> module_timing_check_states;
     std::map<std::uint64_t, ForkGroup> fork_groups;
     std::uint64_t next_fork_group { 1 };
+    // Named block and task body intervals by hierarchical name, built from
+    // block_entry/block_exit debug points when a disable first needs them.
+    struct NamedScopeInterval {
+        ProcessId design_process { };
+        InstructionIndex begin { };
+        InstructionIndex end { };
+    };
+    std::optional<std::unordered_map<std::string,
+        std::vector<NamedScopeInterval>>> named_scope_intervals;
     std::uint32_t next_process_generation { 1 };
     std::vector<Fanout> static_fanout_entries;
     std::vector<std::size_t> static_fanout_offsets;
@@ -4243,6 +4252,8 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessId process,
         std::string_view path,
         std::string_view mode);
+    [[nodiscard]] bool soft_unreadable_file(
+        ProcessId process, FileState& file);
     [[nodiscard]] FileState& checked_file(
         ProcessId process, FileHandle handle);
     void close_file(ProcessId process, FileHandle handle);
@@ -4664,6 +4675,16 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessState& process,
         InstructionIndex instruction,
         const Operation& operation);
+    // End a disabled block for `owner`: kill its fork children spawned in
+    // [begin, end) and resume it at `end` if it executes inside the block.
+    void disable_process_interval(
+        ProcessState& process,
+        ProcessState& owner,
+        InstructionIndex begin,
+        InstructionIndex end,
+        bool include_end);
+    void disable_named_scope(
+        ProcessState& process, const std::vector<std::string>& scopes);
     void spawn_fork(
         ProcessState& parent,
         InstructionIndex instruction,

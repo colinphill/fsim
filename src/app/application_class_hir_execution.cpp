@@ -443,6 +443,33 @@ SystemVerilogClassHirExecution::evaluate_packed(
     if (value == nullptr)
         return std::nullopt;
     using semantic::sv::ExpressionKind;
+    // `++x`, `x--` of a local (IEEE 1800-2017 11.4.2).
+    if (value->kind == ExpressionKind::update && value->operands.size() == 1U
+        && (value->text == "pre++" || value->text == "pre--"
+            || value->text == "post++" || value->text == "post--")) {
+        const auto* target = expression(value->operands.front());
+        if (target == nullptr || target->kind != ExpressionKind::name) {
+            return std::nullopt;
+        }
+        const auto found = environment.find(target->text);
+        if (found == environment.end() || found->second.width() == 0U
+            || found->second.width() > 64U) {
+            return std::nullopt;
+        }
+        const auto before = found->second;
+        const auto word = before.low_word();
+        const auto width = before.width();
+        const auto mask = width == 64U ? ~std::uint64_t { 0 }
+                                       : (std::uint64_t { 1 } << width) - 1U;
+        const auto after = word.bval != 0U
+            ? runtime::PackedLogic4(width, runtime::Logic4::x)
+            : runtime::PackedLogic4::from_aval_bval(width,
+                  (value->text.ends_with("++") ? word.aval + 1U
+                                               : word.aval - 1U) & mask,
+                  0U);
+        found->second = after;
+        return value->text.starts_with("post") ? before : after;
+    }
     if (value->kind == ExpressionKind::name) {
         if (value->text == "this" || value->text == "super") {
             return runtime::PackedLogic4::from_aval_bval(64U, handle, 0U);
@@ -859,6 +886,15 @@ SystemVerilogClassHirExecution::bind_actuals(
             environment[local->name]
                 = runtime::PackedLogic4(64U, runtime::Logic4::zero);
             continue;
+        }
+        // A static local keeps its value across calls (IEEE 1800-2017
+        // 6.21).
+        if (local->lifetime == semantic::sv::Lifetime::static_lifetime) {
+            if (const auto kept = static_locals_.find(local_id.value());
+                kept != static_locals_.end()) {
+                environment[local->name] = kept->second;
+                continue;
+            }
         }
         const auto local_width = width(*local->type);
         const auto value = local->initializer
@@ -1539,6 +1575,16 @@ runtime::PackedLogic4 SystemVerilogClassHirExecution::invoke_function(
     }
     auto result = execute(
         method.statements, handle, environment, strings, false);
+    for (const auto local_id : method.local_declarations) {
+        const auto* local = declaration(local_id);
+        if (local != nullptr
+            && local->lifetime == semantic::sv::Lifetime::static_lifetime) {
+            if (const auto kept = environment.find(local->name);
+                kept != environment.end()) {
+                static_locals_.insert_or_assign(local_id.value(), kept->second);
+            }
+        }
+    }
     if (!result.returned && result_variable) {
         result.returned = true;
         result.value = environment.at(method.name);

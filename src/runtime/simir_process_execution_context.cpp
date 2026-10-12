@@ -100,7 +100,7 @@ ProcessExecutionContext::borrow_container_object(ContainerObjectId) const
 }
 
 void ProcessExecutionContext::write_container_object(
-    ContainerObjectId, const ContainerValue&)
+    ContainerObjectId, const ContainerValue&, bool)
 {
     throw std::logic_error {
         "alternate process executor does not support container objects"

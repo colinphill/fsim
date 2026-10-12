@@ -2803,10 +2803,37 @@ void Interpreter::Impl::execute_container(
     const auto process_domain = process.program().scheduling_domain();
     const auto update_domain
         = process_domain == ProcessSchedulingDomain::systemverilog
-        ? SignalUpdateDomain::systemverilog_active
+        ? operation.nonblocking
+            ? SignalUpdateDomain::systemverilog_nba
+            : SignalUpdateDomain::systemverilog_active
         : SignalUpdateDomain::generic;
-    const auto origin = capture_signal_change_origin(
+    auto origin = capture_signal_change_origin(
         process.id, update_domain);
+    if (operation.nonblocking) {
+        if (update_domain == SignalUpdateDomain::generic) {
+            origin.phase = SchedulerPhase::update;
+        }
+        const auto publish = [this, object = operation.object,
+                                 value = source, driver = process.id,
+                                 instruction = process.pc,
+                                 origin](Scheduler&) {
+            try {
+                write_container_object_value(
+                    object, value, driver, origin);
+            } catch (const std::invalid_argument& error) {
+                container_error(driver, instruction, error.what());
+            }
+        };
+        if (process_domain == ProcessSchedulingDomain::systemverilog) {
+            scheduler.schedule_systemverilog(
+                origin.phase, process.id, publish);
+        } else {
+            scheduler.schedule(
+                SchedulerPhase::update, process.id, publish);
+        }
+        ++process.pc;
+        return;
+    }
     try {
         write_container_object_value(
             operation.object, source, process.id, origin);

@@ -280,8 +280,12 @@ template <typename OperationType, typename ExactSignalWidth,
     } else if constexpr (std::is_same_v<OperationType, WriteDelayed>) {
         (void)exact_signal_width(operation.signal, index);
         record_use(operation.source, index);
-        if (operation.delay.source) {
-            record_use(*operation.delay.source, index);
+        for (const auto* wait : { &operation.delay,
+                 operation.fall ? &*operation.fall : nullptr,
+                 operation.turnoff ? &*operation.turnoff : nullptr }) {
+            if (wait != nullptr && wait->source) {
+                record_use(*wait->source, index);
+            }
         }
         // A delay computed at run time is scheduled by the interpreter.
         record_unsupported(

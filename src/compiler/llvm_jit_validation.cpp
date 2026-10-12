@@ -795,8 +795,9 @@ using namespace runtime::simir;
                             "DisableFork named site does not reference Fork");
                     }
                 } else if constexpr (std::is_same_v<OperationType, DisableBlock>) {
-                    if (operation.begin >= operation.end
-                        || operation.end > process.operations.size()) {
+                    if (operation.scopes.empty()
+                        && (operation.begin >= operation.end
+                            || operation.end > process.operations.size())) {
                         reject(
                             process, index,
                             "DisableBlock has an invalid lexical interval");

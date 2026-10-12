@@ -733,6 +733,38 @@ bool validate_systemverilog_class_inheritance(
               declaration->span);
         }
       }
+      // A pure constraint of a virtual base class must be overridden by
+      // every non-virtual subclass (IEEE 1800-2017 18.5.2).
+      std::set<std::string> defined_constraints;
+      std::set<std::string> constraint_visited;
+      for (const auto* current = declaration; current != nullptr;) {
+        if (!constraint_visited.insert(current->canonical_identity).second) {
+          break;
+        }
+        for (const auto& constraint : current->constraints) {
+          if (!constraint.is_pure) {
+            defined_constraints.insert(constraint.name);
+          } else if (!defined_constraints.contains(constraint.name)) {
+            diagnose(
+                diagnostics,
+                "FSIM-SV-CLASS-INHERIT-009",
+                "concrete class '" + declaration->canonical_identity
+                    + "' does not implement pure constraint '"
+                    + constraint.name + "'",
+                declaration->span);
+            defined_constraints.insert(constraint.name);
+          }
+        }
+        const SystemVerilogClassDeclaration* next = nullptr;
+        if (current->base && !current->base->declaration_identity.empty()) {
+          if (const auto base = classes.find(
+                  current->base->declaration_identity);
+              base != classes.end()) {
+            next = &*base->second;
+          }
+        }
+        current = next;
+      }
     }
   }
 

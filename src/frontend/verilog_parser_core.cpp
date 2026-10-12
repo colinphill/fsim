@@ -151,7 +151,31 @@ VerilogParser::VerilogParser(
 ParseResult VerilogParser::run() {
     ParsedDesign design;
     parsed_design_ = &design;
+    // An escaped identifier whose characters form a simple identifier
+    // names that identifier (`\abc` is `abc`, IEEE 1800-2017 5.6.1),
+    // unless it is a keyword.
+    for (auto& token : tokens_) {
+        if (token.kind != TokenKind::Identifier || token.text.size() < 2U
+            || token.text.front() != '\\') {
+            continue;
+        }
+        const auto name = std::string_view { token.text }.substr(1U);
+        const bool simple = (std::isalpha(static_cast<unsigned char>(name.front()))
+                                || name.front() == '_')
+            && std::ranges::all_of(name, [](const char character) {
+                   return std::isalnum(static_cast<unsigned char>(character))
+                       || character == '_' || character == '$';
+               });
+        if (simple && !keyword_reserved(keyword_set_, name)) {
+            token.text = std::string { name };
+        }
+    }
     while (!at_end()) {
+        if (language_ == Language::SystemVerilog2017
+            && match(TokenKind::Semicolon)) {
+            // An empty compilation-unit item (IEEE 1800-2017 A.1.11).
+            continue;
+        }
         if (verilog_attribute_instance_start()) {
             parse_verilog_attribute_instances();
         } else if (language_ == Language::SystemVerilog2017

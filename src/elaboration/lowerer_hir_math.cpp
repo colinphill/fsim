@@ -250,7 +250,14 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_math_call(
     };
     const auto lower_operand = [&](const semantic::ExpressionId operand_id)
         -> std::optional<Operand> {
-        const auto kind = hir_systemverilog_scalar_kind(operand_id);
+        auto kind = hir_systemverilog_scalar_kind(operand_id);
+        // A real argument of $shortrealtobits converts to shortreal, as an
+        // assignment would (IEEE 1800-2017 20.5, 6.12.1).
+        if (*function == runtime::SystemVerilogMathFunction::ShortRealToBits
+            && (kind == frontend::SystemVerilogScalarKind::Real
+                || kind == frontend::SystemVerilogScalarKind::Realtime)) {
+            kind = frontend::SystemVerilogScalarKind::ShortReal;
+        }
         const auto width = kind
                 == frontend::SystemVerilogScalarKind::ShortReal
             ? std::optional<std::size_t> { 32U }

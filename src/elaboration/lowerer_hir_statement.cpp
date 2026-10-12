@@ -2365,6 +2365,15 @@ bool Lowerer::lower_hir_statement(
                     == ProcessSchedulingDomain::systemverilog
             ? SignalUpdateDomain::systemverilog_active
             : SignalUpdateDomain::generic;
+        // Under FSIM_HIR_LOWER_TRACE_FAILURES, name the lowerer line that
+        // rejected an assignment.
+        const auto assignment_rejected = [](const int line) {
+            if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+                std::cerr << "[fsim-hir-lower] assignment-rejected line="
+                          << line << '\n';
+            }
+            return false;
+        };
         const auto trace_assignment_failure =
             [&](const std::string_view reason) {
                 if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES")
@@ -2388,12 +2397,12 @@ bool Lowerer::lower_hir_statement(
             return true;
         }
         if (!target || !value) {
-            return false;
+            return assignment_rejected(__LINE__);
         }
         const auto target_expression = specialized_hir_unit_->find_expression(
             *target);
         if (!target_expression) {
-            return false;
+            return assignment_rejected(__LINE__);
         }
         const auto assignment_value_expression
             = specialized_hir_unit_->find_expression(*value);
@@ -2622,7 +2631,7 @@ bool Lowerer::lower_hir_statement(
                     != semantic::sv::AssignmentControl::none
                 || statement->systemverilog->delay
                 || hir_update_reevaluates_target(*statement->systemverilog)) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             const auto source_width = hir_expression_width(
                 *value, hir_process_scope_)
@@ -2639,7 +2648,7 @@ bool Lowerer::lower_hir_statement(
                 *value,
                 streaming ? source_width : *composite_target_width);
             if (!lowered) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             if (streaming
                 && register_width(*lowered) > *composite_target_width) {
@@ -2732,7 +2741,7 @@ bool Lowerer::lower_hir_statement(
         if (event_control_lowered_early
             && !lower_assignment_event_control(
                 *statement->systemverilog)) {
-            return false;
+            return assignment_rejected(__LINE__);
         }
         const auto lower_intra_assignment_control = [&] {
             return event_control_lowered_early
@@ -2876,7 +2885,7 @@ bool Lowerer::lower_hir_statement(
                         = lower_statement_packed_expression(*value, width);
                     if (!lowered_value
                         || register_width(*lowered_value) != width) {
-                        return false;
+                        return assignment_rejected(__LINE__);
                     }
                     const auto clipped_low = std::max(low, range_low);
                     const auto clipped_high = std::min(high, range_high);
@@ -2898,7 +2907,7 @@ bool Lowerer::lower_hir_statement(
                     if (timed_nonblocking) {
                         handoff = begin_nonblocking_handoff();
                         if (!handoff) {
-                            return false;
+                            return assignment_rejected(__LINE__);
                         }
                     }
                     if (signal_assignment || nonblocking) {
@@ -2961,38 +2970,38 @@ bool Lowerer::lower_hir_statement(
             // element, for example).
             const auto captured = capture_hir_packed_update_target(*target);
             if (!captured && hir_update_reevaluates_target(input)) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             if (captured) {
                 if (event_controlled
                     && !lower_assignment_event_control(input)) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 const auto updated = lower_hir_packed_update_value(
                     *captured,
                     input.update_operator,
                     normalized->systemverilog->operands.back());
                 if (!updated) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 if (!event_controlled
                     && !lower_intra_assignment_control()) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 if (input.assignment_control
                     == semantic::sv::AssignmentControl::delay) {
                     if (!input.delay || !input.delay->additional.empty()) {
-                        return false;
+                        return assignment_rejected(__LINE__);
                     }
                     const auto delay = delay_magnitude(
                         input.delay->primary);
                     if (!delay) {
-                        return false;
+                        return assignment_rejected(__LINE__);
                     }
                     emit_debug_point(DebugPointKind::wait, span);
                     process_.operations.emplace_back(WaitFor { *delay });
                 } else if (input.delay) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 return write_hir_packed_update_target(
                     *captured, *updated);
@@ -3228,7 +3237,7 @@ bool Lowerer::lower_hir_statement(
                         auto lowered = lower_hir_expression(
                             *value, selection->width);
                         if (!lowered) {
-                            return false;
+                            return assignment_rejected(__LINE__);
                         }
                         if (register_width(*lowered) != selection->width) {
                             lowered = resize_register(
@@ -3298,7 +3307,7 @@ bool Lowerer::lower_hir_statement(
                                     : 0U)
                             << '\n';
                     }
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 auto current = lower_hir_expression(
                     selected.operands.front(), element->width);
@@ -3316,7 +3325,7 @@ bool Lowerer::lower_hir_statement(
                             << " value_expression=" << value->value()
                             << '\n';
                     }
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 if (register_width(*current) != element->width) {
                     current = resize_register(
@@ -3380,7 +3389,7 @@ bool Lowerer::lower_hir_statement(
                     != semantic::sv::AssignmentControl::none
                 || input.delay
                 || hir_update_reevaluates_target(input)) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             if (container->read_only) {
                 report(
@@ -3441,7 +3450,7 @@ bool Lowerer::lower_hir_statement(
                     != semantic::sv::AssignmentControl::none
                 || input.delay
                 || hir_update_reevaluates_target(input)) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             return lower_hir_container_locator_assignment(
                 *target, *value);
@@ -3474,7 +3483,7 @@ bool Lowerer::lower_hir_statement(
                 || expression->systemverilog->kind
                     != semantic::sv::ExpressionKind::slice
                 || expression->systemverilog->operands.empty()) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             const auto base = hir_container_object_binding(
                 expression->systemverilog->operands.front());
@@ -3528,7 +3537,7 @@ bool Lowerer::lower_hir_statement(
                     != semantic::sv::AssignmentControl::none
                 || input.delay
                 || hir_update_reevaluates_target(input)) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             const auto diagnostics_before = diagnostics_.size();
             const auto container_source
@@ -3557,7 +3566,7 @@ bool Lowerer::lower_hir_statement(
                     != semantic::sv::AssignmentControl::none
                 || input.delay
                 || hir_update_reevaluates_target(input)) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             if (container->read_only) {
                 report(
@@ -3576,7 +3585,7 @@ bool Lowerer::lower_hir_statement(
                     const auto part = lower_hir_static_container_value(
                         operand);
                     if (!part) {
-                        return false;
+                        return assignment_rejected(__LINE__);
                     }
                     process_.operations.emplace_back(AppendContainer {
                         built, false, part->value, { }, { } });
@@ -3585,7 +3594,7 @@ bool Lowerer::lower_hir_statement(
                 if (type.element_kind == ContainerElementKind::String) {
                     const auto text = lower_hir_string_expression(operand);
                     if (!text) {
-                        return false;
+                        return assignment_rejected(__LINE__);
                     }
                     process_.operations.emplace_back(AppendContainer {
                         built, false, { }, { }, *text });
@@ -3593,7 +3602,7 @@ bool Lowerer::lower_hir_statement(
                 }
                 if (type.element_kind != ContainerElementKind::Packed
                     && type.element_kind != ContainerElementKind::Scalar) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 const auto element_kind
                     = type.element_kind == ContainerElementKind::Scalar
@@ -3617,7 +3626,7 @@ bool Lowerer::lower_hir_statement(
                         operand, type.element_width, element_kind);
                 }
                 if (!element_value) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 if (register_width(*element_value) != type.element_width) {
                     element_value = resize_register(*element_value, type.element_width,
@@ -3672,14 +3681,28 @@ bool Lowerer::lower_hir_statement(
                 || unresolved_static_array_call;
             if (constructor_call || plain_constructor || source_container
                 || static_slice || typed_container_value) {
-                if (signal_assignment || nonblocking
-                    || input.assignment_kind
-                        != semantic::sv::AssignmentKind::blocking
+                // A time-free continuous assignment of a whole unpacked
+                // array writes it as its process evaluates (10.3).
+                const auto continuous_copy = input.assignment_kind
+                        == semantic::sv::AssignmentKind::continuous
+                    && !nonblocking;
+                // A nonblocking one publishes the whole value in the NBA
+                // region (10.4.2).
+                const auto nonblocking_copy = nonblocking
+                    && input.assignment_kind
+                        == semantic::sv::AssignmentKind::nonblocking
+                    && !container->local;
+                const auto whole_copy = continuous_copy || nonblocking_copy;
+                if ((signal_assignment && !whole_copy)
+                    || (nonblocking && !nonblocking_copy)
+                    || (input.assignment_kind
+                            != semantic::sv::AssignmentKind::blocking
+                        && !whole_copy)
                     || input.assignment_control
                         != semantic::sv::AssignmentControl::none
                     || input.delay
                     || hir_update_reevaluates_target(input)) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 if (container->read_only) {
                     report(
@@ -3698,6 +3721,7 @@ bool Lowerer::lower_hir_statement(
                                 container->object,
                                 destination,
                                 std::nullopt,
+                                nonblocking_copy,
                             });
                     }
                 };
@@ -3787,7 +3811,7 @@ bool Lowerer::lower_hir_statement(
                     : container_source.operands.back();
                 auto size = lower_hir_expression(size_id, 32U);
                 if (!size) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 if (register_width(*size) != 32U) {
                     size = resize_register(
@@ -3849,7 +3873,7 @@ bool Lowerer::lower_hir_statement(
                     != semantic::sv::AssignmentControl::none
                 || input.delay
                 || hir_update_reevaluates_target(input)) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             if (string_member->element.read_only) {
                 report(
@@ -3862,7 +3886,7 @@ bool Lowerer::lower_hir_statement(
                 string_member->element);
             const auto text = lower_hir_string_expression(*value);
             if (!element_index || !text) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             const auto member_container = string_member->element.local
                 ? *string_member->element.local
@@ -3937,7 +3961,7 @@ bool Lowerer::lower_hir_statement(
                 auto lowered = lower_hir_expression(
                     *value, selection->width);
                 if (!element_index || !current || !lowered) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 if (register_width(*current) != leaf_width) {
                     current = resize_register(*current, leaf_width, false);
@@ -4005,7 +4029,7 @@ bool Lowerer::lower_hir_statement(
                     || input.delay
                     || hir_update_reevaluates_target(input))
                 && !nonblocking_member) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             if (aggregate_member->element.read_only) {
                 report(
@@ -4037,7 +4061,7 @@ bool Lowerer::lower_hir_statement(
             }
             if (!element_index || !lowered
                 || aggregate_member->leaf.element_width == 0U) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             if (register_width(*lowered)
                 != aggregate_member->leaf.element_width) {
@@ -4208,11 +4232,11 @@ bool Lowerer::lower_hir_statement(
                     || *width > std::numeric_limits<std::uint32_t>::max()
                     || !dynamic || !element_index
                     || element->width == 0U) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 auto lowered = lower_hir_expression(*value, *width);
                 if (!lowered) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 if (register_width(*lowered) != *width) {
                     lowered = resize_register(
@@ -4230,10 +4254,10 @@ bool Lowerer::lower_hir_statement(
                 if (timed_nonblocking) {
                     handoff = begin_nonblocking_handoff();
                     if (!handoff) {
-                        return false;
+                        return assignment_rejected(__LINE__);
                     }
                 } else if (!lower_intra_assignment_control()) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 const auto write_guard = begin_hir_fixed_array_write(
                     *element, *element_index);
@@ -4283,7 +4307,7 @@ bool Lowerer::lower_hir_statement(
                     || (hir_update_reevaluates_target(input)
                         && !real_element_update))) {
                 trace_generated("fixed-net-control");
-                return false;
+                return assignment_rejected(__LINE__);
             }
             if (element->read_only) {
                 report(
@@ -4345,7 +4369,7 @@ bool Lowerer::lower_hir_statement(
                                                  .rend())
                                   << '\n';
                     }
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 std::size_t ordinal { };
                 std::size_t element_count { 1U };
@@ -4361,13 +4385,13 @@ bool Lowerer::lower_hir_statement(
                         bounds.first, bounds.second);
                     if (!index || *index < low || *index > high) {
                         trace_generated("fixed-net-index-range");
-                        return false;
+                        return assignment_rejected(__LINE__);
                     }
                     const auto distance = index_distance(high, low);
                     if (distance
                         >= std::numeric_limits<std::size_t>::max()) {
                         trace_generated("fixed-net-distance");
-                        return false;
+                        return assignment_rejected(__LINE__);
                     }
                     const auto count
                         = static_cast<std::size_t>(distance + 1U);
@@ -4381,14 +4405,14 @@ bool Lowerer::lower_hir_statement(
                                   - selected)
                                 / count) {
                         trace_generated("fixed-net-ordinal");
-                        return false;
+                        return assignment_rejected(__LINE__);
                     }
                     element_count *= count;
                     ordinal = ordinal * count + selected;
                 }
                 if (ordinal >= element_count) {
                     trace_generated("fixed-net-signal-shape");
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 SignalId target_signal { };
                 std::uint32_t offset { };
@@ -4403,7 +4427,7 @@ bool Lowerer::lower_hir_statement(
                         if (selected_alias != nullptr
                             || !candidate.writable) {
                             trace_generated("fixed-net-element-alias");
-                            return false;
+                            return assignment_rejected(__LINE__);
                         }
                         selected_alias = &candidate;
                     }
@@ -4413,7 +4437,7 @@ bool Lowerer::lower_hir_statement(
                         || design_.signal_info_[selected_alias->signal].width
                             != element->width) {
                         trace_generated("fixed-net-element-shape");
-                        return false;
+                        return assignment_rejected(__LINE__);
                     }
                     target_signal = selected_alias->signal;
                 } else {
@@ -4424,14 +4448,14 @@ bool Lowerer::lower_hir_statement(
                                 / element->width
                         || signal.width != element_count * element->width) {
                         trace_generated("fixed-net-signal-shape");
-                        return false;
+                        return assignment_rejected(__LINE__);
                     }
                     const auto aggregate_offset
                         = (element_count - ordinal - 1U) * element->width;
                     if (aggregate_offset
                         > std::numeric_limits<std::uint32_t>::max()) {
                         trace_generated("fixed-net-offset");
-                        return false;
+                        return assignment_rejected(__LINE__);
                     }
                     target_signal = alias->signal;
                     offset = static_cast<std::uint32_t>(aggregate_offset);
@@ -4440,7 +4464,7 @@ bool Lowerer::lower_hir_statement(
                     *value, element->width);
                 if (!lowered) {
                     trace_generated("fixed-net-value");
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 if (register_width(*lowered) != element->width) {
                     lowered = resize_register(
@@ -4507,7 +4531,7 @@ bool Lowerer::lower_hir_statement(
                 const auto source_index
                     = lower_hir_container_element_index(*source_element);
                 if (!target_index || !source_index) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 const auto target_container = element->local
                     ? *element->local
@@ -4556,7 +4580,7 @@ bool Lowerer::lower_hir_statement(
                 }
                 const auto path = lower_hir_container_element_path(*element);
                 if (!path) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 HirContainerElementBinding selected_element = *element;
                 selected_element.type = path->type;
@@ -4565,7 +4589,7 @@ bool Lowerer::lower_hir_statement(
                 const auto element_index = lower_hir_container_element_index(
                     selected_element);
                 if (!element_index) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 const auto& child_type
                     = element->selected_type->element_types.front();
@@ -4611,7 +4635,7 @@ bool Lowerer::lower_hir_statement(
                     auto size = lower_hir_expression(
                         size_expression, 32U);
                     if (!size) {
-                        return false;
+                        return assignment_rejected(__LINE__);
                     }
                     if (register_width(*size) != 32U) {
                         size = resize_register(
@@ -4627,7 +4651,7 @@ bool Lowerer::lower_hir_statement(
                             value_expression->systemverilog->operands.back(),
                             child_type);
                         if (!initializer) {
-                            return false;
+                            return assignment_rejected(__LINE__);
                         }
                     }
                     process_.operations.emplace_back(ResizeContainer {
@@ -4636,7 +4660,7 @@ bool Lowerer::lower_hir_statement(
                     lowered = lower_hir_static_container_actual(
                         *value, child_type, element->declaration);
                     if (!lowered) {
-                        return false;
+                        return assignment_rejected(__LINE__);
                     }
                 }
                 process_.operations.emplace_back(ContainerElementWrite {
@@ -4661,7 +4685,7 @@ bool Lowerer::lower_hir_statement(
                 const auto path = lower_hir_container_element_path(*element);
                 const auto lowered = lower_hir_string_expression(*value);
                 if (!path || !lowered) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 HirContainerElementBinding selected_element = *element;
                 selected_element.type = path->type;
@@ -4670,7 +4694,7 @@ bool Lowerer::lower_hir_statement(
                 const auto element_index = lower_hir_container_element_index(
                     selected_element);
                 if (!element_index) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 process_.operations.emplace_back(ContainerStringWrite {
                     path->container,
@@ -4794,14 +4818,14 @@ bool Lowerer::lower_hir_statement(
             if (delayed_nonblocking_element) {
                 handoff = begin_nonblocking_handoff();
                 if (!handoff) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
             }
             const auto write_guard = begin_hir_fixed_array_write(
                 *element, *element_index);
             if (element->local) {
                 if (nonblocking) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 process_.operations.emplace_back(ContainerWrite {
                     *element->local,
@@ -4814,7 +4838,7 @@ bool Lowerer::lower_hir_statement(
                 });
             } else if (element->type->string_indices) {
                 if (nonblocking) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 const auto materialized = allocate_container_register(
                     *element->type);
@@ -4870,11 +4894,11 @@ bool Lowerer::lower_hir_statement(
                 || input.delay
                 || hir_update_reevaluates_target(input)
                 || !width || *width == 0U) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             auto lowered = lower_hir_expression(*value, *width);
             if (!lowered) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             if (register_width(*lowered) != *width) {
                 lowered = resize_register(
@@ -4891,7 +4915,7 @@ bool Lowerer::lower_hir_statement(
             const auto& access = *target_expression->systemverilog;
             if (signal_assignment || nonblocking
                 || access.operands.size() != 2U) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             const auto receiver = lower_hir_expression(
                 access.operands[0], 64U);
@@ -4904,10 +4928,10 @@ bool Lowerer::lower_hir_statement(
             if (!receiver || register_width(*receiver) != 64U
                 || !element_index || !lowered
                 || register_width(*lowered) != 64U) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             if (!lower_intra_assignment_control()) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             const auto destination = allocate_register(
                 64U, frontend::ValueDomain::Bit2);
@@ -4947,7 +4971,7 @@ bool Lowerer::lower_hir_statement(
                     != semantic::sv::ExpressionKind::index
                 || resize_expression->systemverilog->operands.size()
                     != 2U) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             const auto& resize = *resize_expression->systemverilog;
             const auto constructor
@@ -4957,7 +4981,7 @@ bool Lowerer::lower_hir_statement(
                 || constructor->systemverilog->kind
                     != semantic::sv::ExpressionKind::name
                 || constructor->systemverilog->text != "new") {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             const auto receiver = lower_hir_expression(
                 access.operands.front(), 64U);
@@ -4967,10 +4991,10 @@ bool Lowerer::lower_hir_statement(
             const auto size = lower_hir_expression(
                 resize.operands.back(), size_width);
             if (!receiver || register_width(*receiver) != 64U || !size) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             if (!lower_intra_assignment_control()) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             const auto destination = allocate_register(
                 64U, frontend::ValueDomain::Bit2);
@@ -4997,7 +5021,7 @@ bool Lowerer::lower_hir_statement(
                     != semantic::sv::AssignmentControl::none
                 || input.delay
                 || hir_update_reevaluates_target(input)) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             const auto lowered = lower_hir_string_expression(*value);
             return lowered
@@ -5005,11 +5029,11 @@ bool Lowerer::lower_hir_statement(
         }
         if (const auto property = hir_class_property_profile(*target)) {
             if (signal_assignment || nonblocking || !property->writable) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             auto lowered = lower_hir_expression(*value, property->width);
             if (!lowered) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             if (register_width(*lowered) != property->width) {
                 lowered = resize_register(
@@ -5017,7 +5041,7 @@ bool Lowerer::lower_hir_statement(
             }
             if (property->static_storage) {
                 if (!lower_intra_assignment_control()) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 process_.operations.emplace_back(ClassStaticPropertyWrite {
                     *lowered, property->identity });
@@ -5026,10 +5050,10 @@ bool Lowerer::lower_hir_statement(
             const auto receiver = lower_hir_expression(
                 *property->receiver, 64U);
             if (!receiver || register_width(*receiver) != 64U) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             if (!lower_intra_assignment_control()) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             process_.operations.emplace_back(ClassPropertyWrite {
                 *receiver, *lowered, property->identity });
@@ -5077,7 +5101,7 @@ bool Lowerer::lower_hir_statement(
                     : std::nullopt;
                 if (!lowered || !handle
                     || !lower_intra_assignment_control()) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 if (register_width(*lowered) != member->width) {
                     lowered = resize_register(*lowered, member->width,
@@ -5119,7 +5143,7 @@ bool Lowerer::lower_hir_statement(
         if (!declaration && !direct_binding) {
             trace_generated("target-binding");
             trace_assignment_failure("target-binding");
-            return false;
+            return assignment_rejected(__LINE__);
         }
         const auto mode_view_target_binding = direct_binding
             ? direct_binding
@@ -5297,6 +5321,8 @@ bool Lowerer::lower_hir_statement(
         std::optional<TransitionDelays> transition_delays;
         std::optional<runtime::SimulationTick> procedural_delay;
         std::optional<WaitFor> runtime_delay;
+        std::optional<WaitFor> runtime_fall;
+        std::optional<WaitFor> runtime_turnoff;
         struct VhdlProjectedAssignment {
             runtime::SimulationTick delay { };
             runtime::SimulationTick rejection { };
@@ -5342,11 +5368,36 @@ bool Lowerer::lower_hir_statement(
                 const auto* single = driver_delay && !net_delay
                     ? driver_delay
                     : net_delay && !driver_delay ? net_delay : nullptr;
-                if (single != nullptr && single->additional.empty()) {
+                if (single != nullptr && single->additional.size() <= 2U) {
                     runtime_delay = dynamic_delay(single->primary);
+                    // Rise, fall and turn-off delays evaluated at run time
+                    // (10.3.3, 28.16).
+                    const auto transition_part = [&](const auto& part)
+                        -> std::optional<WaitFor> {
+                        if (const auto magnitude = delay_magnitude(part)) {
+                            return WaitFor { *magnitude };
+                        }
+                        return dynamic_delay(part);
+                    };
+                    if (!single->additional.empty()) {
+                        runtime_delay = transition_part(single->primary);
+                    }
+                    if (runtime_delay && !single->additional.empty()) {
+                        runtime_fall = transition_part(
+                            single->additional[0].primary);
+                        if (single->additional.size() > 1U) {
+                            runtime_turnoff = transition_part(
+                                single->additional[1].primary);
+                        }
+                        if (!runtime_fall
+                            || (single->additional.size() > 1U
+                                && !runtime_turnoff)) {
+                            runtime_delay.reset();
+                        }
+                    }
                 }
                 if (!runtime_delay) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
             }
             transition_delays = driver ? driver : net;
@@ -5383,7 +5434,7 @@ bool Lowerer::lower_hir_statement(
                 runtime_delay = dynamic_delay(driver_delay->primary);
             }
             if (!primary && !runtime_delay) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             if (primary) {
                 procedural_delay = *primary;
@@ -5398,7 +5449,7 @@ bool Lowerer::lower_hir_statement(
                 ? delay_magnitude(input.delay->primary)
                 : std::optional<runtime::SimulationTick> { 0U };
             if (!element_delay) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             const auto transport = input.delay_mechanism
                 == semantic::vhdl::DelayMechanism::transport;
@@ -5408,7 +5459,7 @@ bool Lowerer::lower_hir_statement(
                       transport ? 0U : *element_delay
                   };
             if (!rejection || *rejection > *element_delay) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             vhdl_projected_assignment = VhdlProjectedAssignment {
                 *element_delay,
@@ -5469,7 +5520,7 @@ bool Lowerer::lower_hir_statement(
                         }
                         const auto left = hir_range_left(constraint);
                         if (!left) {
-                            return false;
+                            return assignment_rejected(__LINE__);
                         }
                         prefix_left = *left;
                         prefix_descending = constraint.descending;
@@ -5480,7 +5531,7 @@ bool Lowerer::lower_hir_statement(
                     target_expression->vhdl->operands[1], 32U);
                 auto byte = lower_hir_expression(*value, 8U);
                 if (!index || !byte) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 if (register_width(*index) != 32U) {
                     index = resize_register(*index, 32U, true);
@@ -5514,7 +5565,7 @@ bool Lowerer::lower_hir_statement(
                         != semantic::sv::AssignmentControl::none
                     || input.delay
                     || hir_update_reevaluates_target(input)) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 if (string_binding->kind == HirStringBindingKind::object
                     && (!string_binding->object
@@ -5527,12 +5578,12 @@ bool Lowerer::lower_hir_statement(
                             span);
                         return true;
                     }
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 StringRegisterId string_target { };
                 if (string_binding->kind == HirStringBindingKind::local) {
                     if (!string_binding->local) {
-                        return false;
+                        return assignment_rejected(__LINE__);
                     }
                     string_target = *string_binding->local;
                 } else {
@@ -5568,7 +5619,7 @@ bool Lowerer::lower_hir_statement(
                     byte = lower_hir_expression(*value, 32U);
                 }
                 if (!string_index || !byte) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 process_.operations.emplace_back(StringReplaceByte {
                     string_target,
@@ -5590,27 +5641,27 @@ bool Lowerer::lower_hir_statement(
                 || (!process_randstate
                     && !can_lower_hir_string_expression(
                         *value, hir_process_scope_))) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             const auto lowered = process_randstate
                 ? process_randstate
                 : lower_hir_string_expression(*value);
             if (!lowered) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             if (!lower_intra_assignment_control()) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             if (string_binding->kind == HirStringBindingKind::local) {
                 if (!string_binding->local) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 process_.operations.emplace_back(CopyStringRegister {
                     *string_binding->local, *lowered });
                 return true;
             }
             if (!string_binding->object) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             if (read_only_string_objects_.contains(
                     *string_binding->object)) {
@@ -5631,7 +5682,7 @@ bool Lowerer::lower_hir_statement(
         if (!binding) {
             trace_generated("runtime-binding");
             trace_assignment_failure("runtime-binding");
-            return false;
+            return assignment_rejected(__LINE__);
         }
         std::span<const semantic::ExpressionId> target_operands;
         std::string_view selection_operation;
@@ -5665,7 +5716,7 @@ bool Lowerer::lower_hir_statement(
             && (target_operands.size() != (index ? 2U : 3U)
                 || hir_target_declaration(target_operands.front())
                     != declaration)) {
-            return false;
+            return assignment_rejected(__LINE__);
         }
         const auto systemverilog_member
             = hir_systemverilog_member_selection(
@@ -5702,7 +5753,7 @@ bool Lowerer::lower_hir_statement(
             && !vhdl_root_selection;
         if (vhdl_root_is_selection && !vhdl_root_selection
             && !vhdl_root_dynamic_index) {
-            return false;
+            return assignment_rejected(__LINE__);
         }
         const auto vhdl_member_offset = [&]()
             -> std::optional<std::size_t> {
@@ -5868,7 +5919,7 @@ bool Lowerer::lower_hir_statement(
                     > std::numeric_limits<std::uint32_t>::max()
                 || *member_width
                     > std::numeric_limits<std::uint32_t>::max()) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             if (constant_selection) {
                 // Root selection composes an ordinary outer slice or index
@@ -5878,7 +5929,7 @@ bool Lowerer::lower_hir_statement(
                     if (*member_offset
                         > std::numeric_limits<std::size_t>::max()
                             - constant_selection->offset) {
-                        return false;
+                        return assignment_rejected(__LINE__);
                     }
                     constant_selection->offset += *member_offset;
                 }
@@ -5909,7 +5960,7 @@ bool Lowerer::lower_hir_statement(
             && (constant_selection->offset > binding->width
                 || constant_selection->width
                     > binding->width - constant_selection->offset)) {
-            return false;
+            return assignment_rejected(__LINE__);
         }
         std::optional<DynamicPartIndex> dynamic_vhdl_selection;
         if (vhdl_array_call
@@ -5923,7 +5974,7 @@ bool Lowerer::lower_hir_statement(
                 || vhdl_array_call->width == 0U
                 || vhdl_array_call->width
                     > std::numeric_limits<std::uint32_t>::max()) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             dynamic_vhdl_selection = DynamicPartIndex {
                 *offset,
@@ -5952,13 +6003,13 @@ bool Lowerer::lower_hir_statement(
                 || binding->width - 1U
                     > static_cast<std::size_t>(
                         std::numeric_limits<std::int64_t>::max())) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             const auto offset = lower_hir_vhdl_dynamic_element_offset(
                 root.operands[0], root.operands[1], *element_width,
                 static_cast<std::uint32_t>(*member_offset));
             if (!offset) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             dynamic_vhdl_selection = DynamicPartIndex {
                 *offset,
@@ -5983,13 +6034,13 @@ bool Lowerer::lower_hir_statement(
                 || binding->width - 1U
                     > static_cast<std::size_t>(
                         std::numeric_limits<std::int64_t>::max())) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             const auto offset = lower_hir_vhdl_dynamic_element_offset(
                 target_operands[0], target_operands[1],
                 *dynamic_element_width);
             if (!offset) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             dynamic_vhdl_selection = DynamicPartIndex {
                 *offset,
@@ -6057,7 +6108,7 @@ bool Lowerer::lower_hir_statement(
             || *assignment_width
                 > std::numeric_limits<std::uint32_t>::max()) {
             trace_assignment_failure("assignment-width");
-            return false;
+            return assignment_rejected(__LINE__);
         }
         std::optional<DynamicIndex> dynamic_selection;
         if (target_is_selected && !constant_selection
@@ -6075,7 +6126,7 @@ bool Lowerer::lower_hir_statement(
                     : 0U);
             if (!dynamic_selection) {
                 trace_assignment_failure("dynamic-index");
-                return false;
+                return assignment_rejected(__LINE__);
             }
         }
         const auto value_expression
@@ -6213,12 +6264,12 @@ bool Lowerer::lower_hir_statement(
                     || value_expression->vhdl == nullptr
                     || value_expression->vhdl->kind
                         != semantic::vhdl::ExpressionKind::name) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 const auto type = specialized_hir_unit_->find_type(
                     *target_enumeration);
                 if (!type || type->vhdl == nullptr) {
-                    return false;
+                    return assignment_rejected(__LINE__);
                 }
                 auto spelling = std::string_view {
                     value_expression->vhdl->text
@@ -6520,7 +6571,7 @@ bool Lowerer::lower_hir_statement(
                       const auto source_root
                           = hir_vhdl_composite_root_type(source_id);
                       if (!target_root || !source_root) {
-                          return false;
+                          return assignment_rejected(__LINE__);
                       }
                       if (target_root->first != source_root->first
                           || target_root->second
@@ -6529,7 +6580,7 @@ bool Lowerer::lower_hir_statement(
                       }
                       if (target_root->first
                           != semantic::vhdl::TypeForm::array) {
-                          return false;
+                          return assignment_rejected(__LINE__);
                       }
                       const auto source_width = hir_expression_width(
                           source_id, hir_process_scope_);
@@ -6756,7 +6807,7 @@ bool Lowerer::lower_hir_statement(
         if (statement->vhdl != nullptr && signal_assignment
             && statement->vhdl->waveform.size() > 1U) {
             if (!binding->signal || !vhdl_projected_assignment) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             const auto waveform_domain = member_domain
                 ? *member_domain
@@ -7027,7 +7078,7 @@ bool Lowerer::lower_hir_statement(
                     > std::numeric_limits<std::uint32_t>::max()
                 || tagged.offset > binding->width
                 || tagged.width > binding->width - tagged.offset) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             const auto tagged_value = allocate_register(
                 tagged.width, binding->domain);
@@ -7113,10 +7164,10 @@ bool Lowerer::lower_hir_statement(
                 process_.operations.size());
             if (!lower_assignment_event_control(*statement->systemverilog)) {
                 nonblocking_event_handoff.fork.reset();
-                return false;
+                return assignment_rejected(__LINE__);
             }
         } else if (!lower_intra_assignment_control()) {
-            return false;
+            return assignment_rejected(__LINE__);
         }
         if (procedural_delay && !delayed_nonblocking_assignment) {
             emit_debug_point(DebugPointKind::wait, span);
@@ -7125,7 +7176,7 @@ bool Lowerer::lower_hir_statement(
         }
         if (binding->kind == HirRuntimeBindingKind::local) {
             if (nonblocking || continuous_assignment || !binding->local) {
-                return false;
+                return assignment_rejected(__LINE__);
             }
             if (constant_selection) {
                 process_.operations.emplace_back(Insert {
@@ -7190,7 +7241,7 @@ bool Lowerer::lower_hir_statement(
         }
         if (!binding->signal) {
             trace_assignment_failure("signal-binding");
-            return false;
+            return assignment_rejected(__LINE__);
         }
         const auto update = signal_assignment || nonblocking;
         if (constant_selection && vhdl_projected_assignment) {
@@ -7258,6 +7309,8 @@ bool Lowerer::lower_hir_statement(
                     : std::nullopt,
                 continuous_assignment,
                 update_domain,
+                runtime_fall,
+                runtime_turnoff,
             });
         } else if (runtime_delay) {
             report(
@@ -10821,6 +10874,8 @@ bool Lowerer::lower_hir_statement(
                 std::string { label }, declaration_scope, block_begin,
                 std::nullopt, { },
             });
+            emit_disable_scope_marker(
+                DebugPointKind::block_entry, label, span);
         }
         if (!initialize_hir_declarations(declarations)
             || !lower_hir_statements(statements)) {
@@ -10852,6 +10907,7 @@ bool Lowerer::lower_hir_statement(
                 named_control.begin, end
             };
         }
+        emit_disable_scope_marker(DebugPointKind::block_exit, label, span);
         restore_scope();
         return true;
     };
@@ -10906,13 +10962,23 @@ bool Lowerer::lower_hir_statement(
             return false;
         }
 
+        if (!input.label.empty()) {
+            emit_disable_scope_marker(
+                DebugPointKind::block_entry, input.label, span);
+        }
         const auto fork_site = static_cast<InstructionIndex>(
             process_.operations.size());
         process_.operations.emplace_back(Fork { });
         if (!input.label.empty()) {
             named_fork_controls_.push_back(
                 { input.label, local_scope_, fork_site });
+            local_scope_.push_back(input.label);
         }
+        const auto pop_fork_scope = [&] {
+            if (!input.label.empty()) {
+                local_scope_.pop_back();
+            }
+        };
         const auto continuation_jump = static_cast<InstructionIndex>(
             process_.operations.size());
         process_.operations.emplace_back(Jump { 0U });
@@ -10940,6 +11006,7 @@ bool Lowerer::lower_hir_statement(
                 loop_controls_ = std::move(outer_loop_controls);
                 block_controls_ = std::move(outer_block_controls);
                 named_fork_controls_.resize(named_fork_count);
+                pop_fork_scope();
                 restore_scope();
                 return false;
             }
@@ -10957,10 +11024,15 @@ bool Lowerer::lower_hir_statement(
         }
         loop_controls_ = std::move(outer_loop_controls);
         block_controls_ = std::move(outer_block_controls);
+        pop_fork_scope();
 
         const auto continuation = static_cast<InstructionIndex>(
             process_.operations.size());
         process_.operations[continuation_jump] = Jump { continuation };
+        if (!input.label.empty()) {
+            emit_disable_scope_marker(
+                DebugPointKind::block_exit, input.label, span);
+        }
         auto join = runtime::simir::ForkJoinKind::all;
         switch (input.fork_join) {
         case semantic::sv::ForkJoinKind::all:
@@ -11036,8 +11108,36 @@ bool Lowerer::lower_hir_statement(
             && expression_source->systemverilog != nullptr
             && expression_source->systemverilog->kind
                 == semantic::sv::ExpressionKind::string_literal;
+        // `c ? "yes" : "NO"` is a packed value as wide as its wider
+        // literal (IEEE 1800-2017 11.4.11, 5.9), so %s pads the shorter.
+        const bool packed_literal_choice = expression_source
+            && expression_source->systemverilog != nullptr
+            && expression_source->systemverilog->kind
+                == semantic::sv::ExpressionKind::call
+            && expression_source->systemverilog->text == "?:"
+            && expression_source->systemverilog->operands.size() == 3U
+            && [&] {
+                   std::optional<std::size_t> length;
+                   bool differ { };
+                   for (std::size_t index = 1U; index < 3U; ++index) {
+                       const auto choice = specialized_hir_unit_->find_expression(
+                           expression_source->systemverilog->operands[index]);
+                       if (!choice || choice->systemverilog == nullptr
+                           || choice->systemverilog->kind
+                               != semantic::sv::ExpressionKind::string_literal
+                           || !choice->systemverilog->decoded_string) {
+                           return false;
+                       }
+                       const auto size
+                           = choice->systemverilog->decoded_string->size();
+                       differ = differ || (length && *length != size);
+                       length = size;
+                   }
+                   return differ;
+               }();
         if ((format == semantic::sv::OutputFormat::string
                 || (format == semantic::sv::OutputFormat::decimal && !literal_value))
+            && !packed_literal_choice
             && (typename_call || hir_expression_is_string(
                     *expression, hir_process_scope_))) {
             const auto displayed_string
@@ -11348,6 +11448,31 @@ bool Lowerer::lower_hir_statement(
                 if (!named_block->end) {
                     named_block->disable_operations.push_back(operation);
                 }
+                return true;
+            }
+            // A block or task outside this process's lexical scope: name it
+            // relative to each enclosing scope, then as a full path, and
+            // let the runtime find the processes executing it (9.6.2).
+            const auto& spelling = input.task.spelling;
+            const auto dot = spelling.rfind('.');
+            const auto last = dot == std::string::npos
+                ? spelling
+                : spelling.substr(dot + 1U);
+            if (disable_declared_labels_ != nullptr
+                && disable_declared_labels_->contains(last)) {
+                const auto path = hir_named_scope_path();
+                std::vector<std::string> scopes;
+                for (auto count = path.size(); count > 0U; --count) {
+                    std::string scope;
+                    for (std::size_t index = 0; index < count; ++index) {
+                        scope += path[index];
+                        scope += '.';
+                    }
+                    scopes.push_back(scope + spelling);
+                }
+                scopes.push_back(spelling);
+                process_.operations.emplace_back(
+                    DisableBlock { 0U, 0U, std::move(scopes) });
                 return true;
             }
             report(

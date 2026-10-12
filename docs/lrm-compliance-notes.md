@@ -1153,3 +1153,65 @@ gives fsim's result in each case checked.
   (a `'DELAYED` copy) still counts.
 - A sec, min or hr design time resolution is accepted by the VPI time
   profile.
+
+## Pull primitives, empty items and escaped identifiers (batch 43)
+
+- `pullup (x)` is a strength only when `x` is a strength keyword
+  (`strong1`, `pull0`, `highz1`, ...); otherwise it is an unnamed instance
+  with terminal `x`.
+- Escaped identifiers: the lexer keeps a Verilog escaped identifier up to
+  the next white space. Before parsing, an escaped identifier whose
+  remaining characters form a simple identifier that is not a keyword of
+  the active keyword set is rewritten to that identifier, so `\abc` and
+  `abc` are one name and `\begin` stays an identifier.
+- Composed class constraints are validated in a second pass over the
+  classes, and a selected constraint owned by a class outside the HIR being
+  validated (a catalog projection holds one class) is not checked there.
+- File reads from a SystemVerilog process on a handle not opened for
+  reading return EOF and set the handle's error; VHDL keeps the error.
+- Structure-typed parameters: procedural reads lower the assignment pattern
+  that gives the value (the override's actual when there is one, following
+  names of other typed parameters) with the parameter's resolved type; a
+  member select `P.m` extracts that member's bits. Constant evaluation
+  (localparams and widths) still treats keyed patterns as unknown.
+- Real specparams carry an `svscalar-v1` identity; integral ones are
+  unchanged.
+
+## Run-time delays, whole arrays, disable and keyed parameters (batch 44)
+
+- A continuous assignment or gate whose rise, fall or turn-off delay is not
+  constant lowers to `WriteDelayed` with optional `fall` and `turnoff`
+  `WaitFor`s; each part is a constant or a run-time value, and the
+  interpreter selects among them like a constant `TransitionDelays`.
+- A continuous or nonblocking assignment of a whole unpacked array copies
+  the container. `WriteContainerObject.nonblocking` publishes the value in
+  the NBA region, in the interpreter and the compiled executor alike.
+  Reading a whole container records a dependency on its bridge signals, so
+  `always_comb` and continuous assignments wake when an element changes.
+- A SystemVerilog unpacked subarray read through an unknown or
+  out-of-range index branches past the copy and yields the default value
+  (7.4.6) instead of failing the range check.
+- Disable across processes (9.6.2): the elaborator collects the last name
+  component of every disable target. Named blocks, named forks and task
+  bodies with such a name are delimited by `block_entry`/`block_exit` debug
+  points that carry their hierarchical name (instance path and enclosing
+  named scopes). A disable that names no enclosing block emits
+  `DisableBlock` with candidate names, most local first; the runtime finds
+  the live processes inside the first matching interval, kills their fork
+  children started there and resumes them at the block's end. A process
+  that already has a pending wake (a delay) resumes at the end when that
+  wake runs rather than at once, because process wakes cannot be
+  cancelled.
+- A target the design declares nowhere (no block, fork or task of that
+  name) is still `FSIM-ELAB-SVDISABLE-001`.
+- Container declaration initializers: an unpacked concatenation lists the
+  elements of each dimension of a fixed array; `new[n]` and `new[n](init)`
+  with a constant size give a dynamic array of that size; a string literal
+  fills an unpacked array of bytes right-justified, as the packed value it
+  denotes (5.9).
+- Structure parameters in constant contexts: both constant evaluators lay
+  out an assignment pattern keyed by member names (`@key` choices) and
+  `default:` for a packed structure type, and `P.m` selects the member's
+  bits from the parameter's actual or initializer. Widths such as
+  `logic [cfg.a-1:0]` and typedefs in interfaces parameterized by such
+  structures now resolve.

@@ -60,6 +60,87 @@ namespace {
         if (type.fixed && (!leaf_count || *leaf_count == 0U)) {
             return std::nullopt;
         }
+        const auto initializer_expression
+            = specialization.find_expression(initializer);
+        const auto* const initializer_source = initializer_expression
+            ? initializer_expression->systemverilog
+            : nullptr;
+        // A string literal initializes an unpacked array of bytes one
+        // character per element, right-justified like the packed value it
+        // denotes (5.9).
+        if (initializer_source != nullptr
+            && initializer_source->kind == ExpressionKind::string_literal
+            && type.fixed && type.dimensions.size() == 1U
+            && type.element_kind == ContainerElementKind::Packed
+            && type.element_width == 8U) {
+            const auto text
+                = specialization.evaluate_string_expression(initializer);
+            if (!text) {
+                return std::nullopt;
+            }
+            auto value = default_container_value(type);
+            for (std::size_t at = 0; at < *leaf_count; ++at) {
+                // Element `at` holds the character `count - at` from the end.
+                const auto from_end = *leaf_count - at;
+                const auto character = from_end <= text->size()
+                    ? static_cast<unsigned char>(
+                          (*text)[text->size() - from_end])
+                    : 0U;
+                value.elements[at] = PackedLogic4::from_aval_bval(
+                    8U, character, 0U);
+            }
+            return value;
+        }
+        // `new[n]` with a constant size: n default elements (7.5.1).
+        const auto new_array_size = [&]() -> std::optional<semantic::ExpressionId> {
+            if (initializer_source == nullptr) {
+                return std::nullopt;
+            }
+            if (initializer_source->kind == ExpressionKind::call
+                && initializer_source->text == "@new-array"
+                && (initializer_source->operands.size() == 1U
+                    || initializer_source->operands.size() == 2U)) {
+                return initializer_source->operands.front();
+            }
+            if (initializer_source->kind == ExpressionKind::index
+                && initializer_source->operands.size() == 2U) {
+                const auto callee = specialization.find_expression(
+                    initializer_source->operands.front());
+                if (callee && callee->systemverilog != nullptr
+                    && callee->systemverilog->kind == ExpressionKind::name
+                    && callee->systemverilog->text == "new") {
+                    return initializer_source->operands.back();
+                }
+            }
+            return std::nullopt;
+        }();
+        if (new_array_size && !type.fixed && !type.queue
+            && type.element_kind != ContainerElementKind::String) {
+            std::string size_error;
+            const auto size = evaluate_hir_systemverilog_constant(
+                specialization, *new_array_size, size_error);
+            const auto count = size && !size->unbounded
+                ? size->packed.known_unsigned_value()
+                : std::nullopt;
+            if (!count || *count > (std::uint64_t { 1 } << 24U)) {
+                return std::nullopt;
+            }
+            auto value = default_container_value(type);
+            if (initializer_source->kind == ExpressionKind::call
+                && initializer_source->operands.size() == 2U) {
+                // `new[n](init)` copies init and resizes it to n elements.
+                auto initial = constant_container_initializer(
+                    specialization, type, initializer_source->operands.back());
+                if (!initial) {
+                    return std::nullopt;
+                }
+                value = std::move(*initial);
+            }
+            value.elements.resize(static_cast<std::size_t>(*count),
+                PackedLogic4(type.element_width,
+                    type.two_state ? Logic4::zero : Logic4::x));
+            return value;
+        }
         std::vector<semantic::ExpressionId> leaves;
         std::optional<semantic::ExpressionId> default_value;
         bool valid = true;
@@ -92,8 +173,11 @@ namespace {
                 }
                 return;
             }
-            if (source.kind == ExpressionKind::concatenation && depth == 0U
-                && !type.fixed) {
+            // An unpacked array concatenation lists the elements of one
+            // dimension (10.10).
+            if (source.kind == ExpressionKind::concatenation
+                && ((depth == 0U && !type.fixed)
+                    || (type.fixed && depth < nested_dimensions))) {
                 for (const auto operand : source.operands) {
                     self(self, operand, depth + 1U);
                 }

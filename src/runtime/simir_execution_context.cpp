@@ -361,16 +361,33 @@ void Interpreter::Impl::ExecutionContext::write_string_object(
 
 void Interpreter::Impl::ExecutionContext::write_container_object(
     const ContainerObjectId object,
-    const ContainerValue& value){
+    const ContainerValue& value,
+    const bool nonblocking){
     const auto process_domain
         = owner.processes.program_view(process).scheduling_domain();
     const auto update_domain
         = process_domain == ProcessSchedulingDomain::systemverilog
-        ? SignalUpdateDomain::systemverilog_active
+        ? nonblocking
+            ? SignalUpdateDomain::systemverilog_nba
+            : SignalUpdateDomain::systemverilog_active
         : SignalUpdateDomain::generic;
-    owner.write_container_object_value(
-        object, value, process,
-        owner.capture_signal_change_origin(process, update_domain));
+    auto origin = owner.capture_signal_change_origin(process, update_domain);
+    if (!nonblocking) {
+        owner.write_container_object_value(object, value, process, origin);
+        return;
+    }
+    if (update_domain == SignalUpdateDomain::generic) {
+        origin.phase = SchedulerPhase::update;
+    }
+    const auto publish = [&owner = owner, object, value,
+                             driver = process, origin](Scheduler&) {
+        owner.write_container_object_value(object, value, driver, origin);
+    };
+    if (process_domain == ProcessSchedulingDomain::systemverilog) {
+        owner.scheduler.schedule_systemverilog(origin.phase, process, publish);
+    } else {
+        owner.scheduler.schedule(SchedulerPhase::update, process, publish);
+    }
 }
 
 void Interpreter::Impl::ExecutionContext::write_container_object_element(
@@ -1416,7 +1433,18 @@ void Interpreter::Impl::ExecutionContext::display_formatted(
     const bool zero_pad,
     const SystemVerilogScalarKind scalar_kind,
     const std::uint32_t precision){
-    auto text = make_formatted_output(
+    // %t of a time value follows $timeformat (IEEE 1800-2017 21.2.1.3).
+    const auto time_value = format == OutputFormat::time
+        ? decode_systemverilog_scalar_payload(value, scalar_kind)
+        : decltype(decode_systemverilog_scalar_payload(value, scalar_kind)) { };
+    const auto tick = format == OutputFormat::time && time_value
+        ? time_value.value.as_time()
+        : std::nullopt;
+    auto text = tick
+        ? make_time_output(prefix, suffix, *tick, owner.time_format,
+              minimum_width == 0 && !suppress_leading_zero, minimum_width,
+              left_justify, zero_pad)
+        : make_formatted_output(
         prefix,
         suffix,
         format,

@@ -143,7 +143,7 @@ public:
         std::size_t,
         PackedLogic4&) const;
     virtual void write_container_object(
-        ContainerObjectId, const ContainerValue&);
+        ContainerObjectId, const ContainerValue&, bool nonblocking = false);
     virtual void write_container_object_element(
         ContainerObjectId,
         const PackedLogic4&,

@@ -347,12 +347,30 @@ void Interpreter::Impl::write_file(
         write_one(*file);
 }
 
+bool Interpreter::Impl::soft_unreadable_file(
+    const ProcessId process, FileState& file)
+{
+    // A SystemVerilog read of a file not opened for reading is an error
+    // the call reports through its result (EOF) and $ferror (IEEE
+    // 1800-2017 21.3.4, 21.3.7), not a simulation failure.
+    if (processes.scheduling_domain(process)
+        != ProcessSchedulingDomain::systemverilog) {
+        return false;
+    }
+    file.last_error = "file is not open for reading";
+    return true;
+}
+
 std::string Interpreter::Impl::read_file_line(
     const ProcessId process,
     const FileHandle handle,
     std::uint32_t& count)
 {
     auto& file = checked_file(process, handle);
+    if (!file.readable && soft_unreadable_file(process, file)) {
+        count = 0;
+        return { };
+    }
     if (!file.readable) {
         throw std::runtime_error {
             "SimIR file handle is not open for reading"
@@ -399,15 +417,18 @@ std::int32_t Interpreter::Impl::read_file_character(
     const FileHandle handle)
 {
     auto& file = checked_file(process, handle);
-    if (!file.readable) {
-        throw std::runtime_error {
-            "SimIR file handle is not open for reading"
-        };
-    }
     if (file.pushback) {
         const auto character = *file.pushback;
         file.pushback.reset();
         return character;
+    }
+    if (!file.readable && soft_unreadable_file(process, file)) {
+        return -1;
+    }
+    if (!file.readable) {
+        throw std::runtime_error {
+            "SimIR file handle is not open for reading"
+        };
     }
     const auto character = file.stream->get();
     if (character != std::char_traits<char>::eof()) {
@@ -425,7 +446,10 @@ std::int32_t Interpreter::Impl::unread_file_character(
     const std::int32_t character)
 {
     auto& file = checked_file(process, handle);
-    if (!file.readable) {
+    // $ungetc pushes back one character whatever the file's mode.
+    if (!file.readable
+        && processes.scheduling_domain(process)
+            != ProcessSchedulingDomain::systemverilog) {
         throw std::runtime_error {
             "SimIR file handle is not open for reading"
         };
@@ -433,7 +457,9 @@ std::int32_t Interpreter::Impl::unread_file_character(
     if (file.pushback || character < 0 || character > 255) {
         return -1;
     }
-    file.stream->clear();
+    if (file.readable) {
+        file.stream->clear();
+    }
     file.pushback = static_cast<std::uint8_t>(character);
     return character;
 }

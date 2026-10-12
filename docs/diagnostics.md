@@ -1487,7 +1487,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-SEM-010` | error | A delay overflows after applying the module `` `timescale``. |
 | `FSIM-SV-SEM-011` | error | An `always_comb` or `always_latch` has an explicit event control. |
 | `FSIM-SV-SEM-012` | error | An `always_comb` or `always_latch` contains a timing control. |
-| `FSIM-SV-SEM-013` | error | An `always_comb` or `always_latch` contains a nonblocking assignment. |
+| `FSIM-SV-SEM-013` | retired | Formerly: an `always_comb` or `always_latch` contained a nonblocking assignment. Such assignments are legal (IEEE 1800-2017 9.2.2.2) and now execute. |
 | `FSIM-SV-SEM-014` | error | A `case` statement contains more than one `default` item. |
 | `FSIM-SV-SEM-015` | error | An undeclared implicit net is forbidden by `` `default_nettype none``. |
 | `FSIM-SV-SEM-016` | error | An untyped ANSI or non-ANSI port is forbidden by `` `default_nettype none``. |

@@ -2023,6 +2023,8 @@ tests/fixtures/compliance/sv_hierarchical_calls.sv
 tests/fixtures/compliance/sv_hierarchical_references.sv
 tests/fixtures/compliance/sv_interface_member_connections.sv
 tests/fixtures/compliance/sv_interface_ports_and_waits.sv
+tests/fixtures/compliance/sv_language_details_batch43.sv
+tests/fixtures/compliance/sv_language_details_batch44.sv
 tests/fixtures/compliance/sv_module_items.sv
 tests/fixtures/compliance/sv_net_data_types.sv
 tests/fixtures/compliance/sv_nonblocking_struct_members.sv

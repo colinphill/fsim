@@ -174,15 +174,13 @@ module bad_comb;
   logic q;
   always_comb @(a) q = a;
   always_comb #1 q = a;
-  always_comb q <= a;
 endmodule
 )",
         Language::SystemVerilog2017);
     require(!invalid_system_verilog.ok(), "invalid always_comb forms");
     for (const auto code : {
              std::string_view { "FSIM-SV-SEM-011" },
-             std::string_view { "FSIM-SV-SEM-012" },
-             std::string_view { "FSIM-SV-SEM-013" } }) {
+             std::string_view { "FSIM-SV-SEM-012" } }) {
         require(
             std::any_of(
                 invalid_system_verilog.diagnostics.begin(),

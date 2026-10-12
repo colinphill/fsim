@@ -395,6 +395,10 @@ enum class DebugPointKind : std::uint8_t {
     wait,
     assertion,
     process_entry,
+    // Delimit a named block or task body that a disable statement in another
+    // process may name; `scope` holds its hierarchical name.
+    block_entry,
+    block_exit,
 };
 
 struct DebugPoint {

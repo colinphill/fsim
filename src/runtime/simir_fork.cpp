@@ -88,6 +88,10 @@ namespace {
     }
     if (const auto* disable_block = fsim::runtime::simir::operation_get_if<DisableBlock>(
             &operation)) {
+        if (!disable_block->scopes.empty()) {
+            disable_named_scope(process, disable_block->scopes);
+            return true;
+        }
         if (disable_block->begin >= disable_block->end
             || disable_block->end > process.program().operations().size()) {
             process.pc = instruction;
@@ -99,40 +103,8 @@ namespace {
             && *owner->cold().fork_site < disable_block->end) {
             owner = &get_process(*owner->cold().fork_parent);
         }
-        std::vector<ProcessId> scoped_children;
-        if (const auto* const fork_state = owner->cold().fork_state.get()) {
-            for (const auto child_id : fork_state->live_children) {
-                const auto& child = get_process(child_id);
-                if (child.cold().fork_site
-                    && *child.cold().fork_site >= disable_block->begin
-                    && *child.cold().fork_site < disable_block->end) {
-                    scoped_children.push_back(child_id);
-                }
-            }
-        }
-        for (const auto child_id : scoped_children) {
-            auto& child = get_process(child_id);
-            cancel_fork_descendants(child);
-            if (!child.halted) {
-                complete_fork_child(child, ProcessStatus::killed);
-            }
-        }
-        const bool owner_inside = owner->pc >= disable_block->begin
-            && owner->pc < disable_block->end;
-        if (owner_inside) {
-            clear_wait_timeout(*owner);
-            owner->cold().waiting_for_children = false;
-            owner->pc = disable_block->end;
-            if (owner->executor) {
-                owner->region_kernel_completion_boundary_validated = false;
-                advance_process_executor_generation(*owner);
-                owner->executor->redirect(disable_block->end);
-            }
-            owner->status = ProcessStatus::running;
-            if (owner != &process) {
-                queue_active_current(owner->id);
-            }
-        }
+        disable_process_interval(process, *owner, disable_block->begin,
+            disable_block->end, false);
         return true;
     }
     if (!fsim::runtime::simir::operation_holds<DisableFork>(operation)) {
@@ -178,6 +150,122 @@ namespace {
             process.cold().current_source);
     }
     return true;
+}
+
+void Interpreter::Impl::disable_process_interval(
+    ProcessState& process,
+    ProcessState& owner,
+    const InstructionIndex begin,
+    const InstructionIndex end,
+    const bool include_end)
+{
+    std::vector<ProcessId> scoped_children;
+    if (const auto* const fork_state = owner.cold().fork_state.get()) {
+        for (const auto child_id : fork_state->live_children) {
+            const auto& child = get_process(child_id);
+            if (child.cold().fork_site
+                && *child.cold().fork_site >= begin
+                && *child.cold().fork_site < end) {
+                scoped_children.push_back(child_id);
+            }
+        }
+    }
+    for (const auto child_id : scoped_children) {
+        auto& child = get_process(child_id);
+        cancel_fork_descendants(child);
+        if (!child.halted) {
+            complete_fork_child(child, ProcessStatus::killed);
+        }
+    }
+    const bool owner_inside = owner.pc >= begin
+        && (owner.pc < end || (include_end && owner.pc == end));
+    if (!owner_inside || owner.halted) {
+        return;
+    }
+    clear_wait_timeout(owner);
+    owner.cold().waiting_for_children = false;
+    owner.pc = end;
+    if (owner.executor) {
+        owner.region_kernel_completion_boundary_validated = false;
+        advance_process_executor_generation(owner);
+        owner.executor->redirect(end);
+    }
+    owner.status = ProcessStatus::running;
+    // A process already queued resumes at `end` when that wake runs.
+    if (&owner != &process) {
+        queue_active_current(owner.id);
+    }
+}
+
+void Interpreter::Impl::disable_named_scope(
+    ProcessState& process, const std::vector<std::string>& scopes)
+{
+    if (!named_scope_intervals) {
+        auto& index = named_scope_intervals.emplace();
+        for (auto& state : processes) {
+            if (state.cold().fork_parent) {
+                continue;
+            }
+            const auto& operations = state.program().operations();
+            std::vector<std::pair<std::string, InstructionIndex>> open;
+            for (std::size_t instruction = 0;
+                instruction < operations.size(); ++instruction) {
+                const auto* point = operation_get_if<DebugPoint>(
+                    &std::as_const(operations)[instruction]);
+                if (point == nullptr
+                    || (point->kind != DebugPointKind::block_entry
+                        && point->kind != DebugPointKind::block_exit)) {
+                    continue;
+                }
+                const auto& actual = operations.debug_point(
+                    static_cast<InstructionIndex>(instruction), *point);
+                const auto& scope = operations.debug_scope(actual.scope).str();
+                if (point->kind == DebugPointKind::block_entry) {
+                    open.emplace_back(scope,
+                        static_cast<InstructionIndex>(instruction));
+                    continue;
+                }
+                for (auto entry = open.rbegin(); entry != open.rend();
+                    ++entry) {
+                    if (entry->first == scope) {
+                        index[scope].push_back({
+                            state.cold().design_process,
+                            entry->second,
+                            static_cast<InstructionIndex>(instruction),
+                        });
+                        open.erase(std::next(entry).base());
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    for (const auto& scope : scopes) {
+        const auto found = named_scope_intervals->find(scope);
+        if (found == named_scope_intervals->end()) {
+            continue;
+        }
+        const auto intervals = found->second;
+        std::vector<ProcessId> live;
+        for (auto& state : processes) {
+            if (!state.halted) {
+                live.push_back(state.id);
+            }
+        }
+        for (const auto& interval : intervals) {
+            for (const auto id : live) {
+                auto& state = get_process(id);
+                if (state.halted
+                    || state.cold().design_process
+                        != interval.design_process) {
+                    continue;
+                }
+                disable_process_interval(process, state, interval.begin,
+                    interval.end, &state != &process);
+            }
+        }
+        return;
+    }
 }
 
 std::uint64_t Interpreter::Impl::process_handle(

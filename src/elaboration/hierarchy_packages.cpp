@@ -13165,6 +13165,11 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
         &systemverilog_interface_handles_, &systemverilog_interface_types_);
     lowerer.set_hir_container_declaration_bindings(
         &root_materialization.container_declaration_bindings);
+    {
+        const auto& disable_labels = systemverilog_disable_labels();
+        lowerer.set_disable_labels(
+            &disable_labels.targets, &disable_labels.declared);
+    }
 
     const auto specialization_index = design_.specializations_.size();
     const auto specialization_id = static_cast<SpecializationId>(

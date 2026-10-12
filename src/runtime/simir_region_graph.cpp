@@ -214,8 +214,12 @@ ReadRegisterFlow build_read_register_flow(const OperationList& operations)
                 use(value.source);
             } else if constexpr (std::is_same_v<T, WriteDelayed>) {
                 use(value.source);
-                if (value.delay.source) {
-                    use(*value.delay.source);
+                for (const auto* wait : { &value.delay,
+                         value.fall ? &*value.fall : nullptr,
+                         value.turnoff ? &*value.turnoff : nullptr }) {
+                    if (wait != nullptr && wait->source) {
+                        use(*wait->source);
+                    }
                 }
             } else if constexpr (std::is_same_v<T, WriteBlockingSlice>
                 || std::is_same_v<T, WriteUpdateSlice>

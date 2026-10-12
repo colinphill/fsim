@@ -795,7 +795,11 @@ HierarchyBuilder::rewrite_eligible_element_net_families()
                     known = true;
                     used = value.source == register_id;
                     if constexpr (std::is_same_v<Type, WriteDelayed>) {
-                        used = used || value.delay.source == register_id;
+                        used = used || value.delay.source == register_id
+                            || (value.fall
+                                && value.fall->source == register_id)
+                            || (value.turnoff
+                                && value.turnoff->source == register_id);
                     }
                     if constexpr (
                         std::is_same_v<Type, WriteBlockingDynamicSlice>

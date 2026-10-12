@@ -1074,7 +1074,8 @@ Lowerer::hir_static_container_selection(
 
 std::optional<RegisterId>
 Lowerer::lower_hir_static_container_selection_offset(
-    const HirStaticContainerSelection& selection)
+    const HirStaticContainerSelection& selection,
+    std::vector<InstructionIndex>* const skip_branches)
 {
     if (selection.base.type == nullptr) {
         return std::nullopt;
@@ -1128,8 +1129,39 @@ Lowerer::lower_hir_static_container_selection_offset(
             index = resize_register(
                 *index, 32U, hir_expression_signed(expression));
         }
-        process_.operations.emplace_back(IntegerCheck {
-            *index, low, high });
+        if (skip_branches != nullptr) {
+            // An unknown or out-of-range index branches past the selection
+            // (IEEE 1800-2017 7.4.6).
+            const auto domain = register_domain(*index);
+            const auto low_register = allocate_register(32U, domain);
+            process_.operations.emplace_back(LoadConstant {
+                low_register, integer_value(low, 32U) });
+            const auto high_register = allocate_register(32U, domain);
+            process_.operations.emplace_back(LoadConstant {
+                high_register, integer_value(high, 32U) });
+            const auto above = allocate_register(
+                1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::greater_equal_signed, above, *index,
+                low_register });
+            const auto below = allocate_register(
+                1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::less_equal_signed, below, *index,
+                high_register });
+            const auto valid = allocate_register(
+                1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(LogicalBinary {
+                LogicalBinaryOperator::logical_and, valid, above, below });
+            const auto branch = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Branch {
+                valid, branch + 1U, 0U, UnknownBranchPolicy::when_false });
+            skip_branches->push_back(branch);
+        } else {
+            process_.operations.emplace_back(IntegerCheck {
+                *index, low, high });
+        }
         const auto declared_left = allocate_register(
             32U, frontend::ValueDomain::Integer);
         process_.operations.emplace_back(LoadConstant {
@@ -1294,6 +1326,9 @@ Lowerer::lower_hir_static_container_value(
             const auto value = allocate_container_register(*binding->type);
             process_.operations.emplace_back(ReadContainerObject {
                 value, binding->object });
+            // A wildcard-sensitive process (always_comb, a continuous
+            // assignment) wakes when any element changes.
+            record_container_object_dependency(binding->object);
             return HirStaticContainerValue { value, *binding->type };
         }
     }
@@ -1363,11 +1398,19 @@ Lowerer::lower_hir_static_container_value(
     if (!selection->base.local) {
         process_.operations.emplace_back(ReadContainerObject {
             base, selection->base.object });
+        record_container_object_dependency(selection->base.object);
     }
     const auto value = allocate_container_register(
         selection->selected_type);
-    const auto source_offset
-        = lower_hir_static_container_selection_offset(*selection);
+    // A SystemVerilog read through an unknown or out-of-range index yields
+    // the element type's default value (7.4.6).
+    std::vector<InstructionIndex> skips;
+    const auto source_offset = lower_hir_static_container_selection_offset(
+        *selection,
+        specialized_hir_unit_->language()
+                == semantic::Language::system_verilog
+            ? &skips
+            : nullptr);
     if (!source_offset) {
         return std::nullopt;
     }
@@ -1378,6 +1421,14 @@ Lowerer::lower_hir_static_container_value(
         selection->selected_type,
         { },
         source_offset);
+    const auto after = static_cast<InstructionIndex>(
+        process_.operations.size());
+    for (const auto branch : skips) {
+        if (auto* const skip = runtime::simir::operation_get_if<Branch>(
+                &process_.operations[branch])) {
+            skip->when_false = after;
+        }
+    }
     return HirStaticContainerValue {
         value, selection->selected_type
     };
@@ -2681,9 +2732,29 @@ bool Lowerer::allocate_hir_static_callable_declarations(
     if (frame_index >= hir_callable_frames_.size()) {
         return false;
     }
-    if (hir_callable_frames_[frame_index].type.automatic
-        || specialized_hir_unit_ == nullptr) {
+    if (specialized_hir_unit_ == nullptr) {
         return true;
+    }
+    // An automatic callable keeps only its explicitly static variables
+    // across calls (IEEE 1800-2017 6.21).
+    const bool automatic_frame = hir_callable_frames_[frame_index].type.automatic;
+    if (automatic_frame) {
+        const auto callable = specialized_hir_unit_->find_declaration(
+            hir_callable_frames_[frame_index].declaration);
+        const bool any_static = callable && callable->systemverilog != nullptr
+            && std::ranges::any_of(callable->systemverilog->children,
+                [&](const semantic::DeclarationId child) {
+                    const auto record
+                        = specialized_hir_unit_->find_declaration(child);
+                    return record && record->systemverilog != nullptr
+                        && record->systemverilog->form
+                            == semantic::sv::DeclarationForm::variable
+                        && record->systemverilog->lifetime
+                            == semantic::sv::Lifetime::static_lifetime;
+                });
+        if (!any_static) {
+            return true;
+        }
     }
     const auto frame_declaration
         = hir_callable_frames_[frame_index].declaration;
@@ -2748,6 +2819,9 @@ bool Lowerer::allocate_hir_static_callable_declarations(
             if (!declaration || declaration->systemverilog == nullptr
                 || declaration->systemverilog->form
                     != semantic::sv::DeclarationForm::variable
+                || (automatic_frame
+                    && declaration->systemverilog->lifetime
+                        != semantic::sv::Lifetime::static_lifetime)
                 || !allocated.insert(declaration_id.value()).second) {
                 continue;
             }
@@ -8031,6 +8105,20 @@ bool Lowerer::lower_hir_callable_return(
         return true;
     }
     if (!value) {
+        // `return;` ends a void function (IEEE 1800-2017 13.4.1).
+        const auto declaration = specialized_hir_unit_ != nullptr
+            ? specialized_hir_unit_->find_declaration(
+                  hir_callable_frames_[index].declaration)
+            : std::nullopt;
+        if (declaration && declaration->systemverilog != nullptr
+            && declaration->systemverilog->callable
+            && declaration->systemverilog->callable->return_type.target.spelling
+                == "void") {
+            hir_callable_frames_[index].return_jumps.push_back(
+                static_cast<InstructionIndex>(process_.operations.size()));
+            process_.operations.emplace_back(Jump { });
+            return true;
+        }
         return false;
     }
     const auto type = hir_callable_frames_[index].type;
@@ -8531,6 +8619,21 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                 == semantic::sv::DeclarationForm::variable
             : record->vhdl->form
                 == semantic::vhdl::DeclarationForm::variable;
+        // A static variable of an automatic callable keeps its storage
+        // and is initialized once (IEEE 1800-2017 6.21).
+        if (variable && automatic && record->systemverilog != nullptr
+            && record->systemverilog->lifetime
+                == semantic::sv::Lifetime::static_lifetime) {
+            if (const auto storage
+                = initial_frame.static_variables.find(child.value());
+                storage != initial_frame.static_variables.end()) {
+                hir_local_registers_.insert_or_assign(
+                    child.value(), storage->second);
+                locals_.insert_or_assign(
+                    record->systemverilog->name, storage->second);
+                continue;
+            }
+        }
         if (variable) {
             variables.push_back(child);
         }
@@ -8540,6 +8643,18 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
     const auto container_begin = next_container_register_;
     const auto declarations_ready = !automatic
         || initialize_hir_declarations(variables);
+    // A task body is an interval that a disable statement naming the task
+    // ends (IEEE 1800-2017 9.6.2).
+    const auto* const task_declaration = declaration->systemverilog != nullptr
+            && declaration->systemverilog->form
+                == semantic::sv::DeclarationForm::task
+        ? declaration->systemverilog
+        : nullptr;
+    if (task_declaration != nullptr && declarations_ready) {
+        emit_disable_scope_marker(DebugPointKind::block_entry,
+            task_declaration->name,
+            hir_source_span(task_declaration->source), true);
+    }
     const auto lowered = declarations_ready
         && lower_hir_statements(statements);
     if (lowered) {
@@ -8548,6 +8663,11 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
         for (const auto jump :
             hir_callable_frames_[callable_index].return_jumps) {
             process_.operations[jump] = Jump { epilogue };
+        }
+        if (task_declaration != nullptr) {
+            emit_disable_scope_marker(DebugPointKind::block_exit,
+                task_declaration->name,
+                hir_source_span(task_declaration->source), true);
         }
         process_.operations.emplace_back(Return { });
         auto& completed = hir_callable_frames_[callable_index];

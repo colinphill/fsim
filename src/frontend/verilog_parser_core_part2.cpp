@@ -480,6 +480,22 @@ void VerilogParser::note_implicit_net_reference(const Token& name) {
       return;
     }
   }
+  // A built-in type keyword reaches here only as a type argument
+  // (`$typename(logic)`, `$bits(int)`); it is not a name reference.
+  static constexpr std::array builtin_types {
+      std::string_view { "logic" }, std::string_view { "bit" },
+      std::string_view { "reg" }, std::string_view { "byte" },
+      std::string_view { "shortint" }, std::string_view { "int" },
+      std::string_view { "longint" }, std::string_view { "integer" },
+      std::string_view { "time" }, std::string_view { "real" },
+      std::string_view { "shortreal" }, std::string_view { "realtime" },
+      std::string_view { "string" }, std::string_view { "chandle" },
+  };
+  if (language_ == Language::SystemVerilog2017
+      && std::ranges::find(builtin_types, std::string_view { name.text })
+          != builtin_types.end()) {
+    return;
+  }
   if (!current_procedural_names_.contains(name.text)
       && !current_generate_names_.contains(name.text)
       && !current_loop_names_.contains(name.text)) {
@@ -1162,6 +1178,14 @@ DesignUnit VerilogParser::parse_module(
         } else if (match_keyword("event")) {
             module_has_non_time_item_ = true;
             parse_event_declaration(unit, previous());
+        } else if (!interface_unit && !program_unit
+            && match_keyword("specparam")) {
+            // A specparam may also be declared as a module item (IEEE
+            // 1800-2017 6.20.5); it is held like one of a specify block.
+            module_has_non_time_item_ = true;
+            VerilogSpecifyBlock block;
+            parse_specparam_declaration(block, previous());
+            unit.verilog_specify_blocks.push_back(std::move(block));
         } else if (match_keyword("specify")) {
             module_has_non_time_item_ = true;
             if (interface_unit || program_unit) {

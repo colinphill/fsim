@@ -999,6 +999,7 @@ def evaluate_assert(expression: str) -> bool:
         return False
     allowed = (ast.Expression, ast.Compare, ast.BoolOp, ast.UnaryOp, ast.BinOp,
                ast.Constant, ast.Eq, ast.NotEq, ast.Lt, ast.LtE, ast.Gt, ast.GtE,
+               ast.In, ast.NotIn,
                ast.And, ast.Or, ast.Not, ast.USub, ast.UAdd, ast.Invert, ast.Add,
                ast.Sub, ast.Mult, ast.Div, ast.FloorDiv, ast.Mod, ast.BitAnd,
                ast.BitOr, ast.BitXor, ast.LShift, ast.RShift, ast.Pow)

@@ -967,15 +967,29 @@ std::string class_hir_error(const Model& semantics,
                 return "SystemVerilog nested class ownership is invalid";
             }
         }
+    }
+    // A composed constraint may select one declared by a base class that
+    // comes later in the class list, so these are checked once every
+    // class's own constraints are known.
+    for (const auto& declaration : classes) {
+        // A constraint inherited from a class outside this HIR (a catalog
+        // projection of one class) is checked where that class is.
+        const auto known = [&](const std::string& constraint_identity) {
+            if (constraint_identities.contains(constraint_identity)) {
+                return true;
+            }
+            const auto separator = constraint_identity.rfind("::");
+            return separator != std::string::npos
+                && !class_identities.contains(
+                    constraint_identity.substr(0U, separator));
+        };
         std::set<std::string> composed;
         for (const auto& constraint : declaration.composed_constraints) {
             if (constraint.name.empty()
-                || !constraint_identities.contains(
-                    constraint.selected_identity)
+                || !known(constraint.selected_identity)
                 || !composed.insert(constraint.name).second
                 || (!constraint.overridden_identity.empty()
-                    && !constraint_identities.contains(
-                        constraint.overridden_identity))) {
+                    && !known(constraint.overridden_identity))) {
                 return "SystemVerilog composed class constraint is invalid";
             }
         }

@@ -702,6 +702,9 @@ template <typename Input>
         semantic::ValueKind::variable,
         sv::Direction::unknown,
         input.initializer);
+    if (input.systemverilog_static) {
+        declaration(id).lifetime = sv::Lifetime::static_lifetime;
+    }
     if (input.type.systemverilog_virtual_interface) {
         declaration(id).interface_type
             = input.type.systemverilog_interface_type;

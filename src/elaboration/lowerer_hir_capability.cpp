@@ -1104,6 +1104,14 @@ void Lowerer::set_hir_container_declaration_bindings(
     container_declaration_bindings_ = bindings;
 }
 
+void Lowerer::set_disable_labels(
+    const std::unordered_set<std::string>* const targets,
+    const std::unordered_set<std::string>* const declared) noexcept
+{
+    disable_target_labels_ = targets;
+    disable_declared_labels_ = declared;
+}
+
 void Lowerer::set_systemverilog_interface_handles(
     const std::unordered_map<std::string, std::uint64_t>* const handles,
     const std::unordered_map<std::string, std::string>* const types)
@@ -2632,7 +2640,7 @@ bool Lowerer::hir_expression_signed(
                 && port->systemverilog->form
                     == semantic::sv::DeclarationForm::port
                 && port->systemverilog->type) {
-                return port->systemverilog->type->signed_value;
+                return hir_systemverilog_type_signed(*port->systemverilog->type);
             }
         }
         if (const auto declaration_id = hir_referenced_declaration(candidate)) {
@@ -2664,7 +2672,7 @@ bool Lowerer::hir_expression_signed(
                     && !source.type->packed_range) {
                     return self(self, *source.initializer);
                 }
-                return source.type && source.type->signed_value;
+                return source.type && hir_systemverilog_type_signed(*source.type);
             }
             const auto subtype = declaration->vhdl->subtype
                 ? hir_effective_vhdl_subtype(
@@ -15970,6 +15978,42 @@ std::optional<std::size_t> Lowerer::hir_vhdl_string_element_width(
         return std::nullopt;
     }
     return width;
+}
+
+bool Lowerer::hir_systemverilog_type_signed(
+    const semantic::sv::TypeReference& type) const
+{
+    // A type parameter or typedef has the signedness of the type it names
+    // (IEEE 1800-2017 6.20.3).
+    if (type.signed_value) {
+        return true;
+    }
+    if (specialized_hir_unit_ == nullptr) {
+        return false;
+    }
+    auto current = type;
+    const semantic::CompiledDesignResolver resolver {
+        *specialized_hir_unit_, hir_generic_binding_frames_
+    };
+    for (int depth = 0; depth < 8; ++depth) {
+        if (current.signed_value) {
+            return true;
+        }
+        if (current.target.target.valid()) {
+            if (const auto binding = hir_systemverilog_type_parameter_binding(
+                    current.target.target)) {
+                current = *binding;
+                continue;
+            }
+        }
+        const auto effective = resolver.effective_systemverilog_type(
+            current, specialized_hir_unit_->scope());
+        if (!effective || *effective == current) {
+            return false;
+        }
+        current = *effective;
+    }
+    return false;
 }
 
 } // namespace fsim::elaboration

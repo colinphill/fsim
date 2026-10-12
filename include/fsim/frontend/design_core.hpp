@@ -906,6 +906,9 @@ struct VariableDeclaration {
     // True only for a SystemVerilog const variable declaration. Class const
     // properties retain the same qualifier on SystemVerilogClassProperty.
     bool systemverilog_const { };
+    // True for a SystemVerilog local declared `static`, which keeps its value
+    // across calls of an automatic callable (IEEE 1800-2017 6.21).
+    bool systemverilog_static { };
     // True for a VHDL protected-type state object that is not publicly
     // selectable. Legacy body variables are implicitly private; VHDL-2019
     // declaration members can carry the explicit `private` qualifier.

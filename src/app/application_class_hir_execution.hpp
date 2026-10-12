@@ -213,6 +213,8 @@ private:
     const StringEnvironment* strings_ { };
     SystemVerilogClassExecutionStatistics statistics_;
     std::size_t depth_ { };
+    // Values of static locals of class methods, by declaration.
+    std::map<std::uint32_t, runtime::PackedLogic4> static_locals_;
     std::size_t constant_depth_ { };
     // The function being executed returns a string.
     bool string_return_ { };

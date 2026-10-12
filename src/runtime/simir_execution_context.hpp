@@ -99,7 +99,8 @@ struct Interpreter::Impl::ExecutionContext final
         PackedLogic4& result) const override;
     void write_container_object(
         const ContainerObjectId object,
-        const ContainerValue& value) override;
+        const ContainerValue& value,
+        bool nonblocking = false) override;
     void write_container_object_element(
         const ContainerObjectId object,
         const PackedLogic4& index,

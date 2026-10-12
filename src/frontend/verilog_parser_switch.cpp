@@ -62,8 +62,18 @@ void VerilogParser::parse_switch_primitive(
       || operation == "rpmos" || operation == "rcmos";
 
   std::optional<VerilogDriveStrength> strength;
+  // `pullup (strong1)` gives a strength; `pullup (net)` is an unnamed
+  // instance whose terminal is that net (IEEE 1800-2017 28.10).
+  const auto strength_keyword = [&](const std::size_t offset) {
+    if (!at(TokenKind::Identifier, offset)) {
+      return false;
+    }
+    const auto text = detail::ascii_lower(current(offset).text);
+    return text.size() > 1U && (text.ends_with('0') || text.ends_with('1'))
+        && (strength_rank(text) || text.starts_with("highz"));
+  };
   if (pull && at(TokenKind::LeftParen)
-      && at(TokenKind::Identifier, 1)
+      && strength_keyword(1)
       && at(TokenKind::RightParen, 2)) {
     const auto strength_start = advance();
     const auto selected = advance();

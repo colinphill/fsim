@@ -3869,6 +3869,56 @@ CompiledDesignResolver::resolve_vhdl_package_members(
         return { status_for(candidates.size()), std::move(candidates) };
     }
 
+    // `use p.all` where `p` is a package generic: the members of the
+    // package instance bound to it (IEEE 1076-2008 6.5.5, 12.4).
+    const auto bound_package_instance = [&](const std::string_view formal_name)
+        -> std::optional<DeclarationId> {
+        std::optional<DeclarationId> found;
+        const auto consider = [&](const CompiledActualBinding& binding) {
+            const auto formal = find_declaration(
+                *design_, effective_, binding.formal);
+            if (!formal || formal->vhdl == nullptr
+                || formal->vhdl->form != vhdl::DeclarationForm::generic_package
+                || !same_vhdl_identifier(formal->vhdl->name, formal_name)) {
+                return;
+            }
+            auto bound = binding.actual_declaration;
+            if (!bound) {
+                bound = actual_declaration(binding.formal);
+            }
+            if (!bound && binding.expression) {
+                const CompiledDeclarationPredicate package_declaration
+                    = [](const CompiledDeclarationView& candidate) {
+                          return candidate.vhdl != nullptr
+                              && candidate.vhdl->form
+                                  == vhdl::DeclarationForm::package_instance;
+                      };
+                bound = resolve_expression_name(
+                    *binding.expression, package_declaration, true)
+                            .unique();
+            }
+            if (bound) {
+                found = actual_declaration(*bound).value_or(*bound);
+            }
+        };
+        for (const auto& frame : binding_frames_) {
+            for (const auto& binding : frame) {
+                consider(binding);
+            }
+        }
+        if (!found && effective_ != nullptr) {
+            for (const auto& actual :
+                effective_->specialization().actual_identities) {
+                CompiledActualBinding binding;
+                binding.formal = actual.declaration;
+                binding.expression = actual.actual_expression;
+                binding.actual_declaration = actual.actual_declaration;
+                consider(binding);
+            }
+        }
+        return found;
+    };
+
     struct ContextAncestor {
         UnitId unit;
         const ContextAncestor* parent;
@@ -3899,6 +3949,13 @@ CompiledDesignResolver::resolve_vhdl_package_members(
                         && !same_vhdl_identifier(
                             selected_parts.back(), parts.back())) {
                         continue;
+                    }
+                    if (selected_parts.size() == 2U) {
+                        if (const auto instance = bound_package_instance(
+                                selected_parts.front())) {
+                            append_instance(*instance, parts.back());
+                            continue;
+                        }
                     }
                     const auto library = selected_parts.size() == 3U
                         ? effective_vhdl_library(selected_parts.front(),

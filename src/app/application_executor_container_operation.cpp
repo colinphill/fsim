@@ -1009,7 +1009,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             invalidate_signal_read_cache(state);
             state.context->write_container_object(
                 write_object->object,
-                read_container(write_object->source));
+                read_container(write_object->source),
+                write_object->nonblocking);
             if (write_object->transaction_signal) {
                 state.context->write_update_word(
                     *write_object->transaction_signal,

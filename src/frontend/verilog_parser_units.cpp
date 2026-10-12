@@ -264,6 +264,8 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
     } else if (is_declaration_start()) {
         module_has_non_time_item_ = true;
         parse_declaration(unit);
+    } else if (match(TokenKind::Semicolon)) {
+        // An empty package item (IEEE 1800-2017 A.1.11).
     } else {
         module_has_non_time_item_ = true;
         const auto unsupported = advance();

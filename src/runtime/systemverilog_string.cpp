@@ -37,11 +37,13 @@ void systemverilog_string_replace(
     const std::size_t index,
     const std::uint32_t byte,
     const std::size_t maximum_bytes) {
-  if (index >= value.size()) {
-    throw std::out_of_range{"string index is outside the byte range"};
-  }
   if (value.size() > maximum_bytes) {
     throw std::length_error{"string value exceeds the byte limit"};
+  }
+  // A write outside the string or of a zero byte leaves the string
+  // unchanged (IEEE 1800-2017 6.16, as for putc).
+  if (index >= value.size() || (byte & 0xffU) == 0U) {
+    return;
   }
   value[index] = static_cast<char>(byte & 0xffU);
 }

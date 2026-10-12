@@ -167,6 +167,17 @@ SystemVerilogScalarTextResult format_systemverilog_scalar(
     result = format_integer(value.bits);
   } else if (const auto integral = value.as_integral()) {
     result = format_integer(*integral);
+  } else if (options.format == SystemVerilogScalarTextFormat::Time) {
+    // %t of a real time value (`$realtime`) is written in whole time
+    // units, as for an integral time (IEEE 1800-2017 21.2.1.3).
+    const double real = value.as_shortreal()
+        ? static_cast<double>(*value.as_shortreal())
+        : *value.as_real();
+    if (!std::isfinite(real)
+        || std::fabs(real) >= 9.2e18) {
+      return {{}, SystemVerilogScalarError::InvalidKind};
+    }
+    result = format_integer(static_cast<std::int64_t>(std::llround(real)));
   } else if (decimal) {
     return {{}, SystemVerilogScalarError::InvalidKind};
   } else if (const auto short_value = value.as_shortreal()) {

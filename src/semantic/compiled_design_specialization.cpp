@@ -27,6 +27,7 @@
 #include <string_view>
 #include <tuple>
 #include <unordered_map>
+#include <unordered_set>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -5479,6 +5480,266 @@ public:
 
 private:
 
+    /// The members of a packed structure or union type, or null.
+    [[nodiscard]] const std::vector<sv::PackedMember>*
+    systemverilog_packed_members(sv::TypeReference type) const
+    {
+        if (const auto effective = CompiledDesignResolver { unit_ }
+                .effective_systemverilog_type(type, unit_.scope())) {
+            type = *effective;
+        }
+        const auto definition = type.target.target.valid()
+            ? unit_.find_type(type.target.target)
+            : std::nullopt;
+        if (!definition || definition->systemverilog == nullptr
+            || (definition->systemverilog->form
+                    != sv::TypeForm::packed_structure
+                && definition->systemverilog->form
+                    != sv::TypeForm::packed_union)) {
+            return nullptr;
+        }
+        return &definition->systemverilog->members;
+    }
+
+    /// The bit width of a packed type, when evident.
+    [[nodiscard]] std::optional<std::size_t> systemverilog_type_bit_width(
+        const sv::TypeReference& type)
+    {
+        if (type.executable_width) {
+            return *type.executable_width
+                    > maximum_systemverilog_constant_work_units
+                ? std::nullopt
+                : std::optional<std::size_t> {
+                      static_cast<std::size_t>(*type.executable_width) };
+        }
+        if (type.packed_range) {
+            const auto boundary
+                = [&](const std::optional<std::int64_t> folded,
+                      const std::optional<ExpressionId> residual) {
+                      return folded ? folded
+                          : residual ? evaluate(*residual) : std::nullopt;
+                  };
+            const auto left = boundary(type.packed_range->left,
+                type.packed_range->left_expression);
+            const auto right = boundary(type.packed_range->right,
+                type.packed_range->right_expression);
+            if (!left || !right) {
+                return std::nullopt;
+            }
+            const auto distance = *left >= *right
+                ? static_cast<std::uint64_t>(*left)
+                    - static_cast<std::uint64_t>(*right)
+                : static_cast<std::uint64_t>(*right)
+                    - static_cast<std::uint64_t>(*left);
+            return distance >= maximum_systemverilog_constant_work_units
+                ? std::nullopt
+                : std::optional<std::size_t> {
+                      static_cast<std::size_t>(distance + 1U) };
+        }
+        const auto& spelling = type.target.spelling;
+        if (spelling == "int" || spelling == "integer") {
+            return 32U;
+        }
+        if (spelling == "byte") {
+            return 8U;
+        }
+        if (spelling == "shortint") {
+            return 16U;
+        }
+        if (spelling == "longint" || spelling == "time") {
+            return 64U;
+        }
+        if (spelling == "bit" || spelling == "logic" || spelling == "reg") {
+            return 1U;
+        }
+        if (const auto* members = systemverilog_packed_members(type)) {
+            std::size_t width { };
+            for (const auto& member : *members) {
+                const auto member_width
+                    = systemverilog_type_bit_width(member.type);
+                if (!member_width) {
+                    return std::nullopt;
+                }
+                width = std::max(width,
+                    static_cast<std::size_t>(member.lsb_offset)
+                        + *member_width);
+            }
+            return width == 0U ? std::nullopt
+                               : std::optional<std::size_t> { width };
+        }
+        return std::nullopt;
+    }
+
+    /// The bits, most significant first, of a value of a packed type: an
+    /// assignment pattern keyed by member names and `default:` places each
+    /// value in its member (IEEE 1800-2017 10.9.2).
+    [[nodiscard]] std::optional<std::string> systemverilog_typed_bits(
+        const ExpressionId value, const sv::TypeReference& type)
+    {
+        const auto width = systemverilog_type_bit_width(type);
+        if (!width) {
+            return std::nullopt;
+        }
+        const auto view = unit_.find_expression(value);
+        const auto* const members = systemverilog_packed_members(type);
+        if (view && view->systemverilog != nullptr && members != nullptr
+            && view->systemverilog->kind == sv::ExpressionKind::assignment_pattern
+            && !std::ranges::all_of(view->systemverilog->associations,
+                [](const auto& association) {
+                    return association.choice_spelling.empty();
+                })) {
+            std::string bits(*width, 'x');
+            std::unordered_set<std::string> assigned;
+            std::optional<ExpressionId> default_value;
+            const auto place = [&](const sv::PackedMember& member,
+                                   const ExpressionId member_value) {
+                const auto member_width
+                    = systemverilog_type_bit_width(member.type);
+                auto member_bits = member_width
+                    ? systemverilog_typed_bits(member_value, member.type)
+                    : std::nullopt;
+                if (!member_bits
+                    || member.lsb_offset + *member_width > *width) {
+                    return false;
+                }
+                member_bits = resize_systemverilog_bits(
+                    std::move(*member_bits), *member_width, false);
+                for (std::size_t bit { }; bit < *member_width; ++bit) {
+                    bits[*width - 1U - (member.lsb_offset + bit)]
+                        = (*member_bits)[*member_width - 1U - bit];
+                }
+                return true;
+            };
+            for (const auto& association : view->systemverilog->associations) {
+                if (association.choice_spelling == "default") {
+                    default_value = association.value;
+                    continue;
+                }
+                std::string_view member_name = association.choice_spelling;
+                if (member_name == "@key" && association.choices.size() == 1U) {
+                    const auto choice
+                        = unit_.find_expression(association.choices.front());
+                    if (choice && choice->systemverilog != nullptr
+                        && choice->systemverilog->kind
+                            == sv::ExpressionKind::name) {
+                        member_name = choice->systemverilog->text;
+                    }
+                }
+                const auto member = std::ranges::find(*members,
+                    member_name, &sv::PackedMember::name);
+                if (member == members->end()
+                    || !place(*member, association.value)) {
+                    return std::nullopt;
+                }
+                assigned.insert(member->name);
+            }
+            if (default_value) {
+                for (const auto& member : *members) {
+                    if (!assigned.contains(member.name)
+                        && !place(member, *default_value)) {
+                        return std::nullopt;
+                    }
+                }
+            }
+            return bits;
+        }
+        if (auto bits = canonical_systemverilog_bits(value)) {
+            return resize_systemverilog_bits(std::move(*bits), *width, false);
+        }
+        if (const auto integral = evaluate(value)) {
+            return systemverilog_integer_bits(*integral, *width);
+        }
+        return std::nullopt;
+    }
+
+    /// The bits of a structure-typed parameter's value: its actual's
+    /// canonical value or its initializer.
+    [[nodiscard]] std::optional<std::string> systemverilog_declaration_bits(
+        const DeclarationId declaration)
+    {
+        const auto selected = unit_.find_declaration(declaration);
+        if (!selected || selected->systemverilog == nullptr
+            || !selected->systemverilog->type) {
+            return std::nullopt;
+        }
+        const auto& actuals = unit_.specialization().actual_identities;
+        const auto actual = std::ranges::find(actuals, declaration,
+            &SpecializedHirActualIdentity::declaration);
+        if (actual != actuals.end()) {
+            const std::string_view identity = actual->identity;
+            const auto marker = identity.rfind(":v=");
+            if (!identity.starts_with("svconst-v3:")
+                || marker == std::string_view::npos) {
+                return std::nullopt;
+            }
+            return std::string { identity.substr(marker + 3U) };
+        }
+        if (!selected->systemverilog->initializer) {
+            return std::nullopt;
+        }
+        return systemverilog_typed_bits(*selected->systemverilog->initializer,
+            *selected->systemverilog->type);
+    }
+
+    /// The value of `P.m` (`P.m.n`) for a structure-typed parameter `P`.
+    [[nodiscard]] std::optional<std::int64_t> systemverilog_member_value(
+        const DeclarationId declaration, std::string_view path)
+    {
+        const auto selected = unit_.find_declaration(declaration);
+        if (!selected || selected->systemverilog == nullptr
+            || !selected->systemverilog->type) {
+            return std::nullopt;
+        }
+        const auto bits = systemverilog_declaration_bits(declaration);
+        if (!bits) {
+            return std::nullopt;
+        }
+        auto type = *selected->systemverilog->type;
+        std::uint64_t offset { };
+        while (!path.empty()) {
+            const auto separator = path.find('.');
+            const auto segment = path.substr(0U, separator);
+            const auto* const members = systemverilog_packed_members(type);
+            if (members == nullptr) {
+                return std::nullopt;
+            }
+            const auto member = std::ranges::find(
+                *members, segment, &sv::PackedMember::name);
+            if (member == members->end()) {
+                return std::nullopt;
+            }
+            offset += member->lsb_offset;
+            type = member->type;
+            path = separator == std::string_view::npos
+                ? std::string_view { }
+                : path.substr(separator + 1U);
+        }
+        const auto width = systemverilog_type_bit_width(type);
+        if (!width || *width > 63U || offset + *width > bits->size()) {
+            return std::nullopt;
+        }
+        std::uint64_t value { };
+        for (std::size_t bit = *width; bit > 0U; --bit) {
+            const auto character
+                = (*bits)[bits->size() - 1U - (offset + bit - 1U)];
+            if (character != '0' && character != '1') {
+                return std::nullopt;
+            }
+            value = (value << 1U) | static_cast<std::uint64_t>(character == '1');
+        }
+        const bool signed_member = type.signed_value
+            || type.target.spelling == "int"
+            || type.target.spelling == "integer"
+            || type.target.spelling == "byte"
+            || type.target.spelling == "shortint"
+            || type.target.spelling == "longint";
+        if (signed_member && *width < 64U
+            && (value >> (*width - 1U)) != 0U) {
+            value |= ~std::uint64_t { 0 } << *width;
+        }
+        return static_cast<std::int64_t>(value);
+    }
+
     [[nodiscard]] std::optional<std::size_t>
     systemverilog_declaration_bit_width(
         const DeclarationId declaration)
@@ -5854,7 +6115,12 @@ private:
                                initializer_view->systemverilog->text)
                                .find("'s")
                             != std::string::npos);
-                const auto bits = canonical_systemverilog_bits(initializer);
+                auto bits = selected->systemverilog->type
+                        && systemverilog_packed_members(
+                            *selected->systemverilog->type)
+                    ? systemverilog_typed_bits(initializer,
+                          *selected->systemverilog->type)
+                    : canonical_systemverilog_bits(initializer);
                 return bits ? std::optional<std::string> {
                                   finish_bits(std::move(*bits)) }
                             : std::nullopt;
@@ -7664,6 +7930,20 @@ private:
             }
             if (expression.referenced_name) {
                 if (expression.referenced_name->selected) {
+                    // A member of a structure parameter (`P.m`, 7.2.1).
+                    const auto selected_view = unit_.find_declaration(
+                        *expression.referenced_name->selected);
+                    const auto dot = expression.text.find('.');
+                    if (dot != std::string::npos && selected_view
+                        && selected_view->systemverilog != nullptr
+                        && selected_view->systemverilog->name
+                            == std::string_view { expression.text }.substr(
+                                0U, dot)) {
+                        return systemverilog_member_value(
+                            *expression.referenced_name->selected,
+                            std::string_view { expression.text }.substr(
+                                dot + 1U));
+                    }
                     if (const auto value = evaluate_declaration(
                             *expression.referenced_name->selected)) {
                         return value;
@@ -7685,6 +7965,32 @@ private:
                     return overload_value;
                 }
             }
+            if constexpr (systemverilog) {
+                // A member of a structure parameter (`P.m`, 7.2.1) the
+                // reference left unresolved.
+                if (const auto dot = expression.text.find('.');
+                    dot != std::string::npos) {
+                    const auto prefix = expression.text.substr(0U, dot);
+                    auto declaration = find_actual_declaration(
+                        prefix, expression.scope, systemverilog);
+                    if (!declaration) {
+                        declaration = find_systemverilog_package_declaration(
+                            prefix, expression.scope);
+                    }
+                    if (declaration) {
+                        const auto selected
+                            = unit_.find_declaration(*declaration);
+                        if (selected && selected->systemverilog != nullptr
+                            && selected->systemverilog->type
+                            && systemverilog_packed_members(
+                                *selected->systemverilog->type)) {
+                            return systemverilog_member_value(*declaration,
+                                std::string_view { expression.text }.substr(
+                                    dot + 1U));
+                        }
+                    }
+                }
+            }
             if (const auto declaration = find_actual_declaration(
                     expression.text, expression.scope, systemverilog)) {
                 // A member of a structure parameter (`P.m`) is not the
@@ -7696,6 +8002,11 @@ private:
                     && selected->systemverilog->name
                         == std::string_view { expression.text }.substr(
                             0U, dot)) {
+                    if constexpr (systemverilog) {
+                        return systemverilog_member_value(*declaration,
+                            std::string_view { expression.text }.substr(
+                                dot + 1U));
+                    }
                     return std::nullopt;
                 }
                 return evaluate_declaration(*declaration);

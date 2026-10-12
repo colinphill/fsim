@@ -1624,6 +1624,15 @@ private:
         systemverilog_interface_parameter_identities_;
     std::unordered_map<std::string, std::string>
         systemverilog_interface_types_;
+    // The last name component of every SystemVerilog disable target, and
+    // the labels of named blocks and tasks it may name.
+    struct SystemVerilogDisableLabels {
+        std::unordered_set<std::string> targets;
+        std::unordered_set<std::string> declared;
+    };
+    std::optional<SystemVerilogDisableLabels> systemverilog_disable_labels_;
+    [[nodiscard]] const SystemVerilogDisableLabels&
+    systemverilog_disable_labels();
     std::uint64_t next_systemverilog_interface_handle_ { 1 };
     std::unordered_set<std::string>
         systemverilog_interface_port_paths_;

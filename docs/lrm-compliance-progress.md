@@ -253,6 +253,137 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 44: run-time delays, whole arrays, disable, keyed parameters
+
+Fixture: `sv_language_details_batch44.sv` (passes on xsim).
+
+- SystemVerilog and Verilog:
+  - a continuous assignment or gate with run-time rise, fall and turn-off
+    delays (`assign #(d1, d2) y = a;`, `buf #(rise, fall)`) selects the
+    delay by the new value (10.3.3, 28.16);
+  - a continuous or nonblocking assignment of a whole unpacked array
+    (`assign x = y;`, `a <= A[i];`), with any index ranges of equal size;
+    `always_comb` and continuous assignments reading a whole array wake
+    when an element changes (10.3, 10.4.2);
+  - an unpacked subarray read through an unknown or out-of-range index
+    gives the default value (7.4.6);
+  - `disable` of a named block, named fork or task that another process
+    (or a sibling fork branch) executes, by a simple or hierarchical name
+    (9.6.2);
+  - container declaration initializers: an unpacked concatenation for a
+    fixed-size array (`int a[3] = {1, 2, 3}`), `new[n]` and `new[n](init)`,
+    and a string literal for an unpacked array of bytes (10.10, 7.5.1,
+    5.9);
+  - a structure parameter given as a keyed assignment pattern
+    (`'{a: 8, default: 0}`) in constant contexts: localparams, widths,
+    typedefs and interface parameters that use its members (10.9.2).
+
+Investigated and left open:
+- A disabled process that waits on a delay resumes at the block's end when
+  the delay expires, not at once (process wakes cannot be cancelled).
+- Hierarchical references to another instance's parameters
+  (`m.lpbit`, `io.types.ABits`).
+- Time-zero order of initial blocks and continuous assignments.
+
+The full run b45 used wip36 (the commit's code). Its one loss,
+`sv_array_cassign_fail3` (a whole-array continuous assignment between
+different unpacked shapes was accepted), is fixed in batch 45.
+
+Corpus (passed/total, unique case ids; against b44):
+
+| Suite | Batch 43 | Batch 44 |
+|---|---:|---:|
+| VESTs | 3337/3648 | 3337/3648 |
+| nvc regress | 633/1482 | 633/1482 |
+| VHDL Compliance-Tests | 33/72 | 33/72 |
+| ivtest | 2179/2826 | 2198/2826 |
+| Verilator test_regress | 1035/2415 | 1075/2415 |
+| sv-tests | 1383/1497 | 1385/1497 |
+
+### Batch 43: pull primitives, constraint inheritance, file reads, empty items
+
+Fixture: `sv_language_details_batch43.sv` (passes on xsim).
+
+- SystemVerilog and Verilog:
+  - `pullup (net);` is an unnamed instance whose terminal is `net`; only a
+    strength keyword in the parentheses makes them a strength (28.10);
+  - a derived class's inherited constraints validate when the base class
+    lies outside the catalog projection being checked;
+  - reading a file opened for writing returns EOF and records the error for
+    `$ferror` instead of stopping the simulation; `$ungetc` pushes back a
+    character whatever the file's mode (21.3);
+  - a lone `;` is an empty compilation-unit or package item (A.1.11);
+  - an escaped identifier ends only at white space and may contain
+    backslashes; one whose characters form a simple identifier names that
+    identifier (`\abc` is `abc`, 5.6.1);
+  - nonblocking assignments in `always_comb` and `always_latch` are legal
+    and execute (`FSIM-SV-SEM-013` is retired);
+  - `return;` ends a void function; `$clog2` of a constant lowers to its
+    value; `$typename` of a built-in type keyword is that keyword, and such
+    keywords are not undeclared identifiers;
+  - `$shortrealtobits` converts a real argument to shortreal;
+  - `%t` of a time variable follows `$timeformat`'s width; `%t` of a real
+    time value is written in whole time units;
+  - `%s` of `c ? "yes" : "NO"` is the packed value as wide as the wider
+    literal;
+  - writing a zero byte or an out-of-range index to a string element
+    leaves the string unchanged (6.16);
+  - a port typed by a type parameter takes its signedness;
+  - a structure-typed parameter given as an assignment pattern, a name of
+    another such parameter, or an override reads correctly in procedural
+    code, including member selects (`P.m`);
+  - a module-level `specparam`; a real `specparam` value;
+  - a one-bit type (`bit`, `logic`, `reg`) as a streaming slice size;
+  - the JIT accepts a string element write of any source width;
+  - a local declared `static` in an automatic function or class method
+    keeps its value across calls, and such a function is not folded as a
+    constant; the class-method executor evaluates `++`/`--` of a local;
+  - a concrete class that inherits a pure constraint it does not override
+    is reported (18.5.2), a check the projection validation used to make by
+    accident.
+- VHDL: `use p.all` where `p` is a package generic makes the members of
+  the package instance bound to it visible.
+- Runner: sv-tests assertions may use `in` and `not in`, as Python's
+  `eval` does.
+
+Out of scope: ivtest `bool1` and `compare_bool_reg` (`reg bool`),
+`binary_nand` and `binary_nor` (binary `~&` and `~|`), and
+`pr1787423`, `pr1787423b`, `pr2834340`, `pr2834340b` (a pull primitive
+with several terminals; 28.10 allows one). All are Icarus extensions.
+
+Investigated and left open:
+- UVM `run_test` does not complete in the class-HIR host interpreter for
+  either UVM release (2020.3.1 stops at the package function `uvm_init`,
+  1.2 at a `void'(...)` statement); about 34 sv-tests UVM cases depend on
+  it, through `uvm_resource_db#(virtual X)`.
+- Time-zero order: ivtest and Verilator cases that read continuous
+  assignments from an initial block at time 0 expect the assignments to
+  settle first, as xsim and Icarus do. Deferring initial blocks a delta
+  also defers the variable initializers bundled with them, so it was not
+  adopted.
+- Structure-typed parameters in constant contexts (`localparam int A =
+  cfg.A`, widths derived from them) need keyed assignment patterns in both
+  constant evaluators; the Verilator `t_lparam_dep_iface*` cases depend on
+  it.
+
+The full run b44 used wip35. The pure-constraint check, static locals and
+the class-method `++`/`--` came after it and were checked with targeted
+reruns (sv-tests 18.5.x, Verilator `t_var_static` and `t_class_static`)
+and the labelled ctest suites.
+
+Corpus (passed/total, unique case ids; against b43/b43v):
+
+| Suite | Batch 42 | Batch 43 |
+|---|---:|---:|
+| VESTs | 3337/3648 | 3337/3648 |
+| nvc regress | 630/1482 | 633/1482 |
+| VHDL Compliance-Tests | 33/72 | 33/72 |
+| ivtest | 2157/2826 | 2179/2826 |
+| Verilator test_regress | 1023/2415 | 1037/2415 (1035 in b44) |
+| sv-tests | 1358/1497 | 1384/1497 (1383 in b44) |
+
+No case that passed before fails.
+
 ### Batch 42: compilation-unit checks, tagged unions, VHDL predefined operations, timeout ordering
 
 Fixtures: `vhdl_predefined_min_max_to_string.vhd` and

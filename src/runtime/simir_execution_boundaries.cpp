@@ -859,6 +859,10 @@ void Interpreter::Impl::handle_boundary(
     if (const auto* point = fsim::runtime::simir::operation_get_if<DebugPoint>(&operation)) {
         const auto& actual_point = process.program().operations().debug_point(
             instruction, *point);
+        if (actual_point.kind == DebugPointKind::block_entry
+            || actual_point.kind == DebugPointKind::block_exit) {
+            return;
+        }
         clear_wait_timeout(process);
         auto& cold = process.cold();
         process.clear_frontier_debug_token();
@@ -881,6 +885,9 @@ void Interpreter::Impl::handle_boundary(
             break;
         case DebugPointKind::process_entry:
             kind = ExecutionPointKind::process_entry;
+            break;
+        case DebugPointKind::block_entry:
+        case DebugPointKind::block_exit:
             break;
         }
         notify_execution_point(

@@ -90,6 +90,12 @@ public:
         const std::unordered_map<std::string, std::uint64_t>* handles,
         const std::unordered_map<std::string, std::string>* types = nullptr)
         noexcept;
+    // Design-wide disable target labels (named blocks and tasks that a
+    // disable statement may name from another process) and the labels a
+    // disable may legally name.
+    void set_disable_labels(
+        const std::unordered_set<std::string>* targets,
+        const std::unordered_set<std::string>* declared) noexcept;
     // The interface type bound to a generic `interface` port of this
     // instance, or empty.
     [[nodiscard]] std::string hir_generic_interface_type(
@@ -1041,6 +1047,14 @@ private:
     lower_hir_systemverilog_coverage_call(
         semantic::ExpressionId expression,
         std::size_t expected_width);
+    [[nodiscard]] bool hir_systemverilog_type_signed(
+        const semantic::sv::TypeReference& type) const;
+    [[nodiscard]] std::optional<std::pair<std::size_t, std::size_t>>
+    hir_systemverilog_parameter_member_slice(
+        semantic::ExpressionId parameter, std::string_view path) const;
+    [[nodiscard]] std::optional<RegisterId>
+    lower_hir_systemverilog_parameter_pattern(
+        semantic::ExpressionId parameter, semantic::ExpressionId value);
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_systemverilog_packed_pattern(
         semantic::ExpressionId expression,
@@ -1521,7 +1535,9 @@ private:
     hir_static_container_selection(semantic::ExpressionId expression);
     [[nodiscard]] std::optional<runtime::simir::RegisterId>
     lower_hir_static_container_selection_offset(
-        const HirStaticContainerSelection& selection);
+        const HirStaticContainerSelection& selection,
+        std::vector<runtime::simir::InstructionIndex>* skip_branches
+        = nullptr);
     [[nodiscard]] std::optional<HirStaticContainerValue>
     lower_hir_static_container_value(semantic::ExpressionId expression);
     enum class HirContainerExpressionPurpose : std::uint8_t {
@@ -2157,6 +2173,15 @@ private:
         std::vector<InstructionIndex> disable_operations;
     };
     std::vector<NamedBlockControl> named_block_controls_;
+    const std::unordered_set<std::string>* disable_target_labels_ { };
+    const std::unordered_set<std::string>* disable_declared_labels_ { };
+    // The hierarchical name of the current lexical scope: the instance path
+    // followed by the enclosing named blocks.
+    [[nodiscard]] std::vector<std::string> hir_named_scope_path() const;
+    // A task is named in its instance; a block within its enclosing scopes.
+    void emit_disable_scope_marker(
+        runtime::simir::DebugPointKind kind, std::string_view label,
+        const frontend::SourceSpan& span, bool task = false);
     struct NamedForkControl {
         std::string label;
         std::vector<std::string> scope;

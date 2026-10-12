@@ -333,8 +333,10 @@ class Lexer {
           std::isspace(static_cast<unsigned char>(peek()))) {
         break;
       }
-      if (peek() == '\\') {
-        if (is_vhdl() && peek(1) == '\\') {
+      // A Verilog escaped identifier ends only at white space, so it may
+      // contain further backslashes (IEEE 1800-2017 5.6.1).
+      if (is_vhdl() && peek() == '\\') {
+        if (peek(1) == '\\') {
           advance();
           advance();
           content = true;

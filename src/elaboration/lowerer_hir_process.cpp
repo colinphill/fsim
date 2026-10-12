@@ -361,6 +361,61 @@ std::string Lowerer::debug_scope_name() const
     return result;
 }
 
+std::vector<std::string> Lowerer::hir_named_scope_path() const
+{
+    std::vector<std::string> path;
+    std::size_t start = 0U;
+    while (start <= hierarchy_.size()) {
+        const auto dot = hierarchy_.find('.', start);
+        const auto stop = dot == std::string::npos ? hierarchy_.size() : dot;
+        if (stop > start) {
+            path.push_back(hierarchy_.substr(start, stop - start));
+        }
+        if (dot == std::string::npos) {
+            break;
+        }
+        start = dot + 1U;
+    }
+    for (const auto& scope : local_scope_) {
+        if (!scope.empty() && scope.front() != '$') {
+            path.push_back(scope);
+        }
+    }
+    return path;
+}
+
+void Lowerer::emit_disable_scope_marker(
+    const DebugPointKind kind,
+    const std::string_view label,
+    const frontend::SourceSpan& span,
+    const bool task)
+{
+    if (disable_target_labels_ == nullptr
+        || !disable_target_labels_->contains(std::string { label })) {
+        return;
+    }
+    std::string scope;
+    if (task) {
+        scope = hierarchy_ + "." + std::string { label };
+    } else {
+        for (const auto& segment : hir_named_scope_path()) {
+            if (!scope.empty()) {
+                scope += '.';
+            }
+            scope += segment;
+        }
+    }
+    process_.operations.emplace_back(DebugPoint {
+        kind,
+        SourceLocation {
+            span.source_name.str(),
+            static_cast<std::uint32_t>(span.begin.line),
+            static_cast<std::uint32_t>(span.begin.column),
+        },
+        scope,
+    });
+}
+
 void Lowerer::emit_debug_point(
     const DebugPointKind kind,
     const frontend::SourceSpan& span)

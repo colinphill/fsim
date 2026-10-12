@@ -248,6 +248,9 @@ struct WriteContainerObject {
     ContainerObjectId object { };
     ContainerRegisterId source { };
     std::optional<SignalId> transaction_signal;
+    /// Capture the value now and publish it in the current time slot's
+    /// nonblocking-update phase.
+    bool nonblocking { };
 };
 
 struct ContainerSize {
@@ -1181,6 +1184,11 @@ struct WriteDelayed {
     std::optional<std::uint32_t> offset;
     bool inertial { };
     SignalUpdateDomain domain { SignalUpdateDomain::generic };
+    // Inertial fall and turn-off delays of a continuous assignment whose
+    // rise and fall delays differ; `delay` is then the rise delay and the
+    // turn-off delay defaults to the smaller of the two (28.16).
+    std::optional<WaitFor> fall;
+    std::optional<WaitFor> turnoff;
 };
 
 /// Suspend and resume later in the current time slot. This is used when one
@@ -1285,6 +1293,11 @@ struct DisableFork {
 struct DisableBlock {
     InstructionIndex begin { };
     InstructionIndex end { };
+    /// Candidate hierarchical names of a block or task outside this
+    /// process's lexical scope, most local first; the first that names a
+    /// block_entry/block_exit interval in any process is disabled there
+    /// (IEEE 1800-2017 9.6.2). `begin` and `end` are unused then.
+    std::vector<std::string> scopes { };
 };
 /// Values returned by the SystemVerilog process status query.
 enum class ProcessStatus : std::uint8_t {
