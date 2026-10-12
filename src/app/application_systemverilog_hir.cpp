@@ -827,6 +827,11 @@ namespace systemverilog_hir_detail {
             output.array_right = expression(
                 *input.array_right, scope, instance_origin);
         }
+        for (const auto& [left, right] : input.outer_array_ranges) {
+            output.outer_array_ranges.emplace_back(
+                *expression(left, scope, instance_origin),
+                *expression(right, scope, instance_origin));
+        }
         for (const auto& input_parameter : input.parameter_overrides) {
             sv::ActualAssociation parameter;
             parameter.formal = input_parameter.name;
@@ -1281,6 +1286,12 @@ namespace systemverilog_hir_detail {
             frontend::revision_string(input.standard_revision)
         };
         output.compatibility_profile = input.verilog_compatibility_profile;
+        output.unconnected_drive
+            = input.unconnected_drive == frontend::VerilogUnconnectedDrive::Pull0
+            ? sv::UnconnectedDrive::pull_zero
+            : input.unconnected_drive == frontend::VerilogUnconnectedDrive::Pull1
+            ? sv::UnconnectedDrive::pull_one
+            : sv::UnconnectedDrive::none;
         output.source_dependencies = input.source_dependencies;
         if (input.systemverilog_scheduling_declaration) {
             const auto& scheduling = *input.systemverilog_scheduling_declaration;

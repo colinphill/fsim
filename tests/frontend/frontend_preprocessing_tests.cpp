@@ -243,7 +243,7 @@ endmodule
 `define EMPTY
 `include `EMPTY
 `resetall
-`pragma protect
+`pragma protect 7
 `ifdef LEFT_OPEN
 )");
     const auto directive_errors = preprocess_verilog_file(

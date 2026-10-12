@@ -152,6 +152,13 @@ ParseResult VhdlParser::run()
             skip_to_semicolon();
         }
     }
+    // Formal conversion functions of entity instances (IEEE 1076-2008
+    // 6.5.7.1), now that the entities of this file are known.
+    for (auto& unit : design.units) {
+        if (unit.kind == UnitKind::VhdlArchitecture) {
+            rewrite_vhdl_formal_conversions(unit, &design.units);
+        }
+    }
     if (!pending_context.empty()) {
         error(Token { TokenKind::EndOfFile, { }, pending_context.front().span, { } },
             "FSIM-VHDL-PARSE-264",

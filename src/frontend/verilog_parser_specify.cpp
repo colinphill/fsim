@@ -29,6 +29,9 @@ void identify_path_pulse(VerilogSpecparamDeclaration& declaration) {
 void VerilogParser::parse_specparam_declaration(
     VerilogSpecifyBlock& block,
     const Token& start) {
+  // A specparam may declare a packed range (IEEE 1800-2017 6.20.5).
+  Type range_type;
+  parse_optional_range(range_type);
   for (;;) {
     const auto name = expect_identifier("specparam name");
     VerilogSpecparamDeclaration declaration;
@@ -125,12 +128,23 @@ VerilogModulePathDeclaration VerilogParser::parse_specify_module_path(
   }
   const bool source_polarity =
       at(TokenKind::Plus) || at(TokenKind::Minus);
+  // `+=>` and `-=>` lex as a compound assignment operator and `>`
+  // (IEEE 1800-2017 30.4.3).
+  const bool polarity_arrow =
+      (at(TokenKind::PlusAssign) || at(TokenKind::MinusAssign))
+      && at(TokenKind::Greater, 1);
   if (match(TokenKind::Plus)) {
     path.polarity = VerilogPathPolarity::Positive;
   } else if (match(TokenKind::Minus)) {
     path.polarity = VerilogPathPolarity::Negative;
   }
-  if (match(TokenKind::Arrow)) {
+  if (polarity_arrow) {
+    path.polarity = match(TokenKind::PlusAssign)
+        ? VerilogPathPolarity::Positive
+        : (advance(), VerilogPathPolarity::Negative);
+    (void)advance();
+    path.kind = VerilogModulePathKind::Parallel;
+  } else if (match(TokenKind::Arrow)) {
     path.kind = VerilogModulePathKind::Parallel;
   } else {
     expect(

@@ -378,13 +378,13 @@ void test_random(
     assert(reference.values[15].aval == 2 && reference.values[15].bval == 0);
     assert(reference.values[16] == reference.values[17]);
     constexpr std::array<std::uint32_t, 15> distribution_values {
-        1U, 0x92c55619U,
-        79U, 0x57d07df5U,
-        10U, 0x664f4e32U,
-        7U, 0x7812cacaU,
-        1U, 0x6051c836U,
-        2U, 0x5bd4c380U,
-        34U, 0x0592ad77U,
+        2U, 0x92c55619U,
+        104U, 0xcbe35dcfU,
+        34U, 0x2ea4a1c4U,
+        8U, 0x2d1914edU,
+        5U, 0x22fd7c09U,
+        0U, 0x07cdaa7bU,
+        33U, 0xfb315d4eU,
         0U
     };
     for (std::size_t index = 0; index < distribution_values.size(); ++index) {
@@ -399,12 +399,12 @@ void test_random(
     assert(reference.values[37].aval == 1 && reference.values[37].bval == 0);
     assert(reference.values[38].aval == 1 && reference.values[38].bval == 0);
     assert(reference.values[39].aval == 0 && reference.values[39].bval == 0);
-    assert(reference.values[40].aval == 0x0592ad77U);
+    assert(reference.values[40].aval == 0xfb315d4eU);
     assert(reference.values[41].aval == 0U);
     assert(reference.values[42].aval == 0U);
     assert(reference.values[43].aval == 0U);
     assert(reference.values[44].aval == 0U);
-    assert(reference.values[45].aval == 0x0592ad77U);
+    assert(reference.values[45].aval == 0xfb315d4eU);
     assert(reference.values[46].aval == 5U);
     assert(reference.values[47].aval == 0x10203040U);
     assert(reference.values[48].aval == 10U);

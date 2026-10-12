@@ -3346,6 +3346,26 @@ void Interpreter::Impl::execute_container(
         ++process.pc;
         return;
     }
+    // Reading an invalid index yields the empty string (IEEE 1800-2017
+    // 7.4.6): an unknown or negative index of a queue or dynamic array too.
+    if (!source.type.fixed) {
+        const auto& raw = get_register(process, operation.index);
+        std::optional<std::int64_t> requested;
+        if (operation.signed_index) {
+            requested = raw.known_signed_value();
+        } else if (const auto value = raw.known_unsigned_value();
+                   value
+                   && *value <= static_cast<std::uint64_t>(
+                          std::numeric_limits<std::int64_t>::max())) {
+            requested = static_cast<std::int64_t>(*value);
+        }
+        if (!requested || *requested < 0) {
+            get_string_register(process, operation.destination)
+                = std::string { };
+            ++process.pc;
+            return;
+        }
+    }
     const auto at = source.type.fixed
         ? operation.linear_index
             ? known_index(
@@ -3359,8 +3379,6 @@ void Interpreter::Impl::execute_container(
               process.id, process.pc,
               get_register(process, operation.index),
               operation.signed_index, "container index");
-    // Reading an invalid index yields the empty string (IEEE 1800-2017
-    // 7.4.6).
     get_string_register(process, operation.destination)
         = at < source.string_elements.size()
         ? source.string_elements[at]

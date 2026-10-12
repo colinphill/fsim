@@ -850,11 +850,35 @@ Expression VerilogParser::parse_primary()
                     cover(name.span, constructor.span)
                 };
                 if (match(TokenKind::LeftParen)) {
+                    bool named { };
                     while (!at_end() && !at(TokenKind::RightParen)) {
-                        typed.operands.push_back(parse_expression());
+                        // `.name(value)` binds a named argument (13.5.4).
+                        if (match(TokenKind::Dot)) {
+                            const auto formal = expect_identifier(
+                                "named constructor argument");
+                            expect(TokenKind::LeftParen,
+                                "'(' after named constructor argument",
+                                "FSIM-SV-PARSE-199");
+                            typed.call_argument_names.resize(
+                                typed.operands.size());
+                            typed.call_argument_names.push_back(formal.text);
+                            typed.operands.push_back(
+                                at(TokenKind::RightParen) ? Expression { }
+                                                          : parse_expression());
+                            expect(TokenKind::RightParen,
+                                "')' after named constructor argument",
+                                "FSIM-SV-PARSE-391");
+                            named = true;
+                        } else {
+                            typed.operands.push_back(parse_expression());
+                        }
                         if (!match(TokenKind::Comma)) {
                             break;
                         }
+                    }
+                    if (named) {
+                        typed.call_argument_names.resize(
+                            typed.operands.size());
                     }
                     expect(TokenKind::RightParen,
                         "')' after typed constructor arguments",

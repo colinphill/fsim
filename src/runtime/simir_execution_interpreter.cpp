@@ -493,6 +493,20 @@ void Interpreter::Impl::execute(ProcessId id)
                 fail(process, error.what());
             }
         };
+        // A SystemVerilog write through an unknown or out-of-range index
+        // does nothing (IEEE 1800-2017 11.5.1); a VHDL index is checked.
+        const auto written_offset = [&](const DynamicIndex& selection)
+            -> std::optional<std::uint32_t> {
+            try {
+                return dynamic_index_offset(
+                    get_register(process, selection.index), selection);
+            } catch (const std::invalid_argument& error) {
+                if (selection.strict) {
+                    fail(process, error.what());
+                }
+                return std::nullopt;
+            }
+        };
         const auto known_string_index =
             [&](const RegisterId index_register,
                 const bool signed_index,
@@ -1509,23 +1523,27 @@ void Interpreter::Impl::execute(ProcessId id)
                         op.mode);
                 } else if constexpr (std::is_same_v<OperationType, WriteBlockingDynamicSlice>) {
                     auto value = get_register(process, op.source);
-                    const auto offset = selected_offset(op.selection);
+                    const auto offset = written_offset(op.selection);
                     ++process.pc;
-                    commit_driver_slice(
-                        process.id,
-                        op.signal,
-                        std::move(value),
-                        offset);
+                    if (offset) {
+                        commit_driver_slice(
+                            process.id,
+                            op.signal,
+                            std::move(value),
+                            *offset);
+                    }
                 } else if constexpr (std::is_same_v<OperationType, WriteUpdateDynamicSlice>) {
                     auto value = get_register(process, op.source);
-                    const auto offset = selected_offset(op.selection);
+                    const auto offset = written_offset(op.selection);
                     ++process.pc;
-                    stage_update_slice(
-                        process.id,
-                        op.signal,
-                        std::move(value),
-                        offset,
-                        op.domain);
+                    if (offset) {
+                        stage_update_slice(
+                            process.id,
+                            op.signal,
+                            std::move(value),
+                            *offset,
+                            op.domain);
+                    }
                 } else if constexpr (std::is_same_v<OperationType, WriteAfterDynamicSlice>) {
                     auto value = get_register(process, op.source);
                     const auto offset = selected_offset(op.selection);

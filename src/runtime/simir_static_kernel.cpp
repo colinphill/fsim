@@ -2376,6 +2376,20 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_generic(
                 fail(member_index, pc, error.what());
             }
         };
+        // A SystemVerilog write through an unknown or out-of-range index
+        // does nothing (IEEE 1800-2017 11.5.1); a VHDL index is checked.
+        const auto written_offset = [&](const DynamicIndex& selection)
+            -> std::optional<std::uint32_t> {
+            try {
+                return dynamic_index_offset(
+                    reg(selection.index, pc), selection);
+            } catch (const std::invalid_argument& error) {
+                if (selection.strict) {
+                    fail(member_index, pc, error.what());
+                }
+                return std::nullopt;
+            }
+        };
         const auto container_at = [&](const ContainerRegisterId id)
             -> const Container& {
             if (id >= member.container_registers.size()
@@ -2566,10 +2580,11 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_generic(
                 signal_write(op.signal, reg(op.source, pc), op.offset, true,
                     SignalUpdateDomain::systemverilog_active);
             } else if constexpr (std::is_same_v<T, WriteBlockingDynamicSlice>) {
-                auto value = reg(op.source, pc);
-                signal_write(op.signal, std::move(value),
-                    dynamic_offset(op.selection), true,
-                    SignalUpdateDomain::systemverilog_active);
+                if (const auto offset = written_offset(op.selection)) {
+                    auto value = reg(op.source, pc);
+                    signal_write(op.signal, std::move(value), *offset, true,
+                        SignalUpdateDomain::systemverilog_active);
+                }
             } else if constexpr (std::is_same_v<T, WriteBlockingDynamicPartSlice>) {
                 std::optional<DynamicPartWrite> write;
                 try {
@@ -2590,9 +2605,11 @@ std::uint32_t Interpreter::Impl::StaticKernel::step_generic(
                 signal_write(op.signal, reg(op.source, pc), op.offset, false,
                     op.domain);
             } else if constexpr (std::is_same_v<T, WriteUpdateDynamicSlice>) {
-                auto value = reg(op.source, pc);
-                signal_write(op.signal, std::move(value),
-                    dynamic_offset(op.selection), false, op.domain);
+                if (const auto offset = written_offset(op.selection)) {
+                    auto value = reg(op.source, pc);
+                    signal_write(op.signal, std::move(value), *offset, false,
+                        op.domain);
+                }
             } else if constexpr (std::is_same_v<T, WriteUpdateDynamicPartSlice>) {
                 std::optional<DynamicPartWrite> write;
                 try {

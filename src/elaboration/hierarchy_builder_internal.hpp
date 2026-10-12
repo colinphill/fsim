@@ -439,6 +439,9 @@ private:
         bool bound { };
         bool systemverilog_2023_bound { };
         std::optional<std::int64_t> array_index;
+        // The indices of a multidimensional instance array's leading
+        // dimensions, outermost first.
+        std::vector<std::int64_t> outer_array_indices { };
     };
 
     struct CompiledSystemVerilogInstanceWorklistResult {
@@ -1448,6 +1451,11 @@ private:
     std::vector<std::int64_t> compiled_instance_array_indices(
         const semantic::sv::Instance& instance,
         const semantic::SpecializedHirUnit& specialization);
+    // Every combination of a multidimensional instance array's leading
+    // indices, outermost first; one empty combination otherwise.
+    std::vector<std::vector<std::int64_t>> compiled_instance_outer_indices(
+        const semantic::sv::Instance& instance,
+        const semantic::SpecializedHirUnit& specialization);
     std::optional<SystemVerilogAliasPlan>
     build_systemverilog_alias_plan(
         const semantic::SpecializedHirUnit& specialization,
@@ -1636,8 +1644,9 @@ private:
     std::uint64_t next_systemverilog_interface_handle_ { 1 };
     std::unordered_set<std::string>
         systemverilog_interface_port_paths_;
-    // The element indices, left to right, of an interface port array.
-    std::unordered_map<std::string, std::vector<std::int64_t>>
+    // The element index suffixes (`[i][j]`), left to right, of an
+    // interface port array.
+    std::unordered_map<std::string, std::vector<std::string>>
         systemverilog_interface_array_indices_;
     std::unordered_map<std::string, std::string>
         systemverilog_interface_modport_views_;

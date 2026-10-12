@@ -849,7 +849,8 @@ std::optional<Type> Resolver::resolve_expression(
     // enumeration, not the handle (IEEE 1800-2017 9.7).
     const auto process_status = [](const Expression& operand) {
       return (operand.kind == ExpressionKind::Identifier
-                 || operand.kind == ExpressionKind::Call)
+                 || operand.kind == ExpressionKind::Call
+                 || operand.kind == ExpressionKind::Index)
           && (operand.text.ends_with(".status")
               || operand.text.ends_with("::status"));
     };
@@ -932,6 +933,27 @@ std::optional<Type> Resolver::resolve_typed_expression(
 }
 void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
   const auto dot = statement.task_name.rfind('.');
+  // `obj.c.constraint_mode(0);` or `obj.v.rand_mode(0);` selects a
+  // constraint block or random property, not an object (18.8, 18.9).
+  if (dot != std::string::npos
+      && statement.task_name.find('.') < dot
+      && (statement.task_name.ends_with(".constraint_mode")
+          || statement.task_name.ends_with(".rand_mode"))) {
+    Expression call{ExpressionKind::Call,
+        statement.task_name.substr(dot), {}, statement.span};
+    call.operands.push_back(Expression{ExpressionKind::Identifier,
+        statement.task_name.substr(0, dot), {}, statement.span});
+    for (auto& argument : statement.task_arguments) {
+      call.operands.push_back(std::move(argument));
+    }
+    resolve_expression(call, scope);
+    statement.kind = StatementKind::ContainerMethod;
+    statement.value = std::move(call);
+    statement.task_name.clear();
+    statement.task_arguments.clear();
+    statement.task_argument_names.clear();
+    return;
+  }
   if (dot != std::string::npos) {
     Expression receiver{
         ExpressionKind::Identifier,
@@ -1123,6 +1145,29 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
             kind,
             statement.task_arguments.size(),
             statement.span);
+        if (match && match->method && match->method->is_static
+            && kind == SystemVerilogClassMethodKind::Function
+            && scope.class_owner == nullptr
+            && selected_uvm_intrinsic(*owner, name).empty()
+            && match->method->canonical_identity.find("::uvm_")
+                == std::string::npos) {
+          // A static function called as a statement discards its result
+          // (IEEE 1800-2017 13.4.1) and lowers as an expression statement;
+          // native UVM methods keep their task form.
+          Expression call{
+              ExpressionKind::Call, statement.task_name, {}, statement.span};
+          for (auto& argument : statement.task_arguments) {
+            call.operands.push_back(std::move(argument));
+          }
+          call.call_argument_names = statement.task_argument_names;
+          resolve_expression(call, scope);
+          statement.kind = StatementKind::ContainerMethod;
+          statement.value = std::move(call);
+          statement.task_name.clear();
+          statement.task_arguments.clear();
+          statement.task_argument_names.clear();
+          return;
+        }
         if (match && match->method && match->method->is_static) {
           const auto intrinsic = selected_uvm_intrinsic(*owner, name);
           statement.task_name = "@sv-static-task:"
@@ -1228,6 +1273,10 @@ void Resolver::resolve_statement(
   if (!statement.declarations.empty()) {
     declared_scope = inherited_scope;
     for (auto& declaration : statement.declarations) {
+      if (auto scoped = resolve_class_scoped_type(
+              declaration.type, inherited_scope)) {
+        declaration.type = std::move(*scoped);
+      }
       if (declaration.initializer) {
         resolve_typed_expression(
             *declaration.initializer, *declared_scope, declaration.type);
@@ -1458,6 +1507,30 @@ void Resolver::resolve_class(SystemVerilogClassDeclaration& declaration, Scope s
           scope,
           property.declaration.type);
     }
+  }
+  // A formal, result or local typed by a typedef of a base class or an
+  // extended interface class takes that type (IEEE 1800-2017 8.26.3).
+  const auto inherit_type = [&](Type& type) {
+    if (type.named_type.empty()
+        || type.named_type.find("::") != std::string::npos) {
+      return;
+    }
+    for (std::string lexical = declaration.canonical_identity;;) {
+      if (class_aliases_.contains(lexical + "::" + type.named_type)) return;
+      const auto separator = lexical.rfind("::");
+      if (separator == std::string::npos) break;
+      lexical.resize(separator);
+    }
+    auto resolved = resolve_alias_type(type, declaration.canonical_identity);
+    if (resolved.named_type != type.named_type
+        || resolved.spelling != type.spelling) {
+      type = std::move(resolved);
+    }
+  };
+  for (auto& method : declaration.methods) {
+    for (auto& argument : method.arguments) inherit_type(argument.type);
+    inherit_type(method.return_type);
+    for (auto& variable : method.variables) inherit_type(variable.type);
   }
   for (auto& method : declaration.methods) {
     auto method_scope = scope;

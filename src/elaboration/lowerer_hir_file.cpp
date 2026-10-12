@@ -3447,9 +3447,25 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                         return true;
                     }
                 }
+                // A string variable printed with a radix format prints its
+                // text, as `$display` does.
+                const auto value_record
+                    = specialized_hir_unit_->find_expression(*output.value);
+                const bool string_variable = value_record
+                    && value_record->systemverilog != nullptr
+                    && value_record->systemverilog->kind
+                        != semantic::sv::ExpressionKind::string_literal;
                 if ((output.format == semantic::sv::OutputFormat::string
                         || output.format
-                            == semantic::sv::OutputFormat::decimal)
+                            == semantic::sv::OutputFormat::decimal
+                        || (string_variable
+                            && (output.format
+                                    == semantic::sv::OutputFormat::binary
+                                || output.format
+                                    == semantic::sv::OutputFormat::octal
+                                || output.format
+                                    == semantic::sv::OutputFormat::
+                                        hexadecimal)))
                     && hir_expression_is_string(
                         *output.value, hir_process_scope_)) {
                     const auto value = lower_hir_string_expression(

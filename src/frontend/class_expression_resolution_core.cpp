@@ -94,6 +94,8 @@ void Resolver::run() {
         {}};
     add_objects(scope, unit.parameters);
     add_objects(scope, unit.ports);
+    resolve_scoped_types(unit.signals, scope);
+    resolve_scoped_types(unit.variables, scope);
     add_objects(scope, unit.signals);
     add_objects(scope, unit.variables);
     for (auto& variable : unit.variables) {
@@ -120,6 +122,7 @@ void Resolver::run() {
     for (auto& task : unit.tasks) resolve_task(task, scope);
     for (auto& process : unit.processes) {
       auto process_scope = scope;
+      resolve_scoped_types(process.variables, process_scope);
       add_objects(process_scope, process.variables);
       for (auto& variable : process.variables) {
         if (variable.initializer) {
@@ -388,6 +391,8 @@ void Resolver::hydrate_task_bodies() {
 }
 void Resolver::resolve_generate_body(GenerateBody& body, const Scope& inherited) {
   auto scope = inherited;
+  resolve_scoped_types(body.signals, scope);
+  resolve_scoped_types(body.variables, scope);
   add_objects(scope, body.signals);
   add_objects(scope, body.variables);
   for (auto& variable : body.variables) {
@@ -402,6 +407,7 @@ void Resolver::resolve_generate_body(GenerateBody& body, const Scope& inherited)
   for (auto& task : body.tasks) resolve_task(task, scope);
   for (auto& process : body.processes) {
     auto process_scope = scope;
+    resolve_scoped_types(process.variables, process_scope);
     add_objects(process_scope, process.variables);
     for (auto& variable : process.variables) {
       if (variable.initializer) {
@@ -597,9 +603,55 @@ bool Resolver::class_assignable(
       || type.named_type.empty()) {
     return type;
   }
+  // A type declared in a base class or an extended interface class is
+  // visible in the derived class (IEEE 1800-2017 8.26.3).
+  const auto inherited_alias = [&](const std::string& identity)
+      -> const Type* {
+    std::vector<const SystemVerilogClassDeclaration*> pending;
+    std::set<std::string> visited;
+    if (const auto* start = find_class(identity)) pending.push_back(start);
+    while (!pending.empty()) {
+      const auto* current = pending.back();
+      pending.pop_back();
+      if (!visited.insert(current->canonical_identity).second) continue;
+      if (current->canonical_identity != identity) {
+        const auto found = class_aliases_.find(
+            current->canonical_identity + "::" + type.named_type);
+        if (found != class_aliases_.end()) return found->second;
+      }
+      if (const auto* base = find_base_class(*current)) {
+        pending.push_back(base);
+      }
+      for (const auto& extended : current->extended_interfaces) {
+        if (const auto* base = find_class(extended.declaration_identity)) {
+          pending.push_back(base);
+        }
+      }
+      for (const auto& implemented : current->implemented_interfaces) {
+        if (const auto* base = find_class(implemented.declaration_identity)) {
+          pending.push_back(base);
+        }
+      }
+    }
+    return nullptr;
+  };
   for (;;) {
-    const auto alias = class_aliases_.find(
+    auto alias = class_aliases_.find(
         lexical_identity + "::" + type.named_type);
+    if (alias == class_aliases_.end()) {
+      if (const auto* inherited = inherited_alias(lexical_identity)) {
+        if (type.systemverilog_container) {
+          auto& elements = type.systemverilog_container->element_types;
+          if (elements.empty()) {
+            elements.push_back(*inherited);
+          } else {
+            elements.front() = *inherited;
+          }
+          return type;
+        }
+        return *inherited;
+      }
+    }
     if (alias != class_aliases_.end()) {
       if (type.systemverilog_container) {
         auto& elements = type.systemverilog_container->element_types;
@@ -881,6 +933,62 @@ Resolver::selected_parameter_actuals(const std::string_view spelling) {
   }
   return type;
 }
+[[nodiscard]] std::optional<Type> Resolver::resolve_class_scoped_type(
+    const Type& type, const Scope& scope) const {
+  // `C::t` or `C #(...)::t`: a type declared in a class, specialized by the
+  // selected class actuals (IEEE 1800-2017 8.25.1).
+  const auto separator = type.named_type.rfind("::");
+  if (separator == std::string::npos || separator == 0U) return std::nullopt;
+  const auto owners = resolve_class_name(
+      std::string_view{type.named_type}.substr(0U, separator), scope);
+  if (owners.size() != 1U) return std::nullopt;
+  const auto alias = class_aliases_.find(owners.front()->canonical_identity
+      + "::" + type.named_type.substr(separator + 2U));
+  if (alias == class_aliases_.end()) return std::nullopt;
+  ClassSelection selection{owners.front(), class_type(*owners.front())};
+  selection.type.systemverilog_class_parameter_actuals =
+      type.systemverilog_class_parameter_actuals;
+  std::size_t next_positional{};
+  for (auto& actual : selection.type.systemverilog_class_parameter_actuals) {
+    std::size_t formal_index = next_positional++;
+    if (actual.name) {
+      const auto formal = std::ranges::find(
+          selection.declaration->parameters, *actual.name,
+          &ParameterDeclaration::name);
+      if (formal == selection.declaration->parameters.end()) continue;
+      formal_index = static_cast<std::size_t>(std::distance(
+          selection.declaration->parameters.begin(), formal));
+    }
+    if (formal_index >= selection.declaration->parameters.size()) continue;
+    const auto& formal = selection.declaration->parameters[formal_index];
+    if (formal.kind == ParameterKind::Type && !actual.type_actual
+        && actual.value.valid()) {
+      actual.type_actual = std::make_shared<Type>(
+          selected_type_actual(actual.value.text, scope));
+    } else if (actual.type_actual
+        && actual.type_actual->systemverilog_class_declaration.empty()
+        && !actual.type_actual->named_type.empty()) {
+      *actual.type_actual = selected_type_actual(
+          actual.type_actual->named_type, scope);
+    }
+  }
+  auto resolved = specialize_selected_type(*alias->second, selection);
+  if (type.systemverilog_container && !resolved.systemverilog_container) {
+    // `C::t x[string]`: the declared dimensions hold elements of the type.
+    auto container = type.systemverilog_container;
+    for (auto& element : container->element_types) {
+      if (element.named_type == type.named_type) {
+        auto actuals = element.systemverilog_class_parameter_actuals;
+        element = resolved;
+        if (element.systemverilog_class_parameter_actuals.empty()) {
+          element.systemverilog_class_parameter_actuals = std::move(actuals);
+        }
+      }
+    }
+    resolved.systemverilog_container = std::move(container);
+  }
+  return resolved;
+}
 [[nodiscard]] SystemVerilogClassMethod Resolver::specialize_selected_method(
     SystemVerilogClassMethod method,
     const ClassSelection& selection,
@@ -1123,6 +1231,39 @@ void Resolver::retain_result_type(
       break;
     }
     current = find_base_class(*current);
+  }
+  if (!matches.empty() || kind == SystemVerilogClassMethodKind::Constructor) {
+    return matches;
+  }
+  // An interface class inherits the prototypes of every interface class it
+  // extends, not only the first (IEEE 1800-2017 8.26.3).
+  std::vector<const SystemVerilogClassDeclaration*> pending;
+  for (const auto& seen : visited) {
+    if (const auto* declaration = find_class(seen)) {
+      for (const auto& extended : declaration->extended_interfaces) {
+        if (const auto* found = find_class(extended.declaration_identity)) {
+          pending.push_back(found);
+        }
+      }
+    }
+  }
+  for (std::size_t index = 0; index < pending.size() && matches.empty();
+       ++index) {
+    const auto* declaration = pending[index];
+    if (!visited.insert(declaration->canonical_identity).second) continue;
+    for (const auto& method : declaration->methods) {
+      if (method.name == name && method.kind == kind) {
+        matches.push_back({&method, declaration});
+      }
+    }
+    if (const auto* base = find_base_class(*declaration)) {
+      pending.push_back(base);
+    }
+    for (const auto& extended : declaration->extended_interfaces) {
+      if (const auto* found = find_class(extended.declaration_identity)) {
+        pending.push_back(found);
+      }
+    }
   }
   return matches;
 }

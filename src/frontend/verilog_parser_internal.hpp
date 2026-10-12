@@ -266,7 +266,8 @@ class VerilogParser final : private detail::ParserBase {
   // Before SystemVerilog a primitive's output or bidirectional terminal is
   // a net (IEEE 1364-2005 7.1); report one that names a variable.
   void check_verilog_primitive_net_terminal(const Expression& terminal,
-      const std::vector<SignalDeclaration>& signals, const Token& instance_start);
+      const std::vector<SignalDeclaration>& signals, const Token& instance_start,
+      bool bidirectional = false);
   // Names of every class declared so far; a class name is never a net.
   std::unordered_set<std::string> known_class_names_;
 
@@ -819,6 +820,16 @@ class VerilogParser final : private detail::ParserBase {
   std::unordered_map<std::string, Type> packed_typedef_types_;
   [[nodiscard]] std::optional<Type> parse_named_packed_array_type();
   std::unordered_set<std::string> body_port_declarations_;
+  // Modport callables named before their declaration, resolved at the end
+  // of the interface (IEEE 1800-2017 25.7).
+  struct PendingModportCallable {
+    std::size_t modport { };
+    std::size_t member { };
+    Token token;
+    bool import { };
+    std::optional<bool> explicit_function;
+  };
+  std::vector<PendingModportCallable> pending_modport_callables_;
   std::unordered_set<std::string> port_type_refinements_;
   // Non-ANSI ports whose direction declaration names a net or data type;
   // such a port cannot be declared again (IEEE 1800-2017 23.2.2.1).
@@ -830,6 +841,9 @@ class VerilogParser final : private detail::ParserBase {
   // Design-unit-level dynamic arrays, queues and associative arrays, whose
   // built-in methods may omit empty parentheses (IEEE 1800-2017 13.4.5).
   std::unordered_set<std::string> unit_container_names_;
+  // Module-level string variables, for `foreach (s[i])` (IEEE 1800-2023
+  // 12.7.3).
+  std::unordered_set<std::string> unit_string_names_;
   // Index types of the unit's associative arrays, for foreach.
   std::unordered_map<std::string, Type> unit_associative_index_types_;
   // Types of the unit's unpacked container variables, for foreach.

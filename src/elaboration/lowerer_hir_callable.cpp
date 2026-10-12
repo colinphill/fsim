@@ -1038,6 +1038,17 @@ Lowerer::hir_static_container_selection(
     const auto expression = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(expression_id)
         : std::nullopt;
+    // A slice of a queue is not a fixed-array selection (7.10.1).
+    if (expression && expression->systemverilog != nullptr
+        && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::slice
+        && !expression->systemverilog->operands.empty()) {
+        if (const auto base = hir_container_object_binding(
+                expression->systemverilog->operands.front());
+            base && base->type != nullptr && base->type->queue) {
+            return std::nullopt;
+        }
+    }
     if (expression && expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::slice) {
@@ -1334,6 +1345,98 @@ Lowerer::lower_hir_static_container_value(
     }
     if (expression && expression->systemverilog != nullptr) {
         const auto& source = *expression->systemverilog;
+        // `q[a:b]` copies the elements from index max(a, 0) through
+        // min(b, $) into a new queue; it is empty when a > b (7.10.1).
+        if (source.kind == semantic::sv::ExpressionKind::slice
+            && source.text == ":" && source.operands.size() == 3U) {
+            const auto base = hir_container_object_binding(
+                source.operands.front());
+            if (base && base->type != nullptr && base->type->queue
+                && (base->type->element_kind == ContainerElementKind::Packed
+                    || base->type->element_kind
+                        == ContainerElementKind::Scalar)) {
+                const auto& type = *base->type;
+                const auto queue = base->local
+                    ? *base->local
+                    : allocate_container_register(type);
+                if (!base->local) {
+                    process_.operations.emplace_back(
+                        ReadContainerObject { queue, base->object });
+                    record_container_object_dependency(base->object);
+                }
+                const auto size = allocate_register(
+                    32U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(
+                    ContainerSize { size, queue });
+                const auto one = allocate_register(
+                    32U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(
+                    LoadConstant { one, unsigned_value(1U, 32U) });
+                const auto last = allocate_register(
+                    32U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::subtract_unsigned, last, size, one });
+                const HirQueueLastIndexRestore restore_last {
+                    hir_queue_last_index_, hir_queue_last_index_
+                };
+                hir_queue_last_index_ = last;
+                auto low = lower_hir_expression(source.operands[1], 32U);
+                auto high = lower_hir_expression(source.operands[2], 32U);
+                if (!low || !high) {
+                    return std::nullopt;
+                }
+                const auto zero = allocate_register(
+                    32U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(
+                    LoadConstant { zero, unsigned_value(0U, 32U) });
+                // Clamp the bounds to the queue: low to 0, high to $.
+                const auto low_negative = allocate_register(
+                    1U, frontend::ValueDomain::Logic4);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::less_signed, low_negative, *low, zero });
+                const auto index = allocate_register(
+                    32U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(ConditionalSelect {
+                    index, low_negative, zero, *low });
+                const auto high_past = allocate_register(
+                    1U, frontend::ValueDomain::Logic4);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::greater_signed, high_past, *high, last });
+                const auto bound = allocate_register(
+                    32U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(ConditionalSelect {
+                    bound, high_past, last, *high });
+                const auto result = allocate_container_register(type);
+                process_.operations.emplace_back(AppendContainer {
+                    result, true, { }, { }, { } });
+                const auto loop = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                const auto within = allocate_register(
+                    1U, frontend::ValueDomain::Logic4);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::less_equal_signed, within, index, bound });
+                const auto branch = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations.emplace_back(Branch {
+                    within, branch + 1U, 0U,
+                    UnknownBranchPolicy::when_false });
+                const auto element = allocate_register(type.element_width,
+                    type.two_state ? frontend::ValueDomain::Bit2
+                                   : frontend::ValueDomain::Logic4);
+                process_.operations.emplace_back(ContainerRead {
+                    element, queue, index, true, false, false });
+                process_.operations.emplace_back(AppendContainer {
+                    result, false, { }, element, { } });
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::add_unsigned, index, index, one });
+                process_.operations.emplace_back(Jump { loop });
+                process_.operations[branch] = Branch {
+                    within, branch + 1U,
+                    static_cast<InstructionIndex>(process_.operations.size()),
+                    UnknownBranchPolicy::when_false };
+                return HirStaticContainerValue { result, type };
+            }
+        }
         if (source.kind == semantic::sv::ExpressionKind::call
             && source.text == "?:" && source.operands.size() == 3U) {
             const auto when_true_type = hir_static_container_expression_type(
@@ -5591,6 +5694,27 @@ std::optional<RegisterId> Lowerer::lower_hir_callable_actual(
                 PackedLogic4::from_aval_bval(8U,
                     static_cast<unsigned char>(expression->vhdl->text[1]), 0U) });
             return result;
+        }
+    }
+    // A named event is passed only to an event formal (IEEE 1800-2017
+    // 6.17, 15.5.5); it is not a value of any other type.
+    if (expression && expression->systemverilog != nullptr
+        && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::name) {
+        const auto event_type = [&](const semantic::DeclarationId id) {
+            const auto view = specialized_hir_unit_->find_declaration(id);
+            return view && view->systemverilog != nullptr
+                && view->systemverilog->type
+                && view->systemverilog->type->target.spelling == "event";
+        };
+        if (const auto declaration = hir_referenced_declaration(actual);
+            declaration && event_type(*declaration) && !event_type(formal)) {
+            report("FSIM-ELAB-SVEVENT-011",
+                "named event '" + expression->systemverilog->text
+                    + "' cannot be passed to a task or function argument "
+                      "that is not an event",
+                hir_source_span(expression->systemverilog->source));
+            return std::nullopt;
         }
     }
     if (expression && expression->systemverilog != nullptr) {

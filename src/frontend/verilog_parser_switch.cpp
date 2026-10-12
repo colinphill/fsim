@@ -205,7 +205,8 @@ void VerilogParser::parse_switch_primitive(
     implicit_net_context_ = saved_context;
     for (std::size_t index = 0; index < terminals.size()
          && index < (bidirectional ? std::size_t { 2 } : std::size_t { 1 }); ++index) {
-      check_verilog_primitive_net_terminal(terminals[index], signals, start);
+      check_verilog_primitive_net_terminal(
+          terminals[index], signals, start, bidirectional);
     }
     expect(
         TokenKind::RightParen,

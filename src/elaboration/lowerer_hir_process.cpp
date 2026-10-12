@@ -930,6 +930,43 @@ bool Lowerer::initialize_hir_declarations(
                     && initializer->systemverilog->kind
                         == semantic::sv::ExpressionKind::
                             assignment_pattern;
+                // `int a[] = new[n];` sizes a dynamic array with a size
+                // known only when the scope is entered (7.5.1).
+                const auto* constructor = initializer
+                    ? initializer->systemverilog : nullptr;
+                std::optional<semantic::ExpressionId> constructed_size;
+                if (constructor != nullptr && !type->fixed && !type->queue
+                    && !type->associative) {
+                    if (constructor->kind == semantic::sv::ExpressionKind::call
+                        && constructor->text == "@new-array"
+                        && constructor->operands.size() == 1U) {
+                        constructed_size = constructor->operands.front();
+                    } else if (constructor->kind
+                            == semantic::sv::ExpressionKind::index
+                        && constructor->operands.size() == 2U) {
+                        const auto callee = specialized_hir_unit_
+                            ->find_expression(constructor->operands.front());
+                        if (callee && callee->systemverilog != nullptr
+                            && callee->systemverilog->kind
+                                == semantic::sv::ExpressionKind::name
+                            && callee->systemverilog->text == "new") {
+                            constructed_size = constructor->operands.back();
+                        }
+                    }
+                }
+                if (constructed_size) {
+                    auto size = lower_hir_expression(*constructed_size, 32U);
+                    if (!size) {
+                        return false;
+                    }
+                    if (register_width(*size) != 32U) {
+                        size = resize_register(*size, 32U,
+                            hir_expression_signed(*constructed_size));
+                    }
+                    process_.operations.emplace_back(ResizeContainer {
+                        destination, *size, std::nullopt, false });
+                    continue;
+                }
                 const auto initial = pattern
                     ? lower_hir_container_assignment_pattern(
                           *input.initializer,

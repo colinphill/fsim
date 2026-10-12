@@ -972,14 +972,19 @@ void test_systemverilog_2023_profile_isolation()
                 + " must remain isolated to the exact 2023 profile");
     };
 
-    require_isolated(
-        "multiple-interface-class-inheritance",
-        R"(interface class LeftContract; endclass
+    // An interface class may extend several interface classes from
+    // SystemVerilog-2012 on (IEEE 1800-2017 8.26.3).
+    require(
+        parse_verilog(
+            SourceText { "multiple-interface-class-inheritance-2017.sv",
+                R"(interface class LeftContract; endclass
 interface class RightContract; endclass
 interface class CombinedContract extends LeftContract, RightContract;
 endclass
-)",
-        "FSIM-SV-PARSE-369");
+)" },
+            StandardRevision::SystemVerilog2017)
+            .ok(),
+        "multiple interface-class inheritance parses in 2017");
     // Streaming unpack targets are SystemVerilog-2005 (IEEE 1800-2017
     // 11.4.14.3), not part of the 2023 profile.
     const auto streaming_target = parse_verilog(

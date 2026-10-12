@@ -804,24 +804,40 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                           ->evaluate_integral_expression(*expression)
                     : std::nullopt;
             };
-            const auto left = bound(dimensions.front().left,
-                dimensions.front().left_expression);
-            const auto right = bound(dimensions.front().right,
-                dimensions.front().right_expression);
-            std::vector<std::int64_t> formal_indices;
-            if (dimensions.size() == 1U && left && right
-                && (*left > *right ? *left - *right : *right - *left)
-                    < (std::int64_t { 1 } << 20)) {
-                for (auto index = *left;; index += *left > *right ? -1 : 1) {
-                    formal_indices.push_back(index);
-                    if (index == *right) {
-                        break;
+            // Element suffixes (`[i][j]`) of every dimension, left to
+            // right, outermost first.
+            const auto expand = [](std::vector<std::string>& suffixes,
+                                   const std::int64_t left,
+                                   const std::int64_t right) {
+                std::vector<std::string> expanded;
+                for (const auto& prefix : suffixes) {
+                    for (auto index = left;; index += left > right ? -1 : 1) {
+                        expanded.push_back(
+                            prefix + "[" + std::to_string(index) + "]");
+                        if (index == right) {
+                            break;
+                        }
                     }
                 }
+                suffixes = std::move(expanded);
+            };
+            std::vector<std::string> formal_suffixes { std::string { } };
+            for (const auto& dimension : dimensions) {
+                const auto left
+                    = bound(dimension.left, dimension.left_expression);
+                const auto right
+                    = bound(dimension.right, dimension.right_expression);
+                if (!left || !right
+                    || (*left > *right ? *left - *right : *right - *left)
+                        >= (std::int64_t { 1 } << 16)) {
+                    formal_suffixes.clear();
+                    break;
+                }
+                expand(formal_suffixes, *left, *right);
             }
             // The actual's elements: an interface instance array of this
             // unit, or an interface port array forwarded into it.
-            std::optional<std::vector<std::int64_t>> actual_indices;
+            std::optional<std::vector<std::string>> actual_suffixes;
             std::string actual_base;
             for (const auto instance_id : unit.instances) {
                 const auto candidate = compiled_->find_instance(instance_id);
@@ -829,26 +845,39 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                     && candidate->systemverilog->name == actual_name
                     && (!candidate->systemverilog->array_indices.empty()
                         || candidate->systemverilog->array_left)) {
-                    actual_indices = compiled_instance_array_indices(
+                    std::vector<std::string> suffixes;
+                    const auto inner = compiled_instance_array_indices(
                         *candidate->systemverilog, working_specialization);
+                    for (const auto& outer : compiled_instance_outer_indices(
+                             *candidate->systemverilog,
+                             working_specialization)) {
+                        std::string prefix;
+                        for (const auto index : outer) {
+                            prefix += "[" + std::to_string(index) + "]";
+                        }
+                        for (const auto index : inner) {
+                            suffixes.push_back(
+                                prefix + "[" + std::to_string(index) + "]");
+                        }
+                    }
+                    actual_suffixes = std::move(suffixes);
                     break;
                 }
             }
             for (auto lexical = std::string { working_path };;) {
                 const auto candidate = lexical + "." + actual_name;
-                if (!actual_indices) {
+                if (!actual_suffixes) {
                     if (const auto forwarded
                         = systemverilog_interface_array_indices_.find(
                             candidate);
                         forwarded
                         != systemverilog_interface_array_indices_.end()) {
-                        actual_indices = forwarded->second;
+                        actual_suffixes = forwarded->second;
                     }
                 }
-                if (actual_indices && !actual_indices->empty()
+                if (actual_suffixes && !actual_suffixes->empty()
                     && systemverilog_interface_handles_.contains(
-                        candidate + "["
-                        + std::to_string(actual_indices->front()) + "]")) {
+                        candidate + actual_suffixes->front())) {
                     actual_base = candidate;
                     break;
                 }
@@ -857,9 +886,9 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 }
                 lexical.resize(lexical.rfind('.'));
             }
-            if (formal_indices.empty() || !actual_indices
+            if (formal_suffixes.empty() || !actual_suffixes
                 || actual_base.empty()
-                || actual_indices->size() != formal_indices.size()) {
+                || actual_suffixes->size() != formal_suffixes.size()) {
                 report(
                     "FSIM-ELAB-SVIFACE-002",
                     "interface port array '" + formal_declaration.name
@@ -871,20 +900,17 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 continue;
             }
             for (std::size_t position = 0;
-                position < formal_indices.size(); ++position) {
+                position < formal_suffixes.size(); ++position) {
                 auto element = formal_declaration;
-                element.name += "["
-                    + std::to_string(formal_indices[position]) + "]";
+                element.name += formal_suffixes[position];
                 if (!forward_interface_port(element,
-                        actual_base + "["
-                            + std::to_string((*actual_indices)[position])
-                            + "]")) {
+                        actual_base + (*actual_suffixes)[position])) {
                     child_ports_valid = false;
                 }
             }
             systemverilog_interface_array_indices_.insert_or_assign(
                 child_path + "." + formal_declaration.name,
-                std::move(formal_indices));
+                std::move(formal_suffixes));
             continue;
         }
         auto interface_path

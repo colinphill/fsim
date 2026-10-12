@@ -1314,6 +1314,9 @@ struct Instance {
     // elaboration once parameters are known.
     std::optional<Expression> array_left;
     std::optional<Expression> array_right;
+    // The leading dimensions of a multidimensional instance array, outermost
+    // first; array_left/array_right or array_indices give the last one.
+    std::vector<std::pair<Expression, Expression>> outer_array_ranges;
     std::vector<ParameterOverride> parameter_overrides;
     // Populated for UDP propagation-delay syntax after declaration-aware
     // frontend normalization. Module parameter overrides remain separate.

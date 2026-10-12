@@ -1543,6 +1543,9 @@ struct DesignUnit {
         StandardRevision::SystemVerilog2017
     };
     std::string verilog_compatibility_profile { "none" };
+    // The `unconnected_drive in effect where the module is defined (IEEE
+    // 1800-2017 22.9).
+    VerilogUnconnectedDrive unconnected_drive { VerilogUnconnectedDrive::None };
     std::string vhdl_compatibility_profile;
     VhdlPredefinedEnvironment vhdl_predefined_environment;
     // Exact compiler-owned `std` package selected by this unit's source

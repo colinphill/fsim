@@ -5530,6 +5530,124 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
             expression_id, expected_width)) {
         return characters;
     }
+    // The process class's state constants and status queries inside an
+    // expression (IEEE 1800-2017 9.7).
+    if (specialized_hir_unit_ != nullptr) {
+        const auto record = specialized_hir_unit_->find_expression(
+            expression_id);
+        const auto* const input = record && record->systemverilog != nullptr
+            ? record->systemverilog
+            : nullptr;
+        const auto sized = [&](const RegisterId value) {
+            return expected_width != 0U
+                    && register_width(value) != expected_width
+                ? resize_register(value, expected_width, false)
+                : value;
+        };
+        if (input != nullptr
+            && input->kind == semantic::sv::ExpressionKind::name) {
+            constexpr std::array states {
+                std::string_view { "FINISHED" }, std::string_view { "RUNNING" },
+                std::string_view { "WAITING" }, std::string_view { "SUSPENDED" },
+                std::string_view { "KILLED" },
+            };
+            std::string_view text = input->text;
+            if (text.starts_with("std::")) {
+                text.remove_prefix(5U);
+            }
+            if (text.starts_with("process::")) {
+                text.remove_prefix(9U);
+                for (std::size_t state = 0; state < states.size(); ++state) {
+                    if (states[state] == text) {
+                        const auto value = allocate_register(
+                            32U, frontend::ValueDomain::Integer);
+                        process_.operations.emplace_back(LoadConstant {
+                            value, integer_value(
+                                static_cast<std::int64_t>(state)) });
+                        return sized(value);
+                    }
+                }
+            }
+        }
+        if (input != nullptr
+            && input->kind == semantic::sv::ExpressionKind::call
+            && (input->text == "process::self"
+                || input->text == "std::process::self")
+            && input->operands.empty()) {
+            const auto value = allocate_register(
+                64U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(ProcessSelf { value });
+            return sized(value);
+        }
+        // `p.status` names the query without parentheses.
+        std::optional<RegisterId> named_receiver;
+        bool named_status { };
+        if (input != nullptr
+            && input->kind == semantic::sv::ExpressionKind::name
+            && (input->text.ends_with(".status")
+                || input->text.ends_with(".completed"))) {
+            const auto dot = input->text.rfind('.');
+            const auto receiver_name = std::string_view { input->text }.substr(
+                0U, dot);
+            const auto declaration = semantic::CompiledDesignResolver {
+                *specialized_hir_unit_, hir_generic_binding_frames_ }
+                .resolve_systemverilog(
+                    receiver_name, hir_process_scope_, { }, true)
+                .unique();
+            const auto binding = declaration
+                ? hir_runtime_binding(*declaration, hir_process_scope_, true)
+                : std::nullopt;
+            if (binding && binding->width == 64U) {
+                if (binding->kind == HirRuntimeBindingKind::local
+                    && binding->local) {
+                    named_receiver = binding->local;
+                } else if (binding->signal) {
+                    named_receiver = allocate_register(64U, binding->domain);
+                    process_.operations.emplace_back(ReadSignal {
+                        *named_receiver, *binding->signal,
+                        SignalReadKind::current });
+                    record_implicit_signal_dependency(*binding->signal);
+                }
+                named_status = input->text.ends_with(".status");
+            }
+        }
+        if (named_receiver) {
+            if (named_status) {
+                const auto value = allocate_register(
+                    32U, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(
+                    ProcessStatusQuery { value, *named_receiver });
+                return sized(value);
+            }
+            const auto value = allocate_register(
+                1U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                ProcessCompleted { value, *named_receiver });
+            return sized(value);
+        }
+        if (input != nullptr
+            && input->kind == semantic::sv::ExpressionKind::call
+            && (input->text == ".status" || input->text == ".completed")
+            && input->operands.size() == 1U
+            && hir_expression_width(input->operands.front(),
+                   hir_process_scope_) == std::optional<std::size_t> { 64U }) {
+            if (const auto receiver
+                = lower_hir_expression(input->operands.front(), 64U)) {
+                if (input->text == ".status") {
+                    const auto value = allocate_register(
+                        32U, frontend::ValueDomain::Integer);
+                    process_.operations.emplace_back(
+                        ProcessStatusQuery { value, *receiver });
+                    return sized(value);
+                }
+                const auto value = allocate_register(
+                    1U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(
+                    ProcessCompleted { value, *receiver });
+                return sized(value);
+            }
+        }
+    }
     if (hir_queue_last_index_ && specialized_hir_unit_ != nullptr) {
         const auto record = specialized_hir_unit_->find_expression(
             expression_id);
@@ -9212,6 +9330,63 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     && !receiver_type->dimensions.empty()
                     ? receiver_type->dimensions.size()
                     : 1U;
+                // A dimension after the unpacked ones selects a packed
+                // dimension of the element (IEEE 1800-2017 20.7).
+                if (requested && receiver_type && receiver_type->fixed
+                    && static_cast<std::uint64_t>(*requested) > rank) {
+                    const auto declaration_id
+                        = hir_referenced_declaration(call.operands.front());
+                    const auto declaration = declaration_id
+                        ? specialized_hir_unit_->find_declaration(
+                              *declaration_id)
+                        : std::nullopt;
+                    std::vector<HirPackedRange> packed;
+                    if (declaration && declaration->systemverilog != nullptr
+                        && declaration->systemverilog->type) {
+                        const auto& type = *declaration->systemverilog->type;
+                        if (!type.packed_dimensions.empty()) {
+                            packed = hir_systemverilog_packed_shape(
+                                call.operands.front(), true);
+                        } else if (type.packed_range) {
+                            const auto left
+                                = hir_range_left(*type.packed_range);
+                            const auto right
+                                = hir_range_right(*type.packed_range);
+                            if (left && right) {
+                                packed.push_back(HirPackedRange { *left,
+                                    *right, *left >= *right });
+                            }
+                        }
+                    }
+                    const auto packed_index = static_cast<std::size_t>(
+                        static_cast<std::uint64_t>(*requested) - rank - 1U);
+                    if (packed_index < packed.size()) {
+                        const auto& range = packed[packed_index];
+                        const auto low = std::min(range.left, range.right);
+                        const auto high = std::max(range.left, range.right);
+                        const std::int64_t answer = call.text == "$left"
+                            ? range.left
+                            : call.text == "$right" ? range.right
+                            : call.text == "$low"   ? low
+                            : call.text == "$high"  ? high
+                            : call.text == "$increment"
+                            ? (range.left >= range.right ? 1 : -1)
+                            : high - low + 1;
+                        const auto destination = allocate_register(
+                            32U, frontend::ValueDomain::Integer);
+                        process_.operations.emplace_back(LoadConstant {
+                            destination,
+                            PackedLogic4::from_aval_bval(32U,
+                                std::bit_cast<std::uint64_t>(answer)
+                                    & UINT64_C(0xffffffff),
+                                0U),
+                        });
+                        return expected_width != 0U && expected_width != 32U
+                            ? std::optional { resize_register(
+                                  destination, expected_width, true) }
+                            : std::optional { destination };
+                    }
+                }
                 if (!requested || *requested < 1
                     || static_cast<std::uint64_t>(*requested) > rank) {
                     report(
@@ -9916,7 +10091,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
         && (expression->systemverilog->text == "$urandom"
-            || expression->systemverilog->text == "$random"
+            || (expression->systemverilog->text == "$random"
+                && expression->systemverilog->operands.size() != 1U)
             || expression->systemverilog->text == "$urandom_range")) {
         const auto& call = *expression->systemverilog;
         const auto range = call.text == "$urandom_range";
@@ -11427,16 +11603,23 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
-        && systemverilog_random_distribution_kind(
-            expression->systemverilog->text)) {
+        && (systemverilog_random_distribution_kind(
+                expression->systemverilog->text)
+            || (expression->systemverilog->text == "$random"
+                && expression->systemverilog->operands.size() == 1U))) {
         const auto& call = *expression->systemverilog;
-        const auto kind = *systemverilog_random_distribution_kind(
-            call.text);
+        // `$random(seed)` is rtl_dist_uniform(seed, LONG_MIN, LONG_MAX)
+        // (IEEE 1364-2005 17.9.1, IEEE 1800-2017 Annex N).
+        const auto seeded_random = call.text == "$random";
+        const auto kind = seeded_random
+            ? runtime::simir::RandomDistributionKind::uniform
+            : *systemverilog_random_distribution_kind(call.text);
         const auto three_arguments
             = kind == runtime::simir::RandomDistributionKind::uniform
             || kind == runtime::simir::RandomDistributionKind::normal
             || kind == runtime::simir::RandomDistributionKind::erlang;
-        const auto required_arity = three_arguments ? 3U : 2U;
+        const auto required_arity
+            = seeded_random ? 1U : three_arguments ? 3U : 2U;
         if (call.operands.size() != required_arity) {
             report(
                 "FSIM-ELAB-SVRAND-008",
@@ -11501,8 +11684,22 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             }
             return value;
         };
-        const auto first = lower_argument(1U);
-        const auto second = three_arguments
+        const auto constant_argument = [&](const std::int32_t value) {
+            const auto constant = allocate_register(
+                32U, frontend::ValueDomain::Integer);
+            process_.operations.emplace_back(LoadConstant {
+                constant,
+                PackedLogic4::from_aval_bval(
+                    32U, std::bit_cast<std::uint32_t>(value), 0U),
+            });
+            return std::optional<RegisterId> { constant };
+        };
+        const auto first = seeded_random
+            ? constant_argument(std::numeric_limits<std::int32_t>::min())
+            : lower_argument(1U);
+        const auto second = seeded_random
+            ? constant_argument(std::numeric_limits<std::int32_t>::max())
+            : three_arguments
             ? lower_argument(2U)
             : std::optional<RegisterId> { };
         if (!first || (three_arguments && !second)) {
@@ -15099,6 +15296,69 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
             return std::nullopt;
         }
         return text;
+    }
+    // `pop_front`/`pop_back` of a queue of strings (IEEE 1800-2017
+    // 7.10.2.4); an empty queue gives the empty string.
+    if (const auto call = specialized_hir_unit_->find_expression(expression_id);
+        call && call->systemverilog != nullptr
+        && call->systemverilog->kind == semantic::sv::ExpressionKind::call
+        && (call->systemverilog->text == ".pop_front"
+            || call->systemverilog->text == ".pop_back")
+        && call->systemverilog->operands.size() == 1U) {
+        const auto binding = hir_container_object_binding(
+            call->systemverilog->operands.front());
+        if (binding && binding->type != nullptr && binding->type->queue
+            && binding->type->element_kind == ContainerElementKind::String
+            && !binding->read_only) {
+            const auto queue = binding->local
+                ? *binding->local
+                : allocate_container_register(*binding->type);
+            if (!binding->local) {
+                process_.operations.emplace_back(
+                    ReadContainerObject { queue, binding->object });
+            }
+            const auto destination = allocate_string_register();
+            process_.operations.emplace_back(
+                LoadStringConstant { destination, std::string { } });
+            const auto size = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(ContainerSize { size, queue });
+            const auto zero = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                LoadConstant { zero, unsigned_value(0U, 32U) });
+            const auto nonempty = allocate_register(
+                1U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::not_equal, nonempty, size, zero });
+            const auto branch = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Branch {
+                nonempty, branch + 1U, 0U, UnknownBranchPolicy::when_false });
+            auto index = zero;
+            if (call->systemverilog->text == ".pop_back") {
+                const auto one = allocate_register(
+                    32U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(
+                    LoadConstant { one, unsigned_value(1U, 32U) });
+                index = allocate_register(32U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::subtract_unsigned, index, size, one });
+            }
+            process_.operations.emplace_back(ContainerStringRead {
+                destination, queue, index, true, false, false, { } });
+            process_.operations.emplace_back(
+                DeleteContainer { queue, index, false });
+            if (!binding->local) {
+                process_.operations.emplace_back(WriteContainerObject {
+                    binding->object, queue, std::nullopt });
+            }
+            process_.operations[branch] = Branch {
+                nonempty, branch + 1U,
+                static_cast<InstructionIndex>(process_.operations.size()),
+                UnknownBranchPolicy::when_false };
+            return destination;
+        }
     }
     // A slice of a STRING is the substring at the slice's positions in the
     // prefix's index range (IEEE 1076-2008 8.5).

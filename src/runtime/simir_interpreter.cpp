@@ -2895,14 +2895,90 @@ void Interpreter::start()
         impl_->execute(id);
         prearmed_static_waits[id] = true;
     }
-    for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
-        if (inert(id)) {
-            continue;
+    // A SystemVerilog process that waits only on time and reads a settling
+    // signal starts one delta after the other processes, so time-zero
+    // continuous assignments and event controls settle before it reads them
+    // (the order within the active region is unspecified, IEEE 1800-2017
+    // 4.7).
+    const auto late_candidate = [&](const ProcessId id) {
+        if (impl_->processes.is_compact_constant(id)) {
+            return false;
         }
         const auto program = impl_->processes.program_view(id);
-        if (program.initialize() && !program.final()
-            && !prearmed_static_waits[id]) {
-            impl_->queue_at(id, impl_->scheduler.now());
+        return program.scheduling_domain()
+                == ProcessSchedulingDomain::systemverilog
+            && program.static_sensitivity().empty()
+            && program.name().find(".$declaration_initializer_")
+                == std::string::npos;
+    };
+    std::vector<bool> candidates(impl_->processes.size(), false);
+    bool any_candidate { };
+    for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
+        candidates[id] = !inert(id) && late_candidate(id);
+        any_candidate = any_candidate || candidates[id];
+    }
+    // Settling signals: nets, and the signals that event-driven processes
+    // (continuous assignments, always_comb) and port adapters drive.
+    std::vector<bool> settling;
+    if (any_candidate) {
+        settling.assign(impl_->signals.size(), false);
+        for (SignalId signal = 0; signal < impl_->signals.size(); ++signal) {
+            settling[signal]
+                = impl_->signals[signal].resolution != ResolutionKind::none;
+        }
+        for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
+            if (impl_->processes.is_compact_constant(id)) {
+                continue;
+            }
+            const auto program = impl_->processes.program_view(id);
+            if (!program.static_sensitivity().empty()
+                || program.name().find(".port_actual_")
+                    != std::string::npos) {
+                for (const auto& region : program.driver_regions()) {
+                    if (region.signal < settling.size()) {
+                        settling[region.signal] = true;
+                    }
+                }
+            }
+        }
+    }
+    const auto starts_late = [&](const ProcessId id) {
+        if (!candidates[id]) {
+            return false;
+        }
+        const auto program = impl_->processes.program_view(id);
+        const auto& operations = std::as_const(program.operations());
+        bool reads_settling { };
+        for (std::size_t index = 0U; index < operations.size(); ++index) {
+            const auto& operation = operations[index];
+            if (operation_holds<WaitOn>(operation)
+                || operation_holds<WaitOrder>(operation)
+                || operation_holds<WaitSensitivity>(operation)) {
+                return false;
+            }
+            if (const auto* read = operation_get_if<ReadSignal>(&operation);
+                read != nullptr && read->signal < settling.size()
+                && settling[read->signal]) {
+                reads_settling = true;
+            }
+        }
+        return reads_settling;
+    };
+    for (const bool late : { false, true }) {
+        for (ProcessId id = 0; id < impl_->processes.size(); ++id) {
+            if (inert(id)) {
+                continue;
+            }
+            const auto program = impl_->processes.program_view(id);
+            if (!program.initialize() || program.final()
+                || prearmed_static_waits[id] || starts_late(id) != late) {
+                continue;
+            }
+            if (late) {
+                impl_->queue_next_delta(id);
+            } else {
+                impl_->queue_at(id, impl_->scheduler.now());
+            }
         }
     }
     impl_->fused_static_bindings_open = true;

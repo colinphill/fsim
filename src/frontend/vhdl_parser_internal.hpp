@@ -234,7 +234,8 @@ private:
   // `conv(formal) => actual` on an output or inout port of a declared
   // component, rewritten through an implicit signal (IEEE 1076-2008
   // 6.5.7.1).
-  void rewrite_vhdl_formal_conversions(DesignUnit& unit);
+  void rewrite_vhdl_formal_conversions(DesignUnit& unit,
+      const std::vector<DesignUnit>* entities = nullptr);
   void apply_vhdl_disconnection_specifications(
       const std::vector<SignalDeclaration> &signals,
       const std::vector<VhdlDisconnectionSpecification> &specifications,

@@ -526,6 +526,9 @@ struct Instance {
     // literals; array_indices is then empty.
     std::optional<ExpressionId> array_left;
     std::optional<ExpressionId> array_right;
+    // The leading dimensions of a multidimensional instance array, outermost
+    // first.
+    std::vector<std::pair<ExpressionId, ExpressionId>> outer_array_ranges { };
     std::optional<std::uint8_t> drive_zero;
     std::optional<std::uint8_t> drive_one;
     UnconnectedDrive unconnected_drive { UnconnectedDrive::none };
@@ -1957,6 +1960,8 @@ struct Unit {
     std::optional<DefaultClockingReference> default_clocking;
     std::vector<AssertionDeclaration> assertion_declarations;
     std::vector<CheckerInstance> checker_instances;
+    // The `unconnected_drive in effect where the module is defined (22.9).
+    UnconnectedDrive unconnected_drive { UnconnectedDrive::none };
 };
 
 /// Owning SystemVerilog semantic HIR, including opaque class-handle operations.

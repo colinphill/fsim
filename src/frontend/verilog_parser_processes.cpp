@@ -1788,15 +1788,18 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                     "FSIM-SV-PARSE-146");
             }
             // `obj.randomize() with {...};` discards the result of a call
-            // with inline constraints (IEEE 1800-2017 18.7).
-            if (keyword("with")
-                && (statement.task_name == "randomize"
-                    || statement.task_name.ends_with(".randomize"))) {
+            // with inline constraints (IEEE 1800-2017 18.7); a method of a
+            // call's result, `process::self().srandom(7);`, is a method
+            // call statement (8.4).
+            if ((keyword("with")
+                    && (statement.task_name == "randomize"
+                        || statement.task_name.ends_with(".randomize")))
+                || (at(TokenKind::Dot) && at(TokenKind::Identifier, 1))) {
                 index_ = task_start_index;
                 Statement call;
                 call.kind = StatementKind::ContainerMethod;
                 call.value = parse_expression();
-                expect(TokenKind::Semicolon, "';' after randomize call",
+                expect(TokenKind::Semicolon, "';' after method call",
                     "FSIM-SV-PARSE-147");
                 call.span = span_from(start, previous());
                 return call;

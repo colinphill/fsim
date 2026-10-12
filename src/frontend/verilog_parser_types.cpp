@@ -1133,6 +1133,35 @@ void VerilogParser::parse_optional_range(Type& type)
         };
     } else {
         type.packed_range.reset();
+        // Bounds that are not literals flatten to
+        // `[extent0 * extent1 * ... - 1 : 0]`, folded at elaboration.
+        const auto span = type.systemverilog_packed_dimensions.front().span;
+        const auto literal = [&](const std::string_view text) {
+            return Expression { ExpressionKind::IntegerLiteral,
+                std::string { text }, { }, span };
+        };
+        std::optional<Expression> product;
+        for (const auto& dimension : type.systemverilog_packed_dimensions) {
+            Expression descending { ExpressionKind::Binary, ">=",
+                { dimension.left, dimension.right }, span };
+            Expression down { ExpressionKind::Binary, "-",
+                { dimension.left, dimension.right }, span };
+            Expression up { ExpressionKind::Binary, "-",
+                { dimension.right, dimension.left }, span };
+            Expression distance { ExpressionKind::Call, "?:",
+                { std::move(descending), std::move(down), std::move(up) },
+                span };
+            Expression extent { ExpressionKind::Binary, "+",
+                { std::move(distance), literal("1") }, span };
+            product = product
+                ? Expression { ExpressionKind::Binary, "*",
+                      { std::move(*product), std::move(extent) }, span }
+                : std::move(extent);
+        }
+        type.packed_range_expression = PackedRangeExpression {
+            Expression { ExpressionKind::Binary, "-",
+                { std::move(*product), literal("1") }, span },
+            literal("0"), span, std::nullopt };
     }
 }
 

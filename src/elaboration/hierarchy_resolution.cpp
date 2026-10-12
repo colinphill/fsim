@@ -2233,7 +2233,19 @@ void HierarchyBuilder::register_systemverilog_resolution_functions(
                     *compiled_, function.source));
             continue;
         }
-        if (!compiled_resolver_returns_first(*compiled_, function)) {
+        // A nettype that no net uses never resolves anything.
+        const auto used = std::ranges::any_of(
+            compiled_->systemverilog_hir.declarations(),
+            [&](const semantic::sv::Declaration& candidate) {
+                return candidate.form
+                        != semantic::sv::DeclarationForm::nettype_declaration
+                    && candidate.type
+                    && (candidate.type->systemverilog_net_type
+                            == declaration->name
+                        || candidate.type->target.spelling
+                            == declaration->name);
+            });
+        if (used && !compiled_resolver_returns_first(*compiled_, function)) {
             report(
                 "FSIM-ELAB-SVNETTYPE-004",
                 "the executable SystemVerilog nettype resolver '" + resolver

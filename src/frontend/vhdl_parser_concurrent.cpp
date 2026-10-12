@@ -1115,33 +1115,62 @@ void VhdlParser::parse_vhdl_generic_map(
   (void)start;
 }
 
-void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit) {
+void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
+    const std::vector<DesignUnit>* const entities) {
   // The value of an output formal reaches its actual through the
   // conversion function; an inout formal also receives the actual's value,
   // converted by the actual part's function when there is one. The parser
   // grouped `f(a) => x, f(b) => y` as subelements of a port `f`.
   std::size_t counter{};
   for (auto& instance : unit.instances) {
-    if (!instance.vhdl_component_instance) {
-      continue;
-    }
-    const auto component = std::ranges::find_if(
-        unit.vhdl_component_declarations,
-        [&](const VhdlComponentDeclaration& declaration) {
-          return declaration.name == instance.unit_name;
-        });
-    if (component == unit.vhdl_component_declarations.end()) {
+    // The formal ports of a component instance come from its component
+    // declaration; those of an entity instance, after every unit is parsed,
+    // from an entity of the same design file.
+    std::vector<VhdlComponentPort> ports;
+    if (instance.vhdl_component_instance && entities == nullptr) {
+      const auto component = std::ranges::find_if(
+          unit.vhdl_component_declarations,
+          [&](const VhdlComponentDeclaration& declaration) {
+            return declaration.name == instance.unit_name;
+          });
+      if (component == unit.vhdl_component_declarations.end()) {
+        continue;
+      }
+      ports = component->ports;
+    } else if (!instance.vhdl_component_instance && entities != nullptr) {
+      auto entity_name = instance.unit_name.substr(
+          0U, instance.unit_name.find('('));
+      if (const auto dot = entity_name.rfind('.');
+          dot != std::string::npos) {
+        entity_name = entity_name.substr(dot + 1U);
+      }
+      const auto entity = std::ranges::find_if(*entities,
+          [&](const DesignUnit& candidate) {
+            return candidate.kind == UnitKind::VhdlEntity
+                && candidate.name == entity_name;
+          });
+      if (entity == entities->end()) {
+        continue;
+      }
+      for (const auto& port : entity->ports) {
+        VhdlComponentPort view;
+        view.name = port.name;
+        view.type = port.type;
+        view.direction = port.direction;
+        ports.push_back(std::move(view));
+      }
+    } else {
       continue;
     }
     const auto port_named = [&](const std::string_view name) {
-      return std::ranges::find_if(component->ports,
+      return std::ranges::find_if(ports,
           [&](const VhdlComponentPort& port) { return port.name == name; });
     };
     std::vector<PortConnection> rewritten;
     for (auto& connection : instance.connections) {
       const auto& group = connection.value;
       const auto convertible = connection.port
-          && port_named(*connection.port) == component->ports.end()
+          && port_named(*connection.port) == ports.end()
           && group.kind == ExpressionKind::Aggregate
           && group.text == "@vhdl-formal-subelements"
           && !group.operands.empty()
@@ -1153,7 +1182,7 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit) {
                   return false;
                 }
                 const auto port = port_named(choices.front().text);
-                return port != component->ports.end()
+                return port != ports.end()
                     && (port->direction == PortDirection::Output
                         || port->direction == PortDirection::Inout
                         || port->direction == PortDirection::Buffer);

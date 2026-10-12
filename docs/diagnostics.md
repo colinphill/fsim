@@ -1341,7 +1341,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-PARSE-366` | error | A `wait_order` event list is missing its closing parenthesis. |
 | `FSIM-SV-PARSE-367` | error | A `wait_order` success or failure action statement is missing. |
 | `FSIM-SV-PARSE-368` | error | A `ref static` task or function formal is used before the SystemVerilog-2023 profile. |
-| `FSIM-SV-PARSE-369` | error | Multiple interface-class inheritance is used before the SystemVerilog-2023 profile. |
+| `FSIM-SV-PARSE-369` | error | Multiple interface-class inheritance is used before the SystemVerilog-2012 profile. |
 | `FSIM-SV-PARSE-370` | error | An assignment-pattern target is used before the SystemVerilog-2023 profile. |
 | `FSIM-SV-PARSE-371` | error | An observed deferred immediate assertion uses a delay qualifier other than exact `#0`. |
 | `FSIM-SV-PARSE-372` | error | A checker instantiation omits its instance name. |
@@ -1826,13 +1826,14 @@ scheduler.
 | `FSIM-SV-SEM-409` | error | A sized literal has size zero (IEEE 1800-2017 5.7.1). |
 | `FSIM-SV-SEM-410` | error | A Verilog (not SystemVerilog) ANSI input or inout port is declared with a variable data type (IEEE 1364-2005 12.3.4). |
 | `FSIM-SV-SEM-411` | error | A simple identifier is not declared and its context (not a port or terminal connection or continuous-assignment target) cannot declare an implicit net (IEEE 1364-2005 4.5, IEEE 1800-2017 6.10). |
-| `FSIM-SV-SEM-412` | error | Before SystemVerilog, a gate or switch primitive output or bidirectional terminal names a variable instead of a net (IEEE 1364-2005 7.1). |
+| `FSIM-SV-SEM-412` | error | A gate or switch primitive output terminal before SystemVerilog, or a bidirectional switch terminal in any revision, names a variable instead of a net (IEEE 1364-2005 7.1, IEEE 1800-2017 28.8). |
 | `FSIM-SV-SEM-413` | error | A Verilog concatenation has an unsized constant number operand (IEEE 1364-2005 5.1.14). |
 | `FSIM-SV-SEM-414` | error | A port named in a non-ANSI port list is not declared with a direction in the module body (IEEE 1364-2005 12.3.3, IEEE 1800-2017 23.2.2.1). |
 | `FSIM-SV-SEM-415` | error | `$signed` or `$unsigned` is applied to a real literal; its argument is integral (IEEE 1364-2005 5.5.1, IEEE 1800-2017 11.7). |
 | `FSIM-SV-SEM-416` | error | A named block of a process has the name of a generate block of the same module (IEEE 1364-2005 12.4.3, IEEE 1800-2017 27.6). |
 | `FSIM-SV-SEM-417` | error | An attribute value names something other than a parameter or genvar; it must be a constant expression (IEEE 1364-2005 3.8). |
 | `FSIM-SV-SEM-418` | error | A compilation-unit type declaration names an undeclared type, or a forward type declaration is never completed (IEEE 1800-2017 6.18). |
+| `FSIM-SV-SEM-419` | error | An overridable parameter's value names a specparam (IEEE 1800-2017 6.20.5). |
 | `FSIM-SV-SEM-073` | error | A module or package declares the same bounded task name more than once. |
 | `FSIM-SV-SEM-075` | error | A bounded text-file system function has the wrong argument count. |
 | `FSIM-SV-SEM-076` | error | `$fdisplay` or `$fwrite` has a nonliteral, malformed, unsupported, or multi-value format. |
@@ -2105,6 +2106,7 @@ scheduler.
 | `FSIM-ELAB-SVEVENT-008` | error | The `triggered` property is selected from an object that is not a named event. |
 | `FSIM-ELAB-SVEVENT-009` | error | A named-event assignment does not have an event-variable target and an event-variable or `null` source. |
 | `FSIM-ELAB-SVEVENT-010` | error | A named-event alias assignment is nonblocking or has a procedural timing control. |
+| `FSIM-ELAB-SVEVENT-011` | error | A named event is passed to a task or function argument that is not an event (IEEE 1800-2017 6.17). |
 | `FSIM-ELAB-SVDELAY-001` | error | A SystemVerilog delay expression is not a known nonnegative locally constant integral value after specialization. |
 | `FSIM-ELAB-SVDELAY-002` | error | A specialized SystemVerilog delay expression overflows 64-bit simulation time after time-unit normalization. |
 | `FSIM-ELAB-SVDELAY-003` | error | Combined continuous-assignment and net-declaration transition delays overflow 64-bit simulation time. |

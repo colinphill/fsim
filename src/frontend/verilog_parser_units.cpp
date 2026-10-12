@@ -21,6 +21,7 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
   explicit_port_types_.clear();
   body_port_declarations_.clear();
     unit_container_names_.clear();
+    unit_string_names_.clear();
     unit_associative_index_types_.clear();
     unit_container_types_.clear();
   port_type_refinements_.clear();
@@ -1950,8 +1951,13 @@ std::vector<Instance> VerilogParser::parse_instances() {
     instance.name = "$udp$" + std::to_string(start.span.begin.offset)
         + "$" + std::to_string(instances.size());
   }
-  if (match(TokenKind::LeftBracket)) {
+  // Each instance-array dimension (`bus[A-1:0][B-1:0]`, IEEE 1800-2017
+  // 23.3.2); all but the last expand during elaboration.
+  std::vector<std::pair<Expression, Expression>> array_ranges;
+  std::optional<Token> last_range;
+  while (match(TokenKind::LeftBracket)) {
     const auto range = previous();
+    last_range = range;
     auto left_expression = parse_expression();
     Expression right_expression;
     if (at(TokenKind::RightBracket)) {
@@ -1975,6 +1981,18 @@ std::vector<Instance> VerilogParser::parse_instances() {
         TokenKind::RightBracket,
         "']' after instance-array range",
         "FSIM-SV-PARSE-218");
+    array_ranges.emplace_back(
+        std::move(left_expression), std::move(right_expression));
+  }
+  if (!array_ranges.empty()) {
+    const auto range = *last_range;
+    for (std::size_t dimension = 0;
+         dimension + 1U < array_ranges.size(); ++dimension) {
+      instance.outer_array_ranges.push_back(
+          std::move(array_ranges[dimension]));
+    }
+    auto left_expression = std::move(array_ranges.back().first);
+    auto right_expression = std::move(array_ranges.back().second);
     const auto literal_value =
         [&](auto& self,
             const Expression& expression)

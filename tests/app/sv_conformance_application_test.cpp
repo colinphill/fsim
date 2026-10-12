@@ -773,7 +773,9 @@ endmodule
 
     config.project.name = "sv-2017-string-foreach-rejection";
     config.source_sets.front().standard = "2017";
-    config.build.cache_path.clear();
+    // A cache of this run only; an empty path would cache beneath the
+    // working directory and outlive the run.
+    config.build.cache_path = statements / "cache-2017";
     fsim::diagnostic::Engine legacy_diagnostics;
     assert(!fsim::app::build_project(config, legacy_diagnostics));
     assert(has_diagnostic(

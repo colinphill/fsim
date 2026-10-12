@@ -205,6 +205,43 @@ std::vector<std::int64_t> HierarchyBuilder::compiled_instance_array_indices(
     return indices;
 }
 
+std::vector<std::vector<std::int64_t>>
+HierarchyBuilder::compiled_instance_outer_indices(
+    const semantic::sv::Instance& instance,
+    const semantic::SpecializedHirUnit& specialization)
+{
+    // Every combination of a multidimensional array's leading indices,
+    // outermost first (IEEE 1800-2017 23.3.2).
+    std::vector<std::vector<std::int64_t>> combinations { { } };
+    for (const auto& [left_id, right_id] : instance.outer_array_ranges) {
+        const auto left = specialization.evaluate_integral_expression(left_id);
+        const auto right
+            = specialization.evaluate_integral_expression(right_id);
+        if (!left || !right
+            || (*left > *right ? *left - *right : *right - *left)
+                >= std::int64_t { 1 } << 16) {
+            report("FSIM-SV-SEM-120",
+                "instance-array bounds of '" + instance.name
+                    + "' must be constant integers",
+                compiled_source_span(*compiled_, instance.source));
+            return { { } };
+        }
+        std::vector<std::vector<std::int64_t>> expanded;
+        for (const auto& prefix : combinations) {
+            for (auto index = *left;; index += *left >= *right ? -1 : 1) {
+                auto combination = prefix;
+                combination.push_back(index);
+                expanded.push_back(std::move(combination));
+                if (index == *right) {
+                    break;
+                }
+            }
+        }
+        combinations = std::move(expanded);
+    }
+    return combinations;
+}
+
 HierarchyBuilder::CompiledSystemVerilogInstanceWorklistResult
 HierarchyBuilder::collect_compiled_systemverilog_instance_materializations(
     const semantic::sv::Unit& unit,
@@ -235,7 +272,12 @@ HierarchyBuilder::collect_compiled_systemverilog_instance_materializations(
                 ? compiled_instance_array_indices(
                       *instance->systemverilog, working_specialization)
                 : std::vector<std::int64_t> { };
+            const auto outer_combinations = instance->systemverilog != nullptr
+                ? compiled_instance_outer_indices(
+                      *instance->systemverilog, working_specialization)
+                : std::vector<std::vector<std::int64_t>> { { } };
             if (!array_indices.empty()) {
+                for (const auto& outer : outer_combinations) {
                 for (const auto index : array_indices) {
                     result.instances.push_back({
                         *instance,
@@ -251,7 +293,9 @@ HierarchyBuilder::collect_compiled_systemverilog_instance_materializations(
                         bound,
                         false,
                         index,
+                        outer,
                     });
+                }
                 }
             } else {
                 result.instances.push_back({

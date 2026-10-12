@@ -31,6 +31,12 @@ namespace fsim::app {
 void Simulation::Impl::load_coverage_database(const std::filesystem::path& path)
 {
     std::error_code error;
+    // A database not yet written holds no cumulative coverage to merge
+    // (IEEE 1800-2017 20.14.4).
+    if (!support::native_fs::exists(path, error) && !error) {
+        return;
+    }
+    error.clear();
     const auto bytes = support::native_fs::file_size(path, error);
     if (error) {
         throw std::runtime_error {

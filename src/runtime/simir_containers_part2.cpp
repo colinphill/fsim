@@ -113,6 +113,36 @@ void Interpreter::Impl::execute_container(
         ++process.pc;
         return;
     }
+    // A queue or dynamic array ignores a write through an unknown,
+    // negative or out-of-range index; a queue write one past its last
+    // element appends (IEEE 1800-2017 7.4.6, 7.10.1).
+    if (!target.type.fixed && !operation.linear_index) {
+        const auto& raw = get_register(process, operation.index);
+        std::optional<std::int64_t> requested;
+        if (operation.signed_index) {
+            requested = raw.known_signed_value();
+        } else if (const auto value = raw.known_unsigned_value();
+                   value
+                   && *value <= static_cast<std::uint64_t>(
+                          std::numeric_limits<std::int64_t>::max())) {
+            requested = static_cast<std::int64_t>(*value);
+        }
+        const auto size = target.string_elements.size();
+        if (!requested || *requested < 0
+            || static_cast<std::uint64_t>(*requested) > size
+            || (static_cast<std::uint64_t>(*requested) == size
+                && (!target.type.queue
+                    || (target.type.maximum_elements
+                        && size >= *target.type.maximum_elements)))) {
+            ++process.pc;
+            return;
+        }
+        if (static_cast<std::uint64_t>(*requested) == size) {
+            target.string_elements.push_back(source);
+            ++process.pc;
+            return;
+        }
+    }
     const auto at = target.type.fixed
         ? operation.linear_index
             ? known_index(

@@ -83,6 +83,18 @@ class Resolver final {
     }
   }
 
+  // Replaces each class-scoped declared type (`C #(...)::t`) by the
+  // specialized type it names.
+  template <typename Declaration>
+  void resolve_scoped_types(
+      std::vector<Declaration>& declarations, const Scope& scope) const {
+    for (auto& declaration : declarations) {
+      if (auto scoped = resolve_class_scoped_type(declaration.type, scope)) {
+        declaration.type = std::move(*scoped);
+      }
+    }
+  }
+
   void resolve_generate_body(GenerateBody& body, const Scope& inherited);
   [[nodiscard]] const SystemVerilogClassDeclaration* find_class(
       std::string_view identity) const;
@@ -112,6 +124,8 @@ class Resolver final {
       Type type, const ClassSelection& selection);
   [[nodiscard]] Type canonicalize_selected_type(
       Type type, const Scope& scope) const;
+  [[nodiscard]] std::optional<Type> resolve_class_scoped_type(
+      const Type& type, const Scope& scope) const;
   [[nodiscard]] SystemVerilogClassMethod specialize_selected_method(
       SystemVerilogClassMethod method,
       const ClassSelection& selection,

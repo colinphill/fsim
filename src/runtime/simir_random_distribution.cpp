@@ -42,8 +42,9 @@ namespace {
         const double high = start < end
             ? static_cast<double>(end)
             : static_cast<double>(std::numeric_limits<std::int32_t>::max());
-        const auto fraction_bits = (state & UINT32_C(0x007fffff))
-            | UINT32_C(0x3f800000);
+        // The 23 high-order seed bits form the mantissa (IEEE 1800-2017
+        // Annex N, uniform).
+        const auto fraction_bits = (state >> 9U) | UINT32_C(0x3f800000);
         double fraction = static_cast<double>(
             std::bit_cast<float>(fraction_bits));
         fraction += fraction * kInverseTwoTo23;

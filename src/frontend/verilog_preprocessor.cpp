@@ -808,8 +808,12 @@ namespace {
                 if (tokens[arguments].text != "protect") {
                     return;
                 }
-                if (arguments + 1 >= end
-                    || tokens[arguments + 1].kind != TokenKind::Identifier) {
+                // A bare `pragma protect has no pragma expression to act
+                // on (IEEE 1800-2017 22.11, 34.3).
+                if (arguments + 1 >= end) {
+                    return;
+                }
+                if (tokens[arguments + 1].kind != TokenKind::Identifier) {
                     diagnose(
                         "FSIM-SV-PP-011",
                         "`pragma protect requires a protect keyword",
@@ -1289,6 +1293,17 @@ namespace {
             const bool quoted) const
         {
             std::error_code error;
+            // An absolute name is the file itself, such as `/dev/null`
+            // (IEEE 1800-2017 22.4).
+            if (const auto absolute = fsim::support::path_from_utf8(requested);
+                absolute.is_absolute()) {
+                if (support::native_fs::exists(absolute, error) && !error
+                    && !support::native_fs::is_directory(absolute, error)
+                    && !error) {
+                    return absolute;
+                }
+                error.clear();
+            }
             if (quoted && !include_stack_.empty()) {
                 const auto local = normalized_path(
                     include_stack_.back().parent_path()

@@ -36,6 +36,115 @@ namespace {
         const semantic::ExpressionId initializer)
     {
         using semantic::sv::ExpressionKind;
+        // `'{key: value, ...}` for an associative array (7.9.11, 10.9.2).
+        if (type.associative && !type.aggregate_value
+            && (type.element_kind == ContainerElementKind::Packed
+                || type.element_kind == ContainerElementKind::String)) {
+            const auto pattern = specialization.find_expression(initializer);
+            if (!pattern || pattern->systemverilog == nullptr
+                || pattern->systemverilog->kind
+                    != ExpressionKind::assignment_pattern) {
+                return std::nullopt;
+            }
+            auto value = default_container_value(type);
+            std::string error;
+            const auto packed_of = [&](const semantic::ExpressionId id,
+                                       const std::uint32_t width)
+                -> std::optional<PackedLogic4> {
+                const auto constant = evaluate_hir_systemverilog_constant(
+                    specialization, id, error);
+                if (!constant || constant->unbounded) {
+                    return std::nullopt;
+                }
+                PackedLogic4 result(width, Logic4::zero);
+                const auto sign = constant->packed.width() != 0U
+                    && constant->signed_value
+                    ? runtime::to_logic4(constant->packed.get_logic9(
+                          constant->packed.width() - 1U))
+                    : Logic4::zero;
+                for (std::uint32_t bit = 0; bit < width; ++bit) {
+                    result.set(bit, bit < constant->packed.width()
+                            ? runtime::to_logic4(
+                                  constant->packed.get_logic9(bit))
+                            : sign);
+                }
+                return result;
+            };
+            for (const auto& association : pattern->systemverilog->associations) {
+                if (association.choice_spelling != "@key"
+                    || association.choices.size() != 1U) {
+                    return std::nullopt;
+                }
+                const auto key_id = association.choices.front();
+                std::size_t position { };
+                if (type.string_indices) {
+                    const auto key = specialization.evaluate_string_expression(
+                        key_id);
+                    if (!key) {
+                        return std::nullopt;
+                    }
+                    const auto found = std::ranges::lower_bound(
+                        value.string_keys, *key);
+                    position = static_cast<std::size_t>(
+                        found - value.string_keys.begin());
+                    if (found == value.string_keys.end() || *found != *key) {
+                        value.string_keys.insert(found, *key);
+                        if (type.element_kind == ContainerElementKind::String) {
+                            value.string_elements.insert(
+                                value.string_elements.begin()
+                                    + static_cast<std::ptrdiff_t>(position),
+                                std::string { });
+                        } else {
+                            value.elements.insert(value.elements.begin()
+                                    + static_cast<std::ptrdiff_t>(position),
+                                PackedLogic4(type.element_width, Logic4::zero));
+                        }
+                    }
+                } else {
+                    const auto key = packed_of(key_id, type.index_width);
+                    if (!key || key->is_logic9()) {
+                        return std::nullopt;
+                    }
+                    const auto found = std::ranges::lower_bound(value.keys,
+                        *key, [&](const PackedLogic4& left,
+                                  const PackedLogic4& right) {
+                            return associative_index_key_less(
+                                type, left, right);
+                        });
+                    position = static_cast<std::size_t>(
+                        found - value.keys.begin());
+                    if (found == value.keys.end() || *found != *key) {
+                        value.keys.insert(found, *key);
+                        if (type.element_kind == ContainerElementKind::String) {
+                            value.string_elements.insert(
+                                value.string_elements.begin()
+                                    + static_cast<std::ptrdiff_t>(position),
+                                std::string { });
+                        } else {
+                            value.elements.insert(value.elements.begin()
+                                    + static_cast<std::ptrdiff_t>(position),
+                                PackedLogic4(type.element_width, Logic4::zero));
+                        }
+                    }
+                }
+                if (type.element_kind == ContainerElementKind::String) {
+                    const auto text = specialization.evaluate_string_expression(
+                        association.value);
+                    if (!text) {
+                        return std::nullopt;
+                    }
+                    value.string_elements[position] = *text;
+                } else {
+                    const auto element = packed_of(
+                        association.value, type.element_width);
+                    if (!element) {
+                        return std::nullopt;
+                    }
+                    value.elements[position] = *element;
+                }
+            }
+            return value;
+        }
         if (type.associative || type.aggregate_value
             || (type.element_kind != ContainerElementKind::Packed
                 && type.element_kind != ContainerElementKind::Scalar
@@ -141,6 +250,93 @@ namespace {
                     type.two_state ? Logic4::zero : Logic4::x));
             return value;
         }
+        // An index-keyed pattern for a one-dimensional fixed array places
+        // each value at its index; `default:` fills the rest (10.9.1).
+        if (initializer_source != nullptr && type.fixed
+            && type.dimensions.size() == 1U
+            && initializer_source->kind == ExpressionKind::assignment_pattern
+            && std::ranges::any_of(initializer_source->associations,
+                [](const auto& association) {
+                    return association.choice_spelling == "@key";
+                })) {
+            const auto [left, right] = type.dimensions.front();
+            std::vector<std::optional<semantic::ExpressionId>> slots(
+                *leaf_count);
+            std::optional<semantic::ExpressionId> keyed_default;
+            std::string key_error;
+            for (const auto& association : initializer_source->associations) {
+                if (association.choice_spelling == "default") {
+                    keyed_default = association.value;
+                    continue;
+                }
+                if (association.choice_spelling != "@key"
+                    || association.choices.size() != 1U) {
+                    return std::nullopt;
+                }
+                const auto key = evaluate_hir_systemverilog_constant(
+                    specialization, association.choices.front(), key_error);
+                const auto index = key && !key->unbounded
+                    ? key->packed.known_signed_value()
+                    : std::nullopt;
+                if (!index || *index < std::min(left, right)
+                    || *index > std::max(left, right)) {
+                    return std::nullopt;
+                }
+                const auto ordinal = static_cast<std::size_t>(left >= right
+                        ? left - *index
+                        : *index - left);
+                slots[ordinal] = association.value;
+            }
+            std::vector<semantic::ExpressionId> keyed_leaves;
+            for (const auto& slot : slots) {
+                if (!slot && !keyed_default) {
+                    return std::nullopt;
+                }
+                keyed_leaves.push_back(slot ? *slot : *keyed_default);
+            }
+            auto value = default_container_value(type);
+            std::string leaf_error;
+            for (std::size_t at = 0; at < keyed_leaves.size(); ++at) {
+                if (type.element_kind == ContainerElementKind::String) {
+                    const auto text = specialization.evaluate_string_expression(
+                        keyed_leaves[at]);
+                    if (!text) {
+                        return std::nullopt;
+                    }
+                    value.string_elements[at] = *text;
+                    continue;
+                }
+                if (type.element_kind != ContainerElementKind::Packed) {
+                    return std::nullopt;
+                }
+                const auto constant = evaluate_hir_systemverilog_constant(
+                    specialization, keyed_leaves[at], leaf_error);
+                if (!constant || constant->unbounded) {
+                    // `'0`, `'1`: an unsized fill of the element.
+                    const auto fill = specialization.find_expression(
+                        keyed_leaves[at]);
+                    const auto text = fill && fill->systemverilog != nullptr
+                        ? fill->systemverilog->text
+                        : std::string { };
+                    if (text != "'0" && text != "'1") {
+                        return std::nullopt;
+                    }
+                    value.elements[at] = PackedLogic4(type.element_width,
+                        text == "'1" ? Logic4::one : Logic4::zero);
+                    continue;
+                }
+                PackedLogic4 element(type.element_width,
+                    type.two_state ? Logic4::zero : Logic4::x);
+                for (std::size_t bit = 0; bit < type.element_width; ++bit) {
+                    element.set(bit, bit < constant->packed.width()
+                            ? runtime::to_logic4(
+                                  constant->packed.get_logic9(bit))
+                            : Logic4::zero);
+                }
+                value.elements[at] = std::move(element);
+            }
+            return value;
+        }
         std::vector<semantic::ExpressionId> leaves;
         std::optional<semantic::ExpressionId> default_value;
         bool valid = true;
@@ -227,7 +423,34 @@ namespace {
             const auto constant = evaluate_hir_systemverilog_constant(
                 specialization, id, error);
             if (!constant || constant->unbounded) {
-                return false;
+                // A string literal is its characters, eight bits each,
+                // right-justified in the element (5.9).
+                const auto literal = specialization.find_expression(id);
+                if (!literal || literal->systemverilog == nullptr
+                    || literal->systemverilog->kind
+                        != ExpressionKind::string_literal) {
+                    return false;
+                }
+                const auto text = specialization.evaluate_string_expression(id);
+                if (!text) {
+                    return false;
+                }
+                PackedLogic4 element(type.element_width, Logic4::zero);
+                for (std::size_t character = 0; character < text->size();
+                    ++character) {
+                    const auto byte = static_cast<unsigned char>(
+                        (*text)[text->size() - 1U - character]);
+                    for (std::size_t bit = 0; bit < 8U; ++bit) {
+                        const auto position = character * 8U + bit;
+                        if (position < type.element_width) {
+                            element.set(position, ((byte >> bit) & 1U) != 0U
+                                    ? Logic4::one
+                                    : Logic4::zero);
+                        }
+                    }
+                }
+                value.elements[at] = std::move(element);
+                return true;
             }
             PackedLogic4 element(type.element_width,
                 type.two_state ? Logic4::zero : Logic4::x);
@@ -592,7 +815,19 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 working_specialization, *executable_container_type,
                 *declaration.initializer);
         }
-        if (declaration.initializer && !initial_container) {
+        // A variable's initializer that is not a constant runs as its
+        // time-zero declaration initializer process (6.8).
+        const bool procedural_initializer = declaration.initializer
+            && !initial_container && declaration.form == Form::variable
+            && std::ranges::any_of(unit.processes,
+                [&](const semantic::ProcessId process_id) {
+                    const auto process = compiled_->find_process(process_id);
+                    return process && process->systemverilog != nullptr
+                        && process->systemverilog->name
+                        == "$declaration_initializer_" + declaration.name;
+                });
+        if (declaration.initializer && !initial_container
+            && !procedural_initializer) {
             report(
                 "FSIM-ELAB-HIR-001",
                 "compiled container declaration '"
@@ -978,7 +1213,11 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
 
     const auto four_state
         = domain == frontend::ValueDomain::Logic4;
+    // An input port net floats until it is connected (23.3.3).
     auto initial = declaration.form == Form::net
+            || (declaration.form == Form::port
+                && direction == frontend::PortDirection::Input
+                && !net_type.empty())
         ? net_initial_for(domain, net_type)
         : four_state
         ? Logic4::x

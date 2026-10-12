@@ -776,9 +776,10 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
     }
     if (interface_class) {
       while (match(TokenKind::Comma)) {
+        // IEEE 1800-2012 8.26.3 lets an interface class extend several.
         (void)require_standard(
             "multiple interface-class inheritance",
-            StandardRevision::SystemVerilog2023,
+            StandardRevision::SystemVerilog2012,
             previous(),
             "FSIM-SV-PARSE-369");
         declaration.extended_interfaces.push_back(parse_base());

@@ -69,12 +69,43 @@ void collect_classes(
   return owner;
 }
 
+// The class, then its bases and the interface classes it extends or
+// implements, nearest first (IEEE 1800-2017 8.26.3).
+[[nodiscard]] std::vector<const SystemVerilogClassDeclaration*>
+class_ancestry(
+    const SystemVerilogClassDeclaration* owner,
+    const std::map<
+        std::string, const SystemVerilogClassDeclaration*>& classes) {
+  std::vector<const SystemVerilogClassDeclaration*> order;
+  std::set<std::string> visited;
+  if (owner != nullptr) order.push_back(owner);
+  for (std::size_t index = 0; index < order.size(); ++index) {
+    const auto* current = order[index];
+    if (!visited.insert(current->canonical_identity).second) continue;
+    const auto add = [&](const std::string& identity) {
+      if (identity.empty()) return;
+      if (const auto found = classes.find(identity); found != classes.end()) {
+        order.push_back(found->second);
+      }
+    };
+    if (current->base) add(current->base->declaration_identity);
+    for (const auto& extended : current->extended_interfaces) {
+      add(extended.declaration_identity);
+    }
+    for (const auto& implemented : current->implemented_interfaces) {
+      add(implemented.declaration_identity);
+    }
+  }
+  return order;
+}
+
 [[nodiscard]] Type resolved_method_type(
     const SystemVerilogClassMethod& method,
     Type result,
     const std::map<
         std::string, const SystemVerilogClassDeclaration*>& classes) {
   const auto* owner = method_owner(method, classes);
+  const auto ancestry = class_ancestry(owner, classes);
   std::set<std::string> expanded;
   while (!result.named_type.empty()
          && expanded.insert(result.named_type).second) {
@@ -82,7 +113,7 @@ void collect_classes(
     const auto separator = alias_name.rfind("::");
     if (separator != std::string::npos) {
       const auto qualifier = alias_name.substr(0, separator);
-      for (auto current = owner; current != nullptr;) {
+      for (const auto* current : ancestry) {
         if (qualifier == current->name
             || qualifier == current->canonical_identity
             || current->canonical_identity.ends_with(
@@ -91,13 +122,6 @@ void collect_classes(
           result.named_type = alias_name;
           break;
         }
-        if (!current->base
-            || current->base->declaration_identity.empty()) {
-          break;
-        }
-        const auto base = classes.find(
-            current->base->declaration_identity);
-        current = base == classes.end() ? nullptr : base->second;
       }
     }
     const Type* replacement = nullptr;
@@ -108,7 +132,7 @@ void collect_classes(
         method_alias != method.type_aliases.end()) {
       replacement = &method_alias->type;
     } else {
-      for (auto current = owner; current != nullptr;) {
+      for (const auto* current : ancestry) {
         if (const auto class_alias = std::ranges::find(
                 current->type_aliases,
                 alias_name,
@@ -117,13 +141,6 @@ void collect_classes(
           replacement = &class_alias->type;
           break;
         }
-        if (!current->base
-            || current->base->declaration_identity.empty()) {
-          break;
-        }
-        const auto base = classes.find(
-            current->base->declaration_identity);
-        current = base == classes.end() ? nullptr : base->second;
       }
     }
     if (replacement == nullptr) break;

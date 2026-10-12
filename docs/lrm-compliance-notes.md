@@ -1263,3 +1263,98 @@ gives fsim's result in each case checked.
 - A clocking drive `cb.v <= ##n e` is rewritten as a forked
   `repeat (n) @(cb)` followed by the drive; `##0` drives as a plain
   clocking drive. The value is evaluated when the drive happens.
+
+## Interface arrays, interface port parameters, seeded random and time-zero order (batch 46)
+
+- An instance array may have several unpacked dimensions
+  (`ifc grid[2][3]()`): the parser keeps every range but the last in
+  `outer_array_ranges`, the worklist expands each combination of outer and
+  inner indices, and interface handles, child paths and port suffixes carry
+  every index (`grid[1][2]`).
+- A non-ANSI port declared in the body as `Iface.mp port;` is an interface
+  port restricted to that modport (25.5); the plain form `Iface port;`
+  keeps its existing meaning.
+- A modport may name an import or export callable declared later in the
+  interface; the parser resolves the pending names at `endinterface`.
+- `process::self()`, `status()`, `completed` and the `process::state`
+  constants (`FINISHED`, `RUNNING`, `WAITING`, `SUSPENDED`, `KILLED`) lower
+  in module processes.
+- A queue slice `q[a:b]` is copied element by element into the target
+  queue; string queues support `push_back`, `push_front`, `pop_front` and
+  `pop_back`.
+- An array pattern may name element indexes (`'{2: v, default: d}`) and
+  may hold string literals that pack right-justified into the elements.
+- `force` and `release` accept a hierarchical target.
+- A specparam is also a local parameter of the module, so expressions
+  outside the specify block may read it (6.20.5).
+- The parameters of the interface instance bound to an interface port are
+  hierarchy identities of the child's specialization (`port.PARAM`), so
+  local parameters, types and generate conditions may depend on them
+  (25.10). Generic `interface` ports work the same way.
+- A static class function called as a statement outside a class body is
+  an expression statement whose result is discarded (13.4.1), like the
+  instance method form.
+- `$random(seed)` is `rtl_dist_uniform(seed, INT_MIN, INT_MAX)`; the
+  Annex N `uniform` helper now takes the mantissa from the seed's high 23
+  bits (`seed >> 9`), which changes every `$dist_*` value to match other
+  simulators.
+- At time zero, a SystemVerilog process with no static sensitivity and no
+  event wait (an `initial` block that only waits on time) starts one delta
+  after the other processes, so continuous assignments and event-driven
+  procedures settle before it reads them. Declaration initializers still
+  run first (6.8). The order within the active region is unspecified
+  (4.7), so this is a choice, not a correction.
+- `` `include `` accepts an absolute path to an existing file (`/dev/null`),
+  and the corpus runner adds the ivtest root to the include path.
+
+## Class-scoped types, process handles, floating inputs and out-of-range writes (batch 47)
+
+- A type named through a class scope (`C#(T)::item_t`, or an alias of a
+  specialization) is specialized with the selection's actuals wherever a
+  declaration uses it: module and process variables, generate bodies,
+  statement declarations, method arguments and return types. Type aliases
+  are looked up through bases, extended interface classes and implemented
+  interface classes, nearest first.
+- A method call on an interface class handle finds prototypes in every
+  interface class it extends, not only the first (8.26.3). Multiple
+  interface-class inheritance is accepted from IEEE 1800-2012.
+- A typed constructor call accepts named arguments
+  (`C#(8)::new(.start(2))`, 8.8).
+- `process::self().srandom(7)` and other process methods apply to a
+  computed receiver (a call or an indexed handle), and `p.status` and
+  `p.completed` work in name form (9.7). `x.y.constraint_mode(0)` and
+  `rand_mode` called as statements are expression statements.
+- A net-typed input port that is not connected starts at `z`, or at its
+  pull value under `` `unconnected_drive `` (23.3.3).
+- Writes to a part select that lies partly or wholly outside the target
+  write only the bits inside it; a dynamic slice that misses entirely is a
+  no-op (11.5.1). A run-time bit index into an array element
+  (`grid[row][column] = 1`) writes that bit only.
+- A blocking assignment with an intra-assignment delay may target an array
+  element; the right-hand side is captured before the delay.
+- `int values[] = new[n];` sizes a local dynamic array at its declaration
+  (7.5.1). A constant associative array may have a keyed pattern
+  initializer.
+- An unpacked structure pattern may key members by type
+  (`'{default: 0, int: 7}`, 10.9.2).
+- The `$left`, `$right`, `$low`, `$high`, `$increment` and `$size` queries
+  accept a dimension number beyond the unpacked rank, which selects a
+  packed dimension (20.7). Multidimensional packed `logic`/`bit`/`reg`
+  types have the product of their extents as their width.
+- An `int` or `integer` parameter may be `$` (unbounded); other types still
+  raise `FSIM-ELAB-SVCONST-001`.
+- A specparam is a local parameter of the module; an overridable
+  parameter whose value names a specparam is `FSIM-SV-SEM-419` (6.20.5). A
+  specparam may have a packed range, and `+=>`/`-=>` polarity paths parse.
+- A named event passed to a non-event formal is `FSIM-ELAB-SVEVENT-011`.
+- Radix formats (`%h`, `%b`, ...) of a string variable print it as `%s`.
+- Hierarchical event triggers (`-> top.u.e`) reach the bound event.
+- `` `pragma protect `` without a keyword is accepted and ignored.
+- A nettype whose resolution function is outside the retained forms
+  raises `FSIM-ELAB-SVNETTYPE-004` only when a net of that type is
+  declared, not at the nettype declaration.
+- The time-zero late start from batch 46 is narrowed: it applies only to a
+  process with no static sensitivity and no event wait that reads a signal
+  still settling (a resolved net, or one driven by a process with static
+  sensitivity or by a port connection).
+- A missing coverage database is an empty load.

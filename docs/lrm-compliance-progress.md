@@ -253,6 +253,112 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 47: class-scoped types, process handles, floating inputs, out-of-range writes
+
+Fixture: `sv_language_details_batch47.sv` (passes on xsim, which dispatches
+every call through a handle of an interface class with two extended
+interfaces to the first prototype; the fixture calls through single-interface
+handles instead).
+
+- SystemVerilog and Verilog:
+  - types named through a class scope (`C#(T)::item_t`) specialized with
+    the selection's actuals in every declaration context, and type aliases
+    found through bases and interface classes (8.25, 8.26);
+  - methods of every interface class an interface class extends, multiple
+    interface-class inheritance from IEEE 1800-2012, and typed constructors
+    with named arguments (8.8, 8.26.3);
+  - process methods on computed receivers (`process::self().srandom(7)`)
+    and `p.status` in name form (9.7); `constraint_mode` and `rand_mode`
+    as statements through member chains (18.8, 18.9);
+  - unconnected net input ports float at `z` or the pull value (23.3.3);
+  - partly out-of-range part-select writes and run-time bit writes into
+    array elements (11.5.1); intra-assignment delays to array elements;
+  - `new[n]` local dynamic-array initializers, keyed constant associative
+    initializers, type-keyed structure patterns (7.5.1, 10.9.2);
+  - packed dimensions in array queries and multidimensional packed widths
+    (20.7);
+  - `$` for `int` parameters; specparams as local parameters and
+    `FSIM-SV-SEM-419` for overridable parameters naming one (6.20.5);
+    ranged specparams and `+=>`/`-=>` paths;
+  - `FSIM-ELAB-SVEVENT-011` for a named event passed to a non-event formal;
+    radix formats of strings; hierarchical event triggers; bare
+    `` `pragma protect ``;
+  - the time-zero late start narrowed to processes that read a settling
+    signal.
+
+Out of scope: Verilator `t_constraint_dist_randmode_unsup` expects an
+unsupported-feature error for legal `rand_mode` use, which fsim now accepts.
+
+Investigated and left open: fork children inside automatic tasks do not
+share the task's automatic variables; instance-array port slicing; a net
+delay plus a continuous assignment delay is one stage, not two; `$typename`;
+class-scoped value parameters; assertions in generate blocks; `%E`/`%G`;
+wide (>64-bit) parameter arithmetic; `job[i].status`; object
+`get_randstate`/`set_randstate`; unconstrained `rand int` randomization
+enumerates the whole domain.
+
+The full corpus run b48 (wip41) for batches 46 and 47 is recorded with
+batch 48.
+
+### Batch 46: interface arrays, interface port parameters, seeded random, time-zero order
+
+Fixture: `sv_language_details_batch46.sv` (passes on xsim).
+
+- SystemVerilog and Verilog:
+  - multidimensional interface instance arrays (`ifc grid[2][3]()`) and
+    their elements as port actuals (23.3.3.5);
+  - non-ANSI interface ports declared in the body as `Iface.mp port;`, and
+    modport import/export of callables declared later in the interface
+    (25.5, 25.7);
+  - `process::self()`, `status()` and the `process::state` constants in
+    module processes (9.7);
+  - queue slices `q[a:b]`, string queue `push_*`/`pop_*`, index-keyed
+    array patterns (`'{2: v, default: d}`), string literals in unpacked
+    byte-array patterns (7.10, 10.9.1);
+  - hierarchical `force`/`release` targets (10.6.2);
+  - specparams read as constants outside the specify block (6.20.5);
+  - parameters of the interface instance bound to an interface port in
+    constant expressions (`localparam p = port.PARAM;`, 25.10);
+  - a static class function called as a statement outside a class (13.4.1);
+  - `$random(seed)`, and the Annex N `uniform` helper now takes the seed's
+    high 23 bits, so every `$dist_*` value matches other simulators;
+  - at time zero, an `initial` block that only waits on time and reads a
+    net starts one delta after the other processes (4.7 leaves the order
+    open);
+  - `` `include `` of an absolute path, and the ivtest root on the include
+    path.
+
+Out of scope: ivtest `$is_signed`, `$ivlh_*`, `$countdrivers`, `$sizeof`,
+`$fopenr`, `$simparam` and `$abstime` (Icarus and Verilog-AMS extensions),
+and `pv_wr_vec*_nb_ec` (they read a nonblocking event-controlled update in
+the same active region, which xsim also rejects).
+
+Investigated and left open:
+- `uvm_resource_db#(virtual X)::set` and `uvm_config_db` calls from module
+  scope: the resolver cannot select the library's parameterized classes.
+- A delayed continuous assignment through a real parameter delay
+  (`assign #Delay y = a`, `br_gh732`) still starts at z.
+- Instance arrays connected to a wide actual (`and_gate u[0:3] (out, a, b)`)
+  connect the low bits to every instance instead of a slice each.
+
+The full run b47 used wip39. Its loss `6.20.5--specparam_inv` is fixed
+after it (an overridable parameter naming a specparam is now
+`FSIM-SV-SEM-419`). Verilator `t_timing_timescale` stays lost: it relies on
+one `initial` block running before an `always` block that its `#(delay)`
+reads, an order the late start changes and 4.7 leaves open; starting such
+blocks on time instead loses three ivtest cases.
+
+Corpus (passed/total, unique case ids; against b46):
+
+| Suite | Batch 45 | Batch 46 |
+|---|---:|---:|
+| VESTs | 3337/3648 | 3337/3648 |
+| nvc regress | 636/1482 | 639/1482 |
+| VHDL Compliance-Tests | 33/72 | 33/72 |
+| ivtest | 2213/2826 | 2232/2826 |
+| Verilator test_regress | 1107/2415 | 1155/2415 |
+| sv-tests | 1390/1497 | 1391/1497 |
+
 ### Batch 45: queues, ports, modport expressions, loop forms
 
 Fixture: `sv_language_details_batch45.sv` (passes on xsim).

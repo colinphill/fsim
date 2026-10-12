@@ -3740,6 +3740,49 @@ std::optional<SignalId> Lowerer::hir_direct_signal(
                 hierarchical_reference_used_ = true;
                 return signal;
             }
+            // A member of an element of a multidimensional interface
+            // instance array, `bus[1][2].data` (23.3.2).
+            if (const auto dot = path->rfind('.');
+                systemverilog_interface_handles_ != nullptr
+                && dot != std::string::npos
+                && path->find('[') < dot) {
+                const auto occurrence = path->substr(0U, dot);
+                const auto member = path->substr(dot + 1U);
+                for (auto lexical = hierarchy_;;) {
+                    const auto candidate = lexical.empty()
+                        ? occurrence
+                        : lexical + "." + occurrence;
+                    if (systemverilog_interface_handles_->contains(
+                            candidate)) {
+                        // An interface port array element is an alias of
+                        // this instance (`b[0][1].data`).
+                        if (const auto alias = signals_.find(
+                                occurrence + "." + member);
+                            alias != signals_.end()
+                            && alias->second < design_.signal_info_.size()) {
+                            return alias->second;
+                        }
+                        if (const auto found = design_.signal_by_name_.find(
+                                candidate + "." + member);
+                            found != design_.signal_by_name_.end()
+                            && found->second < design_.signal_info_.size()) {
+                            hierarchical_reference_used_ = true;
+                            return found->second;
+                        }
+                        break;
+                    }
+                    const auto separator = lexical.rfind('.');
+                    if (separator == std::string::npos) {
+                        if (!lexical.empty()) {
+                            lexical.clear();
+                            continue;
+                        }
+                        break;
+                    }
+                    lexical.resize(separator);
+                }
+                hierarchical_reference_missed_ = true;
+            }
             return std::nullopt;
         }
         const auto element = specialized_hir_unit_
@@ -4843,6 +4886,48 @@ Lowerer::hir_container_object_binding(
     const auto declaration_id = hir_referenced_declaration(
         expression_id);
     if (!declaration_id) {
+        // A hierarchical name of another instance's unpacked array
+        // (`inst.mem`, IEEE 1800-2017 23.6).
+        const auto expression = specialized_hir_unit_->find_expression(
+            expression_id);
+        if (!expression || expression->systemverilog == nullptr
+            || expression->systemverilog->kind
+                != semantic::sv::ExpressionKind::name
+            || expression->systemverilog->text.find('.')
+                == std::string::npos) {
+            return std::nullopt;
+        }
+        const auto& text = expression->systemverilog->text;
+        for (auto lexical = hierarchy_;;) {
+            const auto candidate
+                = lexical.empty() ? text : lexical + "." + text;
+            if (const auto found = design_.container_by_name_.find(candidate);
+                found != design_.container_by_name_.end()) {
+                const auto info = std::ranges::find_if(
+                    design_.container_object_info_.rbegin(),
+                    design_.container_object_info_.rend(),
+                    [&](const ContainerObjectInfo& candidate_info) {
+                        return candidate_info.id == found->second;
+                    });
+                if (info == design_.container_object_info_.rend()) {
+                    return std::nullopt;
+                }
+                hierarchical_reference_used_ = true;
+                return HirContainerObjectBinding {
+                    { }, candidate, found->second, std::nullopt,
+                    &info->type, false,
+                };
+            }
+            const auto separator = lexical.rfind('.');
+            if (separator == std::string::npos) {
+                if (!lexical.empty()) {
+                    lexical.clear();
+                    continue;
+                }
+                break;
+            }
+            lexical.resize(separator);
+        }
         return std::nullopt;
     }
     return hir_container_object_binding_for_declaration(*declaration_id);
@@ -5993,6 +6078,18 @@ Lowerer::hir_static_container_expression_type(
         return std::nullopt;
     }
     const auto& source = *expression->systemverilog;
+    // A slice of a queue is a queue (IEEE 1800-2017 7.10.1).
+    if (source.kind == semantic::sv::ExpressionKind::slice
+        && source.text == ":" && source.operands.size() == 3U) {
+        if (const auto base = hir_container_object_binding(
+                source.operands.front());
+            base && base->type != nullptr && base->type->queue
+            && (base->type->element_kind == ContainerElementKind::Packed
+                || base->type->element_kind
+                    == ContainerElementKind::Scalar)) {
+            return *base->type;
+        }
+    }
     if (source.kind == semantic::sv::ExpressionKind::call
         && source.text == "?:" && source.operands.size() == 3U) {
         const auto when_true = hir_static_container_expression_type(
@@ -6558,6 +6655,18 @@ bool Lowerer::hir_expression_is_string(
     }
     if (hir_vhdl_string_element_width(expression_id)) {
         return true;
+    }
+    // `pop_front`/`pop_back` of a queue of strings.
+    if (const auto call = specialized_hir_unit_->find_expression(expression_id);
+        call && call->systemverilog != nullptr
+        && call->systemverilog->kind == semantic::sv::ExpressionKind::call
+        && (call->systemverilog->text == ".pop_front"
+            || call->systemverilog->text == ".pop_back")
+        && call->systemverilog->operands.size() == 1U) {
+        const auto binding = hir_container_object_binding(
+            call->systemverilog->operands.front());
+        return binding && binding->type != nullptr && binding->type->queue
+            && binding->type->element_kind == ContainerElementKind::String;
     }
     if (const auto slice = specialized_hir_unit_->find_expression(expression_id);
         slice && slice->vhdl != nullptr
@@ -11383,6 +11492,31 @@ std::optional<std::size_t> Lowerer::hir_systemverilog_type_width(
             return 64U;
         }
         std::optional<std::size_t> width;
+        // `logic [N:1][3:0]`: the product of every packed dimension's
+        // extent, each folded in this specialization (7.4.1).
+        if (reference.packed_dimensions.size() > 1U
+            && (reference.target.spelling == "logic"
+                || reference.target.spelling == "bit"
+                || reference.target.spelling == "reg")) {
+            std::size_t product { 1U };
+            for (const auto& dimension : reference.packed_dimensions) {
+                const auto left = hir_range_left(dimension);
+                const auto right = hir_range_right(dimension);
+                const auto extent = left && right
+                    ? index_distance(*left, *right) + 1U
+                    : std::uint64_t { };
+                if (extent == 0U
+                    || extent > std::numeric_limits<std::uint32_t>::max()
+                        / product) {
+                    product = 0U;
+                    break;
+                }
+                product *= static_cast<std::size_t>(extent);
+            }
+            if (product != 0U) {
+                return product;
+            }
+        }
         if (reference.packed_range) {
             const auto boundary = [&](
                                       const std::optional<std::int64_t> value,

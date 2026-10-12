@@ -691,6 +691,7 @@ DesignUnit VerilogParser::parse_module(
     explicit_port_types_.clear();
     body_port_declarations_.clear();
     unit_container_names_.clear();
+    unit_string_names_.clear();
     unit_associative_index_types_.clear();
     unit_container_types_.clear();
     port_type_refinements_.clear();
@@ -727,6 +728,7 @@ DesignUnit VerilogParser::parse_module(
     pending_systemverilog_fsm_pragmas_.clear();
     pending_systemverilog_fsm_pragma_target_position_.reset();
     unit.kind = kind;
+    unit.unconnected_drive = current_unconnected_drive_;
     const bool interface_unit = kind == UnitKind::SystemVerilogInterface;
     const bool program_unit = kind == UnitKind::SystemVerilogProgram;
     const auto unit_kind = interface_unit
@@ -1253,6 +1255,42 @@ DesignUnit VerilogParser::parse_module(
                 required,
                 later_declaration);
             skip_to_semicolon();
+        } else if (language_ == Language::SystemVerilog2017
+            && at(TokenKind::Identifier)
+            && !keyword_reserved(keyword_set_, current().text)
+            && at(TokenKind::Dot, 1) && at(TokenKind::Identifier, 2)
+            && at(TokenKind::Identifier, 3)
+            && non_ansi_ports_.contains(current(3).text)
+            && at(TokenKind::Semicolon, 4)) {
+            // A non-ANSI interface port declaration
+            // (`counter_if.counter_mp c_data;`, IEEE 1800-2017 25.5).
+            module_has_non_time_item_ = true;
+            const auto interface_start = advance();
+            std::string modport;
+            if (match(TokenKind::Dot)) {
+                modport = expect_identifier("interface modport name").text;
+            }
+            const auto port_name = expect_identifier("interface port name");
+            expect(TokenKind::Semicolon, "';' after interface port",
+                "FSIM-SV-PARSE-008");
+            body_port_declarations_.insert(port_name.text);
+            SignalDeclaration declaration {
+                port_name.text,
+                Type { ValueDomain::Unknown, "interface", std::nullopt,
+                    false },
+                PortDirection::Unknown,
+                true,
+                cover(interface_start.span, port_name.span),
+                std::nullopt,
+                interface_start.text,
+                std::move(modport) };
+            const auto existing = std::ranges::find(
+                unit.ports, port_name.text, &SignalDeclaration::name);
+            if (existing != unit.ports.end()) {
+                *existing = std::move(declaration);
+            } else {
+                unit.ports.push_back(std::move(declaration));
+            }
         } else if (is_declaration_start() && !instance_start()) {
             module_has_non_time_item_ = true;
             parse_declaration(unit);
@@ -1442,6 +1480,96 @@ DesignUnit VerilogParser::parse_module(
                 std::string { unit_kind }
                     + " end name does not match '" + unit.name + "'");
         }
+    }
+    // Modport callables declared after the modport (25.7).
+    for (const auto& pending : pending_modport_callables_) {
+      if (pending.modport >= unit.systemverilog_modports.size()
+          || pending.member
+              >= unit.systemverilog_modports[pending.modport].members.size()) {
+        continue;
+      }
+      auto& member = unit.systemverilog_modports[pending.modport]
+                         .members[pending.member];
+      const bool function = std::ranges::any_of(unit.functions,
+          [&](const FunctionDeclaration& candidate) {
+            return candidate.name == pending.token.text;
+          });
+      const bool task = std::ranges::any_of(unit.tasks,
+          [&](const TaskDeclaration& candidate) {
+            return candidate.name == pending.token.text;
+          });
+      if (!function && !task) {
+        error(pending.token, "FSIM-SV-SEM-122",
+            "modport callable '" + pending.token.text
+                + "' is not declared by the interface");
+      } else if (pending.explicit_function
+          && *pending.explicit_function != function) {
+        error(pending.token, "FSIM-SV-SEM-123",
+            "modport callable kind does not match '"
+                + pending.token.text + "'");
+      } else {
+        member.kind = function
+            ? (pending.import ? SystemVerilogModportMemberKind::FunctionImport
+                              : SystemVerilogModportMemberKind::FunctionExport)
+            : (pending.import ? SystemVerilogModportMemberKind::TaskImport
+                              : SystemVerilogModportMemberKind::TaskExport);
+      }
+    }
+    pending_modport_callables_.clear();
+    // A specparam is a constant usable in expressions outside the specify
+    // block (IEEE 1800-2017 6.20.5); expose it as a local parameter. An
+    // overridable parameter's value shall not name a specparam.
+    std::unordered_set<std::string> specparam_names;
+    for (const auto& block : unit.verilog_specify_blocks) {
+      for (const auto& specparam : block.specparams) {
+        specparam_names.insert(specparam.name);
+      }
+    }
+    const auto names_specparam = [&](const auto& self, const Expression& value)
+        -> std::optional<std::string> {
+      if (value.kind == ExpressionKind::Identifier
+          && specparam_names.contains(value.text)) {
+        return value.text;
+      }
+      for (const auto& operand : value.operands) {
+        if (auto found = self(self, operand)) {
+          return found;
+        }
+      }
+      return std::nullopt;
+    };
+    for (const auto& parameter : unit.parameters) {
+      if (parameter.kind != ParameterKind::Value || parameter.local
+          || specparam_names.contains(parameter.name)) {
+        continue;
+      }
+      if (const auto found = names_specparam(names_specparam,
+              parameter.default_value)) {
+        error(Token { TokenKind::Identifier, parameter.name, parameter.span,
+                  { } },
+            "FSIM-SV-SEM-419",
+            "parameter '" + parameter.name + "' names specparam '" + *found
+                + "' in its value");
+      }
+    }
+    for (const auto& block : unit.verilog_specify_blocks) {
+      for (const auto& specparam : block.specparams) {
+        if (specparam.path_pulse || specparam.value.kind == ExpressionKind::Invalid
+            || std::ranges::any_of(unit.parameters,
+                [&](const ParameterDeclaration& existing) {
+                  return existing.name == specparam.name;
+                })) {
+          continue;
+        }
+        ParameterDeclaration parameter;
+        parameter.name = specparam.name;
+        parameter.type = Type { ValueDomain::Integer, "implicit",
+                                std::nullopt, true };
+        parameter.default_value = specparam.value;
+        parameter.local = true;
+        parameter.span = specparam.span;
+        unit.parameters.push_back(std::move(parameter));
+      }
     }
     // A non-ANSI port declared in the body only by a type name and never
     // given a direction is an interface port: `module m(c); ifc c;`
@@ -1668,6 +1796,10 @@ bool VerilogParser::instance_start() const {
         break;
       }
     }
+    // `C #(...)::t name;` declares a variable of a class-scoped type.
+    if (at(TokenKind::Scope, cursor)) {
+      return false;
+    }
     if (!at(TokenKind::Identifier, cursor)) {
       return true;
     }
@@ -1693,6 +1825,8 @@ bool VerilogParser::instance_start() const {
   if (!at(TokenKind::LeftBracket, 2)) {
     return false;
   }
+  // One or more instance-array dimensions precede the port list
+  // (`bus[1:0][2:0] ()`, IEEE 1800-2017 23.3.2).
   std::size_t depth = 1;
   for (std::size_t lookahead = 3;
        !at(TokenKind::EndOfFile, lookahead); ++lookahead) {
@@ -1700,6 +1834,11 @@ bool VerilogParser::instance_start() const {
       ++depth;
     } else if (at(TokenKind::RightBracket, lookahead)
                && --depth == 0) {
+      if (at(TokenKind::LeftBracket, lookahead + 1)) {
+        ++lookahead;
+        depth = 1;
+        continue;
+      }
       return at(TokenKind::LeftParen, lookahead + 1);
     }
   }

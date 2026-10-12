@@ -578,10 +578,25 @@ def ivtest_cases(root: Path) -> list[Case]:
         if not source.exists():
             skip = skip or "source not present"
         compile_args += standard_args(language, standard)
-        compile_args += ["-I", str(base / directory), str(source)]
+        # iverilog runs from the ivtest root, so an include named
+        # "ivltests/x.v" resolves against it as well (IEEE 1800-2017 22.4).
+        compile_args += ["-I", str(base / directory), "-I", str(base), str(source)]
         commands = [Command("compile", compile_args)]
         if source.exists():
-            tops = [module] if module else sv_root_modules([read_text(source)])
+            # A module may come from an included file.
+            texts = [read_text(source)]
+            pending = [texts[0]]
+            for _ in range(4):
+                found = []
+                for text in pending:
+                    for included in re.findall(r'`include\s+"([^"]+)"', text):
+                        for root in (base / directory, base):
+                            if (root / included).is_file():
+                                found.append(read_text(root / included))
+                                break
+                texts += found
+                pending = found
+            tops = [module] if module else sv_root_modules(texts)
             elab = ["elaborate", "-q", "--no-aot"] + delay_mode
             for top in tops:
                 elab += ["--top", top]

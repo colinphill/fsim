@@ -868,9 +868,11 @@ Statement VerilogParser::parse_procedural_foreach_statement(
         return std::nullopt;
     }();
     const bool string_collection = collection_type
-        && !collection_type->systemverilog_container
-        && (collection_type->domain == ValueDomain::String
-            || collection_type->spelling == "string");
+        ? !collection_type->systemverilog_container
+            && (collection_type->domain == ValueDomain::String
+                || collection_type->spelling == "string")
+        : statement.target.kind == ExpressionKind::Identifier
+            && unit_string_names_.contains(statement.target.text);
     const bool known_container = collection_type
         ? collection_type->systemverilog_container.has_value()
         : statement.target.kind == ExpressionKind::Identifier

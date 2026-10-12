@@ -8804,6 +8804,7 @@ namespace {
                 std::vector<bool> bound(definition.members.size());
                 std::size_t positional { };
                 std::optional<semantic::ExpressionId> default_value;
+                std::vector<std::string_view> type_keys;
                 bool valid = true;
                 for (const auto& association : value.associations) {
                     std::optional<std::size_t> member_index;
@@ -8844,6 +8845,29 @@ namespace {
                         if (member != definition.members.end()) {
                             member_index = static_cast<std::size_t>(
                                 std::distance(definition.members.begin(), member));
+                        } else {
+                            // `type:value` sets each member of that type
+                            // not named otherwise (IEEE 1800-2017 10.9.2).
+                            bool typed { };
+                            for (std::size_t index { };
+                                index < definition.members.size(); ++index) {
+                                if (definition.members[index].type.target.spelling
+                                    != choice) {
+                                    continue;
+                                }
+                                typed = true;
+                                if (!bound[index]) {
+                                    valid = validate_nominal_value(
+                                                definition.members[index].type,
+                                                association.value, diagnostic,
+                                                context)
+                                        && valid;
+                                }
+                            }
+                            if (typed) {
+                                type_keys.push_back(choice);
+                                continue;
+                            }
                         }
                     }
                     if (!member_index) {
@@ -8867,6 +8891,14 @@ namespace {
                     = definition.form == TypeForm::packed_union
                     || definition.form == TypeForm::unpacked_union
                     || definition.form == TypeForm::tagged_union;
+                for (std::size_t member { }; member < bound.size(); ++member) {
+                    if (std::ranges::find(type_keys,
+                            std::string_view {
+                                definition.members[member].type.target.spelling })
+                        != type_keys.end()) {
+                        bound[member] = true;
+                    }
+                }
                 // Without `default`, a structure pattern covers every
                 // member (IEEE 1800-2017 10.9.2).
                 if (!default_value && !union_members && valid
@@ -9338,7 +9370,9 @@ namespace {
                 std::string error;
                 const auto value = evaluate_hir_systemverilog_constant(
                     *unit_specialized, *parameter.initializer, error);
-                if (value && value->unbounded) {
+                if (value && value->unbounded
+                    && parameter.type->target.spelling != "int"
+                    && parameter.type->target.spelling != "integer") {
                     append("FSIM-ELAB-SVCONST-001",
                         "symbolic unbounded '$' requires an implicit "
                         "parameter type",
@@ -13091,6 +13125,9 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
                 = instance->systemverilog->unconnected_drive;
         }
     }
+    if (unconnected_drive == semantic::sv::UnconnectedDrive::none) {
+        unconnected_drive = unit.unconnected_drive;
+    }
     for (const auto declaration_id : active_declarations) {
         const auto declaration = specialized->find_declaration(
             declaration_id);
@@ -13490,8 +13527,15 @@ void HierarchyBuilder::reserve_compiled_systemverilog_interface_occurrences(
             reserve(occurrence_path);
             return;
         }
-        for (const auto index : array_indices) {
-            reserve(occurrence_path + "[" + std::to_string(index) + "]");
+        for (const auto& outer :
+            compiled_instance_outer_indices(record, owner)) {
+            auto prefix = occurrence_path;
+            for (const auto index : outer) {
+                prefix += "[" + std::to_string(index) + "]";
+            }
+            for (const auto index : array_indices) {
+                reserve(prefix + "[" + std::to_string(index) + "]");
+            }
         }
     };
     for (const auto instance : unit.instances) {
@@ -13837,6 +13881,9 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_instance_worklist(
             ? generated_path(working_path, record.name)
             : compiled_instance_path(*compiled_, unit.scope,
                   record.scope, working_path, record.name);
+        for (const auto outer : materialization.outer_array_indices) {
+            child_path += "[" + std::to_string(outer) + "]";
+        }
         if (materialization.array_index) {
             child_path += "["
                 + std::to_string(*materialization.array_index) + "]";
@@ -14085,6 +14132,45 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_instance_worklist(
 
         if (!child_ports_valid) {
             continue;
+        }
+        // A parameter of the interface instance bound to an interface port
+        // is a constant of the child (`i.PARAM`, IEEE 1800-2017 25.10).
+        if (child_interface_specialization) {
+            std::vector<semantic::SpecializedHirNamedIdentity> identities {
+                child_interface_specialization->specialization()
+                    .hierarchy_identities.begin(),
+                child_interface_specialization->specialization()
+                    .hierarchy_identities.end()
+            };
+            const auto inherited = identities.size();
+            for (const auto declaration_id :
+                child->systemverilog->declarations) {
+                const auto declaration
+                    = compiled_->find_declaration(declaration_id);
+                if (!declaration || declaration->systemverilog == nullptr
+                    || declaration->systemverilog->form
+                        != semantic::sv::DeclarationForm::port) {
+                    continue;
+                }
+                const auto& port_name = declaration->systemverilog->name;
+                const auto parameters
+                    = systemverilog_interface_parameter_identities_.find(
+                        child_path + "." + port_name);
+                if (parameters
+                    == systemverilog_interface_parameter_identities_.end()) {
+                    continue;
+                }
+                for (const auto& [parameter, parameter_identity] :
+                    parameters->second) {
+                    identities.push_back({ port_name + "." + parameter,
+                        parameter_identity });
+                }
+            }
+            if (identities.size() != inherited) {
+                child_interface_specialization
+                    = child_interface_specialization
+                          ->with_hierarchy_identities(identities);
+            }
         }
         const auto* saved_configuration
             = active_compiled_systemverilog_configuration_;

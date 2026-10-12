@@ -442,13 +442,16 @@ void VerilogParser::parse_modport(
                 "modport member '" + member.text
                     + "' is not declared by the interface");
           }
-          if (callable && function == unit.functions.end()
-              && task == unit.tasks.end()) {
-            error(
+          const bool pending_callable = callable
+              && function == unit.functions.end()
+              && task == unit.tasks.end();
+          if (pending_callable) {
+            pending_modport_callables_.push_back({
+                unit.systemverilog_modports.size(),
+                declaration.members.size(),
                 member,
-                "FSIM-SV-SEM-122",
-                "modport callable '" + member.text
-                    + "' is not declared by the interface");
+                callable_access == CallableAccess::Import,
+                explicit_function});
           }
           if (callable && explicit_function
               && ((*explicit_function
@@ -719,6 +722,15 @@ Type VerilogParser::parse_named_type() {
           std::move(retained));
     }
     type.named_type_span = cover(type.named_type_span, previous().span);
+    // `C #(...)::t`: a type declared in a class specialization (8.25.1);
+    // the actuals stay with the selected name.
+    while (at(TokenKind::Scope) && at(TokenKind::Identifier, 1)) {
+      (void)advance();
+      const auto member = advance();
+      type.named_type += "::" + member.text;
+      type.spelling = type.named_type;
+      type.named_type_span = cover(type.named_type_span, member.span);
+    }
   }
   return type;
 }
@@ -814,7 +826,7 @@ void VerilogParser::parse_virtual_interface_declaration(
   return is_direction_keyword() || is_net_type_keyword()
       || keyword("static") || keyword("automatic")
       || keyword("string") || keyword("chandle") || keyword("event")
-      || keyword("process")
+      || (keyword("process") && !at(TokenKind::Scope, 1))
       || keyword("struct") || keyword("union") || keyword("enum")
       || is_named_type_reference_start()
       || (at(TokenKind::Identifier) && at(TokenKind::LeftBracket, 1)
@@ -1113,6 +1125,11 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     const auto name = expect_identifier("declared name");
     auto declaration_type = spec.type;
     (void)parse_optional_container_dimension(declaration_type);
+    if (!declaration_type.systemverilog_container
+        && (declaration_type.domain == ValueDomain::String
+            || declaration_type.spelling == "string")) {
+      unit_string_names_.insert(name.text);
+    }
     if (declaration_type.systemverilog_container) {
       unit_container_names_.insert(name.text);
       unit_container_types_.insert_or_assign(name.text, declaration_type);
@@ -1623,16 +1640,22 @@ std::vector<Statement> VerilogParser::parse_continuous_assignments(
 }
 
 void VerilogParser::check_verilog_primitive_net_terminal(const Expression& terminal,
-    const std::vector<SignalDeclaration>& signals, const Token& instance_start)
+    const std::vector<SignalDeclaration>& signals, const Token& instance_start,
+    const bool bidirectional)
 {
-  if (keyword_set_rank(keyword_set_for_standard_revision(standard_revision_))
+  // SystemVerilog lets a variable take a primitive's output, but a
+  // bidirectional switch connects nets (IEEE 1800-2017 28.8).
+  const bool systemverilog
+      = keyword_set_rank(keyword_set_for_standard_revision(standard_revision_))
       >= keyword_set_rank(keyword_set_for_standard_revision(
-          StandardRevision::SystemVerilog2005))) {
+          StandardRevision::SystemVerilog2005));
+  if (systemverilog && !bidirectional) {
     return;
   }
   if (terminal.kind == ExpressionKind::Concatenation) {
     for (const auto& operand : terminal.operands) {
-      check_verilog_primitive_net_terminal(operand, signals, instance_start);
+      check_verilog_primitive_net_terminal(
+          operand, signals, instance_start, bidirectional);
     }
     return;
   }
@@ -1652,7 +1675,11 @@ void VerilogParser::check_verilog_primitive_net_terminal(const Expression& termi
   }
   const auto spelling = detail::ascii_lower(signal->type.spelling);
   if (spelling == "reg" || spelling == "integer" || spelling == "time"
-      || spelling == "real" || spelling == "realtime") {
+      || spelling == "real" || spelling == "realtime"
+      || (systemverilog && signal->type.systemverilog_net_type.empty()
+          && (spelling == "logic" || spelling == "bit" || spelling == "int"
+              || spelling == "byte" || spelling == "shortint"
+              || spelling == "longint"))) {
     error(instance_start, "FSIM-SV-SEM-412",
         "a Verilog primitive output or bidirectional terminal must be a net, "
         "not variable '" + root->text + "'");
