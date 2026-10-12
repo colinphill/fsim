@@ -392,7 +392,7 @@ def verilator_library_files(top_file: Path, tdir: Path) -> list[Path]:
 
 # Icarus system tasks that are not in IEEE 1364/1800.
 ICARUS_EXTENSION_TASKS = re.compile(
-    r"\$(abstime|is_signed|countdrivers|simparam|fopenr|sizeof|ivlh_\w+)\b")
+    r"\$(abstime|is_signed|countdrivers|simparam|fopenr|sizeof|deposit|finish_and_return|ivlh_\w+)\b")
 # Icarus syntax extensions: the `bool` variable type and the binary `~&`
 # and `~|` operators (the IEEE LRMs define them only as unary reductions).
 ICARUS_EXTENSION_SYNTAX = re.compile(
@@ -411,6 +411,19 @@ VERILATOR_NONSTANDARD = {
     "t_timing_unset1": "expects the Verilator --timing flag error",
     "t_timing_unset2": "expects the Verilator --timing flag error",
     "t_timing_unset3": "expects the Verilator --timing flag error",
+    # Two-state assumptions: `clk = !clk` from an x `logic clk` never
+    # toggles (IEEE 1800-2017 6.8), and an `always @*` reading only a
+    # variable it writes waits for a change that never comes (9.4.2.2).
+    "t_virtual_interface_method": "toggles a clock that starts at x",
+    "t_wait_iface_vif": "expects an always @* block to run without an event",
+    # A constant function may call only constant system functions, which
+    # do not include $sformatf (IEEE 1800-2017 13.4.3, 11.2.1).
+    "t_const_string_func": "calls $sformatf in a constant function",
+    "t_display_string": "calls $sformatf in a constant function",
+    "t_display_string_noopt": "calls $sformatf in a constant function",
+    "t_display_enum_format": "calls $sformatf in a constant expression",
+    "t_unroll_nested_param": "calls $sformatf and writes module variables "
+        "in a constant function",
 }
 
 def verilator_cases(root: Path) -> list[Case]:

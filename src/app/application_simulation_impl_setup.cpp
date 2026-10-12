@@ -677,6 +677,19 @@ Simulation::Impl::Impl(
                 notify_class_changes(before);
                 return runtime::PackedLogic4::from_aval_bval(64U, copy, 0U);
             }
+            // `obj.srandom(seed)` (IEEE 1800-2017 18.13.3).
+            if (method == "@object-srandom") {
+                if (handle == 0U) {
+                    throw std::invalid_argument {
+                        "srandom of a null class handle"
+                    };
+                }
+                const auto seed = actuals.empty()
+                    ? std::uint64_t { }
+                    : actuals.front().low_word().aval;
+                class_heap.reseed_random(handle, seed);
+                return runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
+            }
             if (method.starts_with(string_property_prefix)) {
                 auto result = access_string_property(
                     class_heap.property(handle,

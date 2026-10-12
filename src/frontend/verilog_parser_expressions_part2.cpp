@@ -239,8 +239,25 @@ Expression VerilogParser::parse_postfix(Expression expression)
                     || member.text == "reverse" || member.text == "sort"
                     || member.text == "rsort" || member.text == "shuffle"
                     || member.text == "delete");
+            // A string method with no arguments likewise (`s.toupper`).
+            const bool implicit_string_call = !parenthesized_call
+                && !implicit_container_with && !implicit_container_call
+                && expression.kind == ExpressionKind::Identifier
+                && [&] {
+                       const auto found
+                           = current_procedural_types_.find(expression.text);
+                       return found != current_procedural_types_.end()
+                           ? !found->second.systemverilog_container
+                               && (found->second.domain == ValueDomain::String
+                                   || found->second.spelling == "string")
+                           : unit_string_names_.contains(expression.text);
+                   }()
+                && (member.text == "len" || member.text == "toupper"
+                    || member.text == "tolower" || member.text == "atoi"
+                    || member.text == "atohex" || member.text == "atooct"
+                    || member.text == "atobin" || member.text == "atoreal");
             if (parenthesized_call || implicit_container_with
-                || implicit_container_call) {
+                || implicit_container_call || implicit_string_call) {
                 const auto receiver_span = expression.span;
                 const auto receiver_type = [&]() -> const Type* {
                     if (expression.kind != ExpressionKind::Identifier)

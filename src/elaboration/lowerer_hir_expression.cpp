@@ -6128,6 +6128,86 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_untraced(
                 : narrow;
         }
     }
+    // An element of a constant string value, such as a user-defined
+    // attribute of type STRING (`s'at1(1)`, IEEE 1076-2008 6.7, 8.4): its
+    // character, indexed from the string's left bound 1.
+    if (const auto indexed = specialized_hir_unit_ != nullptr
+            ? specialized_hir_unit_->find_expression(expression_id)
+            : std::nullopt;
+        indexed && indexed->vhdl != nullptr
+        && indexed->vhdl->kind == semantic::vhdl::ExpressionKind::index
+        && indexed->vhdl->operands.size() == 2U) {
+        const auto prefix = specialized_hir_unit_->find_expression(
+            indexed->vhdl->operands.front());
+        const auto attribute = prefix && prefix->vhdl != nullptr
+            && ((prefix->vhdl->kind == semantic::vhdl::ExpressionKind::call
+                    && prefix->vhdl->text.starts_with("'"))
+                || prefix->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::string_literal);
+        const auto text = attribute
+            ? specialized_hir_unit_->evaluate_string_expression(
+                  indexed->vhdl->operands.front())
+            : std::nullopt;
+        const auto position = text
+            ? hir_constant_integer(indexed->vhdl->operands.back())
+            : std::nullopt;
+        if (text && position && *position >= 1
+            && static_cast<std::size_t>(*position) <= text->size()) {
+            const auto result = allocate_register(
+                8U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(LoadConstant {
+                result,
+                unsigned_value(static_cast<unsigned char>(
+                                   (*text)[static_cast<std::size_t>(
+                                       *position - 1)]),
+                    8U),
+            });
+            return result;
+        }
+    }
+    // A member of an unpacked structure parameter is its pattern item
+    // (IEEE 1800-2017 7.2, 6.20).
+    if (const auto member = hir_systemverilog_parameter_member(expression_id)) {
+        const auto type = hir_systemverilog_value_type(expression_id);
+        const auto width = type ? hir_systemverilog_type_width(*type)
+                                : std::nullopt;
+        if (width && *width != 0U) {
+            auto value = lower_hir_expression(*member, *width);
+            if (value && register_width(*value) != *width) {
+                value = resize_register(
+                    *value, *width, hir_expression_signed(*member));
+            }
+            return value;
+        }
+    }
+    // A unit name used as a value is one of that unit (`ns`, IEEE 1076-2008
+    // 5.2.4.1).
+    if (const auto expression = specialized_hir_unit_ != nullptr
+            ? specialized_hir_unit_->find_expression(expression_id)
+            : std::nullopt;
+        expression && expression->vhdl != nullptr
+        && expression->vhdl->kind == semantic::vhdl::ExpressionKind::name) {
+        if (const auto unit = hir_vhdl_physical_unit_name(expression_id)) {
+            const auto physical = hir_vhdl_physical_unit(*unit,
+                expected_width == 32U || expected_width == 64U
+                    ? expected_width
+                    : 0U);
+            if (physical) {
+                const auto width = physical->width != 0U ? physical->width
+                    : expected_width != 0U ? expected_width
+                                           : std::size_t { 64U };
+                const auto result = allocate_register(
+                    width, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(LoadConstant {
+                    result,
+                    unsigned_value(static_cast<std::uint64_t>(
+                                       physical->scale),
+                        width),
+                });
+                return result;
+            }
+        }
+    }
     const auto diagnostics_before = diagnostics_.size();
     auto result = lower_hir_expression_impl(
         expression_id, expected_width, scalar_context);
@@ -9577,6 +9657,34 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             process_.operations.emplace_back(ClassPropertyWrite {
                 *receiver, new_value, property->identity });
             result = update.text.starts_with("post") ? old_value : new_value;
+        } else if (hir_container_element_binding(update.operands.front())
+            && hir_systemverilog_scalar_kind(update.operands.front())
+                == frontend::SystemVerilogScalarKind::None) {
+            // An element of an unpacked array (`c[i]++`): read, step and
+            // write back the element (11.4.2).
+            const auto width = hir_expression_width(
+                update.operands.front(), hir_process_scope_);
+            const auto old_value = width && *width != 0U
+                ? lower_hir_expression(update.operands.front(), *width)
+                : std::nullopt;
+            if (!old_value) {
+                return std::nullopt;
+            }
+            const auto one = allocate_register(
+                *width, register_domain(*old_value));
+            process_.operations.emplace_back(LoadConstant {
+                one, unsigned_value(1U, *width) });
+            const auto new_value = allocate_register(
+                *width, register_domain(*old_value));
+            process_.operations.emplace_back(Binary {
+                update.text.ends_with("++")
+                    ? BinaryOperator::add_unsigned
+                    : BinaryOperator::subtract_unsigned,
+                new_value, *old_value, one });
+            if (!lower_hir_packed_copy_out(update.operands.front(), new_value)) {
+                return std::nullopt;
+            }
+            result = update.text.starts_with("post") ? *old_value : new_value;
         } else {
         const auto target = capture_hir_packed_update_target(
             update.operands.front());
@@ -10888,7 +10996,13 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         const auto operand_kind = hir_systemverilog_scalar_kind(operand);
         const bool real_operand
             = frontend::is_real_scalar_kind(operand_kind);
-        auto lowered = real_operand
+        // A string operand converts byte by byte, its last character in the
+        // least significant byte (IEEE 1800-2017 6.16, 6.24.1).
+        const bool string_operand
+            = hir_expression_is_string(operand, hir_process_scope_);
+        auto lowered = string_operand
+            ? lower_hir_string_to_packed(operand, cast->width)
+            : real_operand
             ? lower_hir_expression(operand,
                   operand_kind == frontend::SystemVerilogScalarKind::ShortReal
                       ? 32U
@@ -13267,10 +13381,41 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         result = *operand;
     } else if (expression->vhdl != nullptr && source.binary
         && source.text == "&" && source.operands.size() == 2U) {
-        const auto left_width = hir_expression_width(
+        auto left_width = hir_expression_width(
             source.operands[0], hir_process_scope_);
-        const auto right_width = hir_expression_width(
+        auto right_width = hir_expression_width(
             source.operands[1], hir_process_scope_);
+        // A string literal of '0' and '1' next to a one-bit-element vector
+        // is a vector of its length (IEEE 1076-2008 9.3.2).
+        const auto literal_length = [&](const semantic::ExpressionId id,
+                                        const semantic::ExpressionId other)
+            -> std::optional<std::size_t> {
+            const auto literal = specialized_hir_unit_->find_expression(id);
+            const auto other_domain = hir_expression_domain(
+                other, hir_process_scope_);
+            if (!literal || literal->vhdl == nullptr
+                || literal->vhdl->kind
+                    != semantic::vhdl::ExpressionKind::string_literal
+                || !other_domain
+                || (*other_domain != frontend::ValueDomain::Bit2
+                    && *other_domain != frontend::ValueDomain::Logic9)) {
+                return std::nullopt;
+            }
+            auto text = literal->vhdl->decoded_string.value_or(
+                literal->vhdl->text);
+            if (text.size() >= 2U && text.front() == '"'
+                && text.back() == '"') {
+                text = text.substr(1U, text.size() - 2U);
+            }
+            return text.empty() ? std::nullopt
+                                : std::optional { text.size() };
+        };
+        if (!left_width && right_width) {
+            left_width = literal_length(source.operands[0], source.operands[1]);
+        }
+        if (!right_width && left_width) {
+            right_width = literal_length(source.operands[1], source.operands[0]);
+        }
         if (!left_width || !right_width || *left_width == 0U
             || *right_width == 0U) {
             return std::nullopt;
@@ -13279,8 +13424,22 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             source.operands[0], *left_width);
         auto right = lower_hir_expression(
             source.operands[1], *right_width);
-        const auto domain = hir_expression_domain(
+        auto domain = hir_expression_domain(
             expression_id, hir_process_scope_);
+        // Without a context type the operands' element domain is the
+        // result's (IEEE 1076-2008 9.2.5).
+        if (!domain && left && right) {
+            const auto left_domain = register_domain(*left);
+            const auto right_domain = register_domain(*right);
+            domain = left_domain == right_domain ? left_domain
+                : left_domain == frontend::ValueDomain::Logic9
+                    || right_domain == frontend::ValueDomain::Logic9
+                ? frontend::ValueDomain::Logic9
+                : left_domain == frontend::ValueDomain::Logic4
+                    || right_domain == frontend::ValueDomain::Logic4
+                ? frontend::ValueDomain::Logic4
+                : left_domain;
+        }
         if (!left || !right || !domain) {
             return std::nullopt;
         }
@@ -16242,6 +16401,57 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
     if (const auto target = hir_vhdl_alias_target_expression(expression_id)) {
         return lower_hir_string_expression(*target);
     }
+    // `p.get_randstate()` of a process (IEEE 1800-2017 9.7, 18.13.4).
+    if (const auto call = specialized_hir_unit_->find_expression(expression_id);
+        call && call->systemverilog != nullptr
+        && call->systemverilog->kind == semantic::sv::ExpressionKind::call
+        && call->systemverilog->text == ".get_randstate"
+        && call->systemverilog->operands.size() == 1U
+        && hir_process_handle_expression(
+            call->systemverilog->operands.front())) {
+        const auto receiver = lower_hir_expression(
+            call->systemverilog->operands.front(), 64U);
+        if (!receiver || register_width(*receiver) != 64U) {
+            return std::nullopt;
+        }
+        const auto destination = allocate_string_register();
+        process_.operations.emplace_back(ProcessGetRandState {
+            destination, *receiver });
+        return destination;
+    }
+    // `string'(x)` (IEEE 1800-2017 6.24.1, 6.16): a string operand is
+    // itself; a packed one becomes its bytes, as %s shows them.
+    if (const auto cast = specialized_hir_unit_->find_expression(expression_id);
+        cast && cast->systemverilog != nullptr
+        && cast->systemverilog->kind == semantic::sv::ExpressionKind::call
+        && cast->systemverilog->text == "@sv-cast:string"
+        && cast->systemverilog->operands.size() == 1U) {
+        const auto operand = cast->systemverilog->operands.front();
+        if (hir_expression_is_string(operand, hir_process_scope_)) {
+            return lower_hir_string_expression(operand);
+        }
+        const auto width = hir_expression_width(operand, hir_process_scope_);
+        const auto value = width && *width != 0U
+            ? lower_hir_expression(operand, *width)
+            : std::nullopt;
+        if (!value) {
+            return std::nullopt;
+        }
+        const auto text = allocate_string_register();
+        process_.operations.emplace_back(
+            LoadStringConstant { text, std::string { } });
+        StringMethod format;
+        format.operation = StringMethodOperator::format_packed;
+        format.source = text;
+        format.first = *value;
+        format.second = allocate_register(32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            format.second, unsigned_value(*width, 32U) });
+        format.format = OutputFormat::string;
+        format.suppress_leading_zero = true;
+        process_.operations.emplace_back(format);
+        return text;
+    }
     // A class method that returns a string.
     if (const auto call = specialized_hir_unit_->find_expression(expression_id);
         call && call->systemverilog != nullptr
@@ -17397,6 +17607,77 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
     process_.operations.emplace_back(ReadStringObject {
         destination, *binding->object });
     return destination;
+}
+
+bool Lowerer::hir_process_handle_expression(
+    const semantic::ExpressionId expression_id) const
+{
+    // A `process` handle: `process::self()` or a variable of type process
+    // (IEEE 1800-2017 9.7).
+    const auto expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (!expression || expression->systemverilog == nullptr) {
+        return false;
+    }
+    const auto& source = *expression->systemverilog;
+    if (source.kind == semantic::sv::ExpressionKind::call) {
+        return source.text == "process::self"
+            || source.text == "std::process::self";
+    }
+    const auto declaration = hir_referenced_declaration(expression_id);
+    const auto record = declaration
+        ? specialized_hir_unit_->find_declaration(*declaration)
+        : std::nullopt;
+    return record && record->systemverilog != nullptr
+        && record->systemverilog->type
+        && (record->systemverilog->type->target.spelling == "process"
+            || record->systemverilog->type->target.spelling
+                == "std::process");
+}
+
+std::optional<RegisterId> Lowerer::lower_hir_string_to_packed(
+    const semantic::ExpressionId operand, const std::size_t width)
+{
+    // The characters fill the value from its least significant byte; a
+    // shorter string leaves zero bytes above, a longer one keeps its last
+    // characters (IEEE 1800-2017 6.16).
+    if (width == 0U || width > 8U * 4096U) {
+        return std::nullopt;
+    }
+    const auto text = lower_hir_string_expression(operand);
+    if (!text) {
+        return std::nullopt;
+    }
+    const auto length = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(StringLength { length, *text });
+    const auto bytes = (width + 7U) / 8U;
+    const auto result = allocate_register(bytes * 8U,
+        frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(LoadConstant {
+        result, PackedLogic4(bytes * 8U, Logic4::zero) });
+    for (std::size_t byte { }; byte < bytes; ++byte) {
+        const auto distance = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(LoadConstant {
+            distance, unsigned_value(byte + 1U, 32U) });
+        const auto index = allocate_register(32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Binary {
+            BinaryOperator::subtract_unsigned, index, length, distance });
+        const auto indexed = allocate_register(
+            32U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(StringIndex {
+            indexed, *text, index, true });
+        const auto character = allocate_register(
+            8U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(Extract {
+            character, indexed, 0U, 8U });
+        process_.operations.emplace_back(Insert {
+            result, result, character,
+            static_cast<std::uint32_t>(byte * 8U) });
+    }
+    return bytes * 8U == width ? result
+                               : resize_register(result, width, false);
 }
 
 std::optional<Lowerer::HirPackedUpdateTarget>

@@ -766,6 +766,14 @@ SystemVerilogClassDeclaration VerilogParser::parse_class(
     const bool virtual_class,
     const bool interface_class) {
   SystemVerilogClassDeclaration declaration;
+  // Class method typedefs stay named; class resolution specializes them.
+  struct ClassDepth {
+    std::size_t& depth;
+    explicit ClassDepth(std::size_t& target) : depth(target) { ++depth; }
+    ClassDepth(const ClassDepth&) = delete;
+    ClassDepth& operator=(const ClassDepth&) = delete;
+    ~ClassDepth() { --depth; }
+  } class_depth { class_parse_depth_ };
   // Names in a class body resolve to class members, never to implicit nets
   // of the enclosing module (IEEE 1800-2017 6.10).
   struct ImplicitNetScope {

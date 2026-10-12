@@ -984,6 +984,19 @@ public:
         return result;
     }
 
+    /// An expression evaluated for a declared type, so that a keyed
+    /// assignment pattern takes the type's layout.
+    [[nodiscard]] std::optional<Value> evaluate_for_type(
+        const semantic::ExpressionId expression,
+        const semantic::sv::TypeReference& type)
+    {
+        auto result = evaluate_typed(expression, type);
+        if (result && hir_systemverilog_explicit_integral_type(type)) {
+            result = convert_record_type(std::move(*result), type);
+        }
+        return result;
+    }
+
 private:
     /// convert_hir_systemverilog_constant for a type held by a declaration
     /// or callable record, whose width is kept per specialization.
@@ -2976,6 +2989,58 @@ private:
     {
         const auto view = specialization_.find_expression(expression);
         const auto* const members = packed_members(type);
+        // A positional pattern for a packed array: each item converts to
+        // the element width, the first item the leftmost (10.9.1).
+        if (view && view->systemverilog != nullptr && members == nullptr
+            && view->systemverilog->kind == ExpressionKind::assignment_pattern
+            && !view->systemverilog->associations.empty()
+            && std::ranges::all_of(view->systemverilog->associations,
+                [](const auto& association) {
+                    return association.choice_spelling.empty();
+                })) {
+            std::unordered_set<std::uint32_t> visiting;
+            const auto width = resolved_type_width(
+                type, &specialization_, visiting);
+            const auto count = view->systemverilog->associations.size();
+            if (width && *width != 0U && *width % count == 0U
+                && *width <= (1U << 20U)) {
+                const auto element_width = *width / count;
+                PackedLogic4 packed { static_cast<std::size_t>(*width),
+                    Logic4::zero };
+                for (std::size_t index { }; index < count; ++index) {
+                    const auto item_id
+                        = view->systemverilog->associations[index].value;
+                    auto item = evaluate(item_id);
+                    if (!item) {
+                        // A real item rounds to an integer (6.12.2).
+                        std::string scalar_error;
+                        const auto scalar = evaluate_hir_systemverilog_scalar_constant(
+                            specialization_, item_id, scalar_error);
+                        const auto real = scalar ? scalar->real() : std::nullopt;
+                        if (!real || !std::isfinite(*real)) {
+                            return std::nullopt;
+                        }
+                        error_.clear();
+                        const auto rounded = static_cast<std::int64_t>(
+                            std::llround(*real));
+                        item = make_value(PackedLogic4::from_aval_bval(64U,
+                                              static_cast<std::uint64_t>(rounded), 0U),
+                            true, false, frontend::ValueDomain::Bit2);
+                    }
+                    const auto resized_item = resized(
+                        std::move(*item),
+                        static_cast<std::uint32_t>(element_width));
+                    const auto base = (count - 1U - index) * element_width;
+                    for (std::size_t bit { }; bit < element_width; ++bit) {
+                        packed.set(base + bit, runtime::to_logic4(
+                            resized_item.packed.get_logic9(bit)));
+                    }
+                }
+                return make_value(std::move(packed), type.signed_value, false,
+                    type.four_state ? frontend::ValueDomain::Logic4
+                                    : frontend::ValueDomain::Bit2);
+            }
+        }
         if (!view || view->systemverilog == nullptr || members == nullptr
             || view->systemverilog->kind != ExpressionKind::assignment_pattern
             || std::ranges::all_of(view->systemverilog->associations,
@@ -4583,6 +4648,18 @@ evaluate_hir_systemverilog_constant(
         expression);
     results.emplace(expression.value(), std::pair { value, error });
     return value;
+}
+
+std::optional<HirSystemVerilogConstant>
+evaluate_hir_systemverilog_typed_constant(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::ExpressionId expression,
+    const semantic::sv::TypeReference& type,
+    std::string& error)
+{
+    error.clear();
+    return HirConstantEvaluator { specialization, error }.evaluate_for_type(
+        expression, type);
 }
 
 bool hir_systemverilog_scalar_expression_applicable(

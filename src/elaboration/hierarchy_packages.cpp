@@ -1263,9 +1263,12 @@ namespace {
             }
             return std::nullopt;
         };
-        const auto boundary = [&](const std::optional<std::int64_t> value,
+        const auto boundary = [&](const auto& self,
+                                  const std::optional<std::int64_t> value,
                                   const std::optional<semantic::ExpressionId>
-                                      expression) -> std::optional<std::int64_t> {
+                                      expression,
+                                  const std::size_t depth = 0U)
+            -> std::optional<std::int64_t> {
             if (!expression) {
                 return value;
             }
@@ -1273,8 +1276,51 @@ namespace {
                 = specialization.evaluate_integral_expression(*expression)) {
                 return evaluated;
             }
-            // A CHARACTER bound is its position (IEEE 1076-2008 16.3).
             const auto literal = specialization.find_expression(*expression);
+            // A bound of a discrete subtype named as an index constraint
+            // (`u(st)`, IEEE 1076-2008 5.3.2.2): its 'LEFT or 'RIGHT.
+            if (literal && literal->vhdl != nullptr && depth < 8U
+                && literal->vhdl->kind == semantic::vhdl::ExpressionKind::call
+                && literal->vhdl->operands.size() == 1U
+                && (literal->vhdl->text == "'left"
+                    || literal->vhdl->text == "'right"
+                    || literal->vhdl->text == "'low"
+                    || literal->vhdl->text == "'high")) {
+                const auto prefix = specialization.find_expression(
+                    literal->vhdl->operands.front());
+                const auto declaration = prefix && prefix->vhdl != nullptr
+                        && prefix->vhdl->referenced_name
+                        && prefix->vhdl->referenced_name->selected
+                    ? specialization.find_declaration(
+                          *prefix->vhdl->referenced_name->selected)
+                    : std::nullopt;
+                const auto type = declaration && declaration->vhdl != nullptr
+                        && declaration->vhdl->declared_type
+                    ? specialization.find_type(*declaration->vhdl->declared_type)
+                    : std::nullopt;
+                if (type && type->vhdl != nullptr) {
+                    const auto range = std::ranges::find_if(
+                        type->vhdl->base.constraints,
+                        [](const semantic::vhdl::RangeConstraint& candidate) {
+                            return candidate.kind
+                                != semantic::vhdl::RangeKind::array_index;
+                        });
+                    if (range != type->vhdl->base.constraints.end()) {
+                        const auto left = self(self, range->left,
+                            range->left_expression, depth + 1U);
+                        const auto right = self(self, range->right,
+                            range->right_expression, depth + 1U);
+                        if (left && right) {
+                            const auto& name = literal->vhdl->text;
+                            return name == "'left" ? left
+                                : name == "'right" ? right
+                                : name == "'low"   ? std::min(*left, *right)
+                                                   : std::max(*left, *right);
+                        }
+                    }
+                }
+            }
+            // A CHARACTER bound is its position (IEEE 1076-2008 16.3).
             if (literal && literal->vhdl != nullptr
                 && literal->vhdl->kind == semantic::vhdl::ExpressionKind::logic_literal
                 && literal->vhdl->text.size() == 3U && literal->vhdl->text.front() == '\'') {
@@ -1286,14 +1332,19 @@ namespace {
         const auto range_count = [&](
                                      const semantic::vhdl::RangeConstraint& range)
             -> std::optional<std::size_t> {
-            const auto left = boundary(range.left, range.left_expression);
-            const auto right = boundary(range.right, range.right_expression);
+            const auto left = boundary(
+                boundary, range.left, range.left_expression);
+            const auto right = boundary(
+                boundary, range.right, range.right_expression);
             if (!left || !right) {
                 return std::nullopt;
             }
+            const auto descending = range.direction_from_bounds
+                ? *left > *right
+                : range.descending;
             if (range.null
-                || (range.descending && *left < *right)
-                || (!range.descending && *left > *right)) {
+                || (descending && *left < *right)
+                || (!descending && *left > *right)) {
                 return 0U;
             }
             const auto distance = index_distance(*left, *right);
@@ -1873,9 +1924,9 @@ namespace {
                     = definition.enumeration_literals.size() - 1U;
                 if (subtype.constraints.size() == 1U) {
                     const auto& constraint = subtype.constraints.front();
-                    const auto left = boundary(
+                    const auto left = boundary(boundary,
                         constraint.left, constraint.left_expression);
-                    const auto right = boundary(
+                    const auto right = boundary(boundary,
                         constraint.right, constraint.right_expression);
                     if (left && right && *left >= 0 && *right >= 0) {
                         maximum_ordinal = static_cast<std::size_t>(
@@ -6926,6 +6977,20 @@ namespace {
                           std::move(*constant),
                           *declaration->systemverilog->type,
                           constant_error, &*result);
+                  }
+                  // A keyed pattern takes the layout of the parameter's
+                  // structure type (IEEE 1800-2017 10.9.2).
+                  if (!constant && declaration->systemverilog->type
+                      && compiled_systemverilog_integral_constant_type(
+                          declaration->systemverilog->type)) {
+                      std::string typed_error;
+                      if (auto typed
+                          = evaluate_hir_systemverilog_typed_constant(
+                              *result, *declaration->systemverilog->initializer,
+                              *declaration->systemverilog->type, typed_error)) {
+                          constant = std::move(typed);
+                          constant_error.clear();
+                      }
                   }
                   if (constant) {
                       actuals.push_back({ declaration_id, constant->canonical(),
@@ -13206,12 +13271,24 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
     auto& read_only_containers
         = root_materialization.read_only_containers;
     auto& read_only_signals = root_materialization.read_only_signals;
+    // A signal is read-only only when every name reaching it is; modport
+    // expressions may expose one signal as an input and an output
+    // (IEEE 1800-2017 25.5.4).
+    std::set<SignalId> read_only_candidates;
+    std::set<SignalId> writable_signals;
     for (const auto& [name, signal] : signals) {
         const auto qualified_name = name.starts_with(path + ".")
             ? name
             : path + "." + name;
         if (systemverilog_read_only_interface_member_paths_.contains(
                 qualified_name)) {
+            read_only_candidates.insert(signal);
+        } else {
+            writable_signals.insert(signal);
+        }
+    }
+    for (const auto signal : read_only_candidates) {
+        if (!writable_signals.contains(signal)) {
             read_only_signals.insert(signal);
         }
     }
@@ -16525,6 +16602,43 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                     working_specialization, *declaration.initializer)) {
                 static_value = PackedLogic4::from_aval_bval(
                     64U, std::bit_cast<std::uint64_t>(*real), 0U);
+            }
+        }
+        // A positional aggregate of bit or std_ulogic literals, one per
+        // element, left element first (IEEE 1076-2008 9.3.3.3).
+        if (!value && !static_value && width > 1U
+            && (domain == frontend::ValueDomain::Bit2
+                || domain == frontend::ValueDomain::Logic9)) {
+            const auto aggregate = working_specialization.find_expression(
+                *declaration.initializer);
+            if (aggregate && aggregate->vhdl != nullptr
+                && aggregate->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::aggregate
+                && aggregate->vhdl->associations.size() == width) {
+                std::string bits;
+                bits.reserve(width);
+                for (const auto& association : aggregate->vhdl->associations) {
+                    const auto element = association.choices.empty()
+                        ? working_specialization.find_expression(
+                              association.value)
+                        : std::nullopt;
+                    if (!element || element->vhdl == nullptr
+                        || element->vhdl->kind
+                            != semantic::vhdl::ExpressionKind::logic_literal
+                        || element->vhdl->text.size() != 3U
+                        || element->vhdl->text.front() != '\''
+                        || (domain == frontend::ValueDomain::Bit2
+                            && element->vhdl->text[1] != '0'
+                            && element->vhdl->text[1] != '1')) {
+                        bits.clear();
+                        break;
+                    }
+                    bits.push_back(static_cast<char>(std::toupper(
+                        static_cast<unsigned char>(element->vhdl->text[1]))));
+                }
+                if (bits.size() == width) {
+                    static_value = PackedLogic4::from_logic9_msb_string(bits);
+                }
             }
         }
         // A constant name denotes the constant's evaluated value.

@@ -422,7 +422,15 @@ void VerilogParser::parse_modport(
           expect(TokenKind::LeftParen, "'(' after modport expression name",
               "FSIM-SV-PARSE-213");
         }
-        const auto member = expect_identifier("modport member name");
+        auto member = expect_identifier("modport member name");
+        // The expression may name a signal of a nested interface instance
+        // (`.r(inner.val)`).
+        bool hierarchical_member = false;
+        while (alias_token && at(TokenKind::Dot)) {
+          advance();
+          member.text += "." + expect_identifier("modport member name").text;
+          hierarchical_member = true;
+        }
         if (alias_token) {
           expect(TokenKind::RightParen,
               "')' after modport expression", "FSIM-SV-PARSE-213");
@@ -458,7 +466,8 @@ void VerilogParser::parse_modport(
               "FSIM-SV-SEM-117",
               "duplicate modport member '" + visible_name + "'");
         } else {
-          const bool signal_declared = std::ranges::any_of(
+          const bool signal_declared = hierarchical_member
+              || std::ranges::any_of(
               unit.signals,
               [&](const SignalDeclaration& signal) {
                 return signal.name == member.text;
@@ -705,6 +714,12 @@ Type VerilogParser::parse_named_type() {
     name += "::";
     name += selected.text;
     span = cover(span, selected.span);
+  }
+  // A typedef of an enclosing procedural block (6.18).
+  if (const auto local = block_typedef_types_.find(name);
+      local != block_typedef_types_.end() && !at(TokenKind::Hash)
+      && class_parse_depth_ == 0U) {
+    return local->second;
   }
   Type type{
       ValueDomain::Unknown,

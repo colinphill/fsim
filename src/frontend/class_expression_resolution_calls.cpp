@@ -1137,13 +1137,23 @@ void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
             statement.task_arguments.begin(), std::move(receiver));
         statement.task_argument_names.insert(
             statement.task_argument_names.begin(), std::string{});
-        if (kind != SystemVerilogClassMethodKind::Constructor
-            && match->method) {
-          retain_task_profile(
-              statement,
-              *match->method,
-              match->owner,
-              &*receiver_type);
+        if (kind == SystemVerilogClassMethodKind::Constructor
+            && !match->method) {
+          // The actuals of `super.new(...)` are expressions of the derived
+          // constructor (IEEE 1800-2017 8.17).
+          for (std::size_t index = 1U;
+               index < statement.task_arguments.size(); ++index) {
+            resolve_expression(statement.task_arguments[index], scope);
+          }
+        }
+        if (match->method) {
+          if (kind != SystemVerilogClassMethodKind::Constructor) {
+            retain_task_profile(
+                statement,
+                *match->method,
+                match->owner,
+                &*receiver_type);
+          }
           for (std::size_t index = 1U;
                index < statement.task_arguments.size(); ++index) {
             const auto actual_name = index < statement.task_argument_names.size()

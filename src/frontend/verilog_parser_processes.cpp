@@ -654,6 +654,7 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         struct PriorBlockType {
             std::string name;
             std::optional<Type> type;
+            std::optional<Type> typedef_type;
         };
         std::vector<PriorBlockType> prior_block_types;
         while (!at_end() && !keyword("end")) {
@@ -664,11 +665,16 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                 if (local_declarations.type_aliases.size() > alias_count) {
                     const auto& alias = local_declarations.type_aliases.back();
                     const auto prior = current_procedural_types_.find(alias.name);
+                    const auto prior_typedef = block_typedef_types_.find(alias.name);
                     prior_block_types.push_back({ alias.name,
                         prior == current_procedural_types_.end()
                             ? std::optional<Type> { }
-                            : std::optional<Type> { prior->second } });
+                            : std::optional<Type> { prior->second },
+                        prior_typedef == block_typedef_types_.end()
+                            ? std::optional<Type> { }
+                            : std::optional<Type> { prior_typedef->second } });
                     current_procedural_types_.insert_or_assign(alias.name, alias.type);
+                    block_typedef_types_.insert_or_assign(alias.name, alias.type);
                 }
             } else if (is_block_declaration_start() || keyword("parameter")
                 || keyword("localparam")) {
@@ -713,6 +719,12 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                     prior->name, std::move(*prior->type));
             } else {
                 current_procedural_types_.erase(prior->name);
+            }
+            if (prior->typedef_type) {
+                block_typedef_types_.insert_or_assign(
+                    prior->name, std::move(*prior->typedef_type));
+            } else {
+                block_typedef_types_.erase(prior->name);
             }
         }
         block.span = span_from(start, previous());

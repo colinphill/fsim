@@ -253,6 +253,92 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 52: virtual-interface methods, string casts and selectors, constant string functions, VHDL physical units
+
+Fixture: `sv_language_details_batch52.sv` (passes on xsim except two
+constant-function checks: xsim rejects `e.next` in a constant function and
+evaluates a string built in a constant-function loop wrongly).
+
+- Virtual interfaces: a task or function called through a handle runs on
+  the instance the handle selects at run time; bit-, part- and dynamic
+  bit-selects of a member are written through the handle (25.9).
+- Modport expressions may name a signal of a nested interface instance
+  (`.r(inner.val)`), and a port using such a modport can be passed on to a
+  lower module; a signal exposed both as an input and as an output of one
+  modport stays writable through the output (25.5.4).
+- Strings: a `case` with a string selector (12.5); `string'(x)` and
+  vector casts of strings (6.16, 6.24.1); methods without parentheses
+  (`s.len`, `s.toupper`, 13.5.5); a static class function without
+  parentheses (`C::f`, 8.10).
+- Constant functions may return strings and use enumeration methods,
+  chained and without parentheses (`e.next.next`, `e.name`), for enums
+  declared in the module, a package or `$unit` (13.4.3, 6.19.5); a module
+  string variable may be initialized by such a function call.
+- Classes: `super.new` with call arguments (8.17); `obj.srandom(seed)` and
+  `this.srandom` (18.13.3).
+- Containers: `void'(q.pop_front())` (7.10.2), `c[i]++` inside an
+  expression, `name` of an enumerated member of a structure or array
+  element.
+- Continuous assignment to a member of an unpacked structure, and net
+  element patterns (10.3, 10.9).
+- Parameters: members of structure-typed parameters in constant
+  expressions (`P.a`), keyed patterns as structure parameter defaults, and
+  positional patterns of packed arrays with real items (6.20.2, 10.9).
+- Block-local typedefs used as declaration types (6.18); `$dumpfile` of a
+  packed filename; a fork's block-item declaration in a loop keeps one
+  debug local.
+- VHDL: nested subprograms read and write the locals of the enclosing
+  subprogram (1076-2008 4.3); a bare physical unit name is a value of its
+  type (5.2.4); `&` with a string literal and a bit or `std_ulogic`
+  vector (9.2.5); index constraints and `'left`/`'right` of subtypes named
+  by character or enumeration subtypes; positional aggregates of `bit`
+  as signal initializers.
+- Runner: Icarus `$deposit` and `$finish_and_return` are Icarus
+  extensions; Verilator `t_virtual_interface_method` (toggles a clock that
+  starts at x), `t_wait_iface_vif` (an `always @*` expected to run without
+  an event) and five cases that call `$sformatf` in a constant function or
+  expression (`t_const_string_func`, `t_display_string`,
+  `t_display_string_noopt`, `t_display_enum_format`,
+  `t_unroll_nested_param`; 13.4.3 allows only the constant system
+  functions of 11.2.1) are out of scope.
+
+Investigated and left open: overriding unpacked-array parameters
+(`#(.P('{...}))`; they are kept as constant containers, about 8 Verilator
+cases); arrays of named events and event handles in classes; modport
+expressions with part-selects or interface-array elements; VHDL signal
+formals assigned with a run-time `after` delay; streaming of unpacked
+operands; class-parameter constants in module constants.
+
+Measurement: the batch 51 run b51a with its failures and the fast set
+rerun on wip52e. 55 cases close (ivtest 8, Verilator 24, VESTs 15, nvc 8);
+no case that passed in batch 51 fails, and the fast set passes.
+
+ctest: the `vhdl`, `systemverilog` and `compliance` labels fail only the 11
+known tests.
+
+Excluded (out-of-scope) cases:
+
+- ivtest 90: Icarus diagnostics in gold output (44), Icarus system tasks
+  (23), Icarus syntax (5), iverilog options and test types (18).
+- Verilator 181: SystemC, PLI/VPI or DPI harness (84), `$c` (32), C++
+  harness (24), lint-only (21), missing top file (8), non-standard
+  behaviour (12).
+- nvc 215: nvc-specific test kinds (shell, VHPI, cover, wave, mixed, Tcl,
+  relaxed, plugin; 209), nvc options (4), named work libraries (2).
+- sv-tests, VESTs, VHDL Compliance-Tests: none.
+
+| Suite | Batch 51 (wip51f) | Batch 52 (wip52e) |
+|---|---:|---:|
+| VESTs | 3337/3648 | 3352/3648 |
+| nvc regress | 647/1267 | 655/1267 |
+| VHDL Compliance-Tests | 33/72 | 33/72 |
+| ivtest | 2377/2740 | 2385/2736 |
+| Verilator test_regress | 1311/2241 | 1335/2234 |
+| sv-tests | 1416/1497 | 1416/1497 |
+
+Batch 51's ivtest and Verilator columns use batch 51's scope; batch 52
+marks 4 more ivtest and 7 more Verilator cases out of scope.
+
 ### Batch 51: packed structure arrays, packed array patterns, `%t` units, genvar shadowing
 
 Fixture: `sv_language_details_batch51.sv`.

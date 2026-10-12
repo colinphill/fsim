@@ -3739,6 +3739,61 @@ bool Lowerer::allocate_hir_static_callable_declarations(
     return valid;
 }
 
+std::optional<std::pair<semantic::DeclarationId,
+    std::vector<std::pair<std::uint64_t, std::string>>>>
+Lowerer::hir_virtual_interface_instances(const std::string_view receiver) const
+{
+    // The instances a virtual interface variable named `receiver` can
+    // designate: every instance of its interface type, by handle.
+    if (specialized_hir_unit_ == nullptr || receiver.empty()
+        || receiver.starts_with("@instance:")
+        || systemverilog_interface_handles_ == nullptr
+        || systemverilog_interface_types_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto receiver_declaration = semantic::CompiledDesignResolver {
+        *specialized_hir_unit_, hir_generic_binding_frames_
+    }.resolve_systemverilog(receiver, hir_process_scope_,
+         [](const semantic::CompiledDeclarationView& candidate) {
+             return candidate.systemverilog != nullptr
+                 && candidate.systemverilog->type.has_value()
+                 && candidate.systemverilog->type->virtual_interface;
+         },
+         false)
+                                          .unique();
+    const auto declaration = receiver_declaration
+        ? specialized_hir_unit_->find_declaration(*receiver_declaration)
+        : std::nullopt;
+    if (!declaration || declaration->systemverilog == nullptr
+        || !declaration->systemverilog->type
+        || declaration->systemverilog->type->interface_type.empty()) {
+        return std::nullopt;
+    }
+    // Every interface instance must be elaborated: resolve in the second
+    // lowering pass.
+    if (hierarchical_reference_retry_) {
+        hierarchical_reference_missed_ = true;
+        return std::nullopt;
+    }
+    const auto& interface_type
+        = declaration->systemverilog->type->interface_type;
+    std::vector<std::pair<std::uint64_t, std::string>> instances;
+    std::set<std::uint64_t> seen;
+    for (const auto& [path, type] : *systemverilog_interface_types_) {
+        const auto handle = systemverilog_interface_handles_->find(path);
+        if (type == interface_type
+            && handle != systemverilog_interface_handles_->end()
+            && seen.insert(handle->second).second) {
+            instances.emplace_back(handle->second, path);
+        }
+    }
+    if (instances.empty()) {
+        return std::nullopt;
+    }
+    std::ranges::sort(instances);
+    return std::pair { *receiver_declaration, std::move(instances) };
+}
+
 bool Lowerer::lower_hir_class_task_call(
     const semantic::StatementId statement_id)
 {
@@ -3896,6 +3951,65 @@ bool Lowerer::lower_hir_class_task_call(
                 static_cast<InstructionIndex>(process_.operations.size()) };
         }
         return true;
+    }
+    // A task of the interface a virtual interface handle names (`v.t()`,
+    // IEEE 1800-2017 25.9) runs on that instance: test the handle against
+    // each instance of the interface type.
+    if (profile->interface_receiver
+        && !profile->interface_receiver->starts_with("@instance:")
+        && systemverilog_interface_handles_ != nullptr
+        && systemverilog_interface_types_ != nullptr) {
+        const auto dispatch = hir_virtual_interface_instances(
+            *profile->interface_receiver);
+        if (hierarchical_reference_missed_ && hierarchical_reference_retry_) {
+            return false;
+        }
+        if (dispatch) {
+            const auto& [receiver_declaration, instances] = *dispatch;
+            const auto handle
+                = lower_hir_virtual_interface_handle(receiver_declaration);
+            if (handle) {
+                std::vector<InstructionIndex> exits;
+                for (const auto& [identity, path] : instances) {
+                    const auto constant = allocate_register(
+                        64U, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(LoadConstant {
+                        constant, unsigned_value(identity, 64U) });
+                    const auto selected = allocate_register(
+                        1U, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(Binary {
+                        BinaryOperator::case_equal, selected, *handle,
+                        constant });
+                    const auto branch = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations.emplace_back(Branch {
+                        selected, branch + 1U, 0U,
+                        UnknownBranchPolicy::when_false });
+                    auto instance_profile = *profile;
+                    instance_profile.interface_receiver = "@instance:" + path;
+                    if (!lower_hir_class_task_invocation(
+                            statement_id, instance_profile, receiver)) {
+                        return false;
+                    }
+                    exits.push_back(static_cast<InstructionIndex>(
+                        process_.operations.size()));
+                    process_.operations.emplace_back(Jump { });
+                    process_.operations[branch] = Branch {
+                        selected,
+                        branch + 1U,
+                        static_cast<InstructionIndex>(
+                            process_.operations.size()),
+                        UnknownBranchPolicy::when_false,
+                    };
+                }
+                for (const auto exit : exits) {
+                    process_.operations[exit] = Jump {
+                        static_cast<InstructionIndex>(
+                            process_.operations.size()) };
+                }
+                return true;
+            }
+        }
     }
     return lower_hir_class_task_invocation(statement_id, *profile, receiver);
 }
@@ -6820,11 +6934,81 @@ Lowerer::lower_hir_function_call_value(
             return std::nullopt;
         }
     }
-    const auto interface_callable = !callable && expression
+    auto interface_callable = !callable && expression
             && expression->systemverilog != nullptr
         ? hir_interface_function_profile(
               expression_id, hir_process_scope_)
         : std::nullopt;
+    if (interface_callable && hir_interface_receiver_override_) {
+        interface_callable->receiver = *std::exchange(
+            hir_interface_receiver_override_, std::nullopt);
+    } else if (interface_callable) {
+        // A function of the interface a virtual interface handle names
+        // (`v.f()`, IEEE 1800-2017 25.9) runs on that instance: test the
+        // handle against each instance of the interface type.
+        const auto dispatch
+            = hir_virtual_interface_instances(interface_callable->receiver);
+        const auto type = dispatch
+            ? hir_callable_type(interface_callable->declaration)
+            : std::nullopt;
+        if (dispatch && type && !type->string && !type->container
+            && type->width != 0U) {
+            const auto handle
+                = lower_hir_virtual_interface_handle(dispatch->first);
+            if (!handle) {
+                return std::nullopt;
+            }
+            const auto result = allocate_register(type->width, type->domain);
+            process_.operations.emplace_back(LoadConstant {
+                result, callable_default_value(type->width, type->domain) });
+            std::vector<InstructionIndex> exits;
+            for (const auto& [identity, path] : dispatch->second) {
+                const auto constant = allocate_register(
+                    64U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(LoadConstant {
+                    constant, unsigned_value(identity, 64U) });
+                const auto selected = allocate_register(
+                    1U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::case_equal, selected, *handle,
+                    constant });
+                const auto branch = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations.emplace_back(Branch {
+                    selected, branch + 1U, 0U,
+                    UnknownBranchPolicy::when_false });
+                hir_interface_receiver_override_ = "@instance:" + path;
+                discarding_call_result_ = discarded;
+                const auto value = lower_hir_function_call_value(
+                    expression_id, expected_width);
+                hir_interface_receiver_override_.reset();
+                if (!value || !value->packed) {
+                    return std::nullopt;
+                }
+                auto packed = *value->packed;
+                if (register_width(packed) != type->width) {
+                    packed = resize_register(
+                        packed, type->width, type->signed_value);
+                }
+                process_.operations.emplace_back(CopyRegister {
+                    result, packed });
+                exits.push_back(static_cast<InstructionIndex>(
+                    process_.operations.size()));
+                process_.operations.emplace_back(Jump { });
+                process_.operations[branch] = Branch {
+                    selected,
+                    branch + 1U,
+                    static_cast<InstructionIndex>(process_.operations.size()),
+                    UnknownBranchPolicy::when_false,
+                };
+            }
+            for (const auto exit : exits) {
+                process_.operations[exit] = Jump {
+                    static_cast<InstructionIndex>(process_.operations.size()) };
+            }
+            return HirFunctionCallValue { result, std::nullopt };
+        }
+    }
     const auto resolution = expression && expression->vhdl != nullptr
         ? resolve_hir_vhdl_function_call(
               expression_id, hir_process_scope_, expected_width)
@@ -9454,6 +9638,30 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
     };
     hir_process_scope_ = initial_frame.scope;
     hir_local_registers_ = hir_enclosing_local_registers_;
+    // A subprogram declared in another subprogram reads that subprogram's
+    // formals and locals (IEEE 1076-2008 4.3, 12.3).
+    {
+        const auto& scopes = specialized_hir_unit_->design().semantics.scopes();
+        std::set<std::uint32_t> enclosing;
+        auto scope = initial_frame.scope;
+        for (std::size_t depth { }; scope.valid() && depth < 64U; ++depth) {
+            if (scope.value() >= scopes.size()
+                || !scopes[scope.value()].parent) {
+                break;
+            }
+            scope = *scopes[scope.value()].parent;
+            enclosing.insert(scope.value());
+        }
+        for (const auto& frame : hir_callable_frames_) {
+            if (frame.lowered && frame.scope.valid()
+                && enclosing.contains(frame.scope.value())) {
+                for (const auto& [enclosing_declaration, register_id] :
+                    frame.body_registers) {
+                    hir_local_registers_.emplace(enclosing_declaration, register_id);
+                }
+            }
+        }
+    }
     hir_local_string_registers_ = hir_enclosing_local_string_registers_;
     hir_local_container_registers_.clear();
     hir_local_container_types_.clear();
@@ -9858,6 +10066,8 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
         completed.invocation_push_sites.clear();
         completed.snapshot_complete = true;
     }
+    hir_callable_frames_[callable_index].body_registers
+        = hir_local_registers_;
 
     restore_context();
     return lowered;

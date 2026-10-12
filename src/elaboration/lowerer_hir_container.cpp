@@ -924,6 +924,107 @@ bool Lowerer::lower_hir_container_locator_assignment(
     return true;
 }
 
+std::optional<semantic::sv::TypeReference>
+Lowerer::hir_systemverilog_value_type(
+    const semantic::ExpressionId expression_id) const
+{
+    // The declared type of a variable, of a member of a structure variable
+    // (`s.a.b`), or of an element of an unpacked array (`a[i]`).
+    const auto expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (!expression || expression->systemverilog == nullptr) {
+        return std::nullopt;
+    }
+    const auto& source = *expression->systemverilog;
+    const semantic::CompiledDesignResolver resolver {
+        *specialized_hir_unit_, hir_generic_binding_frames_
+    };
+    if (source.kind == semantic::sv::ExpressionKind::index
+        && source.operands.size() == 2U && source.text == "index") {
+        auto element = hir_systemverilog_value_type(source.operands.front());
+        if (!element || element->unpacked_dimensions.empty()) {
+            return std::nullopt;
+        }
+        element->unpacked_dimensions.erase(
+            element->unpacked_dimensions.begin());
+        if (element->unpacked_dimensions.empty()) {
+            element->container_form.reset();
+            element->container_element_types.clear();
+        }
+        return element;
+    }
+    if (source.kind != semantic::sv::ExpressionKind::name) {
+        return std::nullopt;
+    }
+    const auto name_separator = source.text.find('.');
+    auto declaration_id = hir_referenced_declaration(expression_id);
+    if (!declaration_id && name_separator != std::string::npos) {
+        declaration_id = resolver.resolve_systemverilog(
+            std::string_view { source.text }.substr(0U, name_separator),
+            source.scope,
+            [](const semantic::CompiledDeclarationView& candidate) {
+                return candidate.systemverilog != nullptr
+                    && candidate.systemverilog->type.has_value();
+            },
+            false).unique();
+    }
+    const auto declaration = declaration_id
+        ? specialized_hir_unit_->find_declaration(*declaration_id)
+        : std::nullopt;
+    if (!declaration || declaration->systemverilog == nullptr
+        || !declaration->systemverilog->type) {
+        return std::nullopt;
+    }
+    auto current = *declaration->systemverilog->type;
+    if (name_separator == std::string::npos) {
+        return current;
+    }
+    if (source.text.substr(0U, name_separator)
+        != declaration->systemverilog->name) {
+        return std::nullopt;
+    }
+    auto remaining = std::string_view { source.text }.substr(
+        name_separator + 1U);
+    while (!remaining.empty()) {
+        if (!current.target.target.valid()) {
+            current = resolver.effective_systemverilog_type(
+                current, declaration->systemverilog->scope)
+                          .value_or(current);
+        }
+        auto definition = current.target.target.valid()
+            ? specialized_hir_unit_->find_type(current.target.target)
+            : std::nullopt;
+        std::unordered_set<std::uint32_t> aliases;
+        while (definition && definition->systemverilog != nullptr
+            && definition->systemverilog->form
+                == semantic::sv::TypeForm::alias
+            && definition->systemverilog->base.target.target.valid()
+            && aliases.insert(definition->systemverilog->base.target
+                                  .target.value()).second) {
+            definition = specialized_hir_unit_->find_type(
+                definition->systemverilog->base.target.target);
+        }
+        if (!definition || definition->systemverilog == nullptr) {
+            return std::nullopt;
+        }
+        const auto separator = remaining.find('.');
+        const auto segment = remaining.substr(0U, separator);
+        const auto member = std::ranges::find(
+            definition->systemverilog->members, segment,
+            &semantic::sv::PackedMember::name);
+        if (member == definition->systemverilog->members.end()) {
+            return std::nullopt;
+        }
+        current = member->type;
+        if (separator == std::string_view::npos) {
+            break;
+        }
+        remaining.remove_prefix(separator + 1U);
+    }
+    return current;
+}
+
 std::optional<Lowerer::HirEnumerationMethod>
 Lowerer::hir_systemverilog_enumeration_method(
     const semantic::ExpressionId expression_id) const
@@ -957,6 +1058,16 @@ Lowerer::hir_systemverilog_enumeration_method(
         }
         const auto receiver = specialized_hir_unit_->find_expression(
             source.operands.front());
+        // An element of an unpacked array of enumerations (`a[i].name()`).
+        if (receiver && receiver->systemverilog != nullptr
+            && receiver->systemverilog->kind
+                == semantic::sv::ExpressionKind::index) {
+            if (const auto type = hir_systemverilog_value_type(
+                    source.operands.front())) {
+                return hir_systemverilog_enumeration_type_profile(
+                    std::move(result), *type, receiver->systemverilog->scope);
+            }
+        }
         // A chained call (`e.next(1).next(1)`) has the enumeration type of
         // the inner method's receiver.
         if (receiver && receiver->systemverilog != nullptr
@@ -970,9 +1081,22 @@ Lowerer::hir_systemverilog_enumeration_method(
             return hir_systemverilog_enumeration_profile(
                 std::move(result), inner->receiver_declaration);
         }
-        if (!receiver || receiver->systemverilog == nullptr
-            || receiver->systemverilog->text.find('.')
-                != std::string::npos) {
+        if (!receiver || receiver->systemverilog == nullptr) {
+            return std::nullopt;
+        }
+        if (receiver->systemverilog->text.find('.') != std::string::npos) {
+            // An enumeration member of a structure (`s.m.name()`, IEEE
+            // 1800-2017 6.19.5, 7.2).
+            if (const auto type = hir_systemverilog_value_type(
+                    source.operands.front())) {
+                const auto root = hir_referenced_declaration(
+                    source.operands.front());
+                if (root) {
+                    result.receiver_declaration = *root;
+                }
+                return hir_systemverilog_enumeration_type_profile(
+                    std::move(result), *type, receiver->systemverilog->scope);
+            }
             return std::nullopt;
         }
         declaration_id = hir_referenced_declaration(source.operands.front());
@@ -1041,11 +1165,20 @@ Lowerer::hir_systemverilog_enumeration_profile(
         return std::nullopt;
     }
     result.receiver_declaration = declaration_id;
-    auto type = *declaration->systemverilog->type;
+    return hir_systemverilog_enumeration_type_profile(std::move(result),
+        *declaration->systemverilog->type, declaration->systemverilog->scope);
+}
+
+std::optional<Lowerer::HirEnumerationMethod>
+Lowerer::hir_systemverilog_enumeration_type_profile(
+    HirEnumerationMethod result,
+    semantic::sv::TypeReference type,
+    const semantic::ScopeId scope) const
+{
     if (!type.target.target.valid()) {
         type = semantic::CompiledDesignResolver {
             *specialized_hir_unit_, hir_generic_binding_frames_
-        }.effective_systemverilog_type(type, declaration->systemverilog->scope)
+        }.effective_systemverilog_type(type, scope)
                    .value_or(type);
     }
     if (!type.target.target.valid()) {

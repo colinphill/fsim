@@ -539,6 +539,20 @@ private:
         const HirVirtualInterfaceMember& member);
     [[nodiscard]] std::optional<RegisterId> lower_hir_virtual_interface_handle(
         semantic::DeclarationId receiver);
+    [[nodiscard]] std::optional<RegisterId> lower_hir_string_to_packed(
+        semantic::ExpressionId operand, std::size_t width);
+    [[nodiscard]] bool hir_process_handle_expression(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<std::int64_t> hir_vhdl_subtype_name_bound(
+        semantic::ExpressionId expression, std::size_t depth) const;
+    [[nodiscard]] std::optional<semantic::ExpressionId>
+    hir_systemverilog_parameter_member(semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<std::pair<semantic::DeclarationId,
+        std::vector<std::pair<std::uint64_t, std::string>>>>
+    hir_virtual_interface_instances(std::string_view receiver) const;
+    // The instance an interface function call runs on, while a call through
+    // a virtual interface handle is lowered once per instance.
+    std::optional<std::string> hir_interface_receiver_override_;
     [[nodiscard]] std::optional<semantic::ExpressionId>
     hir_parameter_type_expression(semantic::DeclarationId declaration) const;
     [[nodiscard]] std::optional<HirSystemVerilogConstant>
@@ -548,6 +562,9 @@ private:
     [[nodiscard]] std::optional<ContainerRegisterId>
     lower_hir_container_concatenation(const ContainerType& type,
         std::span<const semantic::ExpressionId> operands);
+    [[nodiscard]] bool lower_hir_virtual_interface_select_write(
+        semantic::ExpressionId target, semantic::ExpressionId value,
+        bool nonblocking, SignalUpdateDomain update_domain);
     // Writes `value` to the member in the instance the handle names.
     [[nodiscard]] bool lower_hir_virtual_interface_write(
         const HirVirtualInterfaceMember& member, RegisterId value,
@@ -792,6 +809,11 @@ private:
     [[nodiscard]] std::optional<HirEnumerationMethod>
     hir_systemverilog_enumeration_method(
         semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<HirEnumerationMethod>
+    hir_systemverilog_enumeration_type_profile(HirEnumerationMethod result,
+        semantic::sv::TypeReference type, semantic::ScopeId scope) const;
+    [[nodiscard]] std::optional<semantic::sv::TypeReference>
+    hir_systemverilog_value_type(semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<HirEnumerationMethod>
     hir_systemverilog_enumeration_profile(HirEnumerationMethod method,
         semantic::DeclarationId declaration) const;
@@ -1274,6 +1296,14 @@ private:
         const HirVhdlAccessHeap& heap,
         RegisterId candidate);
     [[nodiscard]] bool is_hir_vhdl_physical_expression(
+        semantic::ExpressionId expression) const;
+    struct HirVhdlPhysicalUnit {
+        std::size_t width { };
+        std::int64_t scale { };
+    };
+    [[nodiscard]] std::optional<HirVhdlPhysicalUnit> hir_vhdl_physical_unit(
+        std::string_view unit_name, std::size_t expected_width) const;
+    [[nodiscard]] std::optional<std::string> hir_vhdl_physical_unit_name(
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_vhdl_physical_expression(
@@ -2218,6 +2248,9 @@ private:
         // whole call. Frames are specialized per actual signal set.
         std::unordered_map<std::uint32_t, HirRuntimeBinding> signal_formals;
         std::unordered_map<std::uint32_t, RegisterId> static_variables;
+        // The registers of the body's formals and locals once lowered,
+        // visible to subprograms declared inside it.
+        std::unordered_map<std::uint32_t, RegisterId> body_registers;
         std::unordered_map<std::uint32_t, StringRegisterId>
             static_string_variables;
         std::unordered_map<std::uint32_t, ContainerRegisterId>

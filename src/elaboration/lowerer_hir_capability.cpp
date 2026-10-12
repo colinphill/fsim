@@ -1207,6 +1207,200 @@ bool Lowerer::hir_vhdl_active_package_constant(
     return owner && std::ranges::any_of(hir_generic_binding_frames_, frame_has_package_generic);
 }
 
+std::optional<semantic::ExpressionId>
+Lowerer::hir_systemverilog_parameter_member(
+    const semantic::ExpressionId expression_id) const
+{
+    // A member of an unpacked structure parameter (`S.a` for `localparam
+    // s_t S = '{a:3, b:4}`, or `S.sub.c`, IEEE 1800-2017 7.2, 6.20): the
+    // pattern's item for that member, else the member's default.
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->systemverilog == nullptr
+        || expression->systemverilog->kind
+            != semantic::sv::ExpressionKind::name) {
+        return std::nullopt;
+    }
+    const auto& text = expression->systemverilog->text;
+    const auto separator = text.find('.');
+    if (separator == std::string::npos || separator == 0U) {
+        return std::nullopt;
+    }
+    const semantic::CompiledDesignResolver resolver {
+        *specialized_hir_unit_, hir_generic_binding_frames_
+    };
+    const auto declaration_id = resolver.resolve_systemverilog(
+        std::string_view { text }.substr(0U, separator),
+        expression->systemverilog->scope,
+        [](const semantic::CompiledDeclarationView& candidate) {
+            return candidate.systemverilog != nullptr
+                && (candidate.systemverilog->form
+                        == semantic::sv::DeclarationForm::parameter
+                    || candidate.systemverilog->form
+                        == semantic::sv::DeclarationForm::local_parameter);
+        },
+        false).unique();
+    const auto declaration = declaration_id
+        ? specialized_hir_unit_->find_declaration(*declaration_id)
+        : std::nullopt;
+    if (!declaration || declaration->systemverilog == nullptr
+        || !declaration->systemverilog->type
+        || !declaration->systemverilog->initializer) {
+        return std::nullopt;
+    }
+    auto type = *declaration->systemverilog->type;
+    std::optional<semantic::ExpressionId> current
+        = declaration->systemverilog->initializer;
+    auto remaining = std::string_view { text }.substr(separator + 1U);
+    while (true) {
+        if (!type.target.target.valid()) {
+            type = resolver.effective_systemverilog_type(
+                type, declaration->systemverilog->scope).value_or(type);
+        }
+        auto definition = type.target.target.valid()
+            ? specialized_hir_unit_->find_type(type.target.target)
+            : std::nullopt;
+        std::unordered_set<std::uint32_t> aliases;
+        while (definition && definition->systemverilog != nullptr
+            && definition->systemverilog->form
+                == semantic::sv::TypeForm::alias
+            && definition->systemverilog->base.target.target.valid()
+            && aliases.insert(definition->systemverilog->base.target.target
+                                  .value()).second) {
+            definition = specialized_hir_unit_->find_type(
+                definition->systemverilog->base.target.target);
+        }
+        if (!definition || definition->systemverilog == nullptr
+            || definition->systemverilog->form
+                != semantic::sv::TypeForm::unpacked_structure) {
+            return std::nullopt;
+        }
+        const auto& members = definition->systemverilog->members;
+        const auto next = remaining.find('.');
+        const auto member_name = remaining.substr(0U, next);
+        const auto member = std::ranges::find(
+            members, member_name, &semantic::sv::PackedMember::name);
+        if (member == members.end()) {
+            return std::nullopt;
+        }
+        const auto member_index = static_cast<std::size_t>(
+            std::distance(members.begin(), member));
+        const auto pattern = current
+            ? specialized_hir_unit_->find_expression(*current)
+            : std::nullopt;
+        std::optional<semantic::ExpressionId> item;
+        if (pattern && pattern->systemverilog != nullptr
+            && pattern->systemverilog->kind
+                == semantic::sv::ExpressionKind::assignment_pattern) {
+            std::optional<semantic::ExpressionId> fallback;
+            std::size_t position { };
+            for (const auto& association :
+                pattern->systemverilog->associations) {
+                if (association.choice_spelling == "default") {
+                    fallback = association.value;
+                } else if (association.choice_spelling == "@key") {
+                    const auto key = association.choices.size() == 1U
+                        ? specialized_hir_unit_->find_expression(
+                              association.choices.front())
+                        : std::nullopt;
+                    if (key && key->systemverilog != nullptr
+                        && key->systemverilog->text == member_name) {
+                        item = association.value;
+                        break;
+                    }
+                } else if (association.choice_spelling.empty()) {
+                    if (position++ == member_index) {
+                        item = association.value;
+                        break;
+                    }
+                }
+            }
+            if (!item) {
+                item = fallback ? fallback : member->initializer;
+            }
+        } else if (!pattern) {
+            item = member->initializer;
+        } else {
+            return std::nullopt;
+        }
+        if (next == std::string_view::npos) {
+            return item;
+        }
+        current = item;
+        type = member->type;
+        remaining.remove_prefix(next + 1U);
+    }
+}
+
+std::optional<std::int64_t> Lowerer::hir_vhdl_subtype_name_bound(
+    const semantic::ExpressionId expression_id, const std::size_t depth) const
+{
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->vhdl == nullptr || depth > 8U) {
+        return std::nullopt;
+    }
+    const auto& source = *expression->vhdl;
+    if (source.kind != semantic::vhdl::ExpressionKind::call
+        || source.operands.size() != 1U
+        || (source.text != "'left" && source.text != "'right"
+            && source.text != "'low" && source.text != "'high")) {
+        return std::nullopt;
+    }
+    const auto prefix = specialized_hir_unit_->find_expression(
+        source.operands.front());
+    const auto declaration = prefix && prefix->vhdl != nullptr
+            && prefix->vhdl->referenced_name
+            && prefix->vhdl->referenced_name->selected
+        ? specialized_hir_unit_->find_declaration(
+              *prefix->vhdl->referenced_name->selected)
+        : std::nullopt;
+    const auto type = declaration && declaration->vhdl != nullptr
+            && declaration->vhdl->declared_type
+        ? specialized_hir_unit_->find_type(*declaration->vhdl->declared_type)
+        : std::nullopt;
+    if (!type || type->vhdl == nullptr) {
+        return std::nullopt;
+    }
+    const auto range = std::ranges::find_if(type->vhdl->base.constraints,
+        [](const semantic::vhdl::RangeConstraint& candidate) {
+            return candidate.kind != semantic::vhdl::RangeKind::array_index;
+        });
+    if (range == type->vhdl->base.constraints.end()) {
+        return std::nullopt;
+    }
+    const auto bound = [&](const std::optional<std::int64_t> value,
+                           const std::optional<semantic::ExpressionId> bound_id)
+        -> std::optional<std::int64_t> {
+        if (value || !bound_id) {
+            return value;
+        }
+        const auto literal = specialized_hir_unit_->find_expression(*bound_id);
+        if (literal && literal->vhdl != nullptr
+            && literal->vhdl->kind
+                == semantic::vhdl::ExpressionKind::logic_literal
+            && literal->vhdl->text.size() == 3U
+            && literal->vhdl->text.front() == '\'') {
+            return static_cast<std::int64_t>(
+                static_cast<unsigned char>(literal->vhdl->text[1]));
+        }
+        if (const auto nested = hir_vhdl_subtype_name_bound(
+                *bound_id, depth + 1U)) {
+            return nested;
+        }
+        return specialized_hir_unit_->evaluate_integral_expression(*bound_id);
+    };
+    const auto left = bound(range->left, range->left_expression);
+    const auto right = bound(range->right, range->right_expression);
+    if (!left || !right) {
+        return std::nullopt;
+    }
+    return source.text == "'left" ? left
+        : source.text == "'right" ? right
+        : source.text == "'low"   ? std::min(*left, *right)
+                                  : std::max(*left, *right);
+}
+
 std::optional<std::int64_t> Lowerer::hir_constant_integer(
     const semantic::ExpressionId expression_id) const
 {
@@ -1249,6 +1443,15 @@ std::optional<std::int64_t> Lowerer::hir_constant_integer(
         const auto result = hir_constant_integer(declaration->expression);
         hir_let_frames_.pop_back();
         return result;
+    }
+    // A bound of a discrete subtype named as an index constraint (`u(st)`
+    // gives `st'left`, IEEE 1076-2008 5.3.2.2), a CHARACTER literal by its
+    // position.
+    if (const auto bound = hir_vhdl_subtype_name_bound(expression_id, 0U)) {
+        return bound;
+    }
+    if (const auto member = hir_systemverilog_parameter_member(expression_id)) {
+        return hir_constant_integer(*member);
     }
     const auto frame_sensitive_package_constant
         = hir_vhdl_active_package_constant(expression_id);
@@ -6937,6 +7140,20 @@ bool Lowerer::hir_expression_is_string(
         return true;
     }
     // `pop_front`/`pop_back` of a queue of strings.
+    // `string'(x)` is a string whatever its operand (6.24.1).
+    if (const auto cast = specialized_hir_unit_ != nullptr
+            ? specialized_hir_unit_->find_expression(expression_id)
+            : std::nullopt;
+        cast && cast->systemverilog != nullptr
+        && cast->systemverilog->kind == semantic::sv::ExpressionKind::call
+        && (cast->systemverilog->text == "@sv-cast:string"
+            || (cast->systemverilog->text == ".get_randstate"
+                && !cast->systemverilog->operands.empty()
+                && hir_process_handle_expression(
+                    cast->systemverilog->operands.front())))
+        && cast->systemverilog->operands.size() == 1U) {
+        return true;
+    }
     if (const auto call = specialized_hir_unit_->find_expression(expression_id);
         call && call->systemverilog != nullptr
         && call->systemverilog->kind == semantic::sv::ExpressionKind::call
@@ -10851,6 +11068,33 @@ std::optional<semantic::DeclarationId> Lowerer::hir_vhdl_alias_object(
     return target && *target != alias_id ? target : std::nullopt;
 }
 
+std::optional<std::string> Lowerer::hir_vhdl_physical_unit_name(
+    const semantic::ExpressionId expression_id) const
+{
+    // The unit of a physical literal (`5 ns`) or a unit name used as a
+    // value (`ns`).
+    const auto expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (!expression || expression->vhdl == nullptr) {
+        return std::nullopt;
+    }
+    const auto& source = *expression->vhdl;
+    constexpr std::string_view prefix { "@vhdl-physical:" };
+    if (source.kind == semantic::vhdl::ExpressionKind::call
+        && source.text.starts_with(prefix) && source.operands.size() == 1U) {
+        return source.text.substr(prefix.size());
+    }
+    if (source.kind == semantic::vhdl::ExpressionKind::name
+        && !source.text.empty()
+        && source.text.find('.') == std::string::npos
+        && !hir_referenced_declaration(expression_id)
+        && hir_vhdl_physical_unit(source.text, 0U)) {
+        return source.text;
+    }
+    return std::nullopt;
+}
+
 std::optional<std::size_t> Lowerer::hir_expression_width(
     const semantic::ExpressionId expression_id,
     const semantic::ScopeId process_scope) const
@@ -10863,6 +11107,36 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
     }
     if (hir_vhdl_runtime_string_bound(expression_id)) {
         return 32U;
+    }
+    // A character of a constant string (`s'at1(1)` after the attribute's
+    // value is substituted).
+    if (const auto indexed = specialized_hir_unit_->find_expression(
+            expression_id);
+        indexed && indexed->vhdl != nullptr
+        && indexed->vhdl->kind == semantic::vhdl::ExpressionKind::index
+        && indexed->vhdl->operands.size() == 2U) {
+        const auto prefix = specialized_hir_unit_->find_expression(
+            indexed->vhdl->operands.front());
+        if (prefix && prefix->vhdl != nullptr
+            && prefix->vhdl->kind
+                == semantic::vhdl::ExpressionKind::string_literal) {
+            return 8U;
+        }
+    }
+    if (hir_systemverilog_parameter_member(expression_id)) {
+        if (const auto type = hir_systemverilog_value_type(expression_id)) {
+            if (const auto width = hir_systemverilog_type_width(*type)) {
+                return width;
+            }
+        }
+    }
+    // A physical literal or a bare unit name has its physical type's width
+    // (IEEE 1076-2008 5.2.4).
+    if (const auto unit = hir_vhdl_physical_unit_name(expression_id)) {
+        if (const auto physical = hir_vhdl_physical_unit(*unit, 0U);
+            physical && physical->width != 0U) {
+            return physical->width;
+        }
     }
     if (const auto member = hir_systemverilog_indexed_member(expression_id)) {
         return member->width;
@@ -13160,8 +13434,14 @@ Lowerer::hir_vhdl_expression_subtype(
         element && element->vhdl != nullptr
         && element->vhdl->kind == semantic::vhdl::ExpressionKind::index
         && element->vhdl->operands.size() == 2U) {
-        // An element of a STRING held as a runtime string is a CHARACTER.
-        if (hir_vhdl_runtime_string_prefix(element->vhdl->operands[0])) {
+        // An element of a STRING held as a runtime string, or of a string
+        // literal, is a CHARACTER.
+        const auto literal_prefix = specialized_hir_unit_->find_expression(
+            element->vhdl->operands[0]);
+        if (hir_vhdl_runtime_string_prefix(element->vhdl->operands[0])
+            || (literal_prefix && literal_prefix->vhdl != nullptr
+                && literal_prefix->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::string_literal)) {
             semantic::vhdl::SubtypeIndication character;
             character.type_mark.spelling = "character";
             character.domain = semantic::vhdl::ValueDomain::bit2;

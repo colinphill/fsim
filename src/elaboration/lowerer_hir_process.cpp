@@ -1465,8 +1465,14 @@ bool Lowerer::initialize_hir_declarations(
             && declaration_scope.value() < scopes.size()
             && scopes[declaration_scope.value()].name == "<loop>";
         auto name = debug_name(declaration_id, binding->name);
+        // A declaration initialized again (a fork's block item in a loop)
+        // keeps one debug local.
         const bool first_debug_name = active_hir_callable_
-            || debug_local_names_.emplace(name).second;
+            ? std::ranges::none_of(process_.debug_locals,
+                  [&](const DebugLocal& existing) {
+                      return existing.name == name;
+                  })
+            : debug_local_names_.emplace(name).second;
         if (first_initialization && !loop_control && first_debug_name) {
             process_.debug_locals.push_back(DebugLocal {
                 std::move(name),

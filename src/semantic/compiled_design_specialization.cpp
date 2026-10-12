@@ -1531,6 +1531,7 @@ class HirIntegralEvaluator {
         std::map<DeclarationId, VhdlConstantValue> vhdl_values;
         std::map<std::string, std::optional<std::int64_t>> pattern_values;
         std::optional<std::int64_t> result;
+        std::optional<std::string> string_result;
         std::optional<VhdlConstantValue> vhdl_result;
     };
 
@@ -5235,7 +5236,7 @@ private:
         }
         call_frames_.push_back(CallFrame {
             *selection.package_instance, { }, { }, { }, { }, std::nullopt,
-            std::nullopt });
+            std::nullopt, std::nullopt });
         for (const auto& binding : selection.generic_bindings) {
             const auto declaration = unit_.find_declaration(binding.formal);
             if (!declaration || declaration->vhdl == nullptr) {
@@ -5437,6 +5438,9 @@ public:
             if (const auto value = frame->string_values.find(declaration);
                 value != frame->string_values.end()) {
                 return value->second;
+            }
+            if (frame->callable == declaration && frame->string_result) {
+                return frame->string_result;
             }
         }
         ensure_actual(declaration);
@@ -6524,9 +6528,305 @@ private:
                 values.push_back(*argument.actual);
             }
         }
+        return format_values(statement.output_text, values);
+    }
+
+    /// Whether a declaration, or a function's result, has type string.
+    [[nodiscard]] bool systemverilog_string_typed(
+        const DeclarationId declaration) const
+    {
+        const auto view = unit_.find_declaration(declaration);
+        if (!view || view->systemverilog == nullptr) {
+            return false;
+        }
+        if (view->systemverilog->callable) {
+            return view->systemverilog->callable->return_type.target.spelling
+                == "string";
+        }
+        return view->systemverilog->type
+            && view->systemverilog->type->target.spelling == "string";
+    }
+
+    /// The literals of the enumerated type of an expression that names a
+    /// variable or applies an enumeration method to one, in declaration
+    /// order; null otherwise.
+    [[nodiscard]] const std::vector<sv::EnumerationLiteral>*
+    systemverilog_enumeration_literals(const ExpressionId expression)
+    {
+        const auto view = unit_.find_expression(expression);
+        if (!view || view->systemverilog == nullptr) {
+            return nullptr;
+        }
+        const auto& source = *view->systemverilog;
+        if (source.kind == sv::ExpressionKind::call
+            && !source.operands.empty()
+            && (source.text == ".next" || source.text == ".prev"
+                || source.text == ".first" || source.text == ".last")) {
+            return systemverilog_enumeration_literals(
+                source.operands.front());
+        }
+        if (const auto dotted = systemverilog_dotted_enumeration_method(
+                source)) {
+            return systemverilog_declaration_enumeration_literals(
+                dotted->declaration);
+        }
+        const auto declaration = expression_declaration(expression);
+        return declaration
+            ? systemverilog_declaration_enumeration_literals(*declaration)
+            : nullptr;
+    }
+
+    /// The literals of a variable's enumerated type, or null.
+    [[nodiscard]] const std::vector<sv::EnumerationLiteral>*
+    systemverilog_declaration_enumeration_literals(
+        const DeclarationId declaration) const
+    {
+        const auto record = unit_.find_declaration(declaration);
+        if (!record || record->systemverilog == nullptr) {
+            return nullptr;
+        }
+        std::optional<TypeId> type;
+        if (record->systemverilog->type) {
+            // A typedef of the compilation unit or a package is resolved
+            // by name.
+            auto reference = *record->systemverilog->type;
+            if (!reference.target.target.valid()) {
+                if (const auto effective = CompiledDesignResolver { unit_ }
+                        .effective_systemverilog_type(
+                            reference, record->systemverilog->scope)) {
+                    reference = *effective;
+                }
+            }
+            if (reference.target.target.valid()) {
+                type = reference.target.target;
+            }
+        }
+        if (!type && record->systemverilog->declared_type) {
+            type = record->systemverilog->declared_type;
+        }
+        for (int depth = 0; type && depth < 32; ++depth) {
+            const auto definition = unit_.find_type(*type);
+            if (!definition || definition->systemverilog == nullptr) {
+                return nullptr;
+            }
+            if (definition->systemverilog->form
+                == sv::TypeForm::enumeration) {
+                return &definition->systemverilog->enumeration_literals;
+            }
+            if (definition->systemverilog->form != sv::TypeForm::alias
+                || !definition->systemverilog->base.target.target.valid()) {
+                return nullptr;
+            }
+            type = definition->systemverilog->base.target.target;
+        }
+        return nullptr;
+    }
+
+    /// The position of an enumerated value among its type's literals.
+    [[nodiscard]] std::optional<std::size_t> systemverilog_enumeration_index(
+        const std::vector<sv::EnumerationLiteral>& literals,
+        const std::int64_t value)
+    {
+        for (std::size_t index { }; index < literals.size(); ++index) {
+            if (evaluate_declaration(literals[index].declaration) == value) {
+                return index;
+            }
+        }
+        return std::nullopt;
+    }
+
+    /// An enumeration method of a constant receiver (IEEE 1800-2017
+    /// 6.19.5): first, last, next, prev or num.
+    [[nodiscard]] std::optional<std::int64_t>
+    evaluate_systemverilog_enumeration_method(const sv::Expression& call)
+    {
+        if (call.operands.empty()) {
+            return std::nullopt;
+        }
+        const auto* literals = systemverilog_enumeration_literals(
+            call.operands.front());
+        if (literals == nullptr) {
+            return std::nullopt;
+        }
+        return systemverilog_enumeration_method_value(*literals,
+            std::string_view { call.text }.substr(1U),
+            [&] { return evaluate(call.operands.front()); },
+            call.operands.size() > 1U
+                ? evaluate(call.operands[1])
+                : std::optional<std::int64_t> { 1 });
+    }
+
+    template <typename Receiver>
+    [[nodiscard]] std::optional<std::int64_t>
+    systemverilog_enumeration_method_value(
+        const std::vector<sv::EnumerationLiteral>& literals,
+        const std::string_view method, const Receiver& receiver_value,
+        const std::optional<std::int64_t> step)
+    {
+        if (literals.empty()) {
+            return std::nullopt;
+        }
+        if (method == "num") {
+            return static_cast<std::int64_t>(literals.size());
+        }
+        if (method == "first") {
+            return evaluate_declaration(literals.front().declaration);
+        }
+        if (method == "last") {
+            return evaluate_declaration(literals.back().declaration);
+        }
+        if (method != "next" && method != "prev") {
+            return std::nullopt;
+        }
+        const auto receiver = receiver_value();
+        if (!receiver || !step || *step < 0) {
+            return std::nullopt;
+        }
+        const auto index = systemverilog_enumeration_index(
+            literals, *receiver);
+        if (!index) {
+            return std::nullopt;
+        }
+        const auto count = static_cast<std::int64_t>(literals.size());
+        const auto offset = *step % count;
+        const auto position = method == "next"
+            ? (static_cast<std::int64_t>(*index) + offset) % count
+            : (static_cast<std::int64_t>(*index) - offset + count) % count;
+        return evaluate_declaration(
+            literals[static_cast<std::size_t>(position)].declaration);
+    }
+
+    /// `variable.method` written without parentheses (13.4.5) for
+    /// enumeration methods, possibly chained (`e.next.next`).
+    struct DottedEnumerationMethods {
+        std::vector<std::string> methods;
+        DeclarationId declaration;
+    };
+
+    [[nodiscard]] std::optional<DottedEnumerationMethods>
+    systemverilog_dotted_enumeration_method(const sv::Expression& name)
+    {
+        if (name.kind != sv::ExpressionKind::name) {
+            return std::nullopt;
+        }
+        DottedEnumerationMethods result;
+        auto prefix = std::string_view { name.text };
+        for (auto separator = prefix.rfind('.');
+            separator != std::string_view::npos;
+            separator = prefix.rfind('.')) {
+            const auto method = prefix.substr(separator + 1U);
+            const bool final_only = method == "num" || method == "name";
+            if ((!final_only && method != "first" && method != "last"
+                    && method != "next" && method != "prev")
+                || (final_only && !result.methods.empty())) {
+                break;
+            }
+            result.methods.insert(result.methods.begin(), std::string { method });
+            prefix = prefix.substr(0U, separator);
+        }
+        if (result.methods.empty()) {
+            return std::nullopt;
+        }
+        auto root = prefix;
+        if (const auto scope = root.rfind("::");
+            scope != std::string_view::npos) {
+            root.remove_prefix(scope + 2U);
+        }
+        auto declaration = result.methods.size() == 1U
+            ? expression_declaration(name.id)
+            : std::nullopt;
+        if (!declaration) {
+            const CompiledDeclarationPredicate object
+                = [](const CompiledDeclarationView& candidate) {
+                      return candidate.systemverilog != nullptr
+                          && candidate.systemverilog->type.has_value();
+                  };
+            declaration = CompiledDesignResolver { unit_ }
+                              .resolve_systemverilog(
+                                  prefix, name.scope, object, false)
+                              .unique();
+        }
+        const auto view = declaration
+            ? unit_.find_declaration(*declaration) : std::nullopt;
+        if (!view || view->systemverilog == nullptr
+            || view->systemverilog->name != root
+            || systemverilog_declaration_enumeration_literals(*declaration)
+                == nullptr) {
+            return std::nullopt;
+        }
+        result.declaration = *declaration;
+        return result;
+    }
+
+    /// The value of a chain of enumeration methods up to, not including,
+    /// a final `name` or `num`.
+    [[nodiscard]] std::optional<std::int64_t>
+    evaluate_dotted_enumeration_value(const DottedEnumerationMethods& dotted,
+        const bool through_final)
+    {
+        const auto& literals = *systemverilog_declaration_enumeration_literals(
+            dotted.declaration);
+        auto value = evaluate_declaration(dotted.declaration);
+        const auto count = through_final
+            ? dotted.methods.size()
+            : dotted.methods.size() - 1U;
+        for (std::size_t index { }; index < count; ++index) {
+            value = systemverilog_enumeration_method_value(literals,
+                dotted.methods[index], [&] { return value; },
+                std::optional<std::int64_t> { 1 });
+        }
+        return value;
+    }
+
+    /// Whether a function keeps state between calls: a static function
+    /// whose variables are initialized once (IEEE 1800-2017 13.4.2).
+    [[nodiscard]] bool systemverilog_retains_state(
+        const DeclarationId callable) const
+    {
+        const auto view = unit_.find_declaration(callable);
+        if (!view || view->systemverilog == nullptr
+            || !view->systemverilog->callable) {
+            return true;
+        }
+        const auto lifetime = view->systemverilog->callable->lifetime;
+        if (lifetime == sv::Lifetime::static_lifetime) {
+            return true;
+        }
+        return std::ranges::any_of(view->systemverilog->children,
+            [&](const DeclarationId child) {
+                const auto local = unit_.find_declaration(child);
+                if (!local || local->systemverilog == nullptr
+                    || local->systemverilog->form
+                        != sv::DeclarationForm::variable) {
+                    return false;
+                }
+                const auto local_lifetime = local->systemverilog->lifetime;
+                return local_lifetime == sv::Lifetime::static_lifetime
+                    || (lifetime == sv::Lifetime::implicit
+                        && local_lifetime != sv::Lifetime::automatic
+                        && local->systemverilog->initializer.has_value());
+            });
+    }
+
+    /// Whether the declaration an expression names has a signed type.
+    [[nodiscard]] bool expression_signed(const ExpressionId expression)
+    {
+        const auto declaration = expression_declaration(expression);
+        const auto view = declaration
+            ? unit_.find_declaration(*declaration) : std::nullopt;
+        return view && view->systemverilog != nullptr
+            && view->systemverilog->type
+            && view->systemverilog->type->signed_value;
+    }
+
+    /// `format` with its conversions applied to `values` in order
+    /// (IEEE 1800-2017 21.2.1).
+    [[nodiscard]] std::optional<std::string> format_values(
+        const std::string_view format,
+        const std::span<const ExpressionId> values)
+    {
         std::string output;
         std::size_t value_index { };
-        const auto format = std::string_view { statement.output_text };
         for (std::size_t index { }; index < format.size(); ++index) {
             if (format[index] != '%') {
                 output.push_back(format[index]);
@@ -6601,9 +6901,23 @@ private:
                 }
                 output += bits;
             } else {
+                const auto bits = expression_bit_width(value_expression);
+                // `%d` without a width pads to the widest value of the
+                // expression's type (21.2.1.3).
+                if (conversion == 'd' && !zero_pad && minimum_width == 0U
+                    && bits > 0U && bits <= 64U) {
+                    const auto signed_value
+                        = expression_signed(value_expression);
+                    const auto magnitude = signed_value
+                        ? std::uint64_t { 1U } << (bits - 1U)
+                        : (bits == 64U
+                              ? std::numeric_limits<std::uint64_t>::max()
+                              : (std::uint64_t { 1U } << bits) - 1U);
+                    minimum_width = std::to_string(magnitude).size()
+                        + (signed_value ? 1U : 0U);
+                }
                 output += formatted_integer(*value, conversion,
-                    minimum_width, expression_bit_width(value_expression),
-                    zero_pad);
+                    minimum_width, bits, zero_pad);
             }
         }
         for (; value_index < values.size(); ++value_index) {
@@ -6651,8 +6965,11 @@ private:
                     == declaration) {
                 return evaluate(value).has_value();
             }
-            auto integral = coerce_systemverilog_value(
-                *declaration, evaluate(value));
+            const auto string_target
+                = systemverilog_string_typed(*declaration);
+            auto integral = string_target
+                ? std::optional<std::int64_t> { }
+                : coerce_systemverilog_value(*declaration, evaluate(value));
             // A value is evaluated once, so its side effects happen once.
             auto string = integral
                 ? std::optional<std::string> { }
@@ -6663,6 +6980,7 @@ private:
             auto& frame = call_frames_.back();
             if (*declaration == frame.callable) {
                 frame.result = integral;
+                frame.string_result = std::move(string);
             } else {
                 frame.values.insert_or_assign(
                     *declaration, std::move(integral));
@@ -6990,6 +7308,15 @@ private:
         case sv::StatementKind::continue_loop:
             return StatementFlow::continued;
         case sv::StatementKind::return_statement:
+            if (systemverilog_string_typed(call_frames_.back().callable)) {
+                if (statement.value) {
+                    call_frames_.back().string_result
+                        = evaluate_string(*statement.value);
+                }
+                return call_frames_.back().string_result
+                    ? StatementFlow::returned
+                    : StatementFlow::failed;
+            }
             if (statement.value) {
                 call_frames_.back().result = evaluate(*statement.value);
             }
@@ -7043,7 +7370,8 @@ private:
     }
 
     [[nodiscard]] std::optional<std::int64_t> evaluate_callable(
-        const sv::Expression& expression)
+        const sv::Expression& expression,
+        std::optional<std::string>* const string_result = nullptr)
     {
         const auto callable_id = callable_declaration(expression);
         if (!callable_id || call_frames_.size() >= 128U) {
@@ -7179,6 +7507,12 @@ private:
                     && call_frames_.back().result)
             ? call_frames_.back().result
             : std::nullopt;
+        if (string_result != nullptr) {
+            *string_result = flow == StatementFlow::returned
+                    || flow == StatementFlow::normal
+                ? call_frames_.back().string_result
+                : std::nullopt;
+        }
         call_frames_.pop_back();
         if (result && declaration.callable->function) {
             result = fit_integral_to_type(
@@ -7695,14 +8029,36 @@ private:
             type_id = definition->base.type_mark.target;
         }
 
+        // A CHARACTER literal bound is its position, its character code
+        // (IEEE 1076-2008 16.3).
+        const bool character_typed = (definition != nullptr
+                && vhdl_name_equal(definition->base.type_mark.spelling,
+                    "character"))
+            || (subtype != nullptr
+                && vhdl_name_equal(subtype->type_mark.spelling, "character"));
+        const auto bound = [&](const ExpressionId id)
+            -> std::optional<std::int64_t> {
+            if (const auto value = evaluate(id)) {
+                return value;
+            }
+            const auto literal = unit_.find_expression(id);
+            if (character_typed && literal && literal->vhdl != nullptr
+                && literal->vhdl->kind == vhdl::ExpressionKind::logic_literal
+                && literal->vhdl->text.size() == 3U
+                && literal->vhdl->text.front() == '\'') {
+                return static_cast<std::int64_t>(
+                    static_cast<unsigned char>(literal->vhdl->text[1]));
+            }
+            return std::nullopt;
+        };
         const auto concrete_range = [&](const vhdl::RangeConstraint& range)
             -> std::optional<vhdl::RangeConstraint> {
             auto result = range;
             if (!result.left && result.left_expression) {
-                result.left = evaluate(*result.left_expression);
+                result.left = bound(*result.left_expression);
             }
             if (!result.right && result.right_expression) {
-                result.right = evaluate(*result.right_expression);
+                result.right = bound(*result.right_expression);
             }
             if (result.direction_from_bounds && result.left
                 && result.right) {
@@ -8022,6 +8378,14 @@ private:
         using Kind = decltype(expression.kind);
         constexpr bool systemverilog
             = std::is_same_v<Expression, sv::Expression>;
+        if constexpr (systemverilog) {
+            if (const auto dotted
+                = systemverilog_dotted_enumeration_method(expression)) {
+                return dotted->methods.back() == "name"
+                    ? std::nullopt
+                    : evaluate_dotted_enumeration_value(*dotted, true);
+            }
+        }
         if (expression.kind == Kind::integer_literal
             || expression.kind == Kind::boolean_literal
             || expression.kind == Kind::logic_literal) {
@@ -8445,6 +8809,12 @@ private:
                 }
                 return std::nullopt;
             }
+            if (expression.kind == Kind::call
+                && (expression.text == ".first" || expression.text == ".last"
+                    || expression.text == ".next" || expression.text == ".prev"
+                    || expression.text == ".num")) {
+                return evaluate_systemverilog_enumeration_method(expression);
+            }
             if (expression.kind == Kind::call) {
                 return evaluate_callable(expression);
             }
@@ -8516,6 +8886,23 @@ private:
             = std::is_same_v<Expression, sv::Expression>;
         if (expression.kind == Kind::string_literal) {
             return expression.decoded_string;
+        }
+        if constexpr (systemverilog) {
+            if (const auto dotted
+                = systemverilog_dotted_enumeration_method(expression);
+                dotted && dotted->methods.back() == "name") {
+                const auto* literals
+                    = systemverilog_declaration_enumeration_literals(
+                        dotted->declaration);
+                const auto value = evaluate_dotted_enumeration_value(
+                    *dotted, false);
+                if (!value) {
+                    return std::nullopt;
+                }
+                const auto index = systemverilog_enumeration_index(
+                    *literals, *value);
+                return index ? (*literals)[*index].name : std::string { };
+            }
         }
         if (expression.kind == Kind::name) {
             if constexpr (!systemverilog) {
@@ -8608,6 +8995,31 @@ private:
                             ? 1U
                             : 2U])
                     : std::nullopt;
+            }
+            if (expression.kind == Kind::call && expression.text == ".name"
+                && expression.operands.size() == 1U) {
+                const auto* literals = systemverilog_enumeration_literals(
+                    expression.operands.front());
+                const auto value = literals == nullptr
+                    ? std::nullopt
+                    : evaluate(expression.operands.front());
+                if (!value) {
+                    return std::nullopt;
+                }
+                const auto index = systemverilog_enumeration_index(
+                    *literals, *value);
+                // A value outside the enumeration has an empty name.
+                return index ? (*literals)[*index].name : std::string { };
+            }
+            // A constant function returning a string (13.4.3).
+            if (expression.kind == Kind::call) {
+                if (const auto callable = callable_declaration(expression);
+                    callable && systemverilog_string_typed(*callable)
+                    && !systemverilog_retains_state(*callable)) {
+                    std::optional<std::string> result;
+                    static_cast<void>(evaluate_callable(expression, &result));
+                    return result;
+                }
             }
         } else {
             if (expression.kind == Kind::conditional

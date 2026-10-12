@@ -873,22 +873,13 @@ bool Lowerer::is_hir_vhdl_physical_expression(
         && expression->vhdl->text.starts_with("@vhdl-physical:");
 }
 
-std::optional<RegisterId> Lowerer::lower_hir_vhdl_physical_expression(
-    const semantic::ExpressionId expression_id,
-    const std::size_t expected_width)
+std::optional<Lowerer::HirVhdlPhysicalUnit> Lowerer::hir_vhdl_physical_unit(
+    const std::string_view unit_name, const std::size_t expected_width) const
 {
-    const auto expression = specialized_hir_unit_->find_expression(
-        expression_id);
-    if (!expression || expression->vhdl == nullptr
-        || expression->vhdl->operands.size() != 1U
-        || (expected_width != 32U && expected_width != 64U)) {
-        return std::nullopt;
-    }
-    constexpr std::string_view prefix { "@vhdl-physical:" };
-    const auto unit_name = std::string_view {
-        expression->vhdl->text
-    }.substr(prefix.size());
-    std::optional<std::int64_t> scale;
+    // The scale of a unit of a physical type in its primary unit, and the
+    // type's width (IEEE 1076-2008 5.2.4). Without an expected width the
+    // unit selects its type.
+    std::optional<HirVhdlPhysicalUnit> result;
     for (const auto& stored :
         specialized_hir_unit_->design().vhdl_hir.types()) {
         const auto type = specialized_hir_unit_->find_type(stored.id);
@@ -898,7 +889,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_physical_expression(
             continue;
         }
         const auto width = hir_vhdl_subtype_width(type->vhdl->base);
-        if (width && *width != expected_width) {
+        if (expected_width != 0U && width && *width != expected_width) {
             continue;
         }
         const auto unit = std::ranges::find_if(
@@ -955,37 +946,93 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_physical_expression(
         if (resolved_scale == scales.end()) {
             continue;
         }
-        const auto unit_scale = resolved_scale->second;
-        if (scale && *scale != unit_scale) {
+        // Without a context width, a physical type is as wide as an
+        // integer type with its range (IEEE 1076-2008 5.2.4.1).
+        const auto range_width = [&]() -> std::size_t {
+            auto constraints = type->vhdl->base.constraints;
+            if (type->vhdl->scalar_range) {
+                constraints.insert(constraints.begin(),
+                    *type->vhdl->scalar_range);
+            }
+            for (const auto& constraint : constraints) {
+                const auto left = constraint.left ? constraint.left
+                    : constraint.left_expression
+                    ? specialized_hir_unit_->evaluate_integral_expression(
+                          *constraint.left_expression)
+                    : std::nullopt;
+                const auto right = constraint.right ? constraint.right
+                    : constraint.right_expression
+                    ? specialized_hir_unit_->evaluate_integral_expression(
+                          *constraint.right_expression)
+                    : std::nullopt;
+                if (left && right) {
+                    const auto fits = [](const std::int64_t value) {
+                        return value >= std::numeric_limits<std::int32_t>::min()
+                            && value <= std::numeric_limits<std::int32_t>::max();
+                    };
+                    return fits(*left) && fits(*right) ? 32U : 64U;
+                }
+            }
+            return 0U;
+        };
+        const auto resolved_width = expected_width != 0U
+            ? expected_width
+            : width ? *width
+                    : range_width();
+        if (result
+            && (result->scale != resolved_scale->second
+                || result->width != resolved_width)) {
             return std::nullopt;
         }
-        scale = unit_scale;
+        result = HirVhdlPhysicalUnit {
+            resolved_width, resolved_scale->second };
     }
+    return result;
+}
+
+std::optional<RegisterId> Lowerer::lower_hir_vhdl_physical_expression(
+    const semantic::ExpressionId expression_id,
+    const std::size_t expected_width)
+{
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->operands.size() != 1U
+        || (expected_width != 0U && expected_width != 32U
+            && expected_width != 64U)) {
+        return std::nullopt;
+    }
+    constexpr std::string_view prefix { "@vhdl-physical:" };
+    const auto unit = hir_vhdl_physical_unit(
+        std::string_view { expression->vhdl->text }.substr(prefix.size()),
+        expected_width);
     const auto magnitude
         = specialized_hir_unit_->evaluate_integral_expression(
             expression->vhdl->operands.front());
-    if (!scale || !magnitude) {
+    if (!unit || !magnitude) {
         report(
             "FSIM-ELAB-VHPHYSICAL-006",
             "invalid physical literal unit or magnitude",
             hir_source_span(expression->vhdl->source));
         return std::nullopt;
     }
-    if (*scale <= 0
+    const auto scale = unit->scale;
+    const auto width = unit->width != 0U ? unit->width : std::size_t { 64U };
+    if (scale <= 0
         || (*magnitude > 0
             && *magnitude
-                > std::numeric_limits<std::int64_t>::max() / *scale)
+                > std::numeric_limits<std::int64_t>::max() / scale)
         || (*magnitude < 0
             && *magnitude
-                < std::numeric_limits<std::int64_t>::min() / *scale)) {
+                < std::numeric_limits<std::int64_t>::min() / scale)) {
         report(
             "FSIM-ELAB-VHPHYSICAL-006",
             "physical literal exceeds its bounded runtime representation",
             hir_source_span(expression->vhdl->source));
         return std::nullopt;
     }
-    const auto value = *magnitude * *scale;
-    if (expected_width == 32U
+    const auto value = *magnitude * scale;
+    if (width == 32U
         && (value < std::numeric_limits<std::int32_t>::min()
             || value > std::numeric_limits<std::int32_t>::max())) {
         report(
@@ -995,11 +1042,10 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_physical_expression(
         return std::nullopt;
     }
     const auto result = allocate_register(
-        expected_width, frontend::ValueDomain::Integer);
+        width, frontend::ValueDomain::Integer);
     process_.operations.emplace_back(LoadConstant {
         result,
-        unsigned_value(
-            static_cast<std::uint64_t>(value), expected_width),
+        unsigned_value(static_cast<std::uint64_t>(value), width),
     });
     return result;
 }

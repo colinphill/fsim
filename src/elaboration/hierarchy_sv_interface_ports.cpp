@@ -65,8 +65,16 @@ HierarchyBuilder::connect_compiled_systemverilog_modport_members(
                                     const bool clocking_event = false,
                                     const std::string_view alias = { })
         -> std::optional<CompiledSystemVerilogInterfaceDiagnostic> {
-        const auto source_name = std::string { source_path } + "."
+        auto source_name = std::string { source_path } + "."
             + std::string { member };
+        // An interface port forwarded from a modport with expressions
+        // carries the expression's alias (IEEE 1800-2017 25.5.4).
+        if (!alias.empty()
+            && !design_.signal_by_name_.contains(source_name)
+            && !systemverilog_clocking_event_signals_.contains(source_name)) {
+            source_name = std::string { source_path } + "."
+                + std::string { alias };
+        }
         if (!connect_compiled_systemverilog_interface_member(
                 source_name, formal_name, child_path,
                 alias.empty() ? member : alias,

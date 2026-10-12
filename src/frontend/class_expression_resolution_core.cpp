@@ -1177,6 +1177,24 @@ Resolver::resolve_class_name(
         && declaration.compilation_unit_identity
             == scope.compilation_unit_identity;
   });
+  // A typedef of a class (`typedef C #(int) K;`) names that class in a
+  // class scope resolution `K::f()` (IEEE 1800-2017 8.23, 6.18).
+  if (matches.empty() && normalized.find("::") == std::string::npos) {
+    const auto library_prefix = scope.library + "::";
+    for (const auto& [key, type] : class_aliases_) {
+      if (!key.starts_with(library_prefix)
+          || !key.ends_with("::" + normalized)) {
+        continue;
+      }
+      if (const auto identity = class_identity(*type)) {
+        if (const auto declaration = find_class(*identity);
+            declaration != nullptr
+            && std::ranges::find(matches, declaration) == matches.end()) {
+          matches.push_back(declaration);
+        }
+      }
+    }
+  }
   std::ranges::sort(matches, {}, [](const auto* declaration) {
     return declaration->canonical_identity;
   });
@@ -1491,6 +1509,31 @@ void Resolver::retain_result_type(
           expression.nominal_type = *identity;
         }
         return type;
+      }
+      // A static function with no arguments called without parentheses,
+      // `C::f` (IEEE 1800-2017 13.4.5, 8.10).
+      if (!match.property
+          && !find_methods(owners.front()->canonical_identity, member,
+                  SystemVerilogClassMethodKind::Function)
+                  .empty()) {
+        const auto method = select_method(owners.front()->canonical_identity,
+            member, SystemVerilogClassMethodKind::Function, 0U,
+            expression.span);
+        if (method && method->method && method->method->is_static) {
+          expression.kind = ExpressionKind::Call;
+          expression.text = "@sv-static-method:"
+              + method->method->canonical_identity;
+          expression.operands.clear();
+          retain_call_profile(expression, *method->method, false);
+          const auto type = resolve_alias_type(
+              method->method->return_type,
+              method->owner->canonical_identity);
+          retain_result_type(expression, type);
+          if (const auto identity = class_identity(type)) {
+            expression.nominal_type = *identity;
+          }
+          return type;
+        }
       }
     }
   }

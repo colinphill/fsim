@@ -149,8 +149,12 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_string_declaration(
                 erase();
                 return result;
             }
+            // A function call the constant evaluator can run, such as a
+            // string-returning function of constant arguments.
+            auto result = working_specialization.evaluate_string_expression(
+                expression_id);
             erase();
-            return std::nullopt;
+            return result;
         };
         const auto evaluated = evaluate_string(
             evaluate_string, *declaration.initializer);

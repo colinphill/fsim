@@ -58,6 +58,15 @@ evaluate_hir_systemverilog_constant(
     semantic::ExpressionId expression,
     std::string& error);
 
+/// Evaluate an expression for a declared type, so a keyed assignment
+/// pattern takes the type's aggregate layout.
+[[nodiscard]] std::optional<HirSystemVerilogConstant>
+evaluate_hir_systemverilog_typed_constant(
+    const semantic::SpecializedHirUnit& specialization,
+    semantic::ExpressionId expression,
+    const semantic::sv::TypeReference& type,
+    std::string& error);
+
 /// Return true when an expression contains real-family, time, or chandle HIR
 /// that requires the scalar evaluator instead of the packed evaluator.
 [[nodiscard]] bool hir_systemverilog_scalar_expression_applicable(
