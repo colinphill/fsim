@@ -253,6 +253,72 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 49: binds, real conversions, untyped parameters, virtual tasks, preprocessing
+
+Fixture: `sv_language_details_batch49.sv` (passes on xsim).
+
+- SystemVerilog and Verilog:
+  - compilation-unit `bind` directives, bound instance arrays, and
+    callables of other instances reading those instances' parameters
+    (23.11, 23.8); tasks of constant-indexed instance-array elements;
+  - rows of multidimensional unpacked arrays assigned from rows, patterns
+    and conditionals (7.6, 10.9.1);
+  - real/integral conversion in conditionals (including an unknown
+    condition), assignment patterns, port connections, argument copy-in
+    and copy-out, compound assignments, `++`/`--` expressions and
+    `inside` (6.12.2, 11.4);
+  - untyped parameters sized and typed by their override values, type
+    parameters and typedefs bound to `real`, typedefs of `string`
+    (6.20.2, 6.20.3, 6.18);
+  - virtual task dispatch (8.20), inherited nested classes, string
+    formals forwarded between class methods;
+  - `time` operands as 64-bit integrals, compound-assignment signedness
+    (6.11, 11.8.1), `%v` in `$monitor`;
+  - module `mailbox`/`semaphore` initializers, `` `include `` from a macro,
+    display-argument name checks, constant-function `$display`/`case`;
+  - `fsim compile --preprocess-only` for sv-tests preprocessing cases.
+- Class `randomize()` enumerates at most 2^22 values per property and
+  samples unconstrained wide properties directly; constrained wide
+  properties still need the constraint solver (a dedicated project).
+- The corpus runner marks Verilator `$c`, Verilator non-standard checks
+  and Icarus extensions as skipped.
+
+Out of scope: Verilator `t_langext` (procedural assignment to a net),
+`t_math_pow3` line 79, `t_package_export`, `t_func_purification` (`$c`);
+ivtest `pr1528093` (`%` on real), `br1029a/b` (`-0` from `%0d` of a
+negative real), `implicit_cast13` (needs `__ICARUS__`), `pr985` (order of
+two time-0 initial blocks).
+
+Investigated and left open: switch outputs with L/H strengths
+(`cmos`, `pr544`, `switch_primitives`); `parameter signed p = 4'd1`
+without a range (1 bit instead of the value's width); a runtime format
+string (`$display(fmt, ...)`, `$sformatf(fmt, ...)`, about 8 cases);
+a class declared in a generate block (`t_gen_class`); `Pkg::Cls a = new`
+and `const` class handles at module scope; forward typedefs of `string`;
+empty positional constructor arguments (`new(5, , "x")`).
+
+Measurement (failures of b50a and the fast set rerun with wip48;
+VHDL suites unchanged, fast-set VHDL cases all pass). Verilator
+`t_bitsel_struct` and `t_paramgraph_bits_iface_typedef` were false passes
+(wrong widths). The four Verilator semaphore cases and ivtest
+`pr2794144` were fixed after wip48 and checked by targeted reruns.
+
+ctest: the `vhdl`, `systemverilog` and `compliance` labels fail only the 11
+known tests. A full unlabelled run also fails application tests on delta
+ordering, plusargs diagnostics and static source gates (for example
+`named_events`, `resolution`, `core_simulation`,
+`cache-corruption-isolation-contract`); `plusargs` fails the same way with
+the batch 48 binary, and the others were not compared with a baseline.
+
+| Suite | Batch 48 (b49) | Batch 49 (wip48) |
+|---|---:|---:|
+| VESTs | 3337/3648 | 3337/3648 |
+| nvc regress | 643/1482 | 643/1482 |
+| VHDL Compliance-Tests | 33/72 | 33/72 |
+| ivtest | 2263/2826 | 2292/2826 |
+| Verilator test_regress | 1204/2415 | 1222/2415 |
+| sv-tests | 1410/1497 | 1411/1497 |
+
 ### Batch 48: nested containers, package arrays, out-of-range selects, instance-array slices
 
 Fixture: `sv_language_details_batch48.sv` (passes on xsim).
@@ -290,7 +356,27 @@ an array of unpacked structures with a constant pattern initializer
 interface instance (`types.cc_index_t`); 97-bit parameter arithmetic
 (`t_param_wide_io`).
 
-The full corpus run b49 used wip42 and is recorded with batch 49.
+The full run b49 used wip42 (batch 48 before its last two fixes). Its
+losses, fixed in batch 49: ivtest `constfunc13` (a `$display` in a constant
+function was reported as an error, and a case with mixed signed and
+unsigned items compared signed), `struct_packed_sysfunct` and Verilator
+`t_struct_packed_sysfunct` and `t_lparam_assign_iface_typedef3` (`$bits` of
+a member or of a structure from another specialization was folded with the
+wrong width), `br_gh62` and `pr2528915` (selects of bit-selects and of
+undeclared names were accepted). Verilator `t_func_purification` calls
+Verilator's `$c` in a function that a folded `if` condition no longer
+skips; it is out of scope.
+
+Corpus (passed/total, unique case ids; against b48):
+
+| Suite | Batch 47 | Batch 48 |
+|---|---:|---:|
+| VESTs | 3337/3648 | 3337/3648 |
+| nvc regress | 639/1482 | 643/1482 |
+| VHDL Compliance-Tests | 33/72 | 33/72 |
+| ivtest | 2246/2826 | 2263/2826 |
+| Verilator test_regress | 1175/2415 | 1204/2415 |
+| sv-tests | 1409/1497 | 1410/1497 |
 
 ### Batch 47: class-scoped types, process handles, floating inputs, out-of-range writes
 
@@ -2518,6 +2604,8 @@ them are not counted as gaps.
 | VHDL: TEXTIO `SREAD`, `JUSTIFY`, and READ of STRING values from a line | nvc textio5, textio6 |
 | SV: pure virtual tasks called through a base handle, and string-returning class methods called from inside another class method (string results elsewhere done in batch 38) | Verilator/sv-tests class cases |
 | SV: a class declared in `$unit` uses the caller's time unit for `$time` and `$printtimescale` (packages and `$unit` subroutines done in batch 38) | ivtest br1003a |
+| SV: a format held in a string variable (`$display(fmt, ...)`, `$sformatf(fmt, ...)`, `$sformat`): formatting needs a run-time format parser over lowered arguments (21.2.1, 21.3.3) | ~8 ivtest/Verilator cases (`FSIM-ELAB-SVSTRING-019`) |
+| SV: constrained randomization of wide variables: the solver enumerates domains; interval domains and bound extraction are the planned first step | 167 Verilator `have_solver` cases (skipped), sv-tests chapter 18 |
 | SV: MOS and CMOS switches with an unknown control (L and H outputs), switch and primitive delays on `tranif`, and `$countdrivers` | ivtest `cmos`, `pr1787394*`, `switch_primitives`, `pr2941939`, `countdrivers*` |
 | SV: `new` for a variable of a specialized class type (`box #(5) b; b = new;`) constructs the default specialization | testbenches using parameterized classes |
 | VHDL: user resolution functions other than a single OR/AND reduction (a runtime resolver calling the function on the driver values) | 28 VESTs cases (`FSIM-ELAB-VHRESOLVE-002`/`-004`), nvc |

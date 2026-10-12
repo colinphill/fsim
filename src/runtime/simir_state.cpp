@@ -2993,6 +2993,8 @@ void Interpreter::Impl::notify_execution_point(
                 value.left_justify,
                 value.zero_pad,
                 value.scalar_kind);
+        } else if (value.strength) {
+            text += value.prefix + signal_strength_text(value.signal);
         } else {
             text += make_formatted_output(
                 value.prefix,

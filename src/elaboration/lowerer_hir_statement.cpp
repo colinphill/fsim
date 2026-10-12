@@ -439,7 +439,7 @@ Lowerer::lower_hir_container_assignment_pattern(
                 ? lower_hir_systemverilog_packed_pattern(
                       *values[member], member_reference,
                       member_type.element_width)
-                : lower_hir_expression(
+                : lower_hir_scalar_converted_value(
                       *values[member], member_type.element_width,
                       member_type.scalar_kind);
             if (!lowered) {
@@ -520,8 +520,9 @@ Lowerer::lower_hir_container_assignment_pattern(
         auto value = packed_pattern
             ? lower_hir_systemverilog_packed_pattern(
                   value_id, *element_type, target.type->element_width)
-            : lower_hir_expression(
-                  value_id, target.type->element_width);
+            : lower_hir_scalar_converted_value(
+                  value_id, target.type->element_width,
+                  target.type->scalar_kind);
         if (!value) {
             return false;
         }
@@ -3254,7 +3255,20 @@ bool Lowerer::lower_hir_statement(
             // the ordinary assignment of its normalized value when the
             // target has no captured update path (an unpacked array
             // element, for example).
-            const auto captured = capture_hir_packed_update_target(*target);
+            // A real operand converts the target to real, and a signed
+            // operand of an unsigned target is zero-extended (IEEE
+            // 1800-2017 11.4.1, 11.8.1); the normalized assignment applies
+            // both when the target can be evaluated twice.
+            const auto operand = normalized->systemverilog->operands.back();
+            const bool mixed_operand = frontend::is_real_scalar_kind(
+                                           hir_systemverilog_scalar_kind(
+                                               operand))
+                || (!hir_expression_signed(*target)
+                    && hir_expression_signed(operand));
+            const auto captured = mixed_operand
+                    && !hir_update_reevaluates_target(input)
+                ? std::optional<HirPackedUpdateTarget> { }
+                : capture_hir_packed_update_target(*target);
             if (!captured && hir_update_reevaluates_target(input)) {
                 return assignment_rejected(__LINE__);
             }
@@ -3831,6 +3845,80 @@ bool Lowerer::lower_hir_statement(
                 span);
             return true;
         }
+        // An assignment pattern assigned to a row of a multidimensional
+        // array (`d[0] = '{a, b, c, d}`, 10.9.1).
+        if (statement->systemverilog != nullptr && target_static_type
+            && target_static_type->fixed
+            && target_expression->systemverilog != nullptr
+            && target_expression->systemverilog->kind
+                == semantic::sv::ExpressionKind::index
+            && !hir_container_object_binding(*target)
+            && !hir_container_element_binding(*target)
+            && container_value_expression
+            && container_value_expression->systemverilog != nullptr
+            && (container_value_expression->systemverilog->kind
+                    == semantic::sv::ExpressionKind::assignment_pattern
+                || (container_value_expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::call
+                    && container_value_expression->systemverilog->text
+                        == "?:"
+                    && !value_static_type))) {
+            const auto& input = *statement->systemverilog;
+            if (signal_assignment || nonblocking
+                || input.assignment_kind
+                    != semantic::sv::AssignmentKind::blocking
+                || input.assignment_control
+                    != semantic::sv::AssignmentControl::none
+                || input.delay) {
+                return assignment_rejected(__LINE__);
+            }
+            const auto diagnostics_before = diagnostics_.size();
+            auto row_base = *target;
+            for (;;) {
+                const auto selection
+                    = specialized_hir_unit_->find_expression(row_base);
+                if (!selection || selection->systemverilog == nullptr
+                    || selection->systemverilog->kind
+                        != semantic::sv::ExpressionKind::index
+                    || selection->systemverilog->operands.empty()) {
+                    break;
+                }
+                row_base = selection->systemverilog->operands.front();
+            }
+            const auto row_declaration = hir_referenced_declaration(row_base);
+            const auto row_value = [&](const semantic::ExpressionId id) {
+                return row_declaration
+                    ? lower_hir_static_container_actual(
+                          id, *target_static_type, *row_declaration)
+                    : lower_hir_static_container_actual(
+                          id, *target_static_type);
+            };
+            std::optional<ContainerRegisterId> row;
+            const auto& value_source = *container_value_expression->systemverilog;
+            if (value_source.kind == semantic::sv::ExpressionKind::call
+                && value_source.operands.size() == 3U) {
+                // `sel ? '{...} : '{...}`: each alternative takes the row's
+                // type (11.4.11).
+                auto condition = lower_hir_expression(
+                    value_source.operands.front(), 1U);
+                const auto when_true = row_value(value_source.operands[1]);
+                const auto when_false = row_value(value_source.operands[2]);
+                if (condition && when_true && when_false) {
+                    if (register_width(*condition) != 1U) {
+                        condition = resize_register(*condition, 1U, false);
+                    }
+                    row = allocate_container_register(*target_static_type);
+                    process_.operations.emplace_back(ConditionalContainerSelect {
+                        *row, *condition, *when_true, *when_false });
+                }
+            } else {
+                row = row_value(*value);
+            }
+            if (!row) {
+                return diagnostics_.size() != diagnostics_before;
+            }
+            return lower_hir_container_copy_out(*target, *row);
+        }
         if (statement->systemverilog != nullptr
             && (target_static_type
                 || unpacked_slice_candidate(*target))
@@ -3885,76 +3973,18 @@ bool Lowerer::lower_hir_statement(
                     span);
                 return true;
             }
-            const auto& type = *container->type;
-            const auto built = allocate_container_register(type);
-            process_.operations.emplace_back(
-                AppendContainer { built, true, { }, { }, { } });
-            for (const auto operand :
-                container_value_expression->systemverilog->operands) {
-                if (hir_static_container_expression_type(operand)) {
-                    const auto part = lower_hir_static_container_value(
-                        operand);
-                    if (!part) {
-                        return assignment_rejected(__LINE__);
-                    }
-                    process_.operations.emplace_back(AppendContainer {
-                        built, false, part->value, { }, { } });
-                    continue;
-                }
-                if (type.element_kind == ContainerElementKind::String) {
-                    const auto text = lower_hir_string_expression(operand);
-                    if (!text) {
-                        return assignment_rejected(__LINE__);
-                    }
-                    process_.operations.emplace_back(AppendContainer {
-                        built, false, { }, { }, *text });
-                    continue;
-                }
-                if (type.element_kind != ContainerElementKind::Packed
-                    && type.element_kind != ContainerElementKind::Scalar) {
-                    return assignment_rejected(__LINE__);
-                }
-                const auto element_kind
-                    = type.element_kind == ContainerElementKind::Scalar
-                    ? type.scalar_kind
-                    : frontend::SystemVerilogScalarKind::None;
-                const auto operand_kind
-                    = hir_systemverilog_scalar_kind(operand);
-                std::optional<RegisterId> element_value;
-                if (element_kind != frontend::SystemVerilogScalarKind::None
-                    && operand_kind
-                        == frontend::SystemVerilogScalarKind::None) {
-                    element_value = lower_hir_expression(operand,
-                        hir_expression_width(operand, hir_process_scope_)
-                            .value_or(32U));
-                    if (element_value) {
-                        element_value = convert_hir_integral_to_real(*element_value,
-                            hir_expression_signed(operand), element_kind);
-                    }
-                } else {
-                    element_value = lower_hir_expression(
-                        operand, type.element_width, element_kind);
-                }
-                if (!element_value) {
-                    return assignment_rejected(__LINE__);
-                }
-                if (register_width(*element_value) != type.element_width) {
-                    element_value = resize_register(*element_value, type.element_width,
-                        hir_expression_signed(operand));
-                }
-                if (type.two_state
-                    && !is_two_state_domain(register_domain(*element_value))) {
-                    element_value = convert_to_two_state(*element_value);
-                }
-                process_.operations.emplace_back(AppendContainer {
-                    built, false, { }, *element_value, { } });
+            const auto built = lower_hir_container_concatenation(
+                *container->type,
+                container_value_expression->systemverilog->operands);
+            if (!built) {
+                return assignment_rejected(__LINE__);
             }
             if (container->local) {
                 process_.operations.emplace_back(
-                    CopyContainerRegister { *container->local, built });
+                    CopyContainerRegister { *container->local, *built });
             } else {
                 process_.operations.emplace_back(WriteContainerObject {
-                    container->object, built, std::nullopt });
+                    container->object, *built, std::nullopt });
             }
             return true;
         }
@@ -13150,6 +13180,8 @@ bool Lowerer::lower_hir_statement(
                     }
                     monitor_value.kind = MonitorValueKind::signal;
                     monitor_value.signal = *monitored;
+                    monitor_value.strength = format
+                        == semantic::sv::OutputFormat::strength;
                     monitor_value.format = output_format(format);
                     monitor_value.minimum_width
                         = hir_systemverilog_decimal_width(*expression,
@@ -16146,6 +16178,61 @@ bool Lowerer::lower_hir_virtual_interface_write(
         };
     }
     return true;
+}
+
+std::optional<ContainerRegisterId> Lowerer::lower_hir_container_concatenation(
+    const ContainerType& type,
+    const std::span<const semantic::ExpressionId> operands)
+{
+    const auto built = allocate_container_register(type);
+    process_.operations.emplace_back(
+        AppendContainer { built, true, { }, { }, { } });
+    for (const auto operand :
+        operands) {
+        if (hir_static_container_expression_type(operand)) {
+            const auto part = lower_hir_static_container_value(
+                operand);
+            if (!part) {
+                return std::nullopt;
+            }
+            process_.operations.emplace_back(AppendContainer {
+                built, false, part->value, { }, { } });
+            continue;
+        }
+        if (type.element_kind == ContainerElementKind::String) {
+            const auto text = lower_hir_string_expression(operand);
+            if (!text) {
+                return std::nullopt;
+            }
+            process_.operations.emplace_back(AppendContainer {
+                built, false, { }, { }, *text });
+            continue;
+        }
+        if (type.element_kind != ContainerElementKind::Packed
+            && type.element_kind != ContainerElementKind::Scalar) {
+            return std::nullopt;
+        }
+        const auto element_kind
+            = type.element_kind == ContainerElementKind::Scalar
+            ? type.scalar_kind
+            : frontend::SystemVerilogScalarKind::None;
+        auto element_value = lower_hir_scalar_converted_value(
+            operand, type.element_width, element_kind);
+        if (!element_value) {
+            return std::nullopt;
+        }
+        if (register_width(*element_value) != type.element_width) {
+            element_value = resize_register(*element_value, type.element_width,
+                hir_expression_signed(operand));
+        }
+        if (type.two_state
+            && !is_two_state_domain(register_domain(*element_value))) {
+            element_value = convert_to_two_state(*element_value);
+        }
+        process_.operations.emplace_back(AppendContainer {
+            built, false, { }, *element_value, { } });
+    }
+    return built;
 }
 
 } // namespace fsim::elaboration

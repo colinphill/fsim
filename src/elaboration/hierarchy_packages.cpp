@@ -9475,6 +9475,23 @@ namespace {
             const auto* base_type = expression_type(base_id);
             const auto* assigned_type = expression_type(
                 *statement.value);
+            // A value that selects a row of an array (`d[1]`) has the
+            // dimensions its indices leave.
+            std::size_t value_indices { };
+            for (auto value_base = *statement.value;;) {
+                const auto selection = compiled.find_expression(value_base);
+                if (!selection || selection->systemverilog == nullptr
+                    || selection->systemverilog->kind
+                        != ExpressionKind::index
+                    || selection->systemverilog->operands.size() != 2U) {
+                    if (value_indices != 0U) {
+                        assigned_type = expression_type(value_base);
+                    }
+                    break;
+                }
+                ++value_indices;
+                value_base = selection->systemverilog->operands.front();
+            }
             // An element of an enumeration array takes only values of its
             // enumeration type.
             if (target == nullptr && base_type != nullptr && !indices.empty()
@@ -9509,10 +9526,16 @@ namespace {
                     && indices.size()
                         < base_type->unpacked_dimensions.size()
                     && (!value || value->systemverilog == nullptr
-                        || value->systemverilog->kind
-                            != ExpressionKind::assignment_pattern)
+                        || (value->systemverilog->kind
+                                != ExpressionKind::assignment_pattern
+                            && !(value->systemverilog->kind
+                                    == ExpressionKind::call
+                                && value->systemverilog->text == "?:")))
                     && !(assigned_type != nullptr
                         && assigned_type->unpacked_dimensions.size()
+                                >= value_indices
+                        && assigned_type->unpacked_dimensions.size()
+                                - value_indices
                             == base_type->unpacked_dimensions.size()
                                 - indices.size())
                     && std::ranges::none_of(
@@ -13003,6 +13026,20 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
         unit.defparams, path, *specialized);
     for (const auto& bind : unit.binds) {
         active_compiled_systemverilog_binds_.push_back({ &bind, &unit });
+    }
+    // A bind directive in a compilation unit applies throughout the design
+    // (IEEE 1800-2017 23.11).
+    if (path.find('.') == std::string::npos) {
+        for (const auto& candidate : compiled_->systemverilog_hir.units()) {
+            if (candidate.kind != semantic::sv::UnitKind::compilation_unit
+                && candidate.kind != semantic::sv::UnitKind::bind) {
+                continue;
+            }
+            for (const auto& bind : candidate.binds) {
+                active_compiled_systemverilog_binds_.push_back(
+                    { &bind, &candidate });
+            }
+        }
     }
 
     auto generate_collection

@@ -220,6 +220,68 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
     }
   }
 
+  // A random property that no constraint references takes a uniformly
+  // chosen value (IEEE 1800-2017 18.5); a wide one is drawn directly
+  // instead of enumerating its complete domain.
+  std::set<std::size_t> direct_indices;
+  {
+    std::vector<std::size_t> wide;
+    for (const auto index : selected_indices) {
+      const auto& property = object.properties[index];
+      const auto width = property.packed.width();
+      if (property.packed.empty() || property.packed.is_logic9()
+          || width > 64U || !property.random_state
+          || property.random_state->kind == SystemVerilogClassRandomKind::Randc
+          || width <= 16U
+          || request.property_domains.contains(object.property_names[index])) {
+        continue;
+      }
+      wide.push_back(index);
+    }
+    if (!wide.empty()) {
+      try {
+        SystemVerilogConstraintSolver probe;
+        SystemVerilogClassRandomizeVariables probe_variables;
+        std::map<SystemVerilogConstraintVariableId, std::size_t> owners;
+        for (std::size_t index = 0; index < object.properties.size();
+             ++index) {
+          const auto& property = object.properties[index];
+          if (property.packed.empty() || property.packed.is_logic9()) {
+            continue;
+          }
+          SystemVerilogConstraintVariable variable;
+          variable.canonical_identity = object.property_names[index];
+          variable.profile = profile(property);
+          variable.domain.push_back(property.packed);
+          const auto id = probe.add_variable(std::move(variable));
+          probe_variables.emplace(object.property_names[index], id);
+          owners.emplace(id, index);
+        }
+        if (request.class_constraints) {
+          request.class_constraints(probe, probe_variables);
+        }
+        if (request.inline_constraints) {
+          request.inline_constraints(probe, probe_variables);
+        }
+        std::set<std::size_t> referenced;
+        for (const auto& clause : probe.clauses()) {
+          for (const auto id : clause.variables) {
+            if (const auto owner = owners.find(id); owner != owners.end()) {
+              referenced.insert(owner->second);
+            }
+          }
+        }
+        if (probe.distribution_count() == 0U) {
+          for (const auto index : wide) {
+            if (!referenced.contains(index)) direct_indices.insert(index);
+          }
+        }
+      } catch (const std::exception&) {
+        direct_indices.clear();
+      }
+    }
+  }
+
   try {
     SystemVerilogConstraintSolver solver{request.limits};
     SystemVerilogClassRandomizeVariables variables;
@@ -238,8 +300,20 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
                 >= domain_values
             ? request.limits.maximum_domain_values - domain_values
             : 0;
-        base_domain = exact_domain(
-            request, object.property_names[index], property, available);
+        if (direct_indices.contains(index)) {
+          const auto width = property.packed.width();
+          auto value = heap.random_stream(
+                  handle,
+                  request.call_identity + "::"
+                      + object.property_names[index])
+                           .next_u64();
+          if (width < 64U) value &= (std::uint64_t{1} << width) - 1U;
+          base_domain.push_back(
+              PackedLogic4::from_aval_bval(width, value, 0));
+        } else {
+          base_domain = exact_domain(
+              request, object.property_names[index], property, available);
+        }
         if (property.random_state->kind
             == SystemVerilogClassRandomKind::Randc) {
           staged_randc = *property.random_state;

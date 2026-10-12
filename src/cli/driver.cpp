@@ -652,6 +652,7 @@ namespace {
             << "                           Add a library to compile/elaborate searches; repeatable\n"
             << "  -I, --include PATH       Add a direct-source include directory\n"
             << "  -D, --define NAME[=VAL]  Add a direct-source preprocessor definition\n"
+            << "      --preprocess-only    compile: run the Verilog preprocessor and stop\n"
             << "      --verbosity quiet|normal|verbose\n"
             << "                           Compile/elaborate/library detail (default: normal)\n"
             << "  -q, --quiet              Suppress command progress\n"
@@ -957,6 +958,7 @@ namespace {
             "--no-aot",
             "--code-coverage",
             "--partial",
+            "--preprocess-only",
         };
         for (const auto flag : flags) {
             if (argument == flag) {
@@ -1380,6 +1382,8 @@ std::optional<Invocation> parse_arguments(
                 invocation.code_coverage = true;
             } else if (argument == "--partial") {
                 invocation.coverage_partial_merge = true;
+            } else if (argument == "--preprocess-only") {
+                invocation.preprocess_only = true;
             } else if (is_option(argument, "", "--format")) {
                 const auto value = take_value(
                     index, argc, argv, argument, "--format", diagnostics);

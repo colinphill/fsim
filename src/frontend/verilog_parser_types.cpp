@@ -809,6 +809,10 @@ void VerilogParser::parse_typedef(
         return;
     }
     packed_typedef_types_.insert_or_assign(name.text, type);
+    if (unit.kind == UnitKind::SystemVerilogPackage) {
+        packed_typedef_types_.insert_or_assign(
+            unit.name + "::" + name.text, type);
+    }
     unit.type_aliases.push_back({ name.text,
         std::move(type),
         cover(start.span, previous().span),

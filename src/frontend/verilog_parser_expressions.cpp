@@ -527,6 +527,15 @@ Expression VerilogParser::parse_unary()
         if (verilog_attribute_instance_start()) {
             parse_verilog_attribute_instances();
         }
+        // A unary operator applies to a primary (IEEE 1800-2017 A.8.3), so
+        // `~ |a` is not the reduction `~|a`.
+        if (operation.kind == TokenKind::Tilde
+            && (at(TokenKind::Pipe) || at(TokenKind::Ampersand)
+                || at(TokenKind::Caret))) {
+            error(current(), "FSIM-SV-PARSE-392",
+                "'~' followed by a separate reduction operator is not an "
+                "expression; use '~" + current().text + "'");
+        }
         Expression operand = parse_unary();
         return Expression { ExpressionKind::Unary, operation.text,
             { std::move(operand) },

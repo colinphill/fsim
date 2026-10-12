@@ -4,6 +4,7 @@
 
 #include "fsim/artifact/object.hpp"
 #include "fsim/elaboration/elaborator.hpp"
+#include "fsim/frontend/preprocessor.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/support/path.hpp"
 
@@ -464,6 +465,27 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
         return 1;
     }
     const auto& sources = config.source_sets.front();
+    // `--preprocess-only` stops after the Verilog preprocessor (IEEE
+    // 1800-2017 22), reporting its diagnostics without parsing.
+    if (invocation.preprocess_only
+        && (sources.language == project::Language::verilog
+            || sources.language == project::Language::system_verilog)) {
+        frontend::PreprocessorOptions options;
+        options.include_directories = sources.include_directories;
+        options.defines = sources.defines;
+        const auto result = frontend::preprocess_verilog_compilation_unit(
+            sources.files,
+            sources.language == project::Language::verilog
+                ? frontend::Language::Verilog2005
+                : frontend::Language::SystemVerilog2017,
+            options);
+        for (const auto& diagnostic : result.lexed.diagnostics) {
+            if (diagnostic.severity == frontend::DiagnosticSeverity::Error) {
+                diagnostics.error(diagnostic.code, diagnostic.message);
+            }
+        }
+        return result.ok() ? 0 : 1;
+    }
     workspace::Store store(config.base_directory);
     std::string error;
     auto transaction = store.begin_library(sources.library, error);

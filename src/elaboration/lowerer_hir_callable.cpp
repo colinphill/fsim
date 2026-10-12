@@ -3150,8 +3150,122 @@ bool Lowerer::lower_hir_class_task_call(
         return true;
     }
 
+    // A virtual task called through a class handle runs the override of
+    // the object's dynamic class (IEEE 1800-2017 8.20): test the handle
+    // against each overriding class, most derived first.
+    if (receiver && !profile->static_method) {
+        const auto& classes
+            = specialized_hir_unit_->design().systemverilog_hir.classes();
+        const semantic::sv::ClassDeclaration* owner = nullptr;
+        const semantic::sv::ClassMethod* called = nullptr;
+        for (const auto& candidate : classes) {
+            for (const auto& method : candidate.methods) {
+                if (method.declaration == profile->declaration) {
+                    owner = &candidate;
+                    called = &method;
+                }
+            }
+        }
+        struct Override {
+            const semantic::sv::ClassDeclaration* owner;
+            const semantic::sv::ClassMethod* method;
+            std::size_t depth;
+        };
+        std::vector<Override> overrides;
+        if (owner != nullptr && called != nullptr) {
+            const auto find_class = [&](const std::string& identity)
+                -> const semantic::sv::ClassDeclaration* {
+                const auto found = std::ranges::find(classes, identity,
+                    &semantic::sv::ClassDeclaration::canonical_identity);
+                return found == classes.end() ? nullptr : &*found;
+            };
+            for (const auto& candidate : classes) {
+                if (&candidate == owner) {
+                    continue;
+                }
+                std::size_t depth { };
+                bool derived { };
+                std::set<std::string> visited;
+                for (auto* current = &candidate; current != nullptr
+                     && !current->base_declaration_identity.empty()
+                     && visited.insert(current->canonical_identity).second;) {
+                    ++depth;
+                    if (current->base_declaration_identity
+                        == owner->canonical_identity) {
+                        derived = true;
+                        break;
+                    }
+                    current = find_class(current->base_declaration_identity);
+                }
+                if (!derived) {
+                    continue;
+                }
+                const auto method = std::ranges::find_if(candidate.methods,
+                    [&](const semantic::sv::ClassMethod& item) {
+                        return item.name == called->name
+                            && item.kind == called->kind && item.defined
+                            && !item.static_method;
+                    });
+                if (method != candidate.methods.end()) {
+                    overrides.push_back({ &candidate, &*method, depth });
+                }
+            }
+            std::ranges::stable_sort(overrides, std::greater { },
+                &Override::depth);
+        }
+        std::vector<InstructionIndex> exits;
+        for (const auto& item : overrides) {
+            const auto selected = allocate_register(
+                1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(ClassMethodCall {
+                selected,
+                *receiver,
+                "@checked-cast:" + item.owner->canonical_identity,
+                { },
+                { },
+                { },
+                1U,
+                false,
+            });
+            const auto branch = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Branch {
+                selected, branch + 1U, 0U, UnknownBranchPolicy::when_false });
+            auto override_profile = *profile;
+            override_profile.declaration = item.method->declaration;
+            override_profile.identity = item.method->canonical_identity;
+            if (!lower_hir_class_task_invocation(statement_id, override_profile, receiver)) {
+                return false;
+            }
+            exits.push_back(static_cast<InstructionIndex>(
+                process_.operations.size()));
+            process_.operations.emplace_back(Jump { });
+            process_.operations[branch] = Branch {
+                selected,
+                branch + 1U,
+                static_cast<InstructionIndex>(process_.operations.size()),
+                UnknownBranchPolicy::when_false,
+            };
+        }
+        if (!lower_hir_class_task_invocation(statement_id, *profile, receiver)) {
+            return false;
+        }
+        for (const auto exit : exits) {
+            process_.operations[exit] = Jump {
+                static_cast<InstructionIndex>(process_.operations.size()) };
+        }
+        return true;
+    }
+    return lower_hir_class_task_invocation(statement_id, *profile, receiver);
+}
+
+bool Lowerer::lower_hir_class_task_invocation(
+    const semantic::StatementId statement_id,
+    const HirClassTaskProfile& profile,
+    const std::optional<RegisterId> receiver)
+{
     const auto declaration = specialized_hir_unit_->find_declaration(
-        profile->declaration);
+        profile.declaration);
     if (!declaration || declaration->systemverilog == nullptr
         || !declaration->systemverilog->callable
         || !declaration->systemverilog->nested_scope) {
@@ -3163,15 +3277,15 @@ bool Lowerer::lower_hir_class_task_call(
         callable.callable->formals.begin(),
         callable.callable->formals.end(),
     };
-    if (formals.size() != profile->actuals.size()) {
+    if (formals.size() != profile.actuals.size()) {
         return false;
     }
 
     auto frame_index = hir_callable_frames_.size();
     bool new_frame { true };
-    if (profile->interface_receiver) {
-        const auto key = std::to_string(profile->declaration.value())
-            + ":" + *profile->interface_receiver;
+    if (profile.interface_receiver) {
+        const auto key = std::to_string(profile.declaration.value())
+            + ":" + *profile.interface_receiver;
         const auto found = hir_interface_callable_indices_.find(key);
         if (found != hir_interface_callable_indices_.end()) {
             frame_index = found->second;
@@ -3181,7 +3295,7 @@ bool Lowerer::lower_hir_class_task_call(
         }
     } else {
         const auto callable_key = systemverilog_task_callable_key(
-            profile->declaration);
+            profile.declaration);
         const auto key = std::to_string(callable_key);
         const auto found = hir_callable_indices_.find(key);
         if (found != hir_callable_indices_.end()) {
@@ -3193,18 +3307,19 @@ bool Lowerer::lower_hir_class_task_call(
     }
     if (new_frame) {
         HirCallableFrame frame;
-        frame.declaration = profile->declaration;
+        frame.declaration = profile.declaration;
         frame.scope = scope;
         frame.type = {
             1U,
             frontend::ValueDomain::Bit2,
             false,
-            profile->automatic,
+            profile.automatic,
             false,
             std::nullopt,
         };
-        frame.interface_receiver = profile->interface_receiver;
+        frame.interface_receiver = profile.interface_receiver;
         frame.formals = formals;
+        bind_hir_instance_parameters(frame);
         frame.debug_name = callable.name;
         frame.function = false;
         frame.invocation_identity = next_callable_invocation_identity_++;
@@ -3228,8 +3343,8 @@ bool Lowerer::lower_hir_class_task_call(
             if (direction == frontend::PortDirection::Unknown) {
                 return false;
             }
-            const auto string = profile->actuals[index].string;
-            const auto container = profile->actuals[index].container;
+            const auto string = profile.actuals[index].string;
+            const auto container = profile.actuals[index].container;
             frame.argument_is_string.push_back(string);
             frame.argument_is_container.push_back(container);
             if (container) {
@@ -3283,16 +3398,16 @@ bool Lowerer::lower_hir_class_task_call(
     }
 
     std::vector<std::optional<RegisterId>> lowered_actuals(
-        profile->actuals.size());
+        profile.actuals.size());
     std::vector<std::optional<StringRegisterId>> lowered_string_actuals(
-        profile->actuals.size());
+        profile.actuals.size());
     std::vector<std::optional<ContainerRegisterId>>
-        lowered_container_actuals(profile->actuals.size());
+        lowered_container_actuals(profile.actuals.size());
     std::vector<std::optional<HirPackedUpdateTarget>>
-        packed_copy_out_targets(profile->actuals.size());
+        packed_copy_out_targets(profile.actuals.size());
     for (std::size_t index = 0U;
-        index < profile->actuals.size(); ++index) {
-        const auto& actual = profile->actuals[index];
+        index < profile.actuals.size(); ++index) {
+        const auto& actual = profile.actuals[index];
         if (actual.container) {
             const auto formal_type
                 = runtime::simir::process_layout_detail::ProcessLayoutAccess::copy_at(
@@ -3345,7 +3460,13 @@ bool Lowerer::lower_hir_class_task_call(
             }
             continue;
         }
+        // A real actual of an integral inout formal converts on the way in
+        // as on the way out (6.12.2).
+        const bool real_inout_actual = packed_copy_out_targets[index]
+            && frontend::is_real_scalar_kind(
+                hir_systemverilog_scalar_kind(actual.expression));
         lowered_actuals[index] = packed_copy_out_targets[index]
+                && !real_inout_actual
             ? std::optional<RegisterId> {
                   packed_copy_out_targets[index]->captured }
             : lower_hir_callable_actual(
@@ -3433,8 +3554,8 @@ bool Lowerer::lower_hir_class_task_call(
             process_.operations.emplace_back(LoadConstant {
                 frame.arguments[index],
                 callable_default_value(
-                    profile->actuals[index].width,
-                    profile->actuals[index].domain),
+                    profile.actuals[index].width,
+                    profile.actuals[index].domain),
             });
         }
     }
@@ -3453,13 +3574,13 @@ bool Lowerer::lower_hir_class_task_call(
         pending_hir_callables_.push_back(frame_index);
     }
     std::vector<std::optional<StringRegisterId>> string_copy_outs(
-        profile->actuals.size());
+        profile.actuals.size());
     std::vector<std::optional<RegisterId>> packed_copy_outs(
-        profile->actuals.size());
+        profile.actuals.size());
     std::vector<RegisterId> preserve_packed;
     std::vector<ContainerRegisterId> preserve_containers;
     for (std::size_t index = 0U;
-        index < profile->actuals.size(); ++index) {
+        index < profile.actuals.size(); ++index) {
         if (!class_method_copy_out(frame.directions[index])) {
             continue;
         }
@@ -3510,7 +3631,7 @@ bool Lowerer::lower_hir_class_task_call(
             && class_method_copy_out(frame.directions[index])) {
             if (!lowered_container_actuals[index]
                 || !lower_hir_container_copy_out(
-                    profile->actuals[index].expression,
+                    profile.actuals[index].expression,
                     *lowered_container_actuals[index])) {
                 return false;
             }
@@ -3541,14 +3662,27 @@ bool Lowerer::lower_hir_class_task_call(
                     ? frontend::SystemVerilogScalarKind::Realtime
                     : frontend::SystemVerilogScalarKind::None;
             }();
-            if (frontend::is_real_scalar_kind(formal_kind)
-                && !frontend::is_real_scalar_kind(
-                    hir_systemverilog_scalar_kind(
-                        profile->actuals[index].expression))) {
+            const auto actual_kind = hir_systemverilog_scalar_kind(
+                profile.actuals[index].expression);
+            if (!frontend::is_real_scalar_kind(formal_kind)
+                && frontend::is_real_scalar_kind(actual_kind)) {
+                // An integral formal copied out to a real actual converts
+                // as an assignment does (6.12.2).
+                const auto formal = index < frame.formals.size()
+                    ? specialized_hir_unit_->find_declaration(
+                          frame.formals[index])
+                    : std::nullopt;
+                const bool formal_signed = formal && formal->systemverilog
+                    && formal->systemverilog->type
+                    && formal->systemverilog->type->signed_value;
+                copied_value = convert_hir_integral_to_real(
+                    copied_value, formal_signed, actual_kind);
+            } else if (frontend::is_real_scalar_kind(formal_kind)
+                && !frontend::is_real_scalar_kind(actual_kind)) {
                 copied_value = convert_hir_real_to_integral(
                     copied_value, formal_kind);
                 if (const auto width = hir_expression_width(
-                        profile->actuals[index].expression,
+                        profile.actuals[index].expression,
                         hir_process_scope_);
                     width && *width != 0U
                     && *width != register_width(copied_value)) {
@@ -3560,20 +3694,21 @@ bool Lowerer::lower_hir_class_task_call(
                 ? write_hir_packed_update_target(
                       *packed_copy_out_targets[index], copied_value)
                 : lower_hir_packed_copy_out(
-                      profile->actuals[index].expression, copied_value);
+                      profile.actuals[index].expression, copied_value);
             if (!copied) {
                 return false;
             }
             continue;
         }
         if (!lower_hir_string_copy_out(
-                profile->actuals[index].expression,
+                profile.actuals[index].expression,
                 *string_copy_outs[index])) {
             return false;
         }
     }
     return true;
 }
+
 
 std::optional<semantic::DeclarationId> Lowerer::hir_actual_declaration(
     const semantic::DeclarationId formal) const
@@ -6365,6 +6500,7 @@ Lowerer::lower_hir_function_call_value(
         }
         frame.formals = formals;
         frame.generic_bindings = resolution->generic_bindings;
+        bind_hir_instance_parameters(frame);
         const auto debug_declaration
             = specialized_hir_unit_->find_declaration(resolution->key);
         if (resolution->key != resolution->body
@@ -8896,6 +9032,76 @@ void Lowerer::append_vhdl_element_constraint_key(std::string& key,
                 + (range.descending ? "d" : "a") + ",";
         }
         key += ";";
+    }
+}
+
+void Lowerer::bind_hir_instance_parameters(HirCallableFrame& frame) const
+{
+    if (!frame.interface_receiver || frame.interface_receiver->empty()
+        || specialized_hir_unit_ == nullptr) {
+        return;
+    }
+    auto receiver = std::string_view { *frame.interface_receiver };
+    if (receiver.starts_with("@instance:")) {
+        receiver.remove_prefix(std::string_view { "@instance:" }.size());
+    }
+    const auto target = std::ranges::find(design_.specializations_,
+        receiver, &SpecializationInfo::instance);
+    const auto callable = specialized_hir_unit_->find_declaration(
+        frame.declaration);
+    if (target == design_.specializations_.end()
+        || target->parameter_values.empty() || !callable
+        || callable->systemverilog == nullptr) {
+        return;
+    }
+    const auto value_of = [](const std::string_view text)
+        -> std::optional<std::int64_t> {
+        std::int64_t value { };
+        const auto parsed = std::from_chars(
+            text.data(), text.data() + text.size(), value);
+        if (parsed.ec == std::errc { }
+            && parsed.ptr == text.data() + text.size()) {
+            return value;
+        }
+        // `svconst-v3:...:v=<bits>`: a known value of at most 64 bits.
+        const auto bits_at = text.rfind(":v=");
+        if (!text.starts_with("svconst-v3:") || bits_at == std::string_view::npos) {
+            return std::nullopt;
+        }
+        const auto bits = text.substr(bits_at + 3U);
+        if (bits.empty() || bits.size() > 64U
+            || bits.find_first_not_of("01") != std::string_view::npos) {
+            return std::nullopt;
+        }
+        std::uint64_t raw { };
+        for (const auto bit : bits) {
+            raw = (raw << 1U) | (bit == '1' ? 1U : 0U);
+        }
+        const bool is_signed = text.find(":s=1:") != std::string_view::npos;
+        if (is_signed && bits.size() < 64U && bits.front() == '1') {
+            raw |= ~std::uint64_t { 0 } << bits.size();
+        }
+        return static_cast<std::int64_t>(raw);
+    };
+    const auto scope = callable->systemverilog->scope;
+    for (const auto& declaration :
+        specialized_hir_unit_->design().systemverilog_hir.declarations()) {
+        if (declaration.scope != scope
+            || (declaration.form != semantic::sv::DeclarationForm::parameter
+                && declaration.form
+                    != semantic::sv::DeclarationForm::local_parameter)) {
+            continue;
+        }
+        const auto found = std::ranges::find(target->parameter_values,
+            declaration.name,
+            &std::pair<std::string, std::string>::first);
+        if (found == target->parameter_values.end()) {
+            continue;
+        }
+        if (const auto value = value_of(found->second)) {
+            frame.static_integer_bindings.emplace_back(
+                declaration.id, *value);
+        }
     }
 }
 

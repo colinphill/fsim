@@ -94,6 +94,9 @@ void Resolver::run() {
         {}};
     add_objects(scope, unit.parameters);
     add_objects(scope, unit.ports);
+    for (const auto& instance : unit.instances) {
+      scope.instances.emplace(instance.name, instance.unit_name);
+    }
     resolve_scoped_types(unit.signals, scope);
     resolve_scoped_types(unit.variables, scope);
     add_objects(scope, unit.signals);
@@ -944,7 +947,18 @@ Resolver::selected_parameter_actuals(const std::string_view spelling) {
   if (owners.size() != 1U) return std::nullopt;
   const auto alias = class_aliases_.find(owners.front()->canonical_identity
       + "::" + type.named_type.substr(separator + 2U));
-  if (alias == class_aliases_.end()) return std::nullopt;
+  if (alias == class_aliases_.end()) {
+    // A nested class, possibly inherited from a base (`Derived::Inner`).
+    if (find_class(owners.front()->canonical_identity + "::"
+            + type.named_type.substr(separator + 2U))) {
+      return std::nullopt;
+    }
+    const auto nested = resolve_class_name(type.named_type, scope);
+    if (nested.size() != 1U) return std::nullopt;
+    auto resolved = class_type(*nested.front());
+    resolved.systemverilog_container = type.systemverilog_container;
+    return resolved;
+  }
   ClassSelection selection{owners.front(), class_type(*owners.front())};
   selection.type.systemverilog_class_parameter_actuals =
       type.systemverilog_class_parameter_actuals;
@@ -1103,6 +1117,32 @@ Resolver::resolve_class_name(
       if (identity) {
         if (const auto declaration = find_class(*identity)) {
           matches.push_back(declaration);
+        }
+      }
+    }
+    // `Derived::Inner` names a class or typedef that `Derived` inherits
+    // from a base class (IEEE 1800-2017 8.13, 8.23).
+    if (matches.empty()) {
+      for (const auto* owner : owners) {
+        std::set<std::string> visited;
+        for (auto base = find_base_class(*owner);
+             base != nullptr && matches.empty()
+             && visited.insert(base->canonical_identity).second;
+             base = find_base_class(*base)) {
+          if (const auto nested = find_class(
+                  base->canonical_identity + "::" + alias_name)) {
+            matches.push_back(nested);
+            break;
+          }
+          const auto alias = class_aliases_.find(
+              base->canonical_identity + "::" + alias_name);
+          if (alias != class_aliases_.end()) {
+            if (const auto identity = class_identity(*alias->second)) {
+              if (const auto declaration = find_class(*identity)) {
+                matches.push_back(declaration);
+              }
+            }
+          }
         }
       }
     }

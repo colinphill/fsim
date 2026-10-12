@@ -5512,8 +5512,10 @@ private:
         const ExpressionId operand)
     {
         const auto view = unit_.find_expression(operand);
+        // A member selection (`word.high`) names part of its object.
         if (!view || view->systemverilog == nullptr
-            || view->systemverilog->kind != sv::ExpressionKind::name) {
+            || view->systemverilog->kind != sv::ExpressionKind::name
+            || view->systemverilog->text.find('.') != std::string::npos) {
             return std::nullopt;
         }
         const CompiledDesignResolver resolver { unit_ };
@@ -5549,6 +5551,23 @@ private:
             return std::nullopt;
         }
         for (int depth = 0; depth < 32; ++depth) {
+            // A typedef taken from an element of an interface instance
+            // array (`if0[0].rq_t`) has that element's specialization; the
+            // lowering sizes it.
+            // A structure's member widths may depend on another unit's
+            // specialization; the lowering sizes it.
+            if (systemverilog_packed_members(*type) != nullptr) {
+                return std::nullopt;
+            }
+            const auto alias = type->target.target.valid()
+                ? unit_.find_type(type->target.target) : std::nullopt;
+            if (type->target.spelling.find('[') != std::string::npos
+                || (alias && alias->systemverilog != nullptr
+                    && alias->systemverilog->form == sv::TypeForm::alias
+                    && alias->systemverilog->base.target.spelling.find('[')
+                        != std::string::npos)) {
+                return std::nullopt;
+            }
             if (const auto width = systemverilog_type_bit_width(*type)) {
                 return width;
             }
@@ -6633,6 +6652,10 @@ private:
             }
             return true;
         };
+        // When any case operand is unsigned, the comparison is unsigned at
+        // the widest operand's width (IEEE 1800-2017 12.5).
+        // The selector's and the current choice's own-width masks.
+        std::optional<std::pair<std::uint64_t, std::uint64_t>> case_mask;
         const auto match_pattern = [&](const auto& self,
                                        const ExpressionId pattern_id,
                                        const std::int64_t selector,
@@ -6697,8 +6720,96 @@ private:
                     && selector >= *low && selector <= *high;
             }
             const auto value = evaluate(pattern_id);
+            if (value && case_mask) {
+                return std::optional {
+                    (static_cast<std::uint64_t>(*value) & case_mask->second)
+                    == (static_cast<std::uint64_t>(selector)
+                        & case_mask->first) };
+            }
             return value ? std::optional { *value == selector }
                          : std::nullopt;
+        };
+        const auto operand_signed = [&](const auto& self,
+                                        const ExpressionId id)
+            -> std::optional<bool> {
+            const auto view = unit_.find_expression(id);
+            if (!view || view->systemverilog == nullptr) {
+                return std::nullopt;
+            }
+            const auto& record = *view->systemverilog;
+            if (record.kind == sv::ExpressionKind::integer_literal
+                || record.kind == sv::ExpressionKind::logic_literal) {
+                const auto quote = record.text.find('\'');
+                if (quote == std::string::npos) {
+                    return record.text.find_first_of(".eE")
+                            == std::string::npos
+                        ? std::optional { true } : std::nullopt;
+                }
+                return quote + 1U < record.text.size()
+                    && (record.text[quote + 1U] == 's'
+                        || record.text[quote + 1U] == 'S');
+            }
+            if (record.kind == sv::ExpressionKind::unary
+                && record.operands.size() == 1U
+                && (record.text == "-" || record.text == "+")) {
+                return self(self, record.operands.front());
+            }
+            if (record.kind == sv::ExpressionKind::name) {
+                const auto declaration = expression_declaration(id);
+                const auto found = declaration
+                    ? unit_.find_declaration(*declaration) : std::nullopt;
+                if (!found || found->systemverilog == nullptr
+                    || !found->systemverilog->type) {
+                    return std::nullopt;
+                }
+                const auto& type = *found->systemverilog->type;
+                const auto& spelling = type.target.spelling;
+                if (spelling == "real" || spelling == "shortreal"
+                    || spelling == "realtime") {
+                    return std::nullopt;
+                }
+                return type.signed_value || spelling == "int"
+                    || spelling == "integer" || spelling == "byte"
+                    || spelling == "shortint" || spelling == "longint";
+            }
+            return std::nullopt;
+        };
+        const auto unsigned_case_mask = [&](const sv::Statement& selection)
+            -> std::optional<std::uint64_t> {
+            if (selection.case_match != sv::CaseMatchKind::exact
+                || !selection.condition) {
+                return std::nullopt;
+            }
+            std::vector<ExpressionId> operands { *selection.condition };
+            for (const auto& alternative : selection.case_alternatives) {
+                for (const auto choice : alternative.choices) {
+                    operands.push_back(choice);
+                }
+            }
+            bool all_signed = true;
+            std::uint64_t width { };
+            for (const auto operand : operands) {
+                const auto is_signed = operand_signed(operand_signed, operand);
+                std::set<ExpressionId> active;
+                const auto operand_width = systemverilog_expression_width(
+                    unit_, operand, active);
+                if (!is_signed || !operand_width) {
+                    return std::nullopt;
+                }
+                all_signed = all_signed && *is_signed;
+                width = std::max(width, *operand_width);
+            }
+            if (all_signed || width == 0U || width >= 64U) {
+                return std::nullopt;
+            }
+            return width;
+        };
+        const auto own_mask = [&](const ExpressionId id) -> std::uint64_t {
+            std::set<ExpressionId> active;
+            const auto width = systemverilog_expression_width(
+                unit_, id, active).value_or(64U);
+            return width >= 64U ? ~std::uint64_t { 0 }
+                                : (std::uint64_t { 1 } << width) - 1U;
         };
         switch (statement.kind) {
         case sv::StatementKind::block:
@@ -6728,6 +6839,7 @@ private:
                 = statement.case_match == sv::CaseMatchKind::matches;
             const auto inside_matching
                 = statement.case_match == sv::CaseMatchKind::inside;
+            const auto selection_mask = unsigned_case_mask(statement);
             const sv::CaseAlternative* default_alternative = nullptr;
             for (const auto& alternative :
                 statement.case_alternatives) {
@@ -6738,9 +6850,14 @@ private:
                 for (const auto choice : alternative.choices) {
                     const auto bindings
                         = call_frames_.back().pattern_values;
+                    if (selection_mask) {
+                        case_mask = std::pair {
+                            own_mask(*statement.condition), own_mask(choice) };
+                    }
                     const auto matched = match_pattern(
                         match_pattern, choice, *selector,
                         pattern_matching, inside_matching);
+                    case_mask.reset();
                     if (!matched) {
                         call_frames_.back().pattern_values = bindings;
                         return StatementFlow::failed;
@@ -6861,6 +6978,9 @@ private:
                 ? StatementFlow::returned
                 : StatementFlow::failed;
         case sv::StatementKind::display:
+            // A $display in a constant function call is ignored
+            // (IEEE 1800-2017 13.4.3); severity tasks are reported.
+            return StatementFlow::normal;
         case sv::StatementKind::report: {
             if (effects_ != nullptr && effects_->size() >= 4'096U) {
                 return StatementFlow::failed;
@@ -8224,10 +8344,14 @@ private:
             if (expression.kind == Kind::call
                 && expression.text == "$bits"
                 && expression.operands.size() == 1U) {
+                if (const auto value = evaluate_callable(expression)) {
+                    return value;
+                }
                 if (const auto bits = systemverilog_named_bits(
                         expression.operands.front())) {
                     return static_cast<std::int64_t>(*bits);
                 }
+                return std::nullopt;
             }
             if (expression.kind == Kind::call) {
                 return evaluate_callable(expression);

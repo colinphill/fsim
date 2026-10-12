@@ -2029,6 +2029,7 @@ tests/fixtures/compliance/sv_language_details_batch45.sv
 tests/fixtures/compliance/sv_language_details_batch46.sv
 tests/fixtures/compliance/sv_language_details_batch47.sv
 tests/fixtures/compliance/sv_language_details_batch48.sv
+tests/fixtures/compliance/sv_language_details_batch49.sv
 tests/fixtures/compliance/sv_module_items.sv
 tests/fixtures/compliance/sv_net_data_types.sv
 tests/fixtures/compliance/sv_nonblocking_struct_members.sv

@@ -1406,3 +1406,83 @@ gives fsim's result in each case checked.
 - An interface class extending interface classes that both declare a type
   parameter of the same name must redeclare it
   (`FSIM-SV-CLASS-INHERIT-013`, 8.26.6.2).
+
+## Binds, instance callables, array rows, randomization limits and preprocessing (batch 49)
+
+- A `bind` directive in a compilation unit (outside any module) applies
+  throughout the design; such directives were ignored. A bound instance
+  array has one occurrence per element (23.11).
+- A function or task of another module instance (`u.f()`,
+  `a.u[0].f()`) reads that instance's parameter values, not the defaults
+  of its module (23.8).
+- A row of a multidimensional unpacked array may be assigned from another
+  row (`d[0] = d[1]`), from an assignment pattern (`d[j] = '{...}`) or
+  from a conditional between patterns, each alternative taking the row's
+  type (7.6, 10.9.1).
+- A `$display` in a constant function call is ignored; severity tasks are
+  reported (13.4.3). A `case` in a constant function compares unsigned at
+  the widest operand's width when any operand is unsigned, each operand
+  zero-extended from its own width (12.5).
+- Class `randomize()` enumerates at most 2^22 values per random property;
+  a wider property that no constraint references is drawn uniformly
+  without enumeration (18.5). A constrained wide property still fails to
+  randomize (the solver enumerates domains).
+- Arguments of value-formatting system tasks (`$display`, `$fwrite`, ...)
+  are checked for undeclared identifiers (`FSIM-SV-SEM-411`); tasks that
+  take a scope (`$dumpvars`, `$printtimescale`, ...) are not.
+- A part-select of a bit-select, or of an undeclared name, is rejected
+  rather than read as X; constant out-of-range selects of declared objects
+  and unpacked-array elements still read X (11.5.1).
+- `$bits` of a member selection, of a structure, or of a typedef taken
+  from an interface-instance array element is left to the lowering, which
+  knows the instance's specialization; the constant evaluator only sizes
+  simple typedefs and objects when its own evaluation fails.
+- An `` `include `` produced by a macro expansion is processed where the
+  expansion is emitted (22.4).
+- `fsim compile --preprocess-only` runs the Verilog preprocessor and stops;
+  the corpus runner uses it for sv-tests marked `:type: preprocessing`,
+  which the sv-tests harness only preprocesses.
+- A virtual task call dispatches on the object's class: each derived class
+  that overrides the task is tested with a checked cast, deepest first,
+  before the declared class's body runs (8.20).
+- Real and integral values convert where an assignment would convert
+  them (6.12.2): the alternatives of `?:` when either is real (an unknown
+  condition gives their common value, or 0.0 when they differ, 11.4.11);
+  the items of assignment patterns for arrays, unpacked and packed
+  structures (10.9); input and output port connections (23.3.3.7); task
+  and function arguments copied in and out (13.5); compound assignments
+  `x op= r` to an integral `x` (11.4.1); and `++`/`--` of a real used as
+  an expression value, which steps by 1.0 (11.4.2). `real inside {...}`
+  compares as real (11.4.13).
+- A power with a negative exponent of an unsigned power path gives 1 for
+  a base of 1, x (or 0 for two-state) for 0, and 0 otherwise (11.4.3).
+- A compound assignment to an unsigned target zero-extends a signed
+  operand; the operands are signed only when both are (11.8.1).
+- A `time` operand is a 64-bit unsigned integral: bitwise and remainder
+  operators accept it and arithmetic wraps (6.11).
+- An untyped parameter takes the width, signedness and real-ness of its
+  override value (6.20.2), including through `$left`/`$right`/`$high`/
+  `$low`, and an instance's overridden values are visible to functions
+  called through it.
+- A type parameter or typedef bound to `real` or `shortreal` gives its
+  objects real semantics (6.20.3). A typedef of `string` declares a
+  string (6.18), also as `pkg::name`; forward typedefs of `string` are
+  not yet resolved this way.
+- `$monitor` honours `%v` and prints strength names (21.2.1.5).
+- A string formal of a class method passed on to another method keeps its
+  text; a string concatenation initializes a class property (11.4.12.2).
+- A nested class or type alias inherited from a base class resolves in a
+  derived class (8.13); a task of a constant-indexed instance-array
+  element (`u[1].t()`) is called through that instance (23.8).
+- An unpacked array of an interface is reachable through a virtual
+  interface or interface port (25.9), and a local dynamic array or queue
+  may be initialized by a concatenation (7.5.1, 7.10.4).
+- A module-level `mailbox` or `semaphore` initialized by `new` is
+  constructed before the module's processes start, like a class handle
+  (15.3, 15.4).
+- `~ |a`, `~ &a` and `~ ^a` (with a space) are rejected
+  (`FSIM-SV-PARSE-392`): a unary operator takes a primary (A.8.3).
+- The corpus runner marks cases that need other simulators' extensions
+  (Verilator `$c`, Verilator non-standard checks, Icarus-only system
+  tasks or gold output containing Icarus warnings) as skipped with the
+  reason.

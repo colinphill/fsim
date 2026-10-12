@@ -129,6 +129,8 @@ struct Invocation {
   std::optional<project::Optimization> optimization;
   std::optional<bool> code_coverage;
   bool coverage_partial_merge{false};
+  // `compile --preprocess-only`: run the Verilog preprocessor and stop.
+  bool preprocess_only{false};
   std::optional<std::string> coverage_report_format;
   std::vector<CoverageThreshold> coverage_thresholds;
   std::optional<std::filesystem::path> tcl_script;

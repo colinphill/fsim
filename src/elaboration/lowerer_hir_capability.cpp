@@ -1727,6 +1727,41 @@ std::optional<semantic::ExpressionId> Lowerer::hir_constant_initializer(
         : std::nullopt;
 }
 
+std::optional<HirSystemVerilogConstant>
+Lowerer::hir_parameter_actual_constant(
+    const semantic::DeclarationId declaration_id) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto& actuals
+        = specialized_hir_unit_->specialization().actual_identities;
+    const auto bound = std::ranges::find(actuals, declaration_id,
+        &semantic::SpecializedHirActualIdentity::declaration);
+    return bound != actuals.end()
+        ? decode_hir_systemverilog_constant(bound->identity)
+        : std::nullopt;
+}
+
+std::optional<semantic::ExpressionId>
+Lowerer::hir_parameter_type_expression(
+    const semantic::DeclarationId declaration_id) const
+{
+    const auto initializer = hir_constant_initializer(declaration_id);
+    if (!initializer || specialized_hir_unit_ == nullptr) {
+        return initializer;
+    }
+    // An untyped parameter takes the type of its final value, an override's
+    // when one is bound (IEEE 1800-2017 6.20.2).
+    const auto& actuals
+        = specialized_hir_unit_->specialization().actual_identities;
+    const auto bound = std::ranges::find(actuals, declaration_id,
+        &semantic::SpecializedHirActualIdentity::declaration);
+    return bound != actuals.end() && bound->actual_expression
+        ? bound->actual_expression
+        : initializer;
+}
+
 std::optional<std::optional<Lowerer::HirPackedRange>>
 Lowerer::hir_vhdl_callable_formal_range(
     const semantic::DeclarationId declaration) const
@@ -2736,7 +2771,13 @@ bool Lowerer::hir_expression_signed(
                     && source.initializer && source.type
                     && source.type->target.spelling == "implicit"
                     && !source.type->packed_range) {
-                    return self(self, *source.initializer);
+                    if (const auto actual
+                        = hir_parameter_actual_constant(*declaration_id)) {
+                        return actual->signed_value;
+                    }
+                    return self(self, hir_parameter_type_expression(
+                                          *declaration_id)
+                                          .value_or(*source.initializer));
                 }
                 return source.type && hir_systemverilog_type_signed(*source.type);
             }
@@ -5043,6 +5084,42 @@ Lowerer::hir_container_object_binding_for_declaration(
     if (vhdl_environment_container) {
         return std::nullopt;
     }
+    // A container member of the instance whose task or function is being
+    // called (`u.t()`, `ifc.f()`) is that instance's (23.8, 25.7).
+    if (active_hir_callable_
+        && *active_hir_callable_ < hir_callable_frames_.size()) {
+        const auto& frame = hir_callable_frames_[*active_hir_callable_];
+        if (frame.interface_receiver) {
+            const auto& receiver = *frame.interface_receiver;
+            std::optional<ContainerObjectId> found;
+            if (receiver.starts_with("@instance:")) {
+                const auto path = receiver.substr(
+                    std::string_view { "@instance:" }.size()) + "." + name;
+                if (const auto global = design_.container_by_name_.find(path);
+                    global != design_.container_by_name_.end()) {
+                    found = global->second;
+                }
+            } else if (const auto receiver_object = container_objects_.find(
+                           receiver + "." + name);
+                receiver_object != container_objects_.end()) {
+                found = receiver_object->second;
+            }
+            if (found) {
+                const auto info = std::ranges::find_if(
+                    design_.container_object_info_.rbegin(),
+                    design_.container_object_info_.rend(),
+                    [&](const ContainerObjectInfo& candidate) {
+                        return candidate.id == *found;
+                    });
+                if (info != design_.container_object_info_.rend()) {
+                    return HirContainerObjectBinding {
+                        *declaration_id, name, *found, std::nullopt,
+                        &info->type, false,
+                    };
+                }
+            }
+        }
+    }
     if (package_container_object_) {
         if (const auto package_object
             = package_container_object_(*declaration_id)) {
@@ -6158,8 +6235,16 @@ Lowerer::hir_static_container_expression_type(
             ? std::optional { *binding->type }
             : std::nullopt;
     }
-    // An element of a nested container is itself a container.
-    if (const auto element = hir_container_element_binding(expression_id);
+    // An element of a nested container is itself a container; a member or
+    // method name on it (`d[k].size`) is not.
+    const auto element_expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (const auto element = element_expression
+                && element_expression->systemverilog != nullptr
+                && element_expression->systemverilog->text == "index"
+            ? hir_container_element_binding(expression_id)
+            : std::nullopt;
         element && element->selected_type != nullptr
         && element->selected_type->element_kind
             == ContainerElementKind::Container
@@ -6408,7 +6493,17 @@ Lowerer::hir_systemverilog_container_query(
         : inferred_type ? &*inferred_type
                         : nullptr;
     if (type_pointer == nullptr) {
-        const auto packed_width = declared_type
+        // An untyped parameter has its value's range (6.20.2).
+        const bool untyped_parameter = !named_type_declaration && declaration
+            && declaration->systemverilog != nullptr
+            && (declaration->systemverilog->form
+                    == semantic::sv::DeclarationForm::parameter
+                || declaration->systemverilog->form
+                    == semantic::sv::DeclarationForm::local_parameter)
+            && declared_type && !declared_type->packed_range
+            && (declared_type->target.spelling == "implicit"
+                || declared_type->target.spelling.empty());
+        const auto packed_width = declared_type && !untyped_parameter
             ? hir_systemverilog_type_width(*declared_type)
             : hir_expression_width(receiver, hir_process_scope_);
         const auto* declared_type_pointer = declared_type
@@ -8877,8 +8972,17 @@ std::optional<frontend::ValueDomain> Lowerer::hir_expression_domain(
                     ? frontend::ValueDomain::Logic4
                     : frontend::ValueDomain::Bit2;
             }
+            if (const auto actual = hir_parameter_actual_constant(*selected);
+                actual && (!declaration || declaration->systemverilog == nullptr
+                    || !declaration->systemverilog->type
+                    || declaration->systemverilog->type->target.spelling
+                        == "implicit")) {
+                return actual->domain;
+            }
             if (const auto inferred = hir_expression_domain(
-                    *initializer, process_scope)) {
+                    hir_parameter_type_expression(*selected)
+                        .value_or(*initializer),
+                    process_scope)) {
                 return inferred;
             }
         }
@@ -9584,10 +9688,29 @@ frontend::SystemVerilogScalarKind Lowerer::hir_systemverilog_scalar_kind(
                                              ->return_type.target.spelling);
                 }
             }
-            return hir_systemverilog_scalar_kind(*record.initializer);
+            return hir_systemverilog_scalar_kind(
+                hir_parameter_type_expression(id).value_or(
+                    *record.initializer));
         }
-        return record.type ? spelling_kind(record.type->target.spelling)
-                           : Kind::None;
+        if (!record.type) {
+            return Kind::None;
+        }
+        const auto kind = spelling_kind(record.type->target.spelling);
+        const auto& spelling = record.type->target.spelling;
+        if (kind != Kind::None || spelling.empty() || spelling == "implicit"
+            || spelling == "logic" || spelling == "bit" || spelling == "reg"
+            || spelling == "int" || spelling == "integer"
+            || spelling == "string") {
+            return kind;
+        }
+        // A type parameter or alias of a real type (6.20.3).
+        const semantic::CompiledDesignResolver resolver {
+            *specialized_hir_unit_, hir_generic_binding_frames_
+        };
+        const auto underlying = resolver.underlying_systemverilog_type(
+            *record.type, record.scope);
+        return underlying ? spelling_kind(underlying->target.spelling)
+                          : Kind::None;
     };
 
     const auto retained_kind = static_cast<Kind>(source.scalar_kind);
@@ -11068,6 +11191,18 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
                 if (const auto declared = hir_systemverilog_type_width(
                         *declaration->systemverilog->type)) {
                     return declared;
+                }
+            }
+            if (const auto actual = hir_parameter_actual_constant(*selected);
+                actual && !actual->unbounded && actual->width != 0U) {
+                return actual->width;
+            }
+            if (const auto type_source = hir_parameter_type_expression(
+                    *selected);
+                type_source && *type_source != *initializer) {
+                if (const auto inferred = hir_expression_width(
+                        *type_source, process_scope)) {
+                    return inferred;
                 }
             }
             if (const auto inferred = hir_expression_width(

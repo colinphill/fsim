@@ -82,6 +82,9 @@ class Case:
     # Cases sharing a chain run in order in one workspace (VESTs Ashenden).
     chain: str | None = None
     skip: str | None = None
+    # Why a failure of this case is outside the IEEE LRMs (another
+    # simulator's extension); a failing run is recorded as a skip.
+    out_of_scope: str | None = None
     timeout: float | None = None
     # Governed UVM release whose precompiled library the case maps (sv-tests).
     uvm_release: str | None = None
@@ -249,6 +252,10 @@ def sv_tests_cases(root: Path) -> list[Case]:
             uvm_src = root / "uvm" / f"uvm-{uvm_release}" / "src"
             compile_args += ["--search-library", "uvm", "-I", str(uvm_src)]
             timeout = max(timeout, 300.0)
+        # A preprocessing test checks only the preprocessor's output, as the
+        # sv-tests harness runs it (IEEE 1800-2017 22).
+        if types == ["preprocessing"]:
+            compile_args.append("--preprocess-only")
         compile_args += source_files
         commands = [Command("compile", compile_args)]
         if uvm_release:
@@ -383,6 +390,20 @@ def verilator_library_files(top_file: Path, tdir: Path) -> list[Path]:
     return loaded
 
 
+# Icarus system tasks that are not in IEEE 1364/1800.
+ICARUS_EXTENSION_TASKS = re.compile(
+    r"\$(abstime|is_signed|countdrivers|simparam|fopenr|sizeof|ivlh_\w+)\b")
+# Verilator's C++ escape functions ($c, $c8..$c64, $cpure).
+VERILATOR_C_TASKS = re.compile(r"\$c(pure|\d+)?\s*\(")
+# Verilator cases that rely on behaviour Verilator itself calls
+# non-standard or that other simulators reject.
+VERILATOR_NONSTANDARD = {
+    "t_enum_type_methods": "prints an enumeration with %s as its name "
+        "(non-standard)",
+    "t_package_export": "reads names a package imports but does not export "
+        "(IEEE 1800-2017 26.6)",
+}
+
 def verilator_cases(root: Path) -> list[Case]:
     tdir = root / "sources" / "verilator" / "test_regress" / "t"
     cases = []
@@ -407,6 +428,15 @@ def verilator_cases(root: Path) -> list[Case]:
             skip = skip or "lint-only test"
         if re.search(r"have_solver|have_sc\b|test\.pli_filename|vpi|dpi|sc_main", source, re.I):
             skip = skip or "requires solver, SystemC, PLI/VPI or DPI harness"
+        # Verilator extensions and behaviour it marks non-standard are outside
+        # the IEEE LRMs (owner decision, 2026-10-12).
+        out_of_scope = None
+        if top_file.exists():
+            verilog = read_text(top_file)
+            if VERILATOR_C_TASKS.search(verilog):
+                out_of_scope = "out of scope: Verilator $c extension"
+            elif name in VERILATOR_NONSTANDARD:
+                out_of_scope = "out of scope: " + VERILATOR_NONSTANDARD[name]
         # fails=test.vlt_all marks a Verilator-only diagnostic; other
         # simulators run the model, which may end in an unconditional $stop.
         verilator_only_failure = bool(re.search(
@@ -502,6 +532,7 @@ def verilator_cases(root: Path) -> list[Case]:
             writes=([("verilator_shell.sv", shell)] if shell else [])
             + [("obj_dir/.keep", "")],
             skip=skip,
+            out_of_scope=out_of_scope,
         ))
     return cases
 
@@ -577,6 +608,18 @@ def ivtest_cases(root: Path) -> list[Case]:
             skip = skip or f"ivtest type {test_type}"
         if not source.exists():
             skip = skip or "source not present"
+        out_of_scope = None
+        if source.exists():
+            # Icarus extensions are outside the IEEE LRMs (owner decision,
+            # 2026-10-12): its own system tasks, and gold output holding
+            # Icarus SORRY or WARNING messages.
+            text = read_text(source)
+            gold_text = read_text(gold) if gold is not None and gold.is_file() else ""
+            if ICARUS_EXTENSION_TASKS.search(text):
+                out_of_scope = "out of scope: Icarus system task extension"
+            elif re.search(r"^\s*(SORRY|WARNING)\b|: (sorry|warning): ",
+                           gold_text, re.M):
+                out_of_scope = "out of scope: Icarus diagnostic in gold output"
         compile_args += standard_args(language, standard)
         # iverilog runs from the ivtest root, so an include named
         # "ivltests/x.v" resolves against it as well (IEEE 1800-2017 22.4).
@@ -632,6 +675,7 @@ def ivtest_cases(root: Path) -> list[Case]:
             checker="ivtest",
             checker_data={"gold": str(gold) if gold else None, "type": test_type},
             skip=skip,
+            out_of_scope=out_of_scope,
         ))
     return cases
 
@@ -1154,6 +1198,15 @@ def vunit_subresults(case: Case, steps: list[StepResult], status: str) -> list[d
 
 def run_case(case: Case, fsim: Path, workdir: Path, engine: str, default_timeout: float,
              keep: bool) -> dict:
+    record = run_case_once(case, fsim, workdir, engine, default_timeout, keep)
+    if case.out_of_scope and record.get("status") not in ("pass", "skip"):
+        record["detail"] = f"{case.out_of_scope} ({record.get('detail', '')})"
+        record["status"] = "skip"
+    return record
+
+
+def run_case_once(case: Case, fsim: Path, workdir: Path, engine: str,
+                  default_timeout: float, keep: bool) -> dict:
     record = {"suite": case.suite, "id": case.id, "group": case.group, "expect": case.expect}
     if case.skip:
         record.update(status="skip", detail=case.skip)

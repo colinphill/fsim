@@ -3489,8 +3489,9 @@ Lowerer::lower_hir_systemverilog_packed_pattern(
                 value, expected, width);
         }
         // A member value converts to the member's width (IEEE 1800-2017
-        // 10.9.2), as in an assignment.
-        auto lowered = lower_hir_expression(value, width);
+        // 10.9.2), as in an assignment, a real value rounded.
+        auto lowered = lower_hir_scalar_converted_value(
+            value, width, frontend::SystemVerilogScalarKind::None);
         if (lowered && register_width(*lowered) != width) {
             lowered = resize_register(
                 *lowered, width, hir_expression_signed(value));
@@ -3918,6 +3919,87 @@ std::optional<RegisterId> Lowerer::lower_hir_membership_expression(
         };
     };
 
+    // A real left operand compares as real, its integral range bounds and
+    // values converted (IEEE 1800-2017 11.4.13).
+    if (const auto lhs_kind = hir_systemverilog_scalar_kind(
+            source.operands.front());
+        frontend::is_real_scalar_kind(lhs_kind)) {
+        const auto real_value = [&](const semantic::ExpressionId operand)
+            -> std::optional<RegisterId> {
+            const auto kind = hir_systemverilog_scalar_kind(operand);
+            if (frontend::is_real_scalar_kind(kind)) {
+                const auto value = lower_hir_expression(operand, 64U, kind);
+                return value && kind == lhs_kind ? value : std::nullopt;
+            }
+            const auto value = lower_hir_expression(operand,
+                hir_expression_width(operand, hir_process_scope_)
+                    .value_or(32U));
+            return value
+                ? std::optional { convert_hir_integral_to_real(
+                      *value, hir_expression_signed(operand), lhs_kind) }
+                : std::nullopt;
+        };
+        const auto compare = [&](
+                                 const runtime::SystemVerilogScalarBinaryOperator
+                                     operation,
+                                 const RegisterId left,
+                                 const RegisterId right) {
+            const auto destination = allocate_register(
+                1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(SystemVerilogScalarBinary {
+                operation, destination, left, right, lhs_kind, lhs_kind,
+                frontend::SystemVerilogScalarKind::None });
+            return destination;
+        };
+        const auto value = real_value(source.operands.front());
+        if (!value) {
+            return std::nullopt;
+        }
+        auto any = allocate_register(1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(LoadConstant {
+            any, PackedLogic4(1U, Logic4::zero) });
+        for (std::size_t index = 1U; index < source.operands.size(); ++index) {
+            const auto item = specialized_hir_unit_->find_expression(
+                source.operands[index]);
+            if (!item || item->systemverilog == nullptr) {
+                return std::nullopt;
+            }
+            const auto& candidate = *item->systemverilog;
+            RegisterId matched { };
+            if (candidate.kind == semantic::sv::ExpressionKind::call
+                && candidate.text == "@inside-range"
+                && candidate.operands.size() == 2U) {
+                const auto low = real_value(candidate.operands.front());
+                const auto high = real_value(candidate.operands.back());
+                if (!low || !high) {
+                    return std::nullopt;
+                }
+                const auto above = compare(
+                    runtime::SystemVerilogScalarBinaryOperator::GreaterEqual,
+                    *value, *low);
+                const auto below = compare(
+                    runtime::SystemVerilogScalarBinaryOperator::LessEqual,
+                    *value, *high);
+                matched = allocate_register(1U, frontend::ValueDomain::Logic4);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::bit_and, matched, above, below });
+            } else {
+                const auto equal = real_value(source.operands[index]);
+                if (!equal) {
+                    return std::nullopt;
+                }
+                matched = compare(
+                    runtime::SystemVerilogScalarBinaryOperator::Equal,
+                    *value, *equal);
+            }
+            const auto combined = allocate_register(
+                1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::bit_or, combined, any, matched });
+            any = combined;
+        }
+        return any;
+    }
     const auto lhs = integral_operand(
         source.operands.front(),
         "FSIM-ELAB-SVMEMBER-003",
@@ -6125,6 +6207,48 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         process_.operations.emplace_back(
             LoadConstant { destination, parameter->value });
         return destination;
+    }
+    // A parameter read in a callable of another module instance
+    // (`u.f()`) takes that instance's value.
+    if (active_hir_callable_
+        && *active_hir_callable_ < hir_callable_frames_.size()
+        && !hir_callable_frames_[*active_hir_callable_]
+                .static_integer_bindings.empty()) {
+        const auto record = specialized_hir_unit_->find_expression(
+            expression_id);
+        const auto declaration = record && record->systemverilog != nullptr
+                && record->systemverilog->kind
+                    == semantic::sv::ExpressionKind::name
+            ? hir_referenced_declaration(expression_id)
+            : std::nullopt;
+        const auto parameter = declaration
+            ? specialized_hir_unit_->find_declaration(*declaration)
+            : std::nullopt;
+        if (parameter && parameter->systemverilog != nullptr
+            && (parameter->systemverilog->form
+                    == semantic::sv::DeclarationForm::parameter
+                || parameter->systemverilog->form
+                    == semantic::sv::DeclarationForm::local_parameter)) {
+            const auto& bindings = hir_callable_frames_[
+                *active_hir_callable_].static_integer_bindings;
+            const auto binding = std::ranges::find_if(bindings,
+                [&](const auto& entry) { return entry.first == *declaration; });
+            if (binding != bindings.end()) {
+                const auto width = hir_expression_width(
+                    expression_id, hir_process_scope_).value_or(32U);
+                const auto destination = allocate_register(
+                    width, frontend::ValueDomain::Logic4);
+                process_.operations.emplace_back(LoadConstant {
+                    destination,
+                    PackedLogic4::from_aval_bval(width,
+                        static_cast<std::uint64_t>(binding->second), 0U),
+                });
+                return expected_width != 0U && expected_width != width
+                    ? std::optional { resize_register(destination,
+                          expected_width, hir_expression_signed(expression_id)) }
+                    : std::optional { destination };
+            }
+        }
     }
     if (const auto method = hir_systemverilog_enumeration_method(
             expression_id);
@@ -9147,10 +9271,30 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         if (!target) {
             return std::nullopt;
         }
-        const auto updated = lower_hir_packed_update_value(
-            *target,
-            update.text.ends_with("++") ? "+" : "-",
-            std::nullopt);
+        // A real operand steps by 1.0 (IEEE 1800-2017 11.4.2).
+        const auto update_kind = hir_systemverilog_scalar_kind(
+            update.operands.front());
+        auto updated = std::optional<RegisterId> { };
+        if (frontend::is_real_scalar_kind(update_kind)) {
+            const auto one = allocate_register(32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                LoadConstant { one, unsigned_value(1U, 32U) });
+            const auto real_one
+                = convert_hir_integral_to_real(one, false, update_kind);
+            updated = allocate_register(
+                register_width(target->captured), target->domain);
+            process_.operations.emplace_back(SystemVerilogScalarBinary {
+                update.text.ends_with("++")
+                    ? runtime::SystemVerilogScalarBinaryOperator::Add
+                    : runtime::SystemVerilogScalarBinaryOperator::Subtract,
+                *updated, target->captured, real_one, update_kind,
+                update_kind, update_kind });
+        } else {
+            updated = lower_hir_packed_update_value(
+                *target,
+                update.text.ends_with("++") ? "+" : "-",
+                std::nullopt);
+        }
         if (!updated
             || !write_hir_packed_update_target(*target, *updated)) {
             return std::nullopt;
@@ -12134,13 +12278,24 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 ? std::string_view {
                       declared->systemverilog->type->target.spelling }
                 : std::string_view { };
-            const auto declared_kind = declared_spelling == "real"
+            auto declared_kind = declared_spelling == "real"
                 ? frontend::SystemVerilogScalarKind::Real
                 : declared_spelling == "realtime"
                 ? frontend::SystemVerilogScalarKind::Realtime
                 : declared_spelling == "shortreal"
                 ? frontend::SystemVerilogScalarKind::ShortReal
                 : frontend::SystemVerilogScalarKind::None;
+            // An untyped parameter whose final value is real is real
+            // (IEEE 1800-2017 6.20.2).
+            if (declared_kind == frontend::SystemVerilogScalarKind::None
+                && declared_spelling == "implicit"
+                && !declared->systemverilog->type->packed_range) {
+                if (const auto kind = hir_systemverilog_scalar_kind(
+                        expression_id);
+                    frontend::is_real_scalar_kind(kind)) {
+                    declared_kind = kind;
+                }
+            }
             std::optional<frontend::SystemVerilogScalarConstant> real_value;
             if (declared_kind != frontend::SystemVerilogScalarKind::None) {
                 std::string error;
@@ -12336,9 +12491,30 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         // A constant part-select that lies partly or wholly outside the
         // declared range reads X (0 for two-state) for the bits outside it
         // (IEEE 1800-2017 11.5.1): the selected bit offsets, low and high.
+        // Only a select of a declared object: a select of a bit- or
+        // part-select, or of an undeclared name, stays an error.
+        const auto declared_select_base = [&] {
+            const auto base = specialized_hir_unit_->find_expression(
+                source.operands[0]);
+            if (!base || base->systemverilog == nullptr) {
+                return false;
+            }
+            // An element of an unpacked array (`arr[2][1:0]`) is a packed
+            // object too.
+            if (base->systemverilog->kind
+                    == semantic::sv::ExpressionKind::index
+                && hir_container_element_binding(source.operands[0])) {
+                return true;
+            }
+            return base->systemverilog->kind
+                    == semantic::sv::ExpressionKind::name
+                && hir_referenced_declaration(source.operands[0])
+                    .has_value();
+        };
         std::optional<std::pair<std::int64_t, std::int64_t>> partial_slice;
         if (!constant_selection && source.slice
             && expression->systemverilog != nullptr && source_width
+            && declared_select_base()
             && hir_systemverilog_packed_shape(source.operands[0]).size()
                 <= 1U) {
             const auto first = hir_constant_integer(source.operands[1]);
@@ -12557,7 +12733,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                     ? hir_expression_range(
                           source.operands[0], hir_process_scope_)
                     : std::nullopt;
-                if (constant_index && range
+                if (constant_index && range && declared_select_base()
                     && (*constant_index
                             < std::min(range->left, range->right)
                         || *constant_index
@@ -12901,6 +13077,85 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             trace_generated_conditional(
                 !condition ? "condition-value" : "value-width");
             return std::nullopt;
+        }
+        // With a real alternative the conditional is real; an integral
+        // alternative is converted (IEEE 1800-2017 11.4.11).
+        if (expression->systemverilog != nullptr) {
+            const auto true_kind = hir_systemverilog_scalar_kind(
+                source.operands[1]);
+            const auto false_kind = hir_systemverilog_scalar_kind(
+                source.operands[2]);
+            if (frontend::is_real_scalar_kind(true_kind)
+                || frontend::is_real_scalar_kind(false_kind)) {
+                const auto real_kind = true_kind == false_kind
+                    ? true_kind : frontend::SystemVerilogScalarKind::Real;
+                const auto alternative = [&](const semantic::ExpressionId id,
+                                             const frontend::SystemVerilogScalarKind kind)
+                    -> std::optional<RegisterId> {
+                    if (frontend::is_real_scalar_kind(kind)) {
+                        return lower_hir_expression(id, 64U, kind);
+                    }
+                    const auto value = lower_hir_expression(id,
+                        hir_expression_width(id, hir_process_scope_)
+                            .value_or(32U));
+                    return value
+                        ? std::optional { convert_hir_integral_to_real(
+                              *value, hir_expression_signed(id), real_kind) }
+                        : std::nullopt;
+                };
+                auto when_true = alternative(source.operands[1], true_kind);
+                auto when_false = alternative(source.operands[2], false_kind);
+                if (!when_true || !when_false) {
+                    return std::nullopt;
+                }
+                auto selector = *condition;
+                const bool four_state
+                    = !is_two_state_domain(register_domain(selector));
+                if (register_width(selector) != 1U || four_state) {
+                    const auto inverted = allocate_register(
+                        1U, register_domain(selector));
+                    process_.operations.emplace_back(
+                        LogicalNot { inverted, selector });
+                    selector = allocate_register(1U, register_domain(selector));
+                    process_.operations.emplace_back(
+                        LogicalNot { selector, inverted });
+                }
+                const auto real_width = register_width(*when_true);
+                const auto destination = allocate_register(
+                    real_width, register_domain(*when_true));
+                process_.operations.emplace_back(ConditionalSelect {
+                    destination, selector, *when_true, *when_false });
+                if (!four_state) {
+                    return destination;
+                }
+                // An unknown condition gives the alternatives' common value,
+                // or 0.0 when they differ (11.4.11).
+                const auto unknown = allocate_register(
+                    1U, frontend::ValueDomain::Logic4);
+                process_.operations.emplace_back(LoadConstant {
+                    unknown, PackedLogic4(1U, Logic4::x) });
+                const auto ambiguous = allocate_register(
+                    1U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::case_equal, ambiguous, selector, unknown });
+                const auto same = allocate_register(
+                    1U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::case_equal, same, *when_true, *when_false });
+                const auto zero = allocate_register(
+                    real_width, register_domain(*when_true));
+                process_.operations.emplace_back(LoadConstant {
+                    zero, PackedLogic4(real_width, Logic4::zero) });
+                const auto common = allocate_register(
+                    real_width, register_domain(*when_true));
+                process_.operations.emplace_back(ConditionalSelect {
+                    common, same, *when_true, zero });
+                const auto resolved = allocate_register(
+                    real_width, register_domain(*when_true));
+                process_.operations.emplace_back(ConditionalSelect {
+                    resolved, ambiguous, common, destination });
+                return resolved;
+            }
         }
         const auto constant_condition = expression->systemverilog != nullptr
             ? hir_constant_integer(source.operands[0])
@@ -14086,10 +14341,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             }
             return power;
         }
+        // A time operand is a 64-bit unsigned integral (6.11), so only a
+        // real operand restricts the operator.
         if (!scalar_operation
-            && (lhs_scalar != ScalarKind::None
-                || rhs_scalar != ScalarKind::None
-                || scalar_context != ScalarKind::None)) {
+            && (real_scalar(lhs_scalar) || real_scalar(rhs_scalar)
+                || real_scalar(scalar_context))) {
             report(
                 "FSIM-ELAB-SVSCALAR-002",
                 "runtime scalar operator '" + std::string { source.text }
@@ -14133,8 +14389,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             }
             return lower_hir_expression(operand, scalar_width(kind), kind);
         };
+        // Time operands wrap as 64-bit unsigned integrals (6.11).
         if (scalar_operation && lhs_scalar != ScalarKind::None
-            && rhs_scalar != ScalarKind::None) {
+            && rhs_scalar != ScalarKind::None
+            && (lhs_scalar != ScalarKind::Time
+                || rhs_scalar != ScalarKind::Time)) {
             const auto lhs = lower_scalar_operand(
                 source.operands[0], lhs_scalar);
             const auto rhs = lower_scalar_operand(
@@ -14685,9 +14944,57 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                                 ? frontend::ValueDomain::Bit2
                                 : frontend::ValueDomain::Logic4
                             : register_domain(*lhs);
-                        const auto destination = allocate_register(width, domain);
+                        auto destination = allocate_register(width, domain);
                         process_.operations.emplace_back(Binary {
                             *operation, destination, *lhs, *rhs });
+                        // An unsigned base with a negative signed exponent
+                        // (the exponent is self-determined): 1 for a base of
+                        // 1, X for 0, and 0 otherwise (IEEE 1800-2017
+                        // 11.4.3, Table 11-4).
+                        if (systemverilog_power
+                            && *operation == BinaryOperator::power_unsigned
+                            && hir_expression_signed(source.operands[1])
+                            && register_width(*rhs) > 0U) {
+                            const auto exponent_width = register_width(*rhs);
+                            const auto zero = allocate_register(
+                                exponent_width, register_domain(*rhs));
+                            process_.operations.emplace_back(LoadConstant {
+                                zero, PackedLogic4(exponent_width, Logic4::zero) });
+                            const auto negative = allocate_register(
+                                1U, frontend::ValueDomain::Logic4);
+                            process_.operations.emplace_back(Binary {
+                                BinaryOperator::less_signed, negative, *rhs, zero });
+                            const auto base_one = allocate_register(width, domain);
+                            process_.operations.emplace_back(LoadConstant {
+                                base_one, unsigned_value(1U, width) });
+                            const auto base_zero = allocate_register(width, domain);
+                            process_.operations.emplace_back(LoadConstant {
+                                base_zero, PackedLogic4(width, Logic4::zero) });
+                            const auto is_one = allocate_register(
+                                1U, frontend::ValueDomain::Logic4);
+                            process_.operations.emplace_back(Binary {
+                                BinaryOperator::equal, is_one, *lhs, base_one });
+                            const auto is_zero = allocate_register(
+                                1U, frontend::ValueDomain::Logic4);
+                            process_.operations.emplace_back(Binary {
+                                BinaryOperator::equal, is_zero, *lhs, base_zero });
+                            const auto unknown = allocate_register(width, domain);
+                            process_.operations.emplace_back(LoadConstant {
+                                unknown, PackedLogic4(width,
+                                    is_two_state_domain(domain)
+                                        ? Logic4::zero : Logic4::x) });
+                            const auto zero_or_x = allocate_register(width, domain);
+                            process_.operations.emplace_back(ConditionalSelect {
+                                zero_or_x, is_zero, unknown, base_zero });
+                            const auto negative_result = allocate_register(
+                                width, domain);
+                            process_.operations.emplace_back(ConditionalSelect {
+                                negative_result, is_one, base_one, zero_or_x });
+                            const auto selected = allocate_register(width, domain);
+                            process_.operations.emplace_back(ConditionalSelect {
+                                selected, negative, negative_result, destination });
+                            destination = selected;
+                        }
                         const auto bitwise_inversion
                             = source.text == "~^" || source.text == "^~"
                             || source.text == "xnor"
@@ -16942,11 +17249,11 @@ std::optional<RegisterId> Lowerer::lower_hir_packed_update_value(
     }
     const auto shift = operation == "<<" || operation == ">>"
         || operation == "<<<" || operation == ">>>";
+    // The operands are signed only when both are (IEEE 1800-2017 11.8.1).
+    const bool signed_operands = target.signed_value
+        && (!rhs_expression || hir_expression_signed(*rhs_expression));
     if (!shift && register_width(*rhs) != target.width) {
-        rhs = resize_register(
-            *rhs,
-            target.width,
-            rhs_expression && hir_expression_signed(*rhs_expression));
+        rhs = resize_register(*rhs, target.width, signed_operands);
     }
     if (shift) {
         const auto destination = allocate_register(
@@ -16967,8 +17274,6 @@ std::optional<RegisterId> Lowerer::lower_hir_packed_update_value(
         return destination;
     }
 
-    const bool signed_operands = target.signed_value
-        || (rhs_expression && hir_expression_signed(*rhs_expression));
     if (target.domain == frontend::ValueDomain::Integer) {
         auto integer = std::optional<IntegerBinaryOperator> { };
         if (operation == "+") {

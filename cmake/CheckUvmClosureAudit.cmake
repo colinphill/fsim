@@ -134,7 +134,7 @@ foreach(FSIM_GATE IN ITEMS
     "${FSIM_GATE_OUTPUT}${FSIM_GATE_ERROR}\n")
 endforeach()
 foreach(FSIM_TOKEN IN ITEMS
-    "diagnostic catalog covers 2957 production codes"
+    "diagnostic catalog covers 2958 production codes"
     "Translation-unit structure checked: 0 forbidden .tpp files"
     "authored license inventory:"
     "source-package manifest:")

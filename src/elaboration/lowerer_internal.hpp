@@ -2,6 +2,7 @@
 #pragma once
 
 #include "elaborator_internal.hpp"
+#include "hierarchy_sv_constant_evaluator.hpp"
 #include "scoped_bindings.hpp"
 #include "systemverilog_template_bindings.hpp"
 #include "fsim/elaboration/coverage_hir_points.hpp"
@@ -528,6 +529,15 @@ private:
         const HirVirtualInterfaceMember& member);
     [[nodiscard]] std::optional<RegisterId> lower_hir_virtual_interface_handle(
         semantic::DeclarationId receiver);
+    [[nodiscard]] std::optional<semantic::ExpressionId>
+    hir_parameter_type_expression(semantic::DeclarationId declaration) const;
+    [[nodiscard]] std::optional<HirSystemVerilogConstant>
+    hir_parameter_actual_constant(semantic::DeclarationId declaration) const;
+    // An unpacked array concatenation built as a queue or dynamic array
+    // value (IEEE 1800-2017 10.10).
+    [[nodiscard]] std::optional<ContainerRegisterId>
+    lower_hir_container_concatenation(const ContainerType& type,
+        std::span<const semantic::ExpressionId> operands);
     // Writes `value` to the member in the instance the handle names.
     [[nodiscard]] bool lower_hir_virtual_interface_write(
         const HirVirtualInterfaceMember& member, RegisterId value,
@@ -801,6 +811,12 @@ private:
     // (IEEE 1800-2017 6.12.2: to nearest, ties away from zero).
     [[nodiscard]] RegisterId convert_hir_real_to_integral(RegisterId value,
         frontend::SystemVerilogScalarKind source);
+    // A value lowered for an element or member of `target` kind (None for
+    // integral), converted between real and integral (IEEE 1800-2017
+    // 10.9: each pattern item is assigned as if by an assignment).
+    [[nodiscard]] std::optional<RegisterId> lower_hir_scalar_converted_value(
+        semantic::ExpressionId value, std::size_t width,
+        frontend::SystemVerilogScalarKind target);
     [[nodiscard]] std::optional<HirVhdlArraySelection>
     hir_vhdl_array_selection(
         semantic::ExpressionId expression) const;
@@ -1718,6 +1734,10 @@ private:
         semantic::ScopeId process_scope) const;
     [[nodiscard]] bool lower_hir_class_task_call(
         semantic::StatementId statement);
+    [[nodiscard]] bool lower_hir_class_task_invocation(
+        semantic::StatementId statement,
+        const HirClassTaskProfile& profile,
+        std::optional<RegisterId> receiver);
     struct HirInterfaceFunctionProfile {
         semantic::DeclarationId declaration;
         std::string receiver;
@@ -2093,6 +2113,9 @@ private:
         std::size_t driver_count, std::size_t element_width);
     std::optional<std::pair<RegisterId, RegisterId>> hir_vhdl_resolver_registers_;
     std::vector<HirCallableFrame> hir_callable_frames_;
+    // A callable of another module instance (`u.f()`) reads that
+    // instance's parameter values.
+    void bind_hir_instance_parameters(HirCallableFrame& frame) const;
     std::unordered_map<std::string, std::size_t> hir_callable_indices_;
     std::unordered_map<std::string, std::size_t>
         hir_interface_callable_indices_;

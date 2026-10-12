@@ -1304,6 +1304,54 @@ void Resolver::resolve_statement(
       statement.task_argument_names.clear();
     }
   }
+  // A task of an element of a module or interface instance array,
+  // `u[0].t(x)`, is a hierarchical task call (IEEE 1800-2017 23.8).
+  if (statement.kind == StatementKind::ContainerMethod
+      && statement.value.kind == ExpressionKind::Call
+      && statement.value.text.starts_with('.')
+      && !statement.value.operands.empty()
+      && statement.value.operands.front().kind == ExpressionKind::Index) {
+    std::string suffix;
+    const Expression* root = &statement.value.operands.front();
+    bool constant_path = true;
+    while (root->kind == ExpressionKind::Index && root->operands.size() == 2U) {
+      if (root->operands[1].kind != ExpressionKind::IntegerLiteral
+          || root->operands[1].text.find_first_not_of("0123456789")
+              != std::string::npos) {
+        constant_path = false;
+        break;
+      }
+      suffix = "[" + root->operands[1].text + "]" + suffix;
+      root = &root->operands.front();
+    }
+    const auto instance = constant_path
+            && root->kind == ExpressionKind::Identifier
+        ? scope.instances.find(root->text)
+        : scope.instances.end();
+    const auto name = statement.value.text.substr(1U);
+    const auto target_unit = instance != scope.instances.end()
+        ? std::ranges::find(design_.units, instance->second, &DesignUnit::name)
+        : design_.units.end();
+    if (target_unit != design_.units.end()
+        && std::ranges::any_of(target_unit->tasks,
+            [&](const auto& task) { return task.name == name; })) {
+      statement.kind = StatementKind::TaskCall;
+      statement.task_name = root->text + suffix + "." + name;
+      statement.task_arguments.clear();
+      statement.task_argument_names.clear();
+      for (std::size_t index = 1U; index < statement.value.operands.size();
+           ++index) {
+        statement.task_arguments.push_back(
+            std::move(statement.value.operands[index]));
+        statement.task_argument_names.push_back(
+            index < statement.value.call_argument_names.size()
+                ? statement.value.call_argument_names[index]
+                : std::string{});
+      }
+      statement.value = Expression{};
+      return;
+    }
+  }
   // A task called through a selected receiver, `items[i].run(x)`, parses as
   // a method call statement (IEEE 1800-2017 8.4, 13.3).
   if (statement.kind == StatementKind::ContainerMethod

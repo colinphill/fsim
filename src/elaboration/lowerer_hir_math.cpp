@@ -402,4 +402,30 @@ RegisterId Lowerer::convert_hir_real_to_integral(const RegisterId value,
     return integral;
 }
 
+std::optional<RegisterId> Lowerer::lower_hir_scalar_converted_value(
+    const semantic::ExpressionId value, const std::size_t width,
+    const frontend::SystemVerilogScalarKind target)
+{
+    const auto source = hir_systemverilog_scalar_kind(value);
+    const bool real_target = frontend::is_real_scalar_kind(target);
+    if (real_target && source == frontend::SystemVerilogScalarKind::None) {
+        const auto lowered = lower_hir_expression(value,
+            hir_expression_width(value, hir_process_scope_).value_or(32U));
+        return lowered
+            ? std::optional { convert_hir_integral_to_real(
+                  *lowered, hir_expression_signed(value), target) }
+            : std::nullopt;
+    }
+    if (!real_target && frontend::is_real_scalar_kind(source)) {
+        const auto lowered = lower_hir_expression(value, 64U, source);
+        if (!lowered) {
+            return std::nullopt;
+        }
+        const auto integral = convert_hir_real_to_integral(*lowered, source);
+        return width == 64U ? integral
+                            : resize_register(integral, width, true);
+    }
+    return lower_hir_expression(value, width, target);
+}
+
 } // namespace fsim::elaboration

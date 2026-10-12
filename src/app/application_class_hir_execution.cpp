@@ -430,6 +430,20 @@ SystemVerilogClassHirExecution::evaluate_string(
         // An unqualified property of this object.
         return read_string_property_(handle, value->text);
     }
+    // `{a, "x"}`: a concatenation of strings (IEEE 1800-2017 11.4.12.2).
+    if (value != nullptr
+        && value->kind == semantic::sv::ExpressionKind::concatenation
+        && !value->operands.empty()) {
+        std::string text;
+        for (const auto operand : value->operands) {
+            const auto part = evaluate_string(operand, environment, handle);
+            if (!part) {
+                return std::nullopt;
+            }
+            text += *part;
+        }
+        return text;
+    }
     return std::nullopt;
 }
 
@@ -609,7 +623,10 @@ SystemVerilogClassHirExecution::evaluate_packed(
             // has them; the callee takes the form its formal's type needs.
             const auto* source = expression(operand);
             auto text = source != nullptr
-                    && source->kind == ExpressionKind::string_literal
+                    && (source->kind == ExpressionKind::string_literal
+                        || (source->kind == ExpressionKind::name
+                            && strings_ != nullptr
+                            && strings_->contains(source->text)))
                 ? evaluate_string(operand,
                       strings_ != nullptr ? *strings_ : StringEnvironment { },
                       handle)
@@ -1188,8 +1205,12 @@ SystemVerilogClassHirExecution::execute(
                     // form its formal's type needs.
                     const auto* source = expression(*association.actual);
                     auto text = source != nullptr
-                            && source->kind
-                                == semantic::sv::ExpressionKind::string_literal
+                            && (source->kind
+                                    == semantic::sv::ExpressionKind::string_literal
+                                || (source->kind
+                                        == semantic::sv::ExpressionKind::name
+                                    && string_environment.contains(
+                                        source->text)))
                         ? evaluate_string(
                               *association.actual, string_environment, handle)
                         : std::optional<std::string> { };

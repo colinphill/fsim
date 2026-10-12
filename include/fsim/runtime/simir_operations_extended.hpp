@@ -541,6 +541,8 @@ struct MonitorValue {
     };
     std::uint64_t time_unit_femtoseconds { };
     std::uint64_t time_precision_femtoseconds { };
+    // `%v`: the signal's strength text instead of its formatted value.
+    bool strength { };
 };
 
 /// Replace the global Verilog/SystemVerilog monitor registration and publish

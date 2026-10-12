@@ -18,6 +18,9 @@ struct Scope {
   std::string lexical_identity;
   const SystemVerilogClassDeclaration* class_owner{};
   std::map<std::string, Type, std::less<>> objects;
+  // Module and interface instances of the enclosing unit, by instance name,
+  // with the name of the instantiated unit.
+  std::map<std::string, std::string, std::less<>> instances{};
 };
 
 struct PropertyMatch {

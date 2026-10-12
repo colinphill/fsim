@@ -978,7 +978,19 @@ bool Lowerer::initialize_hir_declarations(
                         destination, *size, std::nullopt, false });
                     continue;
                 }
-                const auto initial = pattern
+                const auto initializer_expression
+                    = specialized_hir_unit_->find_expression(
+                        *input.initializer);
+                const bool concatenation = initializer_expression
+                    && initializer_expression->systemverilog != nullptr
+                    && initializer_expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::concatenation
+                    && !type->fixed && !type->associative
+                    && !type->aggregate_value;
+                const auto initial = concatenation
+                    ? lower_hir_container_concatenation(*type,
+                          initializer_expression->systemverilog->operands)
+                    : pattern
                     ? lower_hir_container_assignment_pattern(
                           *input.initializer,
                           HirContainerObjectBinding {
@@ -2984,6 +2996,17 @@ std::optional<Process> Lowerer::lower_hir_process_body(
         // signedness, as a continuous assignment does (IEEE 1800-2017
         // 23.3.3.7 and 10.7).
         bool extend_signed = signal.is_signed;
+        // A real actual of an integral port, or an integral actual of a
+        // real port, converts as an assignment does (23.3.3.7, 6.12.2).
+        if (!value && actual_expression
+            && actual_expression->systemverilog != nullptr
+            && frontend::is_real_scalar_kind(signal.systemverilog_scalar)
+                != frontend::is_real_scalar_kind(
+                    hir_systemverilog_scalar_kind(actual))) {
+            value = lower_hir_scalar_converted_value(
+                actual, signal.width, signal.systemverilog_scalar);
+            extend_signed = true;
+        }
         if (!value && actual_expression
             && actual_expression->systemverilog != nullptr) {
             const auto natural = hir_expression_width(
@@ -3035,10 +3058,27 @@ std::optional<Process> Lowerer::lower_hir_process_body(
     } else if (description.output_actual) {
         const auto source = *description.output_actual_source;
         const auto& signal = design_.signal_info_[source];
-        const auto value = allocate_register(
+        auto value = allocate_register(
             signal.width, signal.source_domain);
         process_.operations.emplace_back(ReadSignal { value, source });
         record_implicit_signal_dependency(source);
+        // A real output port converts to an integral actual, and an
+        // integral one to a real actual (23.3.3.7, 6.12.2).
+        if (const auto actual_kind
+            = hir_systemverilog_scalar_kind(*description.output_actual);
+            !description.actual_slice
+            && specialized_hir_unit_->find_expression(
+                   *description.output_actual)
+                   ->systemverilog
+                != nullptr
+            && frontend::is_real_scalar_kind(signal.systemverilog_scalar)
+                != frontend::is_real_scalar_kind(actual_kind)) {
+            value = frontend::is_real_scalar_kind(actual_kind)
+                ? convert_hir_integral_to_real(
+                      value, signal.is_signed, actual_kind)
+                : convert_hir_real_to_integral(
+                      value, signal.systemverilog_scalar);
+        }
         if (description.actual_slice) {
             // One instance of an instance array drives its slice of the
             // actual net.

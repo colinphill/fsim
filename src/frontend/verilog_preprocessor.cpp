@@ -586,9 +586,28 @@ namespace {
                     auto expanded = expand_invocation(
                         mapped_tokens, index, 0,
                         mapped_tokens[index].expansion_stack);
+                    std::size_t emitted { };
+                    for (std::size_t at = 0; at + 2 < expanded.size(); ++at) {
+                        if (expanded[at].kind != TokenKind::Backtick
+                            || expanded[at + 1].kind != TokenKind::Identifier
+                            || expanded[at + 1].text != "include") {
+                            continue;
+                        }
+                        output_.insert(output_.end(),
+                            std::make_move_iterator(expanded.begin()
+                                + static_cast<std::ptrdiff_t>(emitted)),
+                            std::make_move_iterator(expanded.begin()
+                                + static_cast<std::ptrdiff_t>(at)));
+                        const auto include_directive = expanded[at + 1];
+                        include_file(expanded, at + 2, at + 3, include_directive,
+                            include_depth);
+                        emitted = at + 3;
+                        at += 2;
+                    }
                     output_.insert(
                         output_.end(),
-                        std::make_move_iterator(expanded.begin()),
+                        std::make_move_iterator(expanded.begin()
+                            + static_cast<std::ptrdiff_t>(emitted)),
                         std::make_move_iterator(expanded.end()));
                     continue;
                 }
@@ -1964,6 +1983,11 @@ namespace {
                     inherited_stack
                 };
                 return { std::move(token) };
+            }
+            // An `include produced by a macro expansion is processed where
+            // the expansion is emitted (IEEE 1800-2017 22.4).
+            if (name_token.text == "include") {
+                return { tick, name_token };
             }
             const auto found = macros_.find(name_token.text);
             if (found == macros_.end()) {

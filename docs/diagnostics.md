@@ -1363,6 +1363,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-PARSE-389` | error | A `randsequence` production, rule, `case` item, or parenthesized/braced operand is malformed (IEEE 1800-2017 18.17). |
 | `FSIM-SV-PARSE-390` | error | A `randcase` item lacks its `:` or the statement has no `endcase` (IEEE 1800-2017 18.16). |
 | `FSIM-SV-PARSE-391` | error | A typed constructor call `C::new(...)` has no closing `)` (IEEE 1800-2017 8.8). |
+| `FSIM-SV-PARSE-392` | error | A `~` is followed by a separate reduction OR, AND or XOR operator; a unary operator takes a primary, so write the combined NOR, NAND or XNOR reduction operator (IEEE 1800-2017 A.8.3). |
 | `FSIM-SV-PARSE-044` | error | Expected an immediate-assertion pass or failure action statement. |
 | `FSIM-SV-PARSE-045` | error | Expected `;` after a procedural variable declaration. |
 | `FSIM-SV-PARSE-046` | error | Expected `(` after `case`. |

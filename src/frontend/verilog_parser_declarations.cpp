@@ -732,6 +732,18 @@ Type VerilogParser::parse_named_type() {
       type.named_type_span = cover(type.named_type_span, member.span);
     }
   }
+  // A typedef of string is a string (IEEE 1800-2017 6.18); the alias name
+  // stays the type's identity.
+  if (!type.systemverilog_container
+      && type.systemverilog_class_parameter_actuals.empty()) {
+    const auto known = packed_typedef_types_.find(type.named_type);
+    if (known != packed_typedef_types_.end()
+        && known->second.domain == ValueDomain::String
+        && !known->second.systemverilog_container) {
+      type.domain = ValueDomain::String;
+      type.is_signed = false;
+    }
+  }
   return type;
 }
 
@@ -1218,7 +1230,6 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
             && (unit.kind == UnitKind::VerilogModule
                 || unit.kind == UnitKind::SystemVerilogProgram
                 || unit.kind == UnitKind::SystemVerilogInterface)
-            && named != "mailbox" && named != "semaphore"
             && named != "process"
             // A scoped type may name a package covergroup.
             && named.find("::") == std::string::npos

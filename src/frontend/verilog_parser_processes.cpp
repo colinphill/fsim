@@ -227,7 +227,19 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         bool saved;
         ~ContextRestore() { flag = saved; }
     } const system_task_context { implicit_net_context_, implicit_net_context_ };
-    if (at(TokenKind::Identifier) && current().text.starts_with('$')) {
+    // Value-formatting tasks ($display, $fwrite, ...) take values, which
+    // are checked like any other operand.
+    static constexpr std::array scope_tasks {
+        std::string_view { "$printtimescale" },
+        std::string_view { "$dumpvars" }, std::string_view { "$dumpports" },
+        std::string_view { "$scope" }, std::string_view { "$list" },
+        std::string_view { "$showvars" }, std::string_view { "$showscopes" },
+        std::string_view { "$countdrivers" }, std::string_view { "$deposit" },
+        std::string_view { "$sdf_annotate" },
+    };
+    if (at(TokenKind::Identifier) && current().text.starts_with('$')
+        && std::ranges::find(scope_tasks, std::string_view { current().text })
+            != scope_tasks.end()) {
         implicit_net_context_ = true;
     }
     const auto require_sv2005 = [&](const std::string_view feature,

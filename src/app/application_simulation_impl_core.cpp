@@ -314,6 +314,9 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
         return runtime::PackedLogic4::from_aval_bval(32, 0, 0);
     }
     runtime::SystemVerilogClassRandomizeRequest request;
+    // Bound the enumerated domains, as scope randomize does, so a wide
+    // random property fails cleanly instead of exhausting memory.
+    request.limits.maximum_domain_values = std::size_t { 1U } << 22U;
     application_detail::configure_systemverilog_randomize_selection(
         request, selected_names);
     request.call_identity = object.specialization_identity

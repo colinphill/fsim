@@ -356,21 +356,35 @@ HierarchyBuilder::collect_compiled_systemverilog_instance_materializations(
         return result;
     }
     for (const auto& bound : bound_instances.instances) {
-        result.instances.push_back({
-            bound.instance,
-            &specialization,
-            &root_materialization.signals,
-            &root_materialization.read_only_signals,
-            &root_materialization.string_objects,
-            &root_materialization.read_only_strings,
-            &root_materialization.container_objects,
-            &root_materialization.read_only_containers,
-            path,
-            false,
-            true,
-            bound.systemverilog_2023_bound,
-            std::nullopt,
-        });
+        // A bound instance array has one occurrence per element (23.11).
+        const auto array_indices = bound.instance.systemverilog != nullptr
+            ? compiled_instance_array_indices(
+                  *bound.instance.systemverilog, specialization)
+            : std::vector<std::int64_t> { };
+        std::vector<std::optional<std::int64_t>> occurrences;
+        if (array_indices.empty()) {
+            occurrences.emplace_back();
+        }
+        for (const auto index : array_indices) {
+            occurrences.emplace_back(index);
+        }
+        for (const auto& occurrence : occurrences) {
+            result.instances.push_back({
+                bound.instance,
+                &specialization,
+                &root_materialization.signals,
+                &root_materialization.read_only_signals,
+                &root_materialization.string_objects,
+                &root_materialization.read_only_strings,
+                &root_materialization.container_objects,
+                &root_materialization.read_only_containers,
+                path,
+                false,
+                true,
+                bound.systemverilog_2023_bound,
+                occurrence,
+            });
+        }
     }
     return result;
 }
