@@ -4209,6 +4209,51 @@ std::optional<RegisterId> Lowerer::lower_hir_membership_expression(
     return result;
 }
 
+bool Lowerer::hir_index_mentions_last(
+    const semantic::ExpressionId expression) const
+{
+    const auto record = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression)
+        : std::nullopt;
+    if (!record || record->systemverilog == nullptr) {
+        return false;
+    }
+    if (record->systemverilog->kind == semantic::sv::ExpressionKind::name
+        && record->systemverilog->text == "$") {
+        return true;
+    }
+    return std::ranges::any_of(record->systemverilog->operands,
+        [&](const semantic::ExpressionId operand) {
+            return hir_index_mentions_last(operand);
+        });
+}
+
+void Lowerer::bind_hir_queue_last_index(
+    const HirContainerElementBinding& element)
+{
+    if (element.type == nullptr || !element.type->queue
+        || element.indices.size() != 1U
+        || !hir_index_mentions_last(element.indices.front())) {
+        return;
+    }
+    const auto source = element.local
+        ? *element.local
+        : allocate_container_register(*element.type);
+    if (!element.local) {
+        process_.operations.emplace_back(
+            ReadContainerObject { source, element.object });
+    }
+    const auto size = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(ContainerSize { size, source });
+    const auto one = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(
+        LoadConstant { one, unsigned_value(1U, 32U) });
+    const auto last = allocate_register(32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::subtract_unsigned, last, size, one });
+    hir_queue_last_index_ = last;
+}
+
 std::optional<RegisterId> Lowerer::lower_hir_container_element_index(
     const HirContainerElementBinding& element)
 {
@@ -4235,6 +4280,11 @@ std::optional<RegisterId> Lowerer::lower_hir_container_element_index(
         }
         const auto width = std::max<std::size_t>(
             element.type->index_width, 1U);
+        // `$` in a queue index is the last index (7.10.1).
+        const HirQueueLastIndexRestore restore_last {
+            hir_queue_last_index_, hir_queue_last_index_
+        };
+        bind_hir_queue_last_index(element);
         auto index = lower_hir_expression(element.indices.front(), width);
         if (index && register_width(*index) != width) {
             index = resize_register(
@@ -4342,8 +4392,14 @@ Lowerer::lower_hir_sv_runtime_container_read_index(
         return std::nullopt;
     }
     const auto expression = element.indices.front();
-    const auto width = hir_expression_width(
-        expression, hir_process_scope_);
+    const HirQueueLastIndexRestore restore_last {
+        hir_queue_last_index_, hir_queue_last_index_
+    };
+    bind_hir_queue_last_index(element);
+    const auto width = hir_queue_last_index_
+            && hir_index_mentions_last(expression)
+        ? std::optional<std::size_t> { 32U }
+        : hir_expression_width(expression, hir_process_scope_);
     if (!width || *width == 0U
         || *width > std::numeric_limits<std::uint32_t>::max()) {
         return std::nullopt;
@@ -5473,6 +5529,21 @@ std::optional<RegisterId> Lowerer::lower_hir_expression(
         = lower_hir_vhdl_static_string_concatenation(
             expression_id, expected_width)) {
         return characters;
+    }
+    if (hir_queue_last_index_ && specialized_hir_unit_ != nullptr) {
+        const auto record = specialized_hir_unit_->find_expression(
+            expression_id);
+        if (record && record->systemverilog != nullptr
+            && record->systemverilog->kind
+                == semantic::sv::ExpressionKind::name
+            && record->systemverilog->text == "$") {
+            auto last = *hir_queue_last_index_;
+            if (expected_width != 0U
+                && register_width(last) != expected_width) {
+                last = resize_register(last, expected_width, true);
+            }
+            return last;
+        }
     }
     auto result = lower_hir_expression_untraced(
         expression_id, expected_width, scalar_context);

@@ -1557,6 +1557,18 @@ std::optional<Process> Lowerer::lower_hir_process(
                 if (binding) {
                     signal = binding->signal;
                 }
+                if (!signal && sensitivity.edge == semantic::sv::EdgeKind::any
+                    && (description.event_expression
+                        || input.sensitivities.size() != 1U)) {
+                    // A constant never changes; another expression is
+                    // watched through every signal it reads (9.4.2).
+                    for (const auto dependency : hir_signal_dependencies(
+                             *sensitivity.expression, input.scope)) {
+                        description.sensitivities.push_back({
+                            dependency, runtime::simir::EdgeKind::any });
+                    }
+                    continue;
+                }
                 if (!signal) {
                     if (description.event_expression
                         || input.sensitivities.size() != 1U) {
@@ -1612,6 +1624,16 @@ std::optional<Process> Lowerer::lower_hir_process(
             }
             if (!signal) {
                 signal = hir_named_signal(sensitivity.signal, input.scope);
+            }
+            // A constant (a parameter or enumeration literal) never
+            // changes, so it adds no event.
+            if (!signal && sensitivity.edge == semantic::sv::EdgeKind::any
+                && input.sensitivities.size() > 1U
+                && semantic::CompiledDesignResolver { *specialized_hir_unit_ }
+                       .resolve_systemverilog_constant(
+                           sensitivity.signal, input.scope)
+                       .unique()) {
+                continue;
             }
             if (!signal) {
                 return std::nullopt;
@@ -2304,6 +2326,46 @@ bool Lowerer::lower_hir_output_actual_write(
         : std::nullopt;
     if (expression && hir_container_element_binding(target)) {
         return lower_hir_packed_copy_out(target, source);
+    }
+    // An output connected to a concatenation of variables or nets writes
+    // each operand its bits, most significant first (23.3.3).
+    if (expression && expression->systemverilog != nullptr
+        && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::concatenation
+        && !expression->systemverilog->operands.empty()) {
+        const auto& operands = expression->systemverilog->operands;
+        std::vector<std::size_t> widths;
+        std::size_t total { };
+        for (const auto operand : operands) {
+            const auto width = hir_expression_width(
+                operand, hir_process_scope_);
+            if (!width || *width == 0U
+                || *width > std::numeric_limits<std::uint32_t>::max()
+                    - total) {
+                return false;
+            }
+            widths.push_back(*width);
+            total += *width;
+        }
+        if (register_width(source) != total) {
+            source = resize_register(source, total, false);
+        }
+        auto offset = total;
+        for (std::size_t index { }; index < operands.size(); ++index) {
+            offset -= widths[index];
+            const auto part = allocate_register(
+                widths[index], register_domain(source));
+            process_.operations.emplace_back(Extract {
+                part,
+                source,
+                static_cast<std::uint32_t>(offset),
+                static_cast<std::uint32_t>(widths[index]),
+            });
+            if (!lower_hir_output_actual_write(operands[index], part)) {
+                return false;
+            }
+        }
+        return true;
     }
     const auto declaration = expression
         ? hir_target_declaration(target)

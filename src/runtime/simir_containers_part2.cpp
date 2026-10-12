@@ -533,19 +533,20 @@ void Interpreter::Impl::execute_container(
     const bool string_element = target.type.element_kind == ContainerElementKind::String;
     if (operation.index) {
         if (target.type.queue) {
-            const auto at = known_index(
-                process.id, process.pc,
-                get_register(process, *operation.index), true,
-                "queue delete index");
+            const auto requested
+                = get_register(process, *operation.index).known_signed_value();
             const auto size = aggregate
                 ? target.nested_elements.size()
                 : string_element ? target.string_elements.size()
                                  : target.elements.size();
-            if (at >= size) {
-                container_error(
-                    process.id, process.pc,
-                    "queue delete index is out of range");
+            // An unknown, negative or out-of-range index leaves the queue
+            // unchanged (IEEE 1800-2017 7.10.2.3).
+            if (!requested || *requested < 0
+                || static_cast<std::uint64_t>(*requested) >= size) {
+                ++process.pc;
+                return;
             }
+            const auto at = static_cast<std::size_t>(*requested);
             if (aggregate) {
                 target.nested_elements.erase(
                     iterator_at(target.nested_elements, at));
@@ -864,16 +865,20 @@ void Interpreter::Impl::execute_container(
             "queue element write type mismatch");
     }
     if (operation.index) {
-        const auto at = known_index(
-            process.id, process.pc,
-            get_register(process, *operation.index), true,
-            "queue insert index");
-        if (at > target.elements.size()) {
-            container_error(
-                process.id, process.pc,
-                "queue insert index is out of range");
+        const auto requested
+            = get_register(process, *operation.index).known_signed_value();
+        // An unknown, negative or out-of-range index inserts nothing
+        // (IEEE 1800-2017 7.10.2.2).
+        if (!requested || *requested < 0
+            || static_cast<std::uint64_t>(*requested)
+                > target.elements.size()) {
+            ++process.pc;
+            return;
         }
-        target.elements.insert(iterator_at(target.elements, at), source);
+        target.elements.insert(
+            iterator_at(target.elements,
+                static_cast<std::size_t>(*requested)),
+            source);
     } else if (operation.front) {
         target.elements.insert(target.elements.begin(), source);
     } else {
@@ -901,10 +906,14 @@ void Interpreter::Impl::execute_container(
 {
     auto& target = get_container_register(process, operation.target);
     require_queue(process.id, process.pc, target);
+    // Popping an empty queue returns the element type's default value
+    // (IEEE 1800-2017 7.10.2.4, 7.10.2.5).
     if (target.elements.empty()) {
-        container_error(
-            process.id, process.pc,
-            "cannot pop an empty queue");
+        get_register(process, operation.destination) = PackedLogic4(
+            target.type.element_width,
+            target.type.two_state ? Logic4::zero : Logic4::x);
+        ++process.pc;
+        return;
     }
     auto value = operation.front
         ? target.elements.front()

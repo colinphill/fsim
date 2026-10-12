@@ -2056,6 +2056,67 @@ bool Lowerer::lower_hir_statement(
             std::vector<runtime::simir::EdgeKind> edges;
             signals.reserve(sensitivities.size());
             edges.reserve(sensitivities.size());
+            // A member of a virtual interface (`@(posedge vif.clk)`) waits
+            // on that member of whichever instance the handle names when
+            // the wait begins (IEEE 1800-2017 25.9).
+            if (sensitivities.size() == 1U
+                && !hir_named_signal(
+                    sensitivities.front().signal, hir_process_scope_)) {
+                const auto& sensitivity = sensitivities.front();
+                const auto member = hir_virtual_interface_member(
+                    sensitivity.signal, hir_process_scope_);
+                if (!member && hierarchical_reference_missed_) {
+                    // Interface instances are bound in the retry pass.
+                    return false;
+                }
+                const auto handle = member && !member->candidates.empty()
+                    ? lower_hir_virtual_interface_handle(member->receiver)
+                    : std::nullopt;
+                const bool scalar_edges = member
+                    && (sensitivity.edge == semantic::sv::EdgeKind::any
+                        || std::ranges::all_of(member->candidates,
+                            [&](const auto& candidate) {
+                                return design_.signal_info_[
+                                           candidate.second].width == 1U;
+                            }));
+                if (handle && scalar_edges) {
+                    std::vector<InstructionIndex> exits;
+                    for (const auto& [identity, signal] : member->candidates) {
+                        const auto constant = allocate_register(
+                            64U, frontend::ValueDomain::Bit2);
+                        process_.operations.emplace_back(LoadConstant {
+                            constant, unsigned_value(identity, 64U) });
+                        const auto selected = allocate_register(
+                            1U, frontend::ValueDomain::Bit2);
+                        process_.operations.emplace_back(Binary {
+                            BinaryOperator::case_equal, selected, *handle,
+                            constant });
+                        const auto branch = static_cast<InstructionIndex>(
+                            process_.operations.size());
+                        process_.operations.emplace_back(Branch {
+                            selected, branch + 1U, 0U,
+                            UnknownBranchPolicy::when_false });
+                        process_.operations.emplace_back(WaitOn {
+                            std::vector<SignalId> { signal },
+                            std::vector<runtime::simir::EdgeKind> {
+                                event_edge(sensitivity.edge) } });
+                        exits.push_back(static_cast<InstructionIndex>(
+                            process_.operations.size()));
+                        process_.operations.emplace_back(Jump { 0U });
+                        process_.operations[branch] = Branch {
+                            selected, branch + 1U,
+                            static_cast<InstructionIndex>(
+                                process_.operations.size()),
+                            UnknownBranchPolicy::when_false };
+                    }
+                    const auto end = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    for (const auto exit : exits) {
+                        process_.operations[exit] = Jump { end };
+                    }
+                    return true;
+                }
+            }
             for (const auto& sensitivity : sensitivities) {
                 const auto found = hir_named_signal(
                     sensitivity.signal, hir_process_scope_);
@@ -3725,6 +3786,29 @@ bool Lowerer::lower_hir_statement(
                             });
                     }
                 };
+                // Unpacked arrays assign only between the same number of
+                // unpacked dimensions of equal sizes (7.6).
+                const auto extent = [](const std::pair<std::int32_t,
+                                           std::int32_t>& bounds) {
+                    return static_cast<std::int64_t>(
+                               std::max(bounds.first, bounds.second))
+                        - std::min(bounds.first, bounds.second);
+                };
+                if (whole_copy && value_static_type
+                    && value_static_type->fixed && container->type->fixed
+                    && (value_static_type->dimensions.size()
+                            != container->type->dimensions.size()
+                        || !std::ranges::equal(
+                            value_static_type->dimensions,
+                            container->type->dimensions, { },
+                            extent, extent))) {
+                    report(
+                        "FSIM-ELAB-SVCONTAINER-010",
+                        "whole-container assignment requires an exactly "
+                        "compatible kind and profile",
+                        hir_source_span(container_source.source));
+                    return true;
+                }
                 if (static_slice || typed_container_value) {
                     const auto source_register
                         = lower_hir_static_container_actual(

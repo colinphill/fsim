@@ -2233,6 +2233,8 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
             operation.handle = *handle;
         }
         std::size_t target_index = 2U;
+        std::vector<std::pair<semantic::ExpressionId, RegisterId>>
+            selected_scan_targets;
         for (const auto& parsed_conversion : parsed.conversions) {
             InputScanConversion conversion;
             conversion.prefix = parsed_conversion.prefix;
@@ -2274,6 +2276,37 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
                     return fail("FSIM-ELAB-SVFILE-012",
                         "scan string target is read-only");
                 }
+            } else if (const auto target_expression
+                = specialized_hir_unit_->find_expression(target_id);
+                target_expression
+                && target_expression->systemverilog != nullptr
+                && target_expression->systemverilog->kind
+                    != semantic::sv::ExpressionKind::name) {
+                // A selected target (`v[i]`, `x[7:0]`, `s.m`) scans into a
+                // copy of its value that is written back afterwards, so an
+                // unconverted target keeps its value (21.3.4.3).
+                const auto width = hir_expression_width(
+                    target_id, hir_process_scope_);
+                if (!width || *width == 0U
+                    || *width > std::numeric_limits<std::uint32_t>::max()) {
+                    return fail("FSIM-ELAB-SVFILE-012",
+                        "scan target has no writable packed storage");
+                }
+                const auto copy = lower_hir_expression(target_id, *width);
+                if (!copy) {
+                    return fail("FSIM-ELAB-SVFILE-012",
+                        "scan target has no writable packed storage");
+                }
+                conversion.target.width = static_cast<std::uint32_t>(*width);
+                conversion.target.scalar_kind
+                    = expression_scalar_kind(target_id);
+                conversion.target.two_state
+                    = conversion.target.scalar_kind
+                        != frontend::SystemVerilogScalarKind::None
+                    || register_domain(*copy) == frontend::ValueDomain::Bit2;
+                conversion.target.kind = InputScanTargetKind::packed_register;
+                conversion.target.id = *copy;
+                selected_scan_targets.emplace_back(target_id, *copy);
             } else {
                 const auto binding = hir_runtime_binding(
                     *target_declaration, hir_process_scope_, true);
@@ -2313,6 +2346,12 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
             32U, frontend::ValueDomain::Bit2);
         operation.destination = destination;
         process_.operations.emplace_back(std::move(operation));
+        for (const auto& [target, copy] : selected_scan_targets) {
+            if (!lower_hir_output_actual_write(target, copy)) {
+                return fail("FSIM-ELAB-SVFILE-012",
+                    "scan target has no writable packed storage");
+            }
+        }
         return finish(destination);
     }
 

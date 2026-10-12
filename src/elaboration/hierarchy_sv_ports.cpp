@@ -887,10 +887,29 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 std::move(formal_indices));
             continue;
         }
-        const auto interface_path
+        auto interface_path
             = interface_port
             ? resolved_interface_path(actual_name)
             : std::nullopt;
+        // An actual may select a modport of an interface instance
+        // (`.port(bus.initiator)`, IEEE 1800-2017 25.5).
+        auto viewed_formal = formal_declaration;
+        if (interface_port && !interface_path) {
+            const std::string_view actual_view { actual_name };
+            const auto dot = actual_view.rfind('.');
+            if (dot != std::string_view::npos) {
+                const auto modport = std::string {
+                    actual_view.substr(dot + 1U) };
+                if (auto instance_path = resolved_interface_path(
+                        actual_view.substr(0U, dot));
+                    instance_path
+                    && (viewed_formal.modport.empty()
+                        || viewed_formal.modport == modport)) {
+                    interface_path = std::move(instance_path);
+                    viewed_formal.modport = modport;
+                }
+            }
+        }
         if (interface_port && !interface_path) {
             report(
                 "FSIM-ELAB-SVIFACE-002",
@@ -902,7 +921,7 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
         }
         if (interface_path
             && !forward_interface_port(
-                formal_declaration, *interface_path)) {
+                viewed_formal, *interface_path)) {
             child_ports_valid = false;
             continue;
         }

@@ -1006,17 +1006,24 @@ void VerilogParser::parse_generate_branch(
             body.concurrent_statements.end(),
             std::make_move_iterator(assignments.begin()),
             std::make_move_iterator(assignments.end()));
-    } else if (program_generate_context_
+    } else if ((program_generate_context_
+                   || language_ == Language::SystemVerilog2017)
         && (keyword("$fatal") || keyword("$error")
             || keyword("$warning") || keyword("$info"))) {
-        (void)require_standard(
-            "a program elaboration severity system task",
-            StandardRevision::SystemVerilog2023,
-            current(),
-            "FSIM-SV-PARSE-381");
+        // An elaboration severity system task (IEEE 1800-2017 20.11).
+        if (program_generate_context_) {
+            (void)require_standard(
+                "a program elaboration severity system task",
+                StandardRevision::SystemVerilog2023,
+                current(),
+                "FSIM-SV-PARSE-381");
+        }
         if (auto statement = parse_statement()) {
             body.concurrent_statements.push_back(std::move(*statement));
         }
+    } else if (language_ == Language::SystemVerilog2017
+        && match(TokenKind::Semicolon)) {
+        // An empty generate item (`if (0);`, A.4.1.1).
     } else if (is_gate_primitive()) {
         parse_gate_primitive(
             body.concurrent_statements, body.signals, { });
@@ -1192,13 +1199,6 @@ void VerilogParser::parse_generate_declaration(
     std::optional<Expression> initializer;
     if (match(TokenKind::Assign)) {
       initializer = parse_expression();
-      if (type.spelling != "wire") {
-        error(
-            name,
-            "FSIM-SV-UNSUPPORTED-011",
-            "generated variable declaration initializers are not "
-            "executable");
-      }
     }
     const auto duplicate = std::find_if(
         body.signals.begin(),
@@ -1272,6 +1272,23 @@ void VerilogParser::parse_generate_declaration(
       driver.value = std::move(*initializer);
       driver.span = span_from(name, previous());
       body.concurrent_statements.push_back(std::move(driver));
+    } else if (initializer && !container_declaration
+        && !class_handle_declaration) {
+      // A variable initializer sets the generated variable at time zero
+      // (IEEE 1800-2017 6.8), as for a module variable.
+      Statement assignment;
+      assignment.kind = StatementKind::Assignment;
+      assignment.assignment_kind = AssignmentKind::Blocking;
+      assignment.target = Expression{
+          ExpressionKind::Identifier, name.text, {}, name.span};
+      assignment.value = std::move(*initializer);
+      assignment.span = span_from(name, previous());
+      Process process;
+      process.kind = ProcessKind::Initial;
+      process.name = "$declaration_initializer_" + name.text;
+      process.statements.push_back(std::move(assignment));
+      process.span = process.statements.front().span;
+      body.processes.push_back(std::move(process));
     }
     if (!match(TokenKind::Comma)) {
       break;
@@ -1292,6 +1309,14 @@ void VerilogParser::parse_generated_parameter_group(
   std::vector<std::string>& local_names,
   const bool local,
   const Token& start) {
+  // Verilog-2005 admits only local parameters in a generate block (IEEE
+  // 1364-2005 12.4); SystemVerilog treats `parameter` there as local.
+  if (!local && language_ == Language::Verilog2005) {
+    error(
+        start,
+        "FSIM-VERILOG-SEM-015",
+        "a generate block parameter must be a localparam in Verilog-2005");
+  }
   const auto type = parse_parameter_type();
   for (;;) {
     const auto name = expect_identifier(

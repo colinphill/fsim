@@ -934,15 +934,13 @@ module initializers(
 endmodule
 )",
         Language::SystemVerilog2017);
-    require(!sv.ok(), "an unsupported SV port default must be rejected");
-    bool port_default_sv = false;
-    for (const auto& diagnostic : sv.diagnostics) {
-        port_default_sv = port_default_sv
-            || diagnostic.code == "FSIM-SV-UNSUPPORTED-010";
-    }
-    require(port_default_sv, "SV port default needs a targeted diagnostic");
+    require(sv.ok(), "an SV port default is accepted");
     const auto* sv_unit = sv.design.find(
         UnitKind::VerilogModule, "initializers");
+    require(
+        sv_unit != nullptr && sv_unit->ports.size() == 1
+            && sv_unit->ports.front().default_value,
+        "an SV port default is kept as the port's default value");
     require(
         sv_unit != nullptr && sv_unit->processes.size() == 1
             && sv_unit->processes.front().name

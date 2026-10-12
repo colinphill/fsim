@@ -1514,6 +1514,14 @@ Expression VerilogParser::parse_primary()
             expression.span = span_from(open, close);
             return parse_postfix(std::move(expression));
         }
+        // A min:typ:max expression selects its typical value
+        // (IEEE 1800-2017 11.11).
+        if (match(TokenKind::Colon)) {
+            expression = parse_expression();
+            expect(TokenKind::Colon, "':' in min:typ:max expression",
+                "FSIM-SV-PARSE-029");
+            (void)parse_expression();
+        }
         expect(TokenKind::RightParen, "')' after expression",
             "FSIM-SV-PARSE-029");
         expression.span = span_from(open, previous());
@@ -1649,8 +1657,15 @@ Expression VerilogParser::parse_primary()
                 }
             }
         }
-        return Expression { ExpressionKind::Concatenation, "concat",
+        Expression concatenation { ExpressionKind::Concatenation, "concat",
             std::move(elements), span_from(open, previous()) };
+        // A bit- or part-select of a concatenation (IEEE 1800-2017
+        // 11.4.12).
+        if (language_ == Language::SystemVerilog2017
+            && at(TokenKind::LeftBracket)) {
+            return parse_postfix(std::move(concatenation));
+        }
+        return concatenation;
     }
     const auto invalid = advance();
     error(invalid, "FSIM-SV-PARSE-031", "expected expression");

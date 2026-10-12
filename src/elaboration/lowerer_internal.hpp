@@ -2174,6 +2174,20 @@ private:
     };
     std::vector<NamedBlockControl> named_block_controls_;
     const std::unordered_set<std::string>* disable_target_labels_ { };
+    // The register holding a queue's last index while one of its element
+    // indices is lowered; `$` reads it (IEEE 1800-2017 7.10.1).
+    std::optional<runtime::simir::RegisterId> hir_queue_last_index_;
+    [[nodiscard]] bool hir_index_mentions_last(
+        semantic::ExpressionId expression) const;
+    // Set hir_queue_last_index_ for an element index of a queue that uses
+    // `$`; the caller restores the previous value.
+    void bind_hir_queue_last_index(
+        const HirContainerElementBinding& element);
+    struct HirQueueLastIndexRestore {
+        std::optional<runtime::simir::RegisterId>& slot;
+        std::optional<runtime::simir::RegisterId> saved;
+        ~HirQueueLastIndexRestore() { slot = saved; }
+    };
     const std::unordered_set<std::string>* disable_declared_labels_ { };
     // The hierarchical name of the current lexical scope: the instance path
     // followed by the enclosing named blocks.

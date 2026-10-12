@@ -1984,17 +1984,28 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             const bool string_element = target.type.element_kind
                 == runtime::simir::ContainerElementKind::String;
             if (erase->index) {
-                if (target.type.queue) {
-                    const auto at = container_index(
-                        *erase->index, input0_aval, input0_bval, true,
-                        "queue delete index");
-                    const auto element_count = runtime::simir::container_value_size(target);
-                    if (at >= element_count) {
-                        throw runtime::simir::InterpreterError {
-                            process, instruction,
-                            "queue delete index is out of range"
-                        };
-                    }
+                const auto index_width = target.type.queue
+                    ? state.executor->layout_.register_widths.at(*erase->index)
+                    : std::uint32_t { };
+                const auto requested = !target.type.queue
+                    ? std::optional<std::int64_t> { }
+                    : (index_width <= 64U && !register_is_logic9(*erase->index)
+                              ? PackedLogic4::from_aval_bval(
+                                    index_width, input0_aval, input0_bval)
+                              : state.executor->read_register(
+                                    *erase->index, index_width))
+                          .known_signed_value();
+                const auto element_count
+                    = runtime::simir::container_value_size(target);
+                // An unknown, negative or out-of-range index leaves the
+                // queue unchanged (IEEE 1800-2017 7.10.2.3).
+                if (target.type.queue
+                    && (!requested || *requested < 0
+                        || static_cast<std::uint64_t>(*requested)
+                            >= element_count)) {
+                    // Nothing to delete.
+                } else if (target.type.queue) {
+                    const auto at = static_cast<std::size_t>(*requested);
                     if (aggregate) {
                         target.nested_elements.erase(
                             target.nested_elements.begin()
@@ -2275,17 +2286,25 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 };
             }
             if (push->index) {
-                const auto at = container_index(
-                    *push->index, input1_aval, input1_bval, true,
-                    "queue insert index");
-                if (at > target.elements.size()) {
-                    throw runtime::simir::InterpreterError {
-                        process, instruction,
-                        "queue insert index is out of range"
-                    };
+                const auto index_width
+                    = state.executor->layout_.register_widths.at(*push->index);
+                const auto requested = (index_width <= 64U
+                            && !register_is_logic9(*push->index)
+                        ? PackedLogic4::from_aval_bval(
+                              index_width, input1_aval, input1_bval)
+                        : state.executor->read_register(
+                              *push->index, index_width))
+                        .known_signed_value();
+                // An unknown, negative or out-of-range index inserts
+                // nothing (IEEE 1800-2017 7.10.2.2).
+                if (!requested || *requested < 0
+                    || static_cast<std::uint64_t>(*requested)
+                        > target.elements.size()) {
+                    return 0;
                 }
                 target.elements.insert(
-                    target.elements.begin() + static_cast<std::ptrdiff_t>(at),
+                    target.elements.begin()
+                        + static_cast<std::ptrdiff_t>(*requested),
                     source);
             } else if (push->front) {
                 target.elements.insert(target.elements.begin(), source);
@@ -2309,17 +2328,22 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         } else if (const auto* pop = fsim::runtime::simir::operation_get_if<runtime::simir::PopContainer>(
                        &operation)) {
             auto& target = mutable_container(pop->target);
-            if (!target.type.queue || target.elements.empty()) {
+            if (!target.type.queue) {
                 throw runtime::simir::InterpreterError {
                     process, instruction,
-                    target.type.queue
-                        ? "cannot pop an empty queue"
-                        : (target.type.associative
-                                  ? "queue method used on an associative array"
-                                  : "queue method used on a dynamic array")
+                    target.type.associative
+                        ? "queue method used on an associative array"
+                        : "queue method used on a dynamic array"
                 };
             }
-            const auto source = pop->front
+            // Popping an empty queue returns the element type's default
+            // value (IEEE 1800-2017 7.10.2.4, 7.10.2.5).
+            const bool empty = target.elements.empty();
+            const auto source = empty
+                ? PackedLogic4(target.type.element_width,
+                      target.type.two_state ? runtime::Logic4::zero
+                                            : runtime::Logic4::x)
+                : pop->front
                 ? target.elements.front()
                 : target.elements.back();
             if (source.width() > 64U) {
@@ -2330,7 +2354,9 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 *result_aval = word.aval;
                 *result_bval = word.bval;
             }
-            if (pop->front) {
+            if (empty) {
+                // Nothing to remove.
+            } else if (pop->front) {
                 target.elements.erase(target.elements.begin());
             } else {
                 target.elements.pop_back();

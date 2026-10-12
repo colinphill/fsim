@@ -62,12 +62,14 @@ HierarchyBuilder::connect_compiled_systemverilog_modport_members(
     const auto connect_member = [&](const std::string_view member,
                                     const semantic::sv::Direction direction,
                                     const semantic::SourceSpanId source,
-                                    const bool clocking_event = false)
+                                    const bool clocking_event = false,
+                                    const std::string_view alias = { })
         -> std::optional<CompiledSystemVerilogInterfaceDiagnostic> {
         const auto source_name = std::string { source_path } + "."
             + std::string { member };
         if (!connect_compiled_systemverilog_interface_member(
-                source_name, formal_name, child_path, member,
+                source_name, formal_name, child_path,
+                alias.empty() ? member : alias,
                 direction == semantic::sv::Direction::input,
                 clocking_event, child_aliases)) {
             return CompiledSystemVerilogInterfaceDiagnostic {
@@ -85,7 +87,9 @@ HierarchyBuilder::connect_compiled_systemverilog_modport_members(
             if (auto diagnostic = connect_member(
                     member.name.spelling,
                     member.direction,
-                    member.source)) {
+                    member.source,
+                    false,
+                    member.alias)) {
                 return diagnostic;
             }
             continue;

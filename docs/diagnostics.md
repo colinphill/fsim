@@ -1476,6 +1476,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VERILOG-SEM-012` | error | A Verilog-2005 memory declaration has more than one unpacked dimension. |
 | `FSIM-VERILOG-SEM-013` | error | A declaration appears in a Verilog-2005 procedural `for` initializer rather than in the surrounding named block. |
 | `FSIM-VERILOG-SEM-014` | error | A named-event declaration assignment was used in Verilog-2005 rather than SystemVerilog. |
+| `FSIM-VERILOG-SEM-015` | error | A generate block declares a `parameter` in Verilog-2005, which admits only `localparam` there (IEEE 1364-2005 12.4). |
 | `FSIM-SV-SEM-002` | error | A delay magnitude is not a decimal literal. |
 | `FSIM-SV-SEM-003` | error | Duplicate module-port declaration in the module header. |
 | `FSIM-SV-SEM-004` | error | Duplicate non-ANSI body port declaration. |
@@ -1870,8 +1871,8 @@ scheduler.
 | `FSIM-SV-UNSUPPORTED-005` | error | A named port connection was used where a module-header declaration is required. |
 | `FSIM-SV-UNSUPPORTED-008` | error | Unsupported identifier-starting procedural statement. |
 | `FSIM-SV-UNSUPPORTED-009` | error | Unsupported procedural statement. |
-| `FSIM-SV-UNSUPPORTED-010` | error | ANSI port default expressions are parsed but not executable. |
-| `FSIM-SV-UNSUPPORTED-011` | error | Declaration initializers are parsed but not executable. |
+| `FSIM-SV-UNSUPPORTED-010` | retired | Formerly: ANSI port default expressions were parsed but not executable. They now initialize a variable output port or give an unconnected input its value (IEEE 1800-2017 23.2.2). |
+| `FSIM-SV-UNSUPPORTED-011` | retired | Formerly: a generated variable declaration's initializer was parsed but not executable. It now sets the variable at time zero (IEEE 1800-2017 6.8). |
 | `FSIM-SV-UNSUPPORTED-014` | error | A procedural declaration uses the net-only `wire` type. |
 | `FSIM-SV-UNSUPPORTED-017` | error | A `unique`, `unique0`, or `priority` qualifier is not followed by a case statement. |
 | `FSIM-SV-UNSUPPORTED-019` | error | Type parameters are not implemented. |

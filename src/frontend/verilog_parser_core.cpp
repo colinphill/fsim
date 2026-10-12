@@ -170,6 +170,20 @@ ParseResult VerilogParser::run() {
             token.text = std::string { name };
         }
     }
+    // `this.super` names the base class object as `super` does (IEEE
+    // 1800-2017 8.15).
+    for (std::size_t index = 0U; index + 2U < tokens_.size(); ++index) {
+        if (tokens_[index].kind == TokenKind::Identifier
+            && tokens_[index].text == "this"
+            && tokens_[index + 1U].kind == TokenKind::Dot
+            && tokens_[index + 2U].kind == TokenKind::Identifier
+            && tokens_[index + 2U].text == "super") {
+            tokens_[index + 2U].span = cover(
+                tokens_[index].span, tokens_[index + 2U].span);
+            tokens_.erase(tokens_.begin() + static_cast<std::ptrdiff_t>(index),
+                tokens_.begin() + static_cast<std::ptrdiff_t>(index + 2U));
+        }
+    }
     while (!at_end()) {
         if (language_ == Language::SystemVerilog2017
             && match(TokenKind::Semicolon)) {
@@ -959,6 +973,21 @@ std::string VerilogParser::decoded_string_literal_text(const Token& token) {
     }
     const char escaped = spelling[index];
     switch (escaped) {
+    case '\r':
+    case '\n':
+      // A backslash before a newline continues the literal on the next
+      // line; both are dropped (IEEE 1800-2017 5.9).
+      if (language_ == Language::SystemVerilog2017) {
+        if (escaped == '\r' && index + 1 < spelling.size()
+            && spelling[index + 1] == '\n') {
+          ++index;
+        }
+        break;
+      }
+      error(token, "FSIM-SV-SEM-040",
+          "unsupported Verilog string escape '\\'");
+      result.push_back(escaped);
+      break;
     case 'n':
       result.push_back('\n');
       break;

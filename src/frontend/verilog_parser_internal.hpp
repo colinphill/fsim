@@ -720,6 +720,10 @@ class VerilogParser final : private detail::ParserBase {
       const Token& start, Statement& statement);
 
   Statement parse_procedural_for_statement(const Token& start);
+  Statement parse_procedural_for_statement_body(
+      const Token& start,
+      std::vector<VariableDeclaration>& extra_declarations,
+      std::vector<Statement>& extra_initializations);
 
   Statement parse_procedural_foreach_statement(const Token& start);
 

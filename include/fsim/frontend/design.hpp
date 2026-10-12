@@ -621,6 +621,9 @@ struct SystemVerilogModportMember {
     PortDirection direction { PortDirection::Unknown };
     SourceSpan span;
     SystemVerilogModportMemberKind kind { SystemVerilogModportMemberKind::Signal };
+    // The port-visible name of a modport expression `.alias(name)`
+    // (IEEE 1800-2017 25.5.4); `name` is then the interface signal.
+    std::string alias { };
 };
 
 struct SystemVerilogModport {

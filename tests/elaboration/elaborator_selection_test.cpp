@@ -864,13 +864,15 @@ endmodule
                 "left",
                 {},
                 {}});
-    const auto rejected_malformed_event_expression =
+    // An event expression listed with another event waits on the
+    // signals it reads (IEEE 1800-2017 9.4.2).
+    const auto mixed_event_expression =
         compile_and_elaborate(
             malformed_event_expression.design,
             "sv:work.malformed_event_expression");
-    assert(!rejected_malformed_event_expression.ok());
-    assert(has_diagnostic(
-        rejected_malformed_event_expression,
+    assert(mixed_event_expression.ok());
+    assert(!has_diagnostic(
+        mixed_event_expression,
         "FSIM-ELAB-SVEVENT-002"));
 
     auto malformed_repeated_event = fsim::frontend::parse_text(

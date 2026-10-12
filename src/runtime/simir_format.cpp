@@ -133,18 +133,23 @@ namespace fsim::runtime::simir {
             bool all_x = true;
             bool all_z = true;
             bool has_unknown = false;
+            bool has_high_impedance = false;
             for (std::size_t bit = 0; bit < bit_count; ++bit) {
                 const auto state = value.get(offset + bit);
                 all_x = all_x && state == Logic4::x;
                 all_z = all_z && state == Logic4::z;
-                has_unknown = has_unknown || state == Logic4::x || state == Logic4::z;
+                has_unknown = has_unknown || state == Logic4::x;
+                has_high_impedance = has_high_impedance || state == Logic4::z;
                 if (state == Logic4::one) {
                     known_value |= 1U << bit;
                 }
             }
+            // A digit with some x bits is X, else with some z bits Z
+            // (IEEE 1800-2017 21.2.1.3).
             const char character = all_x ? 'x'
                 : all_z                  ? 'z'
-                : has_unknown            ? 'x'
+                : has_unknown            ? 'X'
+                : has_high_impedance     ? 'Z'
                                          : digits[known_value];
             text[digit_count - digit - 1U] = character;
         }
@@ -161,18 +166,23 @@ namespace fsim::runtime::simir {
             bool all_x = true;
             bool all_z = true;
             bool has_unknown = false;
+            bool has_high_impedance = false;
             for (std::size_t bit = 0; bit < bit_count; ++bit) {
                 const auto state = value.get(offset + bit);
                 all_x = all_x && state == Logic4::x;
                 all_z = all_z && state == Logic4::z;
-                has_unknown = has_unknown || state == Logic4::x || state == Logic4::z;
+                has_unknown = has_unknown || state == Logic4::x;
+                has_high_impedance = has_high_impedance || state == Logic4::z;
                 if (state == Logic4::one) {
                     known_value |= 1U << bit;
                 }
             }
+            // A digit with some x bits is X, else with some z bits Z
+            // (IEEE 1800-2017 21.2.1.3).
             const char character = all_x ? 'x'
                 : all_z                  ? 'z'
-                : has_unknown            ? 'x'
+                : has_unknown            ? 'X'
+                : has_high_impedance     ? 'Z'
                                          : digits[known_value];
             text[digit_count - digit - 1U] = character;
         }

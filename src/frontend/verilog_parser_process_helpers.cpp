@@ -299,6 +299,39 @@ void VerilogParser::parse_procedural_loop_body(
 
 Statement VerilogParser::parse_procedural_for_statement(const Token& start)
 {
+    std::vector<VariableDeclaration> extra_declarations;
+    std::vector<Statement> extra_initializations;
+    auto loop = parse_procedural_for_statement_body(
+        start, extra_declarations, extra_initializations);
+    for (const auto& declaration : extra_declarations) {
+        const auto name = current_loop_names_.find(declaration.name);
+        if (name != current_loop_names_.end() && --name->second == 0) {
+            current_loop_names_.erase(name);
+        }
+    }
+    if (extra_declarations.empty() && extra_initializations.empty()) {
+        return loop;
+    }
+    // Further initializers (`for (int i = 0, j = 0; ...)`) run once
+    // before the loop in a block that scopes their declarations (12.7.1).
+    Statement block;
+    block.kind = StatementKind::Block;
+    block.span = loop.span;
+    for (auto& declaration : extra_declarations) {
+        block.declarations.push_back(std::move(declaration));
+    }
+    for (auto& initialization : extra_initializations) {
+        block.statements.push_back(std::move(initialization));
+    }
+    block.statements.push_back(std::move(loop));
+    return block;
+}
+
+Statement VerilogParser::parse_procedural_for_statement_body(
+    const Token& start,
+    std::vector<VariableDeclaration>& extra_declarations,
+    std::vector<Statement>& extra_initializations)
+{
     Statement statement;
     statement.kind = StatementKind::Loop;
     expect(
@@ -325,6 +358,7 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start)
     }
     const bool inline_variable = built_in_loop_type || named_loop_type
         || var_declaration;
+    std::optional<Type> inline_type;
     if (inline_variable && (built_in_loop_type || named_loop_type)) {
         (void)require_standard(
             "an inline procedural loop declaration",
@@ -336,7 +370,7 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start)
                 current(), "FSIM-VERILOG-SEM-013",
                 "a procedural for-loop declaration requires SystemVerilog");
         }
-        (void)parse_parameter_type();
+        inline_type = parse_parameter_type();
     }
     // Each of the three for-loop clauses may be empty (IEEE 1800-2017
     // 12.7.1). Without an initializer, the loop counts the variable its
@@ -398,6 +432,41 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start)
             "'=' after procedural loop variable",
             "FSIM-SV-PARSE-096");
         statement.loop_initial = parse_expression();
+        while (language_ == Language::SystemVerilog2017
+            && match(TokenKind::Comma)) {
+            const bool typed = keyword("byte") || keyword("shortint")
+                || keyword("int") || keyword("longint")
+                || keyword("integer") || keyword("time")
+                || keyword("bit") || keyword("logic")
+                || keyword("reg") || at(TokenKind::LeftBracket)
+                || (at(TokenKind::Identifier)
+                    && at(TokenKind::Identifier, 1));
+            // A name after a declaration declares another variable of the
+            // same type (12.7.1).
+            auto type = typed ? parse_parameter_type()
+                : inline_type ? *inline_type
+                              : Type { };
+            const auto name = expect_identifier("procedural loop variable");
+            expect(
+                TokenKind::Assign,
+                "'=' after procedural loop variable",
+                "FSIM-SV-PARSE-096");
+            auto value = parse_expression();
+            Statement initialization;
+            initialization.kind = StatementKind::Assignment;
+            initialization.assignment_kind = AssignmentKind::Blocking;
+            initialization.target = Expression {
+                ExpressionKind::Identifier, name.text, { }, name.span };
+            initialization.value = value;
+            initialization.span = span_from(name, previous());
+            extra_initializations.push_back(std::move(initialization));
+            if (typed || inline_type) {
+                ++current_loop_names_[name.text];
+                extra_declarations.push_back(VariableDeclaration {
+                    name.text, std::move(type), std::nullopt,
+                    span_from(name, previous()) });
+            }
+        }
     }
     ++current_loop_names_[statement.loop_variable];
     expect(
@@ -439,6 +508,111 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start)
         statement.loop_update_target = statement.target;
         statement.value = statement.target;
         statement.loop_runtime = true;
+        parse_procedural_loop_body(start, statement);
+        const auto loop_name = current_loop_names_.find(
+            statement.loop_variable);
+        if (loop_name != current_loop_names_.end()
+            && --loop_name->second == 0) {
+            current_loop_names_.erase(loop_name);
+        }
+        statement.span = span_from(start, previous());
+        return statement;
+    }
+    // A general update (`{a, b} = ...`, `i <<= 1`) of any variable: an
+    // assignment or increment run after each iteration (12.7.1).
+    const auto compound_operator = [](const TokenKind kind)
+        -> std::optional<std::string> {
+        switch (kind) {
+        case TokenKind::PlusAssign: return "+";
+        case TokenKind::MinusAssign: return "-";
+        case TokenKind::StarAssign: return "*";
+        case TokenKind::SlashAssign: return "/";
+        case TokenKind::PercentAssign: return "%";
+        case TokenKind::AmpersandAssign: return "&";
+        case TokenKind::PipeAssign: return "|";
+        case TokenKind::CaretAssign: return "^";
+        case TokenKind::ShiftLeftAssign: return "<<";
+        case TokenKind::ShiftRightAssign: return ">>";
+        case TokenKind::ArithmeticShiftLeftAssign: return "<<<";
+        case TokenKind::ArithmeticShiftRightAssign: return ">>>";
+        default: return std::nullopt;
+        }
+    };
+    const auto parse_general_update = [&] {
+        const auto update_start = current();
+        Statement update;
+        update.kind = StatementKind::Assignment;
+        update.assignment_kind = AssignmentKind::Blocking;
+        std::optional<Token> update_prefix;
+        if (match(TokenKind::PlusPlus)
+            || match(TokenKind::MinusMinus)) {
+            update_prefix = previous();
+        }
+        update.target = parse_lvalue();
+        std::optional<std::string> operation;
+        bool unit = update_prefix.has_value();
+        if (update_prefix) {
+            operation = update_prefix->kind == TokenKind::PlusPlus ? "+" : "-";
+            update.procedural_update_kind = ProceduralUpdateKind::Prefix;
+        } else if (match(TokenKind::PlusPlus)
+            || match(TokenKind::MinusMinus)) {
+            operation = previous().kind == TokenKind::PlusPlus ? "+" : "-";
+            unit = true;
+            update.procedural_update_kind = ProceduralUpdateKind::Postfix;
+        } else if (const auto compound = compound_operator(current().kind)) {
+            advance();
+            operation = *compound;
+            update.procedural_update_kind = ProceduralUpdateKind::Compound;
+        } else if (match(TokenKind::Assign)) {
+            update.value = parse_expression();
+        } else {
+            error(
+                current(),
+                "FSIM-SV-SEM-103",
+                "procedural loop update is not an assignment or increment");
+        }
+        if (operation) {
+            Expression operand = unit
+                ? Expression {
+                      ExpressionKind::IntegerLiteral,
+                      "1",
+                      { },
+                      previous().span
+                  }
+                : parse_expression();
+            update.value = Expression {
+                ExpressionKind::Binary,
+                *operation,
+                { update.target, std::move(operand) },
+                cover(update.target.span, previous().span)
+            };
+            update.procedural_update_operator = *operation;
+        }
+        update.span = cover(update_start.span, previous().span);
+        return update;
+    };
+    const auto simple_update_offset = at(TokenKind::PlusPlus)
+            || at(TokenKind::MinusMinus)
+        ? 1U
+        : 0U;
+    const bool simple_update = at(TokenKind::Identifier, simple_update_offset)
+        && (simple_update_offset == 1U
+            || at(TokenKind::PlusPlus, 1U) || at(TokenKind::MinusMinus, 1U)
+            || at(TokenKind::PlusAssign, 1U)
+            || at(TokenKind::MinusAssign, 1U)
+            || at(TokenKind::Assign, 1U));
+    if (!simple_update) {
+        statement.loop_update_target = statement.target;
+        statement.value = statement.target;
+        statement.loop_runtime = true;
+        statement.loop_updates.push_back(parse_general_update());
+        while (match(TokenKind::Comma)) {
+            statement.loop_updates.push_back(parse_general_update());
+        }
+        expect(
+            TokenKind::RightParen,
+            "')' after procedural loop header",
+            "FSIM-SV-PARSE-099");
         parse_procedural_loop_body(start, statement);
         const auto loop_name = current_loop_names_.find(
             statement.loop_variable);
@@ -521,57 +695,7 @@ Statement VerilogParser::parse_procedural_for_statement(const Token& start)
         statement.loop_runtime = true;
     }
     while (match(TokenKind::Comma)) {
-        const auto update_start = current();
-        Statement update;
-        update.kind = StatementKind::Assignment;
-        update.assignment_kind = AssignmentKind::Blocking;
-        std::optional<Token> update_prefix;
-        if (match(TokenKind::PlusPlus)
-            || match(TokenKind::MinusMinus)) {
-            update_prefix = previous();
-        }
-        update.target = parse_lvalue();
-        std::optional<std::string> operation;
-        bool unit = update_prefix.has_value();
-        if (update_prefix) {
-            operation = update_prefix->kind == TokenKind::PlusPlus ? "+" : "-";
-            update.procedural_update_kind = ProceduralUpdateKind::Prefix;
-        } else if (match(TokenKind::PlusPlus)
-            || match(TokenKind::MinusMinus)) {
-            operation = previous().kind == TokenKind::PlusPlus ? "+" : "-";
-            unit = true;
-            update.procedural_update_kind = ProceduralUpdateKind::Postfix;
-        } else if (match(TokenKind::PlusAssign)
-            || match(TokenKind::MinusAssign)) {
-            operation = previous().kind == TokenKind::PlusAssign ? "+" : "-";
-            update.procedural_update_kind = ProceduralUpdateKind::Compound;
-        } else if (match(TokenKind::Assign)) {
-            update.value = parse_expression();
-        } else {
-            error(
-                current(),
-                "FSIM-SV-SEM-103",
-                "procedural loop update is not an assignment or increment");
-        }
-        if (operation) {
-            Expression operand = unit
-                ? Expression {
-                      ExpressionKind::IntegerLiteral,
-                      "1",
-                      { },
-                      previous().span
-                  }
-                : parse_expression();
-            update.value = Expression {
-                ExpressionKind::Binary,
-                *operation,
-                { update.target, std::move(operand) },
-                cover(update.target.span, previous().span)
-            };
-            update.procedural_update_operator = *operation;
-        }
-        update.span = cover(update_start.span, previous().span);
-        statement.loop_updates.push_back(std::move(update));
+        statement.loop_updates.push_back(parse_general_update());
         statement.loop_runtime = true;
     }
 
@@ -648,9 +772,13 @@ Statement VerilogParser::parse_procedural_foreach_statement(
             }
             ++cursor;
         }
+        // Only the last bracket group lists loop variables; an earlier one
+        // selects the collection (`foreach (q[i][j])`, IEEE 1800-2017
+        // 12.7.3).
         if (depth != 0U
             || (!at(TokenKind::Dot, cursor)
-                && !at(TokenKind::Scope, cursor))) {
+                && !at(TokenKind::Scope, cursor)
+                && !at(TokenKind::LeftBracket, cursor))) {
             break;
         }
         const auto selection_start = advance();
@@ -833,6 +961,11 @@ Statement VerilogParser::parse_procedural_foreach_statement(
     emit("begin");
     for (std::size_t dimension = 0; dimension < dimension_names.size();
          ++dimension) {
+        // An empty index position does not iterate its dimension (IEEE
+        // 1800-2017 12.7.3); fixed bounds are queried by dimension number.
+        if (dimension_names[dimension].empty() && numbered_dimensions) {
+            continue;
+        }
         const auto name = dimension_names[dimension].empty()
             ? "__fsim_fe" + suffix + "_" + std::to_string(dimension)
             : dimension_names[dimension];

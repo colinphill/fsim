@@ -1408,6 +1408,14 @@ DesignUnit VerilogParser::parse_module(
         } else if (language_ == Language::SystemVerilog2017
             && match(TokenKind::Semicolon)) {
             // An empty module item (IEEE 1800-2017 A.1.10).
+        } else if (language_ == Language::SystemVerilog2017
+            && (keyword("$fatal") || keyword("$error")
+                || keyword("$warning") || keyword("$info"))) {
+            // An elaboration severity system task (IEEE 1800-2017 20.11).
+            module_has_non_time_item_ = true;
+            if (auto statement = parse_statement()) {
+                unit.concurrent_statements.push_back(std::move(*statement));
+            }
         } else {
             module_has_non_time_item_ = true;
             const auto unexpected = advance();

@@ -253,6 +253,68 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 45: queues, ports, modport expressions, loop forms
+
+Fixture: `sv_language_details_batch45.sv` (passes on xsim).
+
+- SystemVerilog and Verilog:
+  - `$` indexes the last element of a queue in reads and writes
+    (`q[$]`, `q[$-1]`); out-of-range, negative or unknown `delete` and
+    `insert` indexes do nothing, popping an empty queue returns the default
+    value, and a write one past the end appends (7.10);
+  - an output port connected to a concatenation (`.o({a, b})`, 23.3.3);
+  - `%h` and `%o` print `X` or `Z` for a digit with some unknown bits
+    (21.2.1.3);
+  - sensitivity lists may hold constants and expressions beside signals
+    (9.4.2);
+  - ANSI port defaults (`output bit clk = 0`) and generated variable
+    initializers execute (`FSIM-SV-UNSUPPORTED-010` and `-011` are
+    retired); Verilog-2005 rejects `parameter` in a generate block
+    (`FSIM-VERILOG-SEM-015`, IEEE 1364-2005 12.4);
+  - for loops with several initializers and any step assignment; `foreach`
+    with a skipped dimension or a selected collection (12.7);
+  - modport expressions `.alias(signal)` and actuals that select a modport
+    (`.port(bus.mp)`, 25.5);
+  - `@(posedge vif.member)` on a virtual interface (25.9);
+  - `$fscanf` into an array element or select (21.3.4.3);
+  - elaboration severity tasks as module items, labels on immediate
+    assertions, attributes before statements, `this.super`, min:typ:max
+    expressions, string line continuation, a select of a concatenation,
+    and clocking drives with a cycle delay (`cb.v <= ##2 e`);
+  - a whole-array continuous assignment between different unpacked shapes
+    is an error again (7.6).
+
+Out of scope: Verilator `t_module_reserved_keyword` (a lint of C++
+reserved words) and ivtest `sv_queue_parray`, `sv_queue_real`, `sv_queue_vec`,
+`sv_immediate_assert`, `sv_immediate_assume`, `always_comb_warn`,
+`always_latch_warn` and `pr1866215` expect Icarus's own warning and error
+text in their gold output.
+
+Investigated and left open:
+- Packed arrays of packed structures (`pair_t [3:0] p;`) need element
+  layouts across parsing, widths and selects.
+- Multidimensional interface instance arrays.
+- Real arithmetic yielding infinities or NaN (division by zero) fails in
+  several layers that require finite values.
+- Time-zero order: running initial blocks after continuous assignments in
+  the active region gained two cases and was not adopted.
+
+The full run b46 used wip37. Its one ivtest loss, `parameter_in_generate1`
+(a Verilog-2005 negative case that used to fail on the generated
+initializer), is fixed after it by `FSIM-VERILOG-SEM-015` and checked with
+a targeted rerun.
+
+Corpus (passed/total, unique case ids; against b45):
+
+| Suite | Batch 44 | Batch 45 |
+|---|---:|---:|
+| VESTs | 3337/3648 | 3337/3648 |
+| nvc regress | 633/1482 | 636/1482 |
+| VHDL Compliance-Tests | 33/72 | 33/72 |
+| ivtest | 2198/2826 | 2213/2826 (2212 in b46) |
+| Verilator test_regress | 1075/2415 | 1107/2415 |
+| sv-tests | 1385/1497 | 1390/1497 |
+
 ### Batch 44: run-time delays, whole arrays, disable, keyed parameters
 
 Fixture: `sv_language_details_batch44.sv` (passes on xsim).

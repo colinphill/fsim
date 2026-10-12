@@ -1215,3 +1215,51 @@ gives fsim's result in each case checked.
   bits from the parameter's actual or initializer. Widths such as
   `logic [cfg.a-1:0]` and typedefs in interfaces parameterized by such
   structures now resolve.
+
+## Queues, ports, modport expressions and loop forms (batch 45)
+
+- `$` in a queue index is the queue's last index: while an element index
+  that mentions `$` is lowered, `hir_queue_last_index_` holds `size - 1`
+  and a `$` name reads it.
+- Queue methods follow 7.10.2: `delete(i)` and `insert(i, v)` with an
+  unknown, negative or out-of-range index do nothing, `pop_front` and
+  `pop_back` of an empty queue return the default value, and a write one
+  past the last element appends (other out-of-range writes to a queue or
+  dynamic array are ignored). The interpreter and the compiled executor
+  agree.
+- An output port connected to a concatenation of variables or nets writes
+  each operand its bits through `Extract`.
+- `%h` and `%o` print a digit with some x bits as `X` and, failing that,
+  with some z bits as `Z` (21.2.1.3).
+- A sensitivity list entry that is a constant (a literal, parameter or
+  enumeration literal) adds no event; another non-signal expression mixed
+  with other entries waits on every signal it reads.
+- ANSI port defaults are kept as the port's default value
+  (`FSIM-SV-UNSUPPORTED-010` is retired), and a generated variable's
+  initializer becomes a time-zero initial assignment like a module
+  variable's (`FSIM-SV-UNSUPPORTED-011` is retired).
+- For loops: further initializers (`int i = 0, j = 10`) are declared in a
+  block around the loop, and the step may be any assignment, increment or
+  compound assignment of any variable (`{a, b} = ...`, `i <<= 1`).
+- `foreach` skips an empty index position of a fixed-size array, and a
+  bracket group before the last one selects the collection
+  (`foreach (q[i][j])`).
+- Modport expressions `.alias(signal)` name an interface signal by a
+  port-visible alias, and an actual may select a modport of an interface
+  instance (`.port(bus.mp)`); only a plain signal is supported as the
+  expression.
+- `@(edge vif.member)` waits on that member of the instance the handle
+  names when the wait begins; it is resolved in the retry pass, after the
+  interface instances exist.
+- `$fscanf`/`$sscanf` into a selected target (`v[i]`, `x[7:0]`) scan into
+  a copy of its value written back afterwards; before, the whole variable
+  was written.
+- Elaboration severity tasks (`$info`, `$warning`, `$error`, `$fatal`) are
+  module and generate items; an empty generate item `;` is accepted.
+- A label may precede an immediate assertion; attribute instances may
+  precede a statement; `this.super` is `super`; `(min:typ:max)` takes the
+  typical value; a backslash before a newline continues a string literal;
+  `{a, b}[i]` selects from a concatenation.
+- A clocking drive `cb.v <= ##n e` is rewritten as a forked
+  `repeat (n) @(cb)` followed by the drive; `##0` drives as a plain
+  clocking drive. The value is evaluated when the drive happens.

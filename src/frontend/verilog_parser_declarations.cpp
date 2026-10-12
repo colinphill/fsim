@@ -267,12 +267,9 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
             "an ANSI port default expression",
             StandardRevision::SystemVerilog2005,
             initializer);
-        (void)parse_expression();
-        error(
-            initializer,
-            "FSIM-SV-UNSUPPORTED-010",
-            "ANSI port default expressions are not executable in this "
-            "frontend slice");
+        // A variable output port's initializer, or an input port's default
+        // value when it is left unconnected (23.2.2.3, 23.2.2.4).
+        declaration.default_value = parse_expression();
       }
       if (at(TokenKind::LeftBracket)) {
         (void)require_standard(
@@ -382,7 +379,22 @@ void VerilogParser::parse_modport(
           explicit_function = keyword("function");
           advance();
         }
+        // A modport expression `.alias(signal)` names an interface signal
+        // by a port-visible alias (IEEE 1800-2017 25.5.4).
+        std::string alias;
+        std::optional<Token> alias_token;
+        if (language_ == Language::SystemVerilog2017
+            && match(TokenKind::Dot)) {
+          alias_token = expect_identifier("modport expression name");
+          alias = alias_token->text;
+          expect(TokenKind::LeftParen, "'(' after modport expression name",
+              "FSIM-SV-PARSE-213");
+        }
         const auto member = expect_identifier("modport member name");
+        if (alias_token) {
+          expect(TokenKind::RightParen,
+              "')' after modport expression", "FSIM-SV-PARSE-213");
+        }
         const auto function = std::ranges::find_if(
             unit.functions,
             [&](const FunctionDeclaration& candidate) {
@@ -400,16 +412,19 @@ void VerilogParser::parse_modport(
               "FSIM-SV-SEM-116",
               "a modport member requires an explicit direction");
         }
+        const auto visible_name = alias.empty() ? member.text : alias;
         const bool duplicate = std::ranges::any_of(
             declaration.members,
             [&](const SystemVerilogModportMember& existing) {
-              return existing.name == member.text;
+              return (existing.alias.empty() ? existing.name
+                                             : existing.alias)
+                  == visible_name;
             });
         if (duplicate) {
           error(
               member,
               "FSIM-SV-SEM-117",
-              "duplicate modport member '" + member.text + "'");
+              "duplicate modport member '" + visible_name + "'");
         } else {
           const bool signal_declared = std::ranges::any_of(
               unit.signals,
@@ -457,7 +472,7 @@ void VerilogParser::parse_modport(
                 : SystemVerilogModportMemberKind::TaskExport;
           }
           declaration.members.push_back({
-              member.text, direction, member.span, kind});
+              member.text, direction, member.span, kind, alias});
         }
       }
       if (!match(TokenKind::Comma)) {

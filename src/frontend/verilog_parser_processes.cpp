@@ -193,6 +193,10 @@ void VerilogParser::prepend_hoisted_statements(
 
 std::optional<Statement> VerilogParser::parse_statement_unhoisted()
 {
+    // Attribute instances may precede a statement (IEEE 1800-2017 5.12).
+    if (verilog_attribute_instance_start()) {
+        parse_verilog_attribute_instances();
+    }
     // A statement label names the block it precedes (IEEE 1800-2017
     // 9.3.5): `name: begin ... end: name`.
     if (at(TokenKind::Identifier) && at(TokenKind::Colon, 1)
@@ -202,6 +206,14 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         (void)require_standard("a statement label",
             StandardRevision::SystemVerilog2005, label, "FSIM-SV-PARSE-347");
         pending_block_label_ = label.text;
+    } else if (language_ == Language::SystemVerilog2017
+        && at(TokenKind::Identifier) && at(TokenKind::Colon, 1)
+        && !keyword_reserved(keyword_set_, current().text)
+        && (keyword("assert", 2) || keyword("assume", 2)
+            || keyword("cover", 2))) {
+        // A label on an immediate assertion names it (9.3.5, 16.3).
+        (void)advance();
+        (void)advance();
     }
     if (const auto required = verilog_system_service_standard(current().text)) {
         note_system_service_standard(current().text, *required, current());
@@ -1893,6 +1905,79 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             update_kind = ProceduralUpdateKind::Postfix;
         } else if (match(TokenKind::LessEqual)) {
             assignment_kind = AssignmentKind::NonBlocking;
+            // A clocking drive with a cycle delay `cb.v <= ##n e` drives
+            // at the n-th later clocking event without blocking the
+            // process (IEEE 1800-2017 14.16).
+            if (language_ == Language::SystemVerilog2017
+                && at(TokenKind::Hash) && at(TokenKind::Hash, 1)) {
+                const std::vector<Token> target_tokens(
+                    tokens_.begin() + static_cast<std::ptrdiff_t>(before),
+                    tokens_.begin() + static_cast<std::ptrdiff_t>(
+                        position() - 1U));
+                advance();
+                advance();
+                std::vector<Token> cycle_tokens;
+                if (at(TokenKind::LeftParen)) {
+                    std::size_t depth { };
+                    do {
+                        if (at(TokenKind::LeftParen)) {
+                            ++depth;
+                        } else if (at(TokenKind::RightParen)) {
+                            --depth;
+                        }
+                        cycle_tokens.push_back(advance());
+                    } while (depth != 0U && !at_end());
+                } else {
+                    cycle_tokens.push_back(advance());
+                }
+                std::vector<Token> value_tokens;
+                while (!at_end() && !at(TokenKind::Semicolon)) {
+                    value_tokens.push_back(advance());
+                }
+                expect(TokenKind::Semicolon, "';' after assignment",
+                    "FSIM-SV-PARSE-022");
+                // The clocking block is the drive target's prefix.
+                std::string clocking;
+                for (const auto& token : target_tokens) {
+                    if (token.kind == TokenKind::LeftBrace) {
+                        continue;
+                    }
+                    if (token.kind != TokenKind::Identifier
+                        && token.kind != TokenKind::Dot) {
+                        break;
+                    }
+                    clocking += token.text;
+                }
+                if (const auto dot = clocking.rfind('.');
+                    dot != std::string::npos) {
+                    clocking.resize(dot);
+                }
+                const bool immediate = cycle_tokens.size() == 1U
+                    && cycle_tokens.front().text == "0";
+                std::vector<Token> out;
+                const auto emit = [&](const std::string_view text) {
+                    auto tokens = synthetic_tokens(text, start.span);
+                    out.insert(out.end(), tokens.begin(), tokens.end());
+                };
+                const auto append = [&](const std::vector<Token>& tokens) {
+                    out.insert(out.end(), tokens.begin(), tokens.end());
+                };
+                if (immediate || clocking.empty()) {
+                    emit("begin");
+                } else {
+                    emit("begin fork begin repeat (");
+                    append(cycle_tokens);
+                    emit(") @(" + clocking + ");");
+                }
+                append(target_tokens);
+                emit("<=");
+                append(value_tokens);
+                emit(";");
+                emit(immediate || clocking.empty()
+                        ? "end" : "end join_none end");
+                return parse_generated_statement(
+                    std::move(out), span_from(start, previous()));
+            }
         } else if (match(TokenKind::Assign)) {
             assignment_kind = AssignmentKind::Blocking;
         } else {

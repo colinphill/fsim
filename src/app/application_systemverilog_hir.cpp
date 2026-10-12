@@ -1455,7 +1455,8 @@ namespace systemverilog_hir_detail {
                 modport.members.push_back({ kind,
                     name(input_member.name, input_member.span, output.scope),
                     direction(input_member.direction),
-                    source(input_member.span) });
+                    source(input_member.span),
+                    input_member.alias });
             }
             output.modports.push_back(std::move(modport));
         }

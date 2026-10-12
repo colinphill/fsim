@@ -848,6 +848,9 @@ struct ModportMember {
     Name name;
     Direction direction { Direction::unknown };
     SourceSpanId source;
+    // The port-visible name of a modport expression `.alias(name)`
+    // (IEEE 1800-2017 25.5.4); empty for an ordinary member.
+    std::string alias { };
 };
 
 struct Modport {

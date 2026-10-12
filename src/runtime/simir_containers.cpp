@@ -2293,6 +2293,37 @@ void Interpreter::Impl::write_container_object_element_value(
         write_container_object_value(id, replacement, process, origin);
         return;
     }
+    // A queue or dynamic array ignores a write through an unknown, negative
+    // or out-of-range index; a queue write one past its last element appends
+    // (IEEE 1800-2017 7.4.6, 7.10.1).
+    if (!target.type.fixed && !linear_index) {
+        const auto requested = signed_index
+            ? index.known_signed_value()
+            : [&]() -> std::optional<std::int64_t> {
+                  const auto unsigned_value = index.known_unsigned_value();
+                  if (!unsigned_value
+                      || *unsigned_value > static_cast<std::uint64_t>(
+                             std::numeric_limits<std::int64_t>::max())) {
+                      return std::nullopt;
+                  }
+                  return static_cast<std::int64_t>(*unsigned_value);
+              }();
+        const auto size = target.elements.size();
+        if (!requested || *requested < 0
+            || static_cast<std::uint64_t>(*requested) > size
+            || (static_cast<std::uint64_t>(*requested) == size
+                && (!target.type.queue
+                    || (target.type.maximum_elements
+                        && size >= *target.type.maximum_elements)))) {
+            return;
+        }
+        if (static_cast<std::uint64_t>(*requested) == size) {
+            auto replacement = target;
+            replacement.elements.push_back(value);
+            write_container_object_value(id, replacement, process, origin);
+            return;
+        }
+    }
     if (object.slice_alias) {
         // Slice aliases need a coherent aggregate replacement. Ordinary
         // signal-backed element writes use the direct packed slice below and
