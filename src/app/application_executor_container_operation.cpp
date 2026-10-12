@@ -271,6 +271,10 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                         || method->operation
                             == runtime::simir::StringMethodOperator::
                                 format_vhdl_time
+                        || (method->operation
+                                == runtime::simir::StringMethodOperator::
+                                    format_time
+                            && method->time_unit_femtoseconds != 0U)
                     ? state.executor->read_register(
                           method->first,
                           runtime::simir::ProcessExecutor::native_register_width)

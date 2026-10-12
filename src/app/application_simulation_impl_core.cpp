@@ -478,13 +478,43 @@ Simulation::Impl::static_property_parts(const std::string_view identity)
         allocation_scope.substr(0, separator)
     };
     const auto* current = &specialization;
+    std::vector<const semantic::sv::SpecializedClassRelation*> interfaces;
     while (current != nullptr) {
         descriptor.assignable_declared_types.push_back(
             current->declaration_identity);
+        for (const auto& implemented : current->interfaces) {
+            interfaces.push_back(&implemented);
+        }
         if (!current->base)
             break;
         current = &class_specialization(
             current->base->specialization_identity);
+    }
+    // A handle of a class converts to each interface class it implements,
+    // and to the interface classes those extend (IEEE 1800-2017 8.26).
+    for (std::size_t index { }; index < interfaces.size(); ++index) {
+        const auto& implemented = *interfaces[index];
+        if (std::ranges::find(descriptor.assignable_declared_types,
+                implemented.declaration_identity)
+            != descriptor.assignable_declared_types.end()) {
+            continue;
+        }
+        descriptor.assignable_declared_types.push_back(
+            implemented.declaration_identity);
+        const auto interface_class = std::ranges::find(
+            built.compiled_systemverilog_class_specializations,
+            implemented.specialization_identity,
+            &semantic::sv::ClassSpecialization::specialization_identity);
+        if (interface_class
+            == built.compiled_systemverilog_class_specializations.end()) {
+            continue;
+        }
+        if (interface_class->base) {
+            interfaces.push_back(&*interface_class->base);
+        }
+        for (const auto& extended : interface_class->interfaces) {
+            interfaces.push_back(&extended);
+        }
     }
     for (const auto& property : specialization.properties) {
         if (!property.static_storage) {

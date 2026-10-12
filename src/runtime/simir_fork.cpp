@@ -105,6 +105,49 @@ namespace {
         }
         disable_process_interval(process, *owner, disable_block->begin,
             disable_block->end, false);
+        // The block may run in a sibling fork branch (`disable victim`
+        // from another branch of the same fork, IEEE 1800-2017 9.6.2): an
+        // ancestor owns that branch.
+        for (auto* ancestor = owner; !process.halted
+            && ancestor->cold().fork_parent;) {
+            ancestor = &get_process(*ancestor->cold().fork_parent);
+            disable_process_interval(process, *ancestor,
+                disable_block->begin, disable_block->end, false);
+            if (const auto* const fork_state
+                = ancestor->cold().fork_state.get()) {
+                const std::vector<ProcessId> siblings {
+                    fork_state->live_children.begin(),
+                    fork_state->live_children.end()
+                };
+                for (const auto sibling : siblings) {
+                    auto& branch = get_process(sibling);
+                    if (&branch == &process || branch.halted
+                        || branch.pc < disable_block->begin
+                        || branch.pc >= disable_block->end) {
+                        continue;
+                    }
+                    // A block that is the branch's whole body ends the
+                    // branch.
+                    const auto& operations = branch.program().operations();
+                    auto next = static_cast<std::size_t>(disable_block->end);
+                    while (next < operations.size()
+                        && operation_holds<DebugPoint>(
+                            std::as_const(operations)[next])) {
+                        ++next;
+                    }
+                    if (next < operations.size()
+                        && operation_holds<ForkEnd>(
+                            std::as_const(operations)[next])) {
+                        cancel_fork_descendants(branch);
+                        complete_fork_child(branch, ProcessStatus::killed);
+                    } else {
+                        disable_process_interval(process, branch,
+                            disable_block->begin, disable_block->end,
+                            false);
+                    }
+                }
+            }
+        }
         return true;
     }
     if (!fsim::runtime::simir::operation_holds<DisableFork>(operation)) {

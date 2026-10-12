@@ -6634,14 +6634,24 @@ bool Lowerer::lower_hir_statement_unsuspended(
             const auto source_width = member_width
                 ? *member_width
                 : binding->width;
-            dynamic_selection = lower_hir_dynamic_index(
-                target_operands[0],
-                target_operands[1],
-                source_width,
-                member_offset
-                    ? static_cast<std::uint32_t>(
-                          *member_offset)
-                    : 0U);
+            const auto base_offset = member_offset
+                ? static_cast<std::uint32_t>(*member_offset)
+                : 0U;
+            if (hir_systemverilog_indexed_member(*target)) {
+                if (const auto offset
+                    = lower_hir_systemverilog_indexed_member_offset(
+                        *target, source_width)) {
+                    dynamic_selection = DynamicIndex { *offset,
+                        static_cast<std::int64_t>(source_width - 1U), 0,
+                        base_offset, false };
+                }
+            } else {
+                dynamic_selection = lower_hir_dynamic_index(
+                    target_operands[0],
+                    target_operands[1],
+                    source_width,
+                    base_offset);
+            }
             if (!dynamic_selection) {
                 trace_assignment_failure("dynamic-index");
                 return assignment_rejected(__LINE__);
@@ -11634,12 +11644,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
         const auto expression_source = expression
             ? specialized_hir_unit_->find_expression(*expression)
             : std::nullopt;
-        if (format == semantic::sv::OutputFormat::time
-            && (!expression
-                || (expression_source
-                    && expression_source->systemverilog != nullptr
-                    && expression_source->systemverilog->text
-                        == "$time"))) {
+        // %t of $time shows $time, the current time rounded to this
+        // module's unit (IEEE 1800-2017 20.3.1, 21.2.1.3); without an
+        // argument it shows the current time.
+        if (format == semantic::sv::OutputFormat::time && !expression) {
             emit_deferred_assertion_action_handoff();
             process_.operations.emplace_back(TimeDisplay {
                 std::move(prefix),
@@ -11716,13 +11724,15 @@ bool Lowerer::lower_hir_statement_unsuspended(
             return true;
         }
         const auto runtime_format = output_format(format);
-        // %e/%f/%g convert an integral value to real (21.2.1.3).
+        // %e/%f/%g convert an integral or time value to real (21.2.1.3).
         const bool real_conversion
             = (runtime_format == runtime::simir::OutputFormat::real_scientific
                 || runtime_format == runtime::simir::OutputFormat::real_fixed
                 || runtime_format == runtime::simir::OutputFormat::real_general)
-            && hir_systemverilog_scalar_kind(*expression)
-                == frontend::SystemVerilogScalarKind::None;
+            && (hir_systemverilog_scalar_kind(*expression)
+                    == frontend::SystemVerilogScalarKind::None
+                || hir_systemverilog_scalar_kind(*expression)
+                    == frontend::SystemVerilogScalarKind::Time);
         const auto width = hir_expression_width(
             *expression, hir_process_scope_)
                                .value_or(32U);
@@ -11753,6 +11763,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
             real_conversion ? frontend::SystemVerilogScalarKind::Real
                             : hir_systemverilog_scalar_kind(*expression),
             precision,
+            runtime_format == runtime::simir::OutputFormat::time
+                ? hir_time_unit_femtoseconds()
+                : 0U,
         });
         return true;
     };
@@ -13223,7 +13236,15 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     monitor_value.zero_pad = zero_pad;
                     monitor_value.suppress_leading_zero
                         = suppress_leading_zero;
-                    if (format == semantic::sv::OutputFormat::time) {
+                    // %t with no argument or with $time shows the time of
+                    // each print; any other argument is a value in this
+                    // module's time unit (IEEE 1800-2017 21.2.1.3).
+                    const auto time_argument = expression
+                        ? specialized_hir_unit_->find_expression(*expression)
+                        : std::nullopt;
+                    if (format == semantic::sv::OutputFormat::time
+                        && (!time_argument
+                            || time_argument->systemverilog == nullptr)) {
                         monitor_value.kind = MonitorValueKind::time;
                         monitor_value.use_timeformat_width
                             = use_systemverilog_timeformat_width(
@@ -13231,6 +13252,13 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         monitor.values.push_back(
                             std::move(monitor_value));
                         return;
+                    }
+                    if (format == semantic::sv::OutputFormat::time) {
+                        monitor_value.time_unit_femtoseconds
+                            = hir_time_unit_femtoseconds();
+                        monitor_value.use_timeformat_width
+                            = use_systemverilog_timeformat_width(
+                                minimum_width, suppress_leading_zero);
                     }
                     const auto string_value = expression
                         ? specialized_hir_unit_

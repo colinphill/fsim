@@ -248,6 +248,9 @@ struct StaticKernelRuntimeSpec {
         } else if constexpr (std::is_same_v<T, ContainerWrite>) {
             // Process-private fixed arrays (see the planner).
             return !value.string_index;
+        } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
+            // $time, $stime and $realtime.
+            return value.function >= SystemVerilogMathFunction::Time;
         } else {
             return std::is_same_v<T, WaitFor>
                 || std::is_same_v<T, WaitSensitivity>

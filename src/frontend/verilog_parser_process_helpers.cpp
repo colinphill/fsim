@@ -855,6 +855,14 @@ Statement VerilogParser::parse_procedural_foreach_statement(
         }
     }
     statement.span = span_from(start, previous());
+    // With every loop variable omitted (`foreach (a[])`) no dimension is
+    // iterated, so the body never runs (12.7.3).
+    if (index_names.empty() && diagnostics_.size() == saved_diagnostics) {
+        Statement nothing;
+        nothing.kind = StatementKind::Null;
+        nothing.span = statement.span;
+        return nothing;
+    }
     // An array foreach runs as nested loops over each dimension's bounds
     // ($left to $right, IEEE 1800-2017 12.7.3 and 20.7); an associative
     // array iterates with first() and next(). A string collection keeps

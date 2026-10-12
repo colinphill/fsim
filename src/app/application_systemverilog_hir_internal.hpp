@@ -433,6 +433,9 @@ private:
 
     semantic::Model& model_;
     sv::Hir& hir_;
+    // The genvar of each loop-generate block scope, which hides outer
+    // declarations of its name inside the block (IEEE 1800-2017 27.4).
+    std::map<semantic::ScopeId, std::string> genvar_scopes_;
     std::span<const frontend::SystemVerilogClassSpecialization>
         class_specializations_;
     std::span<const frontend::SystemVerilogImport> current_imports_;

@@ -457,13 +457,17 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             TokenKind::RightParen,
             "')' after wait_order event list",
             "FSIM-SV-PARSE-366");
-        if (auto success = parse_statement()) {
-            statement.statements.push_back(std::move(*success));
-        } else {
-            error(
-                current(),
-                "FSIM-SV-PARSE-367",
-                "wait_order requires a success action statement");
+        // action_block ::= statement_or_null | [statement] else
+        // statement_or_null (IEEE 1800-2017 A.6.4).
+        if (!keyword("else")) {
+            if (auto success = parse_statement()) {
+                statement.statements.push_back(std::move(*success));
+            } else {
+                error(
+                    current(),
+                    "FSIM-SV-PARSE-367",
+                    "wait_order requires a success action statement");
+            }
         }
         if (match_keyword("else")) {
             if (auto failure = parse_statement()) {
@@ -1231,15 +1235,9 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                     const auto format_token = advance();
                     auto parsed_format = parse_output_format(
                         decoded_string_literal_text(format_token));
-                    const bool has_unformatted = std::ranges::any_of(
-                        parsed_format.conversions,
-                        [](const auto& conversion) {
-                            return conversion.format
-                                    == OutputFormat::Unformatted2
-                                || conversion.format
-                                    == OutputFormat::Unformatted4;
-                        });
-                    if (!parsed_format.valid || has_unformatted) {
+                    // %u and %z write raw data, as for $fwrite (IEEE 1800-2017
+                    // 21.2.1.7).
+                    if (!parsed_format.valid) {
                         error(
                             format_token,
                             "FSIM-SV-SEM-042",
@@ -1305,14 +1303,6 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                         = format_token.generated_text;
                     auto parsed_format = parse_output_format(
                         decoded_string_literal_text(format_token));
-                    const bool has_unformatted = std::ranges::any_of(
-                        parsed_format.conversions,
-                        [](const auto& conversion) {
-                            return conversion.format
-                                    == OutputFormat::Unformatted2
-                                || conversion.format
-                                    == OutputFormat::Unformatted4;
-                        });
                     std::vector<Expression> values;
                     while (match(TokenKind::Comma)) {
                         values.push_back(parse_expression());
@@ -1339,7 +1329,9 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                               time_conversions,
                               values.size() - required_values)
                         : std::size_t { 0 };
-                    if (!parsed_format.valid || has_unformatted) {
+                    // %u and %z write raw data, as for $fwrite (IEEE 1800-2017
+                    // 21.2.1.7).
+                    if (!parsed_format.valid) {
                         error(
                             format_token,
                             "FSIM-SV-SEM-042",

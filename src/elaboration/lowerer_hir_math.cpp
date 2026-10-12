@@ -131,6 +131,23 @@ namespace {
 
 } // namespace
 
+std::uint64_t Lowerer::hir_time_unit_femtoseconds() const
+{
+    // A unit without a timescale counts in the project resolution, which
+    // the maximum value names.
+    const auto unit = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->design().find_unit(
+              specialized_hir_unit_->unit())
+        : std::nullopt;
+    const auto* const context = unit && unit->systemverilog != nullptr
+        ? &unit->systemverilog->compilation
+        : nullptr;
+    const auto scale = context
+        ? systemverilog_unit_time_scale_femtoseconds(context->time_unit)
+        : std::nullopt;
+    return scale.value_or(std::numeric_limits<std::uint64_t>::max());
+}
+
 std::optional<std::uint64_t> systemverilog_unit_time_scale_femtoseconds(
     const std::string_view spelling) noexcept
 {

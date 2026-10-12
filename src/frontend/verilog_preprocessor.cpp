@@ -1859,6 +1859,13 @@ namespace {
                         index += 2;
                         continue;
                     }
+                    // `\`" puts an escaped quote in the string (IEEE
+                    // 1800-2017 22.5.1).
+                    if (body.substr(index, 4) == "`\\`\"") {
+                        result += "\\\"";
+                        index += 4;
+                        continue;
+                    }
                     auto name_end = index + 1;
                     while (name_end < body.size()
                         && (std::isalnum(static_cast<unsigned char>(body[name_end]))

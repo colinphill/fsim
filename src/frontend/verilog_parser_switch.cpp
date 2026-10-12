@@ -383,10 +383,12 @@ void VerilogParser::parse_switch_primitive(
         if (operation == "pmos" || operation == "rpmos") {
           control = inverted(std::move(control), start.span);
         } else if (operation == "cmos" || operation == "rcmos") {
+          // A cmos switch is an nmos and a pmos in parallel: it conducts
+          // when either is on (IEEE 1800-2017 28.9).
           auto pcontrol = inverted(mapped[3], start.span);
           control = Expression{
               ExpressionKind::Binary,
-              "&",
+              "|",
               {std::move(control), std::move(pcontrol)},
               start.span};
         }

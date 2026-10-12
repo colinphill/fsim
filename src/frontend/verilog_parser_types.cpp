@@ -130,7 +130,10 @@ Type VerilogParser::parse_systemverilog_aggregate_type()
                 };
                 if (!packed || !declarator_type.named_type.empty()
                     || declarator_type.packed_aggregate
-                        != PackedAggregateKind::None) {
+                        != PackedAggregateKind::None
+                        // `bit [2:0][3:0] y`: a multidimensional packed member keeps
+                        // its dimensions (IEEE 1800-2017 7.4.1).
+                        || declarator_type.systemverilog_packed_dimensions.size() > 1U) {
                     packed_member.nested_types.push_back(declarator_type);
                 }
                 type.packed_members.push_back(std::move(packed_member));
@@ -401,12 +404,11 @@ std::optional<Type> VerilogParser::parse_named_packed_array_type()
     }
     const auto& element = found->second;
     if (!element.named_type.empty() || !element.enumeration_literals.empty()
-        || !element.packed_members.empty()
         || element.systemverilog_container
         || (element.domain != ValueDomain::Logic4
             && element.domain != ValueDomain::Bit2)
-        || (element.spelling != "logic" && element.spelling != "bit"
-            && element.spelling != "reg")) {
+        || (element.packed_members.empty() && element.spelling != "logic"
+            && element.spelling != "bit" && element.spelling != "reg")) {
         return std::nullopt;
     }
     const auto name = advance();
@@ -630,7 +632,10 @@ void VerilogParser::parse_typedef(
                     };
                     if (!packed || !declarator_type.named_type.empty()
                         || declarator_type.packed_aggregate
-                            != PackedAggregateKind::None) {
+                            != PackedAggregateKind::None
+                            // `bit [2:0][3:0] y`: a multidimensional packed member keeps
+                            // its dimensions (IEEE 1800-2017 7.4.1).
+                            || declarator_type.systemverilog_packed_dimensions.size() > 1U) {
                         packed_member.nested_types.push_back(declarator_type);
                     }
                     type.packed_members.push_back(std::move(packed_member));
@@ -1013,7 +1018,12 @@ void VerilogParser::parse_optional_net_type(Type& type)
     if (!is_net_type_keyword()) {
         return;
     }
-    const auto keyword_token = advance();
+    auto keyword_token = advance();
+    // An interconnect net carries the values of the ports it connects
+    // (IEEE 1800-2017 6.6.8); it is kept as a wire.
+    if (keyword_token.text == "interconnect") {
+        keyword_token.text = "wire";
+    }
     const bool net_keyword = contains_word(
         { "wire", "tri", "tri0", "tri1", "wand", "triand", "wor",
             "trior", "trireg", "uwire", "supply0", "supply1" },

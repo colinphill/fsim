@@ -914,6 +914,71 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                 compiled_port_direction(declaration),
                 std::nullopt,
             });
+        // Members of an unpacked structure take their declared defaults
+        // (IEEE 1800-2017 7.2.2).
+        if (!initial_container && declaration.type
+            && type->element_kind == ContainerElementKind::Aggregate) {
+            const semantic::CompiledDesignResolver type_resolver {
+                working_specialization
+            };
+            const auto structure = type_resolver.effective_systemverilog_type(
+                *declaration.type, declaration.scope);
+            const auto definition = structure
+                    && structure->target.target.valid()
+                ? working_specialization.find_type(structure->target.target)
+                : std::nullopt;
+            if (definition && definition->systemverilog != nullptr
+                && definition->systemverilog->form
+                    == semantic::sv::TypeForm::unpacked_structure) {
+                auto value = default_container_value(*type);
+                const auto& members = definition->systemverilog->members;
+                bool defaulted { };
+                for (std::size_t member_index { };
+                    member_index < members.size()
+                    && member_index < value.nested_elements.size();
+                    ++member_index) {
+                    auto& leaf = value.nested_elements[member_index];
+                    if (!members[member_index].initializer
+                        || leaf.type.element_kind
+                            != ContainerElementKind::Packed
+                        || leaf.elements.size() != 1U) {
+                        continue;
+                    }
+                    const auto width = leaf.type.element_width;
+                    // `'0` and `'1` fill the member (5.7.1).
+                    const auto fill = working_specialization.find_expression(
+                        *members[member_index].initializer);
+                    const auto text = fill && fill->systemverilog != nullptr
+                        ? fill->systemverilog->text
+                        : std::string { };
+                    if (text == "'0" || text == "'1") {
+                        leaf.elements.front() = PackedLogic4(width,
+                            text == "'1" ? Logic4::one : Logic4::zero);
+                        defaulted = true;
+                        continue;
+                    }
+                    std::string member_error;
+                    const auto constant = evaluate_hir_systemverilog_constant(
+                        working_specialization, *members[member_index].initializer,
+                        member_error);
+                    if (!constant || constant->unbounded) {
+                        continue;
+                    }
+                    PackedLogic4 element(width, Logic4::zero);
+                    for (std::size_t bit = 0; bit < width; ++bit) {
+                        element.set(bit, bit < constant->packed.width()
+                                ? runtime::to_logic4(
+                                      constant->packed.get_logic9(bit))
+                                : Logic4::zero);
+                    }
+                    leaf.elements.front() = std::move(element);
+                    defaulted = true;
+                }
+                if (defaulted) {
+                    initial_container = std::move(value);
+                }
+            }
+        }
         design_.container_objects_.push_back(ContainerObject {
             full_name,
             initial_container ? std::move(*initial_container)

@@ -1879,9 +1879,31 @@ void prepare_string_property_call(Call& call, const StringRegisterId value,
 
 } // namespace
 
+bool Lowerer::hir_genvar_hides_signal(
+    const std::string_view name, const semantic::ScopeId scope) const
+{
+    // A genvar of an enclosing loop-generate block hides a signal of its
+    // name (IEEE 1800-2017 27.4); its value is a hierarchy identity.
+    return specialized_hir_unit_ != nullptr && scope.valid()
+        && name.find('.') == std::string_view::npos
+        && std::ranges::any_of(
+            specialized_hir_unit_->specialization().hierarchy_identities,
+            [&](const semantic::SpecializedHirNamedIdentity& identity) {
+                return identity.name == name;
+            })
+        && semantic::CompiledDesignResolver {
+               *specialized_hir_unit_, hir_generic_binding_frames_ }
+               .resolve_systemverilog(name, scope, { }, true)
+               .status
+            == semantic::CompiledResolutionStatus::not_found;
+}
+
 std::optional<SignalId> Lowerer::hir_named_signal(
     const std::string& name, const semantic::ScopeId scope)
 {
+    if (hir_genvar_hides_signal(name, scope)) {
+        return std::nullopt;
+    }
     if (const auto found = signals_.find(name); found != signals_.end()) {
         return found->second;
     }
@@ -2451,6 +2473,7 @@ Lowerer::hir_class_task_profile(
 
     auto selected_declaration = std::optional<semantic::DeclarationId> { };
     auto interface_receiver = std::optional<std::string> { };
+    bool instance_function { };
     const semantic::sv::ClassMethod* selected = nullptr;
     if (class_call) {
         const semantic::CompiledDesignResolver resolver {
@@ -2496,6 +2519,25 @@ Lowerer::hir_class_task_profile(
                       call.scope, task,
                       hir_generic_interface_type(receiver))
                       .unique();
+            if (!selected_declaration) {
+                // `intf.f(...);`: a void function of an interface called as
+                // a statement (13.4.1).
+                selected_declaration
+                    = resolver.resolve_systemverilog_interface_member(
+                          receiver, identity.substr(separator + 1U),
+                          call.scope,
+                          [](const semantic::CompiledDeclarationView& view) {
+                              return view.systemverilog != nullptr
+                                  && view.systemverilog->form
+                                      == semantic::sv::DeclarationForm::
+                                          function
+                                  && view.systemverilog->callable
+                                  && view.systemverilog->callable->function;
+                          },
+                          hir_generic_interface_type(receiver))
+                          .unique();
+                instance_function = selected_declaration.has_value();
+            }
             if (selected_declaration) {
                 interface_receiver = std::string { receiver };
             } else if (const auto instance = hir_instance_callable(
@@ -2503,6 +2545,13 @@ Lowerer::hir_class_task_profile(
                 // `u.t(...)`: a task of a module instance (23.8).
                 selected_declaration = instance->first;
                 interface_receiver = instance->second;
+            } else if (const auto function_instance = hir_instance_callable(
+                           receiver, identity.substr(separator + 1U), true)) {
+                // `u.f(...);`: a function of a module instance called as a
+                // statement, its result discarded (23.8, 13.4.1).
+                selected_declaration = function_instance->first;
+                interface_receiver = function_instance->second;
+                instance_function = true;
             }
         }
     }
@@ -2515,7 +2564,8 @@ Lowerer::hir_class_task_profile(
         return std::nullopt;
     }
     const auto& callable = *declaration->systemverilog;
-    const bool statement_function = class_call && lower_class_functions_
+    const bool statement_function
+        = ((class_call && lower_class_functions_) || instance_function)
         && callable.callable && callable.callable->function;
     if (!callable.callable
         || (!native_uvm

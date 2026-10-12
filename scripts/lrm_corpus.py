@@ -297,9 +297,9 @@ def sv_tests_cases(root: Path) -> list[Case]:
     return cases
 
 
-VERILATOR_SHELL = """module top;
+VERILATOR_SHELL = """module {shell};
 {decls}
-    t t (
+    {module} {module} (
 {ports}
     );
     initial begin
@@ -313,11 +313,11 @@ endmodule
 """
 
 
-def verilator_shell(top_text: str) -> str:
+def verilator_shell(top_text: str, module: str = "t", shell: str = "top") -> str:
     inputs: list[str] = []
     get_sigs = True
     for line in top_text.splitlines():
-        if re.match(r"^\s*module\s+t\b", line):
+        if re.match(r"^\s*module\s+" + re.escape(module) + r"\b", line):
             inputs = []
             get_sigs = True
         if get_sigs:
@@ -345,7 +345,7 @@ def verilator_shell(top_text: str) -> str:
             body += "          clk = !clk;\n"
         body += "          #1;\n"
     return VERILATOR_SHELL.format(decls=decls, ports=ports, init0=init0.rstrip("\n"),
-                                  body=body.rstrip("\n"))
+                                  body=body.rstrip("\n"), module=module, shell=shell)
 
 
 def python_literal_list(source: str, keyword: str) -> list[str] | None:
@@ -393,6 +393,10 @@ def verilator_library_files(top_file: Path, tdir: Path) -> list[Path]:
 # Icarus system tasks that are not in IEEE 1364/1800.
 ICARUS_EXTENSION_TASKS = re.compile(
     r"\$(abstime|is_signed|countdrivers|simparam|fopenr|sizeof|ivlh_\w+)\b")
+# Icarus syntax extensions: the `bool` variable type and the binary `~&`
+# and `~|` operators (the IEEE LRMs define them only as unary reductions).
+ICARUS_EXTENSION_SYNTAX = re.compile(
+    r"\breg\s+bool\b|[\w)\]]\s*~[&|]\s*[\w(]")
 # Verilator's C++ escape functions ($c, $c8..$c64, $cpure).
 VERILATOR_C_TASKS = re.compile(r"\$c(pure|\d+)?\s*\(")
 # Verilator cases that rely on behaviour Verilator itself calls
@@ -402,6 +406,11 @@ VERILATOR_NONSTANDARD = {
         "(non-standard)",
     "t_package_export": "reads names a package imports but does not export "
         "(IEEE 1800-2017 26.6)",
+    # Verilator rejects timing controls unless --timing or --no-timing is
+    # given; the sources are legal.
+    "t_timing_unset1": "expects the Verilator --timing flag error",
+    "t_timing_unset2": "expects the Verilator --timing flag error",
+    "t_timing_unset3": "expects the Verilator --timing flag error",
 }
 
 def verilator_cases(root: Path) -> list[Case]:
@@ -485,14 +494,38 @@ def verilator_cases(root: Path) -> list[Case]:
         # module t run as written.
         use_shell = "t" in declared and "top" not in declared \
             and not re.search(r"make_top_shell\s*=\s*False", source)
+        # `--top-module X` (or `--top X`, which may name a configuration)
+        # selects the root the driver elaborates.
+        explicit_top = None
+        for value in python_literal_list(source, "verilator_flags2") or []:
+            match = re.search(r"--top(?:-module)?[ =]([A-Za-z_]\w*)", value)
+            if match:
+                explicit_top = match.group(1)
         compile_args.append(str(top_file))
         compile_args += [str(f) for f in verilator_library_files(top_file, tdir)]
-        if use_shell:
+        shell = ""
+        if explicit_top and explicit_top != "t":
+            if explicit_top in declared and re.search(
+                    r"\bmodule\s+" + re.escape(explicit_top) + r"\s*\(\s*input\s+clk\b",
+                    top_text):
+                compile_args.append("verilator_shell.sv")
+                tops = ["fsim_verilator_top"]
+                shell = verilator_shell(top_text, explicit_top, "fsim_verilator_top")
+            else:
+                tops = [explicit_top]
+                # A configuration with several design cells (33.4.1.1)
+                # elaborates each of them as a root.
+                config = re.search(r"\bconfig\s+" + re.escape(explicit_top)
+                                   + r"\s*;(.*?)\bendconfig\b", top_text, re.S)
+                cells = re.search(r"\bdesign\s+([^;]+);", config.group(1)) if config else None
+                if cells and len(cells.group(1).split()) > 1:
+                    tops = [cell.split(".")[-1] for cell in cells.group(1).split()]
+        elif use_shell:
             compile_args.append("verilator_shell.sv")
             tops = ["top"]
+            shell = verilator_shell(top_text)
         else:
             tops = sv_root_modules([top_text])
-        shell = verilator_shell(top_text) if use_shell else ""
         commands = [Command("compile", compile_args)]
         # driver.py simulates only when the test calls test.execute(); a
         # test that only compiles passes once the model builds.
@@ -628,6 +661,10 @@ def ivtest_cases(root: Path) -> list[Case]:
             gold_text = read_text(gold) if gold is not None and gold.is_file() else ""
             if ICARUS_EXTENSION_TASKS.search(text):
                 out_of_scope = "out of scope: Icarus system task extension"
+            elif test_type != "CE" and ICARUS_EXTENSION_SYNTAX.search(
+                    re.sub(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\\n])*"', "",
+                           text, flags=re.S)):
+                out_of_scope = "out of scope: Icarus syntax extension"
             elif re.search(r"^\s*(SORRY|WARNING)\b|: (sorry|warning): ",
                            gold_text, re.M):
                 out_of_scope = "out of scope: Icarus diagnostic in gold output"

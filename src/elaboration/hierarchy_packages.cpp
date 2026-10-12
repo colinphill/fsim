@@ -2637,6 +2637,13 @@ namespace {
                 return std::nullopt;
             }
             std::optional<std::size_t> initialized_union_member;
+            // Every member of a structure, packed or unpacked, takes its
+            // default (IEEE 1800-2017 7.2.2); a union takes its first
+            // initialized member's.
+            const bool structure = aggregate->form
+                    == semantic::sv::TypeForm::packed_structure
+                || aggregate->form
+                    == semantic::sv::TypeForm::unpacked_structure;
             for (std::size_t index { };
                 index < aggregate->members.size(); ++index) {
                 const auto& member = aggregate->members[index];
@@ -2646,8 +2653,7 @@ namespace {
                     value = expression_value(
                         *member.initializer, member.type,
                         member_width_value);
-                } else if (aggregate->form
-                    == semantic::sv::TypeForm::packed_structure) {
+                } else if (structure) {
                     value = type_default(
                         member.type, member_width_value);
                 }
@@ -2659,8 +2665,7 @@ namespace {
                     continue;
                 }
                 insert_compiled_default(result, *value, offset);
-                if (aggregate->form
-                    != semantic::sv::TypeForm::packed_structure) {
+                if (!structure) {
                     initialized_union_member = index;
                     break;
                 }
@@ -8005,6 +8010,20 @@ namespace {
                 const auto base = compiled.find_type(type.base.target.target);
                 if (base && base->systemverilog != nullptr) {
                     self(self, *base->systemverilog);
+                }
+            }
+            // A structure or union cannot contain itself through a member
+            // (IEEE 1800-2017 7.2); a class handle member can.
+            for (const auto& member : type.members) {
+                if (!member.type.target.target.valid()
+                    || member.type.value_form
+                        == semantic::sv::TypeForm::class_handle) {
+                    continue;
+                }
+                const auto nested = compiled.find_type(
+                    member.type.target.target);
+                if (nested && nested->systemverilog != nullptr) {
+                    self(self, *nested->systemverilog);
                 }
             }
             state = 2U;

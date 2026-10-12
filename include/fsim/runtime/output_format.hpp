@@ -4,6 +4,7 @@
 #include "fsim/runtime/simir.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -34,6 +35,15 @@ namespace fsim::runtime::simir {
 // (IEEE 1800-2017 21.2.1.7): `'{1,-2,3}`, `'{a:1,s:"x"}`, `'{"k":1}`.
 [[nodiscard]] std::string format_container_assignment_pattern(
     const ContainerValue& value);
+
+// The simulation tick of a known nonnegative integral `%t` argument given
+// in `unit_femtoseconds` (IEEE 1800-2017 21.2.1.3), or nullopt.
+[[nodiscard]] std::optional<SimulationTick> integral_time_ticks(
+    const PackedLogic4& value,
+    bool signed_value,
+    std::uint64_t unit_femtoseconds,
+    const SystemVerilogTimeFormat& time_format,
+    SystemVerilogScalarKind scalar_kind = SystemVerilogScalarKind::None);
 
 [[nodiscard]] std::string make_time_output(
     std::string_view prefix,

@@ -292,6 +292,7 @@ Interpreter::Impl::FileState& Interpreter::Impl::checked_file(
             invalid.stream = std::make_unique<std::fstream>();
         }
         invalid.stream->clear();
+        invalid.stream->setstate(std::ios::eofbit);
         invalid.pushback.reset();
         invalid.closed = false;
         invalid.readable = false;
@@ -569,6 +570,9 @@ std::int32_t Interpreter::Impl::unread_file_character(
     const std::int32_t character)
 {
     auto& file = checked_file(process, handle);
+    if (&file == &invalid_systemverilog_file) {
+        return -1;
+    }
     // $ungetc pushes back one character whatever the file's mode.
     if (!file.readable
         && processes.scheduling_domain(process)
@@ -839,10 +843,37 @@ void Interpreter::Impl::execute_file(
     try {
         const auto& value = get_register(process, operation.source);
         std::string text;
-        if (operation.format == OutputFormat::time) {
-            const auto decoded = decode_systemverilog_scalar_payload(
-                value, operation.scalar_kind);
-            const auto tick = decoded ? decoded.value.as_time() : std::nullopt;
+        // An integral %t argument is in its module's time unit (IEEE
+        // 1800-2017 21.2.1.3).
+        const bool integral_time = operation.format == OutputFormat::time
+            && (operation.scalar_kind == SystemVerilogScalarKind::None
+                || (operation.scalar_kind != SystemVerilogScalarKind::Chandle
+                    && operation.time_unit_femtoseconds != 0U));
+        const auto integral_tick = integral_time
+            ? integral_time_ticks(value, operation.signed_decimal,
+                  operation.time_unit_femtoseconds, time_format,
+                  operation.scalar_kind)
+            : std::nullopt;
+        if (integral_time && !integral_tick) {
+            text = make_formatted_output(
+                operation.prefix,
+                operation.suffix,
+                OutputFormat::decimal,
+                value,
+                operation.signed_decimal,
+                operation.suppress_leading_zero,
+                operation.minimum_width,
+                operation.left_justify,
+                operation.zero_pad);
+        } else if (operation.format == OutputFormat::time) {
+            const auto decoded = integral_tick
+                ? decltype(decode_systemverilog_scalar_payload(
+                      value, operation.scalar_kind)) { }
+                : decode_systemverilog_scalar_payload(
+                      value, operation.scalar_kind);
+            const auto tick = integral_tick
+                ? integral_tick
+                : decoded ? decoded.value.as_time() : std::nullopt;
             if (!tick) {
                 throw std::runtime_error {
                     "invalid time payload for formatted file output"

@@ -1494,6 +1494,11 @@ std::optional<std::int64_t> evaluate_binary(
         if (right < 0 || right >= 63) {
             return std::nullopt;
         }
+        // A logical shift of a negative value depends on its width, which
+        // this integral evaluation does not keep (IEEE 1800-2017 11.4.10).
+        if (left < 0 && operation == ">>") {
+            return std::nullopt;
+        }
         return left >> static_cast<unsigned>(right);
     }
     if (operation == "**") {

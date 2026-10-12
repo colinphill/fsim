@@ -415,11 +415,15 @@ void VerilogParser::parse_time_declaration(
                  ? current_time_precision_
                  : compilation_time_precision_)
           : module_time_precision_;
-  validate_effective_time_declaration(
-      declaration,
-      effective_unit_magnitude,
-      effective_unit,
-      effective_precision);
+  // A timeunit directly followed by its timeprecision is checked with that
+  // precision, not the inherited one (IEEE 1800-2017 3.14.2.2).
+  if (!(declares_unit && !combined_precision && keyword("timeprecision"))) {
+    validate_effective_time_declaration(
+        declaration,
+        effective_unit_magnitude,
+        effective_unit,
+        effective_precision);
+  }
   if (unit != nullptr) {
     update_unit_time(*unit);
   }

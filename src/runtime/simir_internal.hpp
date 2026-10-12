@@ -1953,6 +1953,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::filesystem::path vhdl_working_directory;
     std::vector<std::string> plusargs;
     SystemVerilogTimeFormat time_format;
+    // The seed of `$random` without an argument; it starts at zero, as in
+    // `$random(seed)` with a zero seed (IEEE 1800-2017 20.15.2, Annex N).
+    std::int32_t system_random_seed { };
     std::map<FileHandle, FileState> files;
     // What a SystemVerilog file operation reads through a descriptor that
     // names no open file: nothing is readable or writable.

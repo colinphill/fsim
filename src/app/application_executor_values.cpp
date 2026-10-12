@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/runtime/output_format.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
 
 #include <algorithm>
@@ -16,6 +17,43 @@
 namespace fsim::app::application_detail {
 
 #if defined(FSIM_HAS_LLVM)
+
+namespace {
+
+// An integral %t argument is in its module's time unit (IEEE 1800-2017
+// 21.2.1.3): it is shown as that many ticks, or as a decimal when unknown.
+void apply_integral_time(
+    runtime::simir::ProcessExecutionContext& context,
+    const runtime::simir::FormatDisplay& operation,
+    runtime::PackedLogic4& value,
+    runtime::simir::OutputFormat& format,
+    runtime::SystemVerilogScalarKind& scalar_kind)
+{
+    if (operation.format != runtime::simir::OutputFormat::time
+        || (operation.scalar_kind != runtime::SystemVerilogScalarKind::None
+            && (operation.scalar_kind
+                    == runtime::SystemVerilogScalarKind::Chandle
+                || operation.time_unit_femtoseconds == 0U))) {
+        return;
+    }
+    const auto tick = runtime::simir::integral_time_ticks(value,
+        operation.signed_decimal, operation.time_unit_femtoseconds,
+        context.systemverilog_time_format(), operation.scalar_kind);
+    if (!tick) {
+        format = runtime::simir::OutputFormat::decimal;
+        return;
+    }
+    const auto encoded = runtime::encode_systemverilog_scalar_payload(
+        runtime::SystemVerilogScalarValue::time(*tick));
+    if (!encoded) {
+        format = runtime::simir::OutputFormat::decimal;
+        return;
+    }
+    value = encoded.value;
+    scalar_kind = runtime::SystemVerilogScalarKind::Time;
+}
+
+} // namespace
 
 std::uint32_t LlvmProcessExecutor::load_string(
     void* context,
@@ -450,12 +488,16 @@ void LlvmProcessExecutor::write_formatted(
                 "different operation"
             };
         }
-        const auto value = PackedLogic4::from_aval_bval(
+        auto value = PackedLogic4::from_aval_bval(
             width, aval, bval);
+        auto format = operation->format;
+        auto scalar_kind = operation->scalar_kind;
+        apply_integral_time(*state.context, *operation, value, format,
+            scalar_kind);
         state.context->display_formatted(
             operation->prefix,
             operation->suffix,
-            operation->format,
+            format,
             value,
             operation->newline,
             operation->postponed,
@@ -464,7 +506,7 @@ void LlvmProcessExecutor::write_formatted(
             operation->minimum_width,
             operation->left_justify,
             operation->zero_pad,
-            operation->scalar_kind,
+            scalar_kind,
             operation->precision);
     } catch (...) {
         capture_failure(state);
@@ -501,16 +543,20 @@ void LlvmProcessExecutor::write_formatted_logic9(
                 "different operation"
             };
         }
-        const auto packed = PackedLogic4::from_logic9_word(
+        auto packed = PackedLogic4::from_logic9_word(
             { width,
                 { value->planes[0],
                     value->planes[1],
                     value->planes[2],
                     value->planes[3] } });
+        auto format = operation->format;
+        auto scalar_kind = operation->scalar_kind;
+        apply_integral_time(*state.context, *operation, packed, format,
+            scalar_kind);
         state.context->display_formatted(
             operation->prefix,
             operation->suffix,
-            operation->format,
+            format,
             packed,
             operation->newline,
             operation->postponed,
@@ -519,7 +565,7 @@ void LlvmProcessExecutor::write_formatted_logic9(
             operation->minimum_width,
             operation->left_justify,
             operation->zero_pad,
-            operation->scalar_kind,
+            scalar_kind,
             operation->precision);
     } catch (...) {
         capture_failure(state);

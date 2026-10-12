@@ -732,10 +732,12 @@ std::optional<std::uint32_t> formatted_value_width(
 {
     using runtime::SystemVerilogScalarKind;
     using runtime::simir::OutputFormat;
+    // An integral %t argument counts in its module's time unit.
     if (scalar_kind == SystemVerilogScalarKind::None)
         return (format <= OutputFormat::string
                    || format == OutputFormat::unformatted2
-                   || format == OutputFormat::unformatted4)
+                   || format == OutputFormat::unformatted4
+                   || format == OutputFormat::time)
             ? std::optional<std::uint32_t> { 0U }
             : std::nullopt;
     const bool real_format = format >= OutputFormat::real_scientific

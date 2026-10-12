@@ -527,11 +527,23 @@ void execute_string_format(
         formatted = vhdl_time_text(packed_value, operation.precision,
             time_format.resolution_femtoseconds);
     } else if (operation.operation == StringMethodOperator::format_time) {
-        formatted = make_time_output(
-            { }, { }, tick, time_format,
-            operation.use_timeformat_width,
-            operation.minimum_width,
-            operation.left_justify, operation.zero_pad);
+        // An integral value is in its module's time unit (IEEE 1800-2017
+        // 21.2.1.3); without a value the current time is shown.
+        const auto value_tick = operation.time_unit_femtoseconds != 0U
+            ? integral_time_ticks(packed_value, operation.time_signed,
+                  operation.time_unit_femtoseconds, time_format)
+            : std::optional<SimulationTick> { tick };
+        formatted = value_tick
+            ? make_time_output(
+                  { }, { }, *value_tick, time_format,
+                  operation.use_timeformat_width,
+                  operation.minimum_width,
+                  operation.left_justify, operation.zero_pad)
+            : make_formatted_output(
+                  { }, { }, OutputFormat::decimal, packed_value,
+                  operation.time_signed, operation.suppress_leading_zero,
+                  operation.minimum_width, operation.left_justify,
+                  operation.zero_pad);
     } else {
         formatted = make_formatted_output(
             { }, { }, operation.format, packed_value,
@@ -561,6 +573,8 @@ void Interpreter::Impl::execute_string(
         const auto packed = operation.operation == StringMethodOperator::format_packed
                 || operation.operation
                     == StringMethodOperator::format_vhdl_time
+                || (operation.operation == StringMethodOperator::format_time
+                    && operation.time_unit_femtoseconds != 0U)
             ? get_register(process, operation.first)
             : PackedLogic4 { 1, Logic4::zero };
         execute_string_format(

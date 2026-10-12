@@ -1978,10 +1978,23 @@ void Interpreter::Impl::execute(ProcessId id)
                         : decltype(decode_systemverilog_scalar_payload(
                               get_register(process, op.source),
                               op.scalar_kind)) { };
-                    const auto tick = op.format == OutputFormat::time
+                    auto tick = op.format == OutputFormat::time
                             && time_value
                         ? time_value.value.as_time()
                         : std::nullopt;
+                    // An integral %t argument is in its module's time unit.
+                    // A `time` value, like an integral one, counts in its
+                    // module's unit.
+                    const bool integral_time = op.format == OutputFormat::time
+                        && (op.scalar_kind == SystemVerilogScalarKind::None
+                            || (op.scalar_kind != SystemVerilogScalarKind::Chandle
+                                && op.time_unit_femtoseconds != 0U));
+                    if (integral_time) {
+                        tick = integral_time_ticks(
+                            get_register(process, op.source),
+                            op.signed_decimal, op.time_unit_femtoseconds,
+                            time_format, op.scalar_kind);
+                    }
                     auto text = tick
                         ? make_time_output(op.prefix, op.suffix, *tick,
                               time_format,
@@ -1991,7 +2004,7 @@ void Interpreter::Impl::execute(ProcessId id)
                         : make_formatted_output(
                         op.prefix,
                         op.suffix,
-                        op.format,
+                        integral_time ? OutputFormat::decimal : op.format,
                         get_register(process, op.source),
                         op.signed_decimal,
                         op.suppress_leading_zero,

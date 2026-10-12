@@ -69,10 +69,17 @@ DelayAlternative VerilogParser::parse_verilog_delay_alternative(
     const bool lone_number = !parenthesized && !explicit_time_literal
         && at(TokenKind::Number)
         && current().text.find('\'') == std::string::npos;
+    // An unparenthesized identifier delay is only the name (`#d (y, a)` on
+    // a gate is not a call).
+    const bool lone_identifier = !parenthesized && !explicit_time_literal
+        && at(TokenKind::Identifier) && at(TokenKind::LeftParen, 1);
     auto expression = explicit_time_literal
         ? Expression { }
         : lone_number
         ? Expression { ExpressionKind::IntegerLiteral, advance().text, { },
+              previous().span }
+        : lone_identifier
+        ? Expression { ExpressionKind::Identifier, advance().text, { },
               previous().span }
         : parse_expression();
     const bool plain_decimal_literal = expression.kind == ExpressionKind::IntegerLiteral

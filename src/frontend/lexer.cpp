@@ -582,9 +582,21 @@ class Lexer {
 
   void lex_string() {
     const auto begin = current_location();
+    // In a macro's `" string, `\`" is an escaped quote, not the end of the
+    // string (IEEE 1800-2017 22.5.1).
+    const bool macro_string = !is_vhdl() && !result_.tokens.empty()
+        && result_.tokens.back().kind == TokenKind::Backtick
+        && result_.tokens.back().span.end.offset == begin.offset;
     advance();
     bool terminated = false;
     while (!at_end()) {
+      if (macro_string && peek() == '\\' && peek(1) == '`'
+          && peek(2) == '"') {
+        advance();
+        advance();
+        advance();
+        continue;
+      }
       if (peek() == '"') {
         advance();
         if (is_vhdl() && peek() == '"') {

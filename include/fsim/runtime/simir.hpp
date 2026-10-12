@@ -208,6 +208,11 @@ struct StringMethod {
     bool use_timeformat_width { };
     // %e/%f/%g digits after the point; the maximum value is automatic.
     std::uint32_t precision { std::numeric_limits<std::uint32_t>::max() };
+    // For format_time with a value: nonzero is the time unit of the
+    // integral value in `first` (IEEE 1800-2017 21.2.1.3); zero prints the
+    // current time.
+    std::uint64_t time_unit_femtoseconds { };
+    bool time_signed { };
 };
 struct ResizeContainer {
     ContainerRegisterId target { };

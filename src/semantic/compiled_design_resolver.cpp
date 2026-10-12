@@ -1008,6 +1008,21 @@ bool systemverilog_genvar_scope(
                 return region.kind == sv::GenerateKind::iterative
                     && region.iterator == name;
             }
+            // A process of the block has its own scope outside the block's
+            // scope chain.
+            if (region.kind == sv::GenerateKind::iterative
+                && region.iterator == name
+                && std::ranges::any_of(region.processes,
+                    [&](const ProcessId process) {
+                        const auto& processes
+                            = design.systemverilog_hir.processes();
+                        const auto found = std::ranges::find(
+                            processes, process, &sv::Process::id);
+                        return found != processes.end()
+                            && found->scope == scope;
+                    })) {
+                return true;
+            }
             if (self(self, region.nested)) {
                 return true;
             }

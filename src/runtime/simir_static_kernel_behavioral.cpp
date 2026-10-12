@@ -207,14 +207,67 @@ bool Interpreter::Impl::StaticKernel::behavioral_step(
         if constexpr (std::is_same_v<T, Display>) {
             behavioral_output(member_index, op.text, op.newline);
         } else if constexpr (std::is_same_v<T, FormatDisplay>) {
-            const auto text = make_formatted_output(op.prefix, op.suffix,
-                op.format, packed_register(op.source), op.signed_decimal,
-                op.suppress_leading_zero, op.minimum_width, op.left_justify,
-                op.zero_pad, op.scalar_kind, op.precision);
+            // %t follows $timeformat; an integral argument is in its
+            // module's time unit (IEEE 1800-2017 21.2.1.3).
+            std::optional<SimulationTick> tick;
+            if (op.format == OutputFormat::time) {
+                if (op.scalar_kind == SystemVerilogScalarKind::None
+                    || (op.scalar_kind != SystemVerilogScalarKind::Chandle
+                        && op.time_unit_femtoseconds != 0U)) {
+                    tick = integral_time_ticks(packed_register(op.source),
+                        op.signed_decimal, op.time_unit_femtoseconds,
+                        impl_.time_format, op.scalar_kind);
+                } else if (const auto decoded
+                    = decode_systemverilog_scalar_payload(
+                        packed_register(op.source), op.scalar_kind)) {
+                    tick = decoded.value.as_time();
+                }
+            }
+            const auto text = tick
+                ? make_time_output(op.prefix, op.suffix, *tick,
+                      impl_.time_format,
+                      op.minimum_width == 0 && !op.suppress_leading_zero,
+                      op.minimum_width, op.left_justify, op.zero_pad)
+                : make_formatted_output(op.prefix, op.suffix,
+                      op.format == OutputFormat::time
+                              && op.scalar_kind
+                                  == SystemVerilogScalarKind::None
+                          ? OutputFormat::decimal
+                          : op.format,
+                      packed_register(op.source), op.signed_decimal,
+                      op.suppress_leading_zero, op.minimum_width,
+                      op.left_justify, op.zero_pad, op.scalar_kind,
+                      op.precision);
             behavioral_output(member_index, text, op.newline);
         } else if constexpr (std::is_same_v<T, StringDisplay>) {
             const auto text = op.prefix + string_register(op.source) + op.suffix;
             behavioral_output(member_index, text, op.newline);
+        } else if constexpr (std::is_same_v<T, SystemVerilogMath>) {
+            // $time, $stime and $realtime (IEEE 1800-2017 20.3); the
+            // planner admits no other function.
+            const auto function = op.function == SystemVerilogMathFunction::Time
+                ? SystemVerilogTimeFunction::Time
+                : op.function == SystemVerilogMathFunction::Stime
+                ? SystemVerilogTimeFunction::Stime
+                : SystemVerilogTimeFunction::Realtime;
+            const auto value = systemverilog_time_function(function,
+                kernel_now(),
+                { op.time_unit_femtoseconds, op.time_precision_femtoseconds,
+                    impl_.time_format.resolution_femtoseconds });
+            if (!value) {
+                fail(member_index, pc, "SystemVerilog time query failed");
+            }
+            const auto encoded
+                = op.function == SystemVerilogMathFunction::Realtime
+                ? encode_systemverilog_scalar_payload(value.value)
+                : systemverilog_scalar_to_packed(value.value,
+                      op.function == SystemVerilogMathFunction::Stime ? 32U
+                                                                      : 64U,
+                      false);
+            if (!encoded) {
+                fail(member_index, pc, "SystemVerilog time query failed");
+            }
+            packed_register(op.destination) = encoded.value;
         } else if constexpr (std::is_same_v<T, TimeDisplay>) {
             const auto text = make_time_output(op.prefix, op.suffix,
                 kernel_now(), impl_.time_format,

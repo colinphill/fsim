@@ -465,6 +465,10 @@ namespace systemverilog_hir_detail {
             if (!result.overloads.empty()) {
                 break;
             }
+            if (const auto genvar = genvar_scopes_.find(*visible_scope);
+                genvar != genvar_scopes_.end() && genvar->second == spelling) {
+                break;
+            }
             visible_scope = model_.scopes()[visible_scope->value()].parent;
         }
         if (result.overloads.size() == 1) {
@@ -1108,6 +1112,10 @@ namespace systemverilog_hir_detail {
         output.alternative_discriminator
             = std::move(alternative_discriminator);
         output.iterator = input.variable;
+        if (owns_scope && output.kind == sv::GenerateKind::iterative
+            && !input.variable.empty()) {
+            genvar_scopes_.insert_or_assign(output.scope, input.variable);
+        }
         output.initial = expression(
             input.initial, output.scope, declaration_origin);
         output.condition = expression(

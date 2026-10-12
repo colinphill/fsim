@@ -253,6 +253,97 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 51: packed structure arrays, packed array patterns, `%t` units, genvar shadowing
+
+Fixture: `sv_language_details_batch51.sv`.
+
+- Packed arrays of packed structures: `s_t [1:0] p` in declarations, ANSI
+  and non-ANSI ports and typedefs; members of elements through constant and
+  runtime indices (`p[i].hi`); multidimensional packed members
+  (`s.y[1][3:0]`) (7.4.1, 7.2.1).
+- Assignment patterns for packed arrays: positional, keyed, `default`,
+  replicated and nested items, including members of packed structures and
+  elements of unpacked arrays (10.9.1).
+- `%t` converts an integral argument from its module's time unit, `$time`
+  is formatted as a value, and `$sformatf` `%t` takes its argument (21.2.1.3,
+  20.3); the static behavioral kernel runs `$time`, `$stime` and
+  `$realtime`.
+- A genvar hides a module variable of its name inside the loop-generate
+  block's processes (27.4).
+- Hierarchical calls: a module-instance or interface function called as a
+  statement (23.8, 13.4.1); an output port connected to an element of a
+  multidimensional packed array (`.out(q[0][g])`).
+- `foreach (a[])` with every loop variable omitted runs no iteration
+  (12.7.3); `disable` of the block of a sibling fork branch ends that branch
+  (9.6.2).
+- An output net port's initializer is a continuous assignment (23.2.2.3);
+  a class handle converts to the interface classes it implements (8.26);
+  an element of an unpacked array parameter folds (6.20.1); a size cast in
+  an unsigned constant expression extends as unsigned (11.8.2); a real
+  hierarchical variable as a delay (10.3.3).
+- `$random` without a seed uses one seed starting at zero, as in
+  `$random(seed)` (20.15); `$feof` of an invalid descriptor is true and
+  `$ungetc` on it fails (21.3); `cmos` conducts when either half is on
+  (28.9).
+- Parsing: `timeunit` followed by `timeprecision`, `$` for integral
+  parameters, time literals rounded to the precision, `` `\`" `` in macro
+  strings, empty `.p()` parameter overrides, `buf #d (...)`, `%u`/`%z` in
+  displays, `wait_order` with only `else`, `interconnect`, compilation-unit
+  subroutines only in SystemVerilog, unpacked structure member defaults,
+  `++` of a class property in an expression.
+- The batch 50 change to `%d` of a real at run time printed a bare
+  `$display(r)` as an integer; `%d` of a real now converts in the format
+  lowering only.
+- Runner: Verilator `--top-module`/`--top` select the elaborated root;
+  Icarus `reg bool` and binary `~&`/`~|` are marked as Icarus extensions.
+
+Investigated and left open: `$bits(instance.type)` (a type named through a
+module instance, not LRM); class-parameter constants (`C#(5)::v`) in module
+constants; base classes whose type actual is a class (`extends P #(item)`);
+mailbox `try_get` inside a fork; real conversion wider than 64 bits;
+unpacked-structure member assignments in `always_comb`; members of
+structure arrays inside structures (`e.d[1][0].b`); ivtest `sv_packed_port1`
+and `sv_packed_port2` (z on undriven variable bits, Icarus behaviour),
+`pr985` (Icarus process order), `br988` (a bare nested block in a generate
+block).
+
+Measurement: the full six-suite run b51a (wip51e) with its failures and
+the fast set rerun on wip51f (fast-set cases all pass). Losses in b51a
+were fixed before the rerun: a configuration with several design cells
+named by `--top` (the runner elaborates each cell), a static function's
+output formal copied to a virtual-interface member (the batch 51
+static-output change is reverted), a typedef cycle through a structure
+member (now `FSIM-ELAB-SVTYPE-003`), and a negated literal compared with a
+wider unsigned value (`-1` now applies at the context width, 11.6.1, in
+constants and at run time). Verilator `t_timing_unset1` to `3` expect
+Verilator's `--timing` flag error and are now out of scope.
+
+ctest: the `vhdl`, `systemverilog` and `compliance` labels fail only the 11
+known tests.
+
+From this batch on, counts are passed/in-scope: cases the runner skips as
+out of scope can never close and are left out of the denominator (owner,
+2026-10-12). The batch 50 column is recomputed on batch 51's scope.
+Excluded cases:
+
+- ivtest 86: Icarus diagnostics in gold output (44), Icarus system tasks
+  (19), Icarus syntax (5), iverilog options and test types (18).
+- Verilator 174: SystemC, PLI/VPI or DPI harness (84), `$c` (32), C++
+  harness (24), lint-only (21), missing top file (8), non-standard
+  behaviour (5).
+- nvc 215: nvc-specific test kinds (shell, VHPI, cover, wave, mixed, Tcl,
+  relaxed, plugin; 209), nvc options (4), named work libraries (2).
+- sv-tests, VESTs, VHDL Compliance-Tests: none.
+
+| Suite | Batch 50 (wip50i) | Batch 51 (wip51f) |
+|---|---:|---:|
+| VESTs | 3337/3648 | 3337/3648 |
+| nvc regress | 643/1267 | 647/1267 |
+| VHDL Compliance-Tests | 33/72 | 33/72 |
+| ivtest | 2345/2740 | 2377/2740 |
+| Verilator test_regress | 1287/2241 | 1311/2241 |
+| sv-tests | 1413/1497 | 1416/1497 |
+
 ### Batch 50: class functions in SimIR, enumerated randomization, IEEE reals, file descriptors
 
 Fixture: `sv_language_details_batch50.sv` (passes on xsim).

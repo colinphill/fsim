@@ -55,6 +55,9 @@ struct FileWriteFormatted {
     SystemVerilogScalarKind scalar_kind { SystemVerilogScalarKind::None };
     // %e/%f/%g digits after the point; the maximum value is automatic.
     std::uint32_t precision { std::numeric_limits<std::uint32_t>::max() };
+    // For %t of an integral value: its time unit (IEEE 1800-2017
+    // 21.2.1.3); zero when unknown.
+    std::uint64_t time_unit_femtoseconds { };
 };
 struct FileWriteString {
     std::uint32_t handle { }, source { };

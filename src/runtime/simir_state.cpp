@@ -2981,6 +2981,25 @@ void Interpreter::Impl::notify_execution_point(
                           ? 32U
                           : 64U,
                       false);
+            // %t shows the time function's value, in this module's unit,
+            // under $timeformat (IEEE 1800-2017 21.2.1.3).
+            const auto tick = value.format == OutputFormat::time && encoded
+                ? integral_time_ticks(encoded.value, false,
+                      value.time_unit_femtoseconds == 0U
+                          ? std::numeric_limits<std::uint64_t>::max()
+                          : value.time_unit_femtoseconds,
+                      time_format,
+                      value.time_function == SystemVerilogTimeFunction::Realtime
+                          ? SystemVerilogScalarKind::Realtime
+                          : SystemVerilogScalarKind::None)
+                : std::nullopt;
+            if (tick) {
+                text += make_time_output(value.prefix, { }, *tick,
+                    time_format, value.use_timeformat_width,
+                    value.minimum_width, value.left_justify,
+                    value.zero_pad);
+                continue;
+            }
             text += make_formatted_output(
                 value.prefix,
                 { },
@@ -2995,6 +3014,22 @@ void Interpreter::Impl::notify_execution_point(
                 value.scalar_kind);
         } else if (value.strength) {
             text += value.prefix + signal_strength_text(value.signal);
+        } else if (value.format == OutputFormat::time
+            && value.time_unit_femtoseconds != 0U) {
+            // A value shown with %t counts in its module's time unit (IEEE
+            // 1800-2017 21.2.1.3).
+            const auto& current = get_signal(value.signal).initial_value;
+            const auto tick = integral_time_ticks(current,
+                value.signed_decimal, value.time_unit_femtoseconds,
+                time_format, value.scalar_kind);
+            text += tick
+                ? make_time_output(value.prefix, { }, *tick, time_format,
+                      value.use_timeformat_width, value.minimum_width,
+                      value.left_justify, value.zero_pad)
+                : make_formatted_output(value.prefix, { },
+                      OutputFormat::decimal, current, value.signed_decimal,
+                      value.suppress_leading_zero, value.minimum_width,
+                      value.left_justify, value.zero_pad);
         } else {
             text += make_formatted_output(
                 value.prefix,
@@ -3248,6 +3283,15 @@ Interpreter::Impl::known_random_bound(const PackedLogic4& value)
     const std::optional<PackedLogic4>& minimum)
 {
     auto& process = get_process(process_id);
+    if (kind == RandomKind::random) {
+        const auto result = evaluate_random_distribution(
+            RandomDistributionKind::uniform, system_random_seed,
+            std::numeric_limits<std::int32_t>::min(),
+            std::numeric_limits<std::int32_t>::max());
+        system_random_seed = result.seed;
+        return PackedLogic4::from_aval_bval(
+            32, std::bit_cast<std::uint32_t>(result.value), 0);
+    }
     if (kind != RandomKind::urandom_range) {
         return PackedLogic4::from_aval_bval(
             32, next_random(process), 0);

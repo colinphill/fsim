@@ -926,7 +926,11 @@ void append_packed(Value& destination, const Value& operand)
     std::string& error,
     const std::optional<std::uint64_t> width)
 {
-    if (value.unbounded) {
+    // `$` may be the value of a parameter of an integer type (IEEE
+    // 1800-2017 6.20.2); it stays unbounded at the type's width.
+    const bool unbounded = value.unbounded;
+    if (unbounded && type.value_form
+        && *type.value_form != semantic::sv::TypeForm::packed_integral) {
         error = "symbolic unbounded '$' requires an implicit parameter type";
         return std::nullopt;
     }
@@ -943,6 +947,7 @@ void append_packed(Value& destination, const Value& operand)
     value.nominal_type = type.target.target.valid()
         ? type.target.spelling
         : std::string { };
+    value.unbounded = unbounded;
     value.packed_range = type.packed_range;
     if (!type.four_state) {
         convert_to_two_state(value);
@@ -1692,9 +1697,11 @@ private:
             return std::optional<Value> { std::move(result) };
         }
         const auto width = std::max(left.width, right.width);
+        // Operands extend as the expression's type: unsigned when either
+        // is unsigned (IEEE 1800-2017 11.8.2).
         const auto signed_value = left.signed_value && right.signed_value;
-        const auto lhs = small_resized(*l, left.width, width, left.signed_value);
-        const auto rhs = small_resized(*r, right.width, width, right.signed_value);
+        const auto lhs = small_resized(*l, left.width, width, signed_value);
+        const auto rhs = small_resized(*r, right.width, width, signed_value);
         const auto known = lhs.b == 0U && rhs.b == 0U;
         const auto domain = left.domain == right.domain
             ? left.domain : frontend::ValueDomain::Logic4;
@@ -1774,6 +1781,40 @@ private:
         return std::nullopt;
     }
 
+    [[nodiscard]] static bool contextual_binary_operator(
+        const std::string_view op) noexcept
+    {
+        return op == "+" || op == "-" || op == "*" || op == "/"
+            || op == "%" || op == "&" || op == "|" || op == "^"
+            || op == "~^" || op == "^~" || op == "==" || op == "!="
+            || op == "===" || op == "!==" || op == "<" || op == "<="
+            || op == ">" || op == ">=";
+    }
+
+    [[nodiscard]] bool context_determined_operator(
+        const semantic::ExpressionId id) const
+    {
+        const auto view = specialization_.find_expression(id);
+        if (!view || view->systemverilog == nullptr) {
+            return false;
+        }
+        const auto& operand = *view->systemverilog;
+        if (operand.kind == ExpressionKind::unary) {
+            return operand.text == "-" || operand.text == "~"
+                || operand.text == "+";
+        }
+        // A negated literal is folded into the literal (`-1`).
+        if (operand.kind == ExpressionKind::integer_literal) {
+            return operand.text.starts_with('-');
+        }
+        return operand.kind == ExpressionKind::binary
+            && (operand.text == "+" || operand.text == "-"
+                || operand.text == "*" || operand.text == "/"
+                || operand.text == "%" || operand.text == "&"
+                || operand.text == "|" || operand.text == "^"
+                || operand.text == "~^" || operand.text == "^~");
+    }
+
     [[nodiscard]] std::optional<Value> evaluate_binary(
         const semantic::sv::Expression& record)
     {
@@ -1798,6 +1839,26 @@ private:
             error_ = "symbolic unbounded '$' is only valid as a parameter "
                      "value or an argument to $isunbounded";
             return std::nullopt;
+        }
+        // The context of an arithmetic, bitwise or relational operator
+        // reaches into an operand that is itself such an operator (`-1` in
+        // `-1 + 64'd0`) before its operator applies (IEEE 1800-2017 11.6.1,
+        // 11.8.2). Evaluated self-determined, a signed one of these is
+        // sign-extended to the common width first; a primary operand
+        // extends by the expression's signedness.
+        if (contextual_binary_operator(record.text)
+            && !(left->signed_value && right->signed_value)) {
+            const auto width = std::max(left->width, right->width);
+            const auto widen = [&](Value& value,
+                                   const semantic::ExpressionId id) {
+                if (!value.signed_value || value.width >= width
+                    || !context_determined_operator(id)) {
+                    return;
+                }
+                value = resized(std::move(value), width);
+            };
+            widen(*left, record.operands.front());
+            widen(*right, record.operands.back());
         }
         if (auto fast = small_binary(record.text, *left, *right)) {
             return std::move(*fast);
@@ -2025,6 +2086,103 @@ private:
         return static_cast<std::uint32_t>(index);
     }
 
+    // An element of an unpacked array parameter (`P[1]` for `parameter int
+    // P[3:1] = '{10, 20, 30}`, IEEE 1800-2017 6.20.1, 7.4): the positional
+    // pattern lists the elements from the left bound.
+    [[nodiscard]] std::optional<Value> evaluate_array_parameter_element(
+        const semantic::sv::Expression& record)
+    {
+        const auto base_view = specialization_.find_expression(
+            record.operands.front());
+        if (!base_view || base_view->systemverilog == nullptr
+            || base_view->systemverilog->kind != ExpressionKind::name
+            || !base_view->systemverilog->referenced_name
+            || !base_view->systemverilog->referenced_name->selected) {
+            return std::nullopt;
+        }
+        const auto declaration = specialization_.find_declaration(
+            *base_view->systemverilog->referenced_name->selected);
+        if (!declaration || declaration->systemverilog == nullptr
+            || !declaration->systemverilog->type
+            || (declaration->systemverilog->form
+                    != semantic::sv::DeclarationForm::parameter
+                && declaration->systemverilog->form
+                    != semantic::sv::DeclarationForm::local_parameter
+                && declaration->systemverilog->form
+                    != semantic::sv::DeclarationForm::variable)
+            || !fixed_one_dimensional_array_type(
+                *declaration->systemverilog->type)) {
+            return std::nullopt;
+        }
+        const auto& declared_type = *declaration->systemverilog->type;
+        const auto& dimension = declared_type.unpacked_dimensions.front();
+        const auto bound = [&](const std::optional<std::int64_t> value,
+                               const std::optional<semantic::ExpressionId>
+                                   expression) -> std::optional<std::int64_t> {
+            if (value) {
+                return value;
+            }
+            const auto evaluated = expression ? evaluate(*expression)
+                                              : std::nullopt;
+            return evaluated ? evaluated->integer_value() : std::nullopt;
+        };
+        const auto left = bound(dimension.left, dimension.left_expression);
+        const auto right = bound(dimension.right, dimension.right_expression);
+        auto element_type = declared_type;
+        element_type.container_form.reset();
+        element_type.unpacked_dimensions.clear();
+        element_type.container_element_types.clear();
+        std::unordered_set<std::uint32_t> visiting;
+        const auto width = resolved_type_width(
+            element_type, &specialization_, visiting);
+        if (!left || !right || !width || *width == 0U) {
+            return std::nullopt;
+        }
+        // The elements come from the declaration's positional assignment
+        // pattern.
+        const auto pattern = declaration->systemverilog->initializer
+            ? specialization_.find_expression(
+                  *declaration->systemverilog->initializer)
+            : std::nullopt;
+        const auto count = static_cast<std::uint64_t>(
+            *left >= *right ? *left - *right : *right - *left) + 1U;
+        if (!pattern || pattern->systemverilog == nullptr
+            || pattern->systemverilog->kind
+                != ExpressionKind::assignment_pattern
+            || pattern->systemverilog->associations.size() != count
+            || std::ranges::any_of(pattern->systemverilog->associations,
+                [](const auto& association) {
+                    return !association.choice_spelling.empty();
+                })) {
+            return std::nullopt;
+        }
+        const auto index = evaluate(record.operands.back());
+        if (!index) {
+            return std::nullopt;
+        }
+        const auto integer = index->integer_value();
+        if (!integer || *integer < std::min(*left, *right)
+            || *integer > std::max(*left, *right)) {
+            // An out-of-range element reads the element type's default.
+            return convert_hir_systemverilog_constant(
+                make_value(PackedLogic4 { static_cast<std::uint32_t>(*width),
+                               type_domain(element_type)
+                                       == frontend::ValueDomain::Bit2
+                                   ? Logic4::zero : Logic4::x },
+                    false, false, type_domain(element_type)),
+                element_type, error_, &specialization_);
+        }
+        const auto ordinal = static_cast<std::size_t>(
+            *integer >= *left ? *integer - *left : *left - *integer);
+        auto element = evaluate(
+            pattern->systemverilog->associations[ordinal].value);
+        if (!element) {
+            return std::nullopt;
+        }
+        return convert_hir_systemverilog_constant(
+            std::move(*element), element_type, error_, &specialization_);
+    }
+
     [[nodiscard]] std::optional<Value> evaluate_selection(
         const semantic::sv::Expression& record)
     {
@@ -2055,6 +2213,12 @@ private:
                     return offset ? std::optional { array->elements[*offset] }
                                   : std::optional { array->default_value };
                 }
+            }
+            if (auto element = evaluate_array_parameter_element(record)) {
+                return element;
+            }
+            if (!error_.empty()) {
+                return std::nullopt;
             }
             const auto base = evaluate(record.operands.front());
             const auto index = base
@@ -3960,8 +4124,19 @@ private:
                              "context";
                     return std::nullopt;
                 }
-                *value *= static_cast<double>(*factor)
-                    / static_cast<double>(scale);
+                // The literal is rounded to the time precision, then
+                // expressed in the time unit (IEEE 1800-2017 5.8).
+                const auto precision = unit && unit->systemverilog != nullptr
+                    ? scalar_time_scale(
+                          unit->systemverilog->compilation.time_precision)
+                    : 0U;
+                auto femtoseconds = *value * static_cast<double>(*factor);
+                if (precision != 0U) {
+                    femtoseconds = std::round(
+                        femtoseconds / static_cast<double>(precision))
+                        * static_cast<double>(precision);
+                }
+                *value = femtoseconds / static_cast<double>(scale);
                 kind = ScalarKind::Realtime;
             }
             return scalar_real(*value, kind);
@@ -4448,10 +4623,6 @@ convert_hir_systemverilog_constant(
     std::string& error,
     const semantic::SpecializedHirUnit* const specialization)
 {
-    if (value.unbounded) {
-        error = "symbolic unbounded '$' requires an implicit parameter type";
-        return std::nullopt;
-    }
     std::unordered_set<std::uint32_t> visiting;
     return convert_constant_to_width(std::move(value), type, error,
         resolved_type_width(type, specialization, visiting));

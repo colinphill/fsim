@@ -44,6 +44,14 @@ void VerilogParser::parse_parameter_overrides(
           TokenKind::LeftParen,
           "'(' after named parameter override",
           "FSIM-SV-PARSE-056");
+      // `.p()` leaves the parameter at its default (IEEE 1800-2017
+      // 23.10.2.2).
+      if (match(TokenKind::RightParen)) {
+        if (!match(TokenKind::Comma)) {
+          break;
+        }
+        continue;
+      }
       parse_actual(override);
       expect(
           TokenKind::RightParen,
@@ -223,6 +231,10 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
         if (keyword("string") || keyword("chandle")
             || keyword("process")) {
           spec.type = parse_parameter_type();
+        } else if (auto expanded = parse_named_packed_array_type()) {
+          // `output nib_t [1:0] o`: a packed array of a typedef (IEEE
+          // 1800-2017 7.4.1).
+          spec.type = std::move(*expanded);
         } else if (is_named_type_reference_start()) {
           spec.type = parse_named_type();
         } else {
@@ -270,6 +282,26 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
         // A variable output port's initializer, or an input port's default
         // value when it is left unconnected (23.2.2.3, 23.2.2.4).
         declaration.default_value = parse_expression();
+        // An output net port's initializer is a net declaration assignment,
+        // a continuous assignment to the net (6.7.1, 23.2.2.3).
+        const auto& net = spec.type.systemverilog_net_type.empty()
+            ? spec.type.spelling
+            : spec.type.systemverilog_net_type;
+        if (spec.direction == PortDirection::Output
+            && contains_word({"wire", "tri", "tri0", "tri1", "wand",
+                                 "triand", "wor", "trior", "uwire"},
+                net)) {
+          Statement driver;
+          driver.kind = StatementKind::Assignment;
+          driver.assignment_kind = AssignmentKind::Continuous;
+          driver.target = Expression{
+              ExpressionKind::Identifier, port_name.text, {},
+              port_name.span};
+          driver.value = std::move(*declaration.default_value);
+          driver.span = span_from(port_name, previous());
+          unit.concurrent_statements.push_back(std::move(driver));
+          declaration.default_value.reset();
+        }
       }
       if (at(TokenKind::LeftBracket)) {
         (void)require_standard(
@@ -575,6 +607,9 @@ void VerilogParser::require_default_port_net_type(
 }
 
 [[nodiscard]] bool VerilogParser::is_net_type_keyword() const  {
+  if (language_ == Language::SystemVerilog2017 && keyword("interconnect")) {
+    return true;
+  }
   return any_keyword({
       "wire", "tri", "tri0", "tri1", "wand", "triand", "wor",
       "trior", "trireg", "uwire", "supply0", "supply1",
@@ -987,6 +1022,9 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
         || keyword("process")
         || keyword("struct") || keyword("union") || keyword("enum")) {
       spec.type = parse_parameter_type();
+    } else if (auto expanded = parse_named_packed_array_type()) {
+      spec.type = std::move(*expanded);
+      port_type_explicit = true;
     } else if (is_named_type_reference_start()) {
       spec.type = parse_named_type();
     } else {

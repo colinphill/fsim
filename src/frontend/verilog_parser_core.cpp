@@ -370,6 +370,13 @@ ParseResult VerilogParser::run() {
         } else if (match_keyword("function")) {
             compilation_unit_has_design_item_ = true;
             const auto declaration = previous();
+            // IEEE 1364-2005 has no compilation-unit scope (IEEE 1800-2017
+            // 3.12.1).
+            (void)require_standard(
+                "a compilation-unit function",
+                StandardRevision::SystemVerilog2005,
+                declaration,
+                "FSIM-SV-PARSE-348");
             if (compilation_unit_class_method_definition_start()) {
                 design.systemverilog_class_method_definitions.push_back(
                     parse_class_out_of_block_method(
@@ -407,6 +414,13 @@ ParseResult VerilogParser::run() {
         } else if (match_keyword("task")) {
             compilation_unit_has_design_item_ = true;
             const auto declaration = previous();
+            // IEEE 1364-2005 has no compilation-unit scope (IEEE 1800-2017
+            // 3.12.1).
+            (void)require_standard(
+                "a compilation-unit task",
+                StandardRevision::SystemVerilog2005,
+                declaration,
+                "FSIM-SV-PARSE-348");
             if (compilation_unit_class_method_definition_start()) {
                 design.systemverilog_class_method_definitions.push_back(
                     parse_class_out_of_block_method(

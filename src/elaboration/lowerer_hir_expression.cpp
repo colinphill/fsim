@@ -943,6 +943,47 @@ namespace {
 
 } // namespace
 
+std::optional<RegisterId>
+Lowerer::lower_hir_systemverilog_indexed_member_offset(
+    const semantic::ExpressionId expression_id,
+    const std::size_t source_width)
+{
+    // The bit offset of `p[i].m` within `p`: the element's offset plus the
+    // member's offset within the element.
+    const auto member = hir_systemverilog_indexed_member(expression_id);
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!member || !expression || expression->systemverilog == nullptr
+        || expression->systemverilog->operands.size() != 2U) {
+        return std::nullopt;
+    }
+    const auto& operands = expression->systemverilog->operands;
+    const auto shape = hir_systemverilog_packed_shape(operands[0]);
+    const auto count = shape.empty()
+        ? 0U
+        : index_distance(shape.front().left, shape.front().right) + 1U;
+    if (count == 0U || source_width % count != 0U
+        || member->offset + member->width > source_width / count
+        || member->offset > static_cast<std::size_t>(
+               std::numeric_limits<std::int32_t>::max())) {
+        return std::nullopt;
+    }
+    const auto element = lower_hir_systemverilog_element_offset(
+        operands[1], shape.front(), source_width / count);
+    if (!element || member->offset == 0U) {
+        return element;
+    }
+    const auto member_offset = allocate_register(
+        32U, frontend::ValueDomain::Logic4);
+    process_.operations.emplace_back(LoadConstant {
+        member_offset, integer_value(
+            static_cast<std::int64_t>(member->offset), 32U) });
+    const auto sum = allocate_register(32U, frontend::ValueDomain::Logic4);
+    process_.operations.emplace_back(Binary {
+        BinaryOperator::add_signed, sum, *element, member_offset });
+    return sum;
+}
+
 std::optional<DynamicIndex> Lowerer::lower_hir_dynamic_index(
     const semantic::ExpressionId source_id,
     const semantic::ExpressionId index_id,
@@ -3451,6 +3492,32 @@ Lowerer::lower_hir_systemverilog_packed_pattern(
     const semantic::sv::TypeReference& type,
     const std::size_t expected_width)
 {
+    // A packed structure keeps its own `[W-1:0]` range as its last packed
+    // dimension; with only that left, the type is the structure.
+    const auto structure_range = [&] {
+        if (type.packed_dimensions.size() != 1U
+            || !type.target.target.valid() || specialized_hir_unit_ == nullptr) {
+            return false;
+        }
+        const auto definition = specialized_hir_unit_->find_type(
+            type.target.target);
+        const auto left = hir_range_left(type.packed_dimensions.front());
+        const auto right = hir_range_right(type.packed_dimensions.front());
+        return definition && definition->systemverilog != nullptr
+            && (definition->systemverilog->form
+                    == semantic::sv::TypeForm::packed_structure
+                || definition->systemverilog->form
+                    == semantic::sv::TypeForm::packed_union
+                || definition->systemverilog->form
+                    == semantic::sv::TypeForm::tagged_union)
+            && left && right
+            && index_distance(*left, *right) + 1U == expected_width;
+    }();
+    if (specialized_hir_unit_ != nullptr && expected_width != 0U
+        && !type.packed_dimensions.empty() && !structure_range) {
+        return lower_hir_systemverilog_packed_array_pattern(
+            expression_id, type, expected_width);
+    }
     if (specialized_hir_unit_ == nullptr
         || expected_width == 0U || !type.target.target.valid()) {
         return std::nullopt;
@@ -3641,6 +3708,129 @@ Lowerer::lower_hir_systemverilog_packed_pattern(
                 && !write_member(index, *default_value)) {
                 return std::nullopt;
             }
+        }
+    }
+    return destination;
+}
+
+std::optional<RegisterId>
+Lowerer::lower_hir_systemverilog_packed_array_pattern(
+    const semantic::ExpressionId expression_id,
+    const semantic::sv::TypeReference& type,
+    const std::size_t expected_width)
+{
+    // An assignment pattern for a packed array (IEEE 1800-2017 10.9.1):
+    // positional items fill the elements from the left bound, index keys
+    // name elements, and `default` fills the rest.
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->systemverilog == nullptr) {
+        return std::nullopt;
+    }
+    const auto& source = *expression->systemverilog;
+    if (source.kind != semantic::sv::ExpressionKind::assignment_pattern
+        || source.text != "sv-pattern" || source.associations.empty()) {
+        return std::nullopt;
+    }
+    const auto left = hir_range_left(type.packed_dimensions.front());
+    const auto right = hir_range_right(type.packed_dimensions.front());
+    if (!left || !right) {
+        return std::nullopt;
+    }
+    const auto count = index_distance(*left, *right) + 1U;
+    if (count == 0U || expected_width % count != 0U) {
+        return std::nullopt;
+    }
+    const auto element_width = static_cast<std::size_t>(
+        expected_width / count);
+    auto element_type = type;
+    element_type.packed_dimensions.erase(
+        element_type.packed_dimensions.begin());
+    const auto domain = hir_systemverilog_type_four_state(type)
+        ? frontend::ValueDomain::Logic4
+        : frontend::ValueDomain::Bit2;
+    const auto destination = allocate_register(expected_width, domain);
+    process_.operations.emplace_back(LoadConstant {
+        destination, PackedLogic4(expected_width, Logic4::zero) });
+    const auto write_element = [&](const std::size_t ordinal,
+                                   const semantic::ExpressionId value) {
+        const auto candidate = specialized_hir_unit_->find_expression(value);
+        if (!candidate || candidate->systemverilog == nullptr) {
+            return false;
+        }
+        std::optional<RegisterId> lowered;
+        if (candidate->systemverilog->kind
+                == semantic::sv::ExpressionKind::assignment_pattern
+            || (candidate->systemverilog->kind
+                    == semantic::sv::ExpressionKind::call
+                && candidate->systemverilog->text.starts_with(
+                    "@sv-tagged:"))) {
+            lowered = lower_hir_systemverilog_packed_pattern(
+                value, element_type, element_width);
+        } else {
+            lowered = lower_hir_scalar_converted_value(
+                value, element_width, frontend::SystemVerilogScalarKind::None);
+            if (lowered && register_width(*lowered) != element_width) {
+                lowered = resize_register(
+                    *lowered, element_width, hir_expression_signed(value));
+            }
+        }
+        if (!lowered) {
+            return false;
+        }
+        process_.operations.emplace_back(Insert {
+            destination,
+            destination,
+            *lowered,
+            static_cast<std::uint32_t>((count - 1U - ordinal) * element_width),
+        });
+        return true;
+    };
+    std::vector<bool> selected(static_cast<std::size_t>(count));
+    std::size_t positional { };
+    bool keyed { };
+    std::optional<semantic::ExpressionId> default_value;
+    for (const auto& association : source.associations) {
+        std::size_t ordinal { };
+        if (association.choice_spelling == "default") {
+            if (default_value) {
+                return std::nullopt;
+            }
+            default_value = association.value;
+            continue;
+        }
+        if (association.choice_spelling == "@key") {
+            if (association.choices.size() != 1U || positional != 0U) {
+                return std::nullopt;
+            }
+            const auto key = hir_constant_integer(association.choices.front());
+            if (!key || *key < std::min(*left, *right)
+                || *key > std::max(*left, *right)) {
+                return std::nullopt;
+            }
+            ordinal = static_cast<std::size_t>(index_distance(*left, *key));
+            keyed = true;
+        } else if (association.choice_spelling.empty() && !keyed) {
+            ordinal = positional++;
+        } else {
+            return std::nullopt;
+        }
+        if (ordinal >= selected.size() || selected[ordinal]) {
+            return std::nullopt;
+        }
+        selected[ordinal] = true;
+        if (!write_element(ordinal, association.value)) {
+            return std::nullopt;
+        }
+    }
+    // Positional items name every element (10.9.1).
+    if (positional != 0U && positional != selected.size()) {
+        return std::nullopt;
+    }
+    for (std::size_t ordinal { }; ordinal < selected.size(); ++ordinal) {
+        if (!selected[ordinal]
+            && (!default_value || !write_element(ordinal, *default_value))) {
+            return std::nullopt;
         }
     }
     return destination;
@@ -5921,7 +6111,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_untraced(
                 && source.text == "?:")
             || (source.kind == semantic::sv::ExpressionKind::unary
                 && (source.text == "+" || source.text == "-"
-                    || source.text == "~"))) {
+                    || source.text == "~"))
+            // A negated literal (`-1`) is folded into the literal; its
+            // minus still applies at the context width (11.6.1).
+            || (source.kind == semantic::sv::ExpressionKind::integer_literal
+                && source.text.starts_with('-'))) {
             hir_unsigned_operation_ = true;
         } else if (const auto width = hir_expression_width(
                        expression_id, hir_process_scope_);
@@ -9351,6 +9545,39 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 && update.text != "post++" && update.text != "post--")) {
             return std::nullopt;
         }
+        // An increment of a class property reads, steps and writes the
+        // property (IEEE 1800-2017 11.4.2).
+        if (const auto property = hir_class_property_profile(
+                update.operands.front());
+            property && property->writable && !property->static_storage
+            && property->receiver
+            && hir_systemverilog_scalar_kind(update.operands.front())
+                == frontend::SystemVerilogScalarKind::None) {
+            const auto receiver = lower_hir_expression(
+                *property->receiver, 64U);
+            if (!receiver || register_width(*receiver) != 64U) {
+                return std::nullopt;
+            }
+            const auto old_value = allocate_register(
+                property->width, property->domain);
+            process_.operations.emplace_back(ClassPropertyRead {
+                old_value, *receiver, property->identity,
+                static_cast<std::uint32_t>(property->width) });
+            const auto one = allocate_register(
+                property->width, property->domain);
+            process_.operations.emplace_back(LoadConstant {
+                one, unsigned_value(1U, property->width) });
+            const auto new_value = allocate_register(
+                property->width, property->domain);
+            process_.operations.emplace_back(Binary {
+                update.text.ends_with("++")
+                    ? BinaryOperator::add_unsigned
+                    : BinaryOperator::subtract_unsigned,
+                new_value, old_value, one });
+            process_.operations.emplace_back(ClassPropertyWrite {
+                *receiver, new_value, property->identity });
+            result = update.text.starts_with("post") ? old_value : new_value;
+        } else {
         const auto target = capture_hir_packed_update_target(
             update.operands.front());
         if (!target) {
@@ -9387,6 +9614,7 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         result = update.text.starts_with("post")
             ? target->captured
             : *updated;
+        }
     } else if (expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::call
@@ -12825,6 +13053,31 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 dynamic->source_descending,
                 is_two_state_domain(register_domain(*input)),
                 dynamic->base_offset,
+            });
+        } else if (source.index && expression->systemverilog != nullptr
+            && hir_systemverilog_indexed_member(expression_id)) {
+            // A member of an element selected by a runtime index (`p[i].hi`,
+            // IEEE 1800-2017 7.4.1): an unknown or out-of-range index reads
+            // X.
+            const auto offset = lower_hir_systemverilog_indexed_member_offset(
+                expression_id, *source_width);
+            if (!offset
+                || *source_width - 1U
+                    > static_cast<std::size_t>(
+                        std::numeric_limits<std::int64_t>::max())) {
+                return std::nullopt;
+            }
+            process_.operations.emplace_back(DynamicPartSelect {
+                destination,
+                *input,
+                *offset,
+                static_cast<std::int64_t>(*source_width - 1U),
+                0,
+                static_cast<std::uint32_t>(*result_width),
+                true,
+                true,
+                is_two_state_domain(register_domain(*input)),
+                0U,
             });
         } else if (expression->systemverilog != nullptr && source.index
             && hir_systemverilog_packed_shape(source.operands[0]).size()

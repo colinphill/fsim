@@ -2485,10 +2485,35 @@ bool Lowerer::lower_hir_output_actual_write(
         slice = selected.kind == semantic::vhdl::ExpressionKind::slice;
     }
     const auto selected = index || slice;
+    // A select of an element of a multidimensional packed array
+    // (`.out(q[0][g])`) names the array through its enclosing selects.
+    auto selected_root = selected && !operands.empty()
+        ? operands.front()
+        : target;
+    bool nested_select { };
+    for (std::size_t depth { };
+        selected && expression->systemverilog != nullptr && depth < 16U;
+        ++depth) {
+        const auto prefix = specialized_hir_unit_->find_expression(
+            selected_root);
+        if (!prefix || prefix->systemverilog == nullptr
+            || prefix->systemverilog->kind
+                != semantic::sv::ExpressionKind::index
+            || prefix->systemverilog->operands.size() != 2U
+            || prefix->systemverilog->text != "index") {
+            break;
+        }
+        selected_root = prefix->systemverilog->operands.front();
+        nested_select = true;
+    }
     if (selected
         && (operands.size() != (index ? 2U : 3U)
-            || hir_referenced_declaration(operands.front())
+            || hir_referenced_declaration(selected_root)
                 != declaration)) {
+        return false;
+    }
+    if (nested_select
+        && !hir_constant_selection(target, hir_process_scope_)) {
         return false;
     }
     const auto member_selection = hir_systemverilog_member_selection(

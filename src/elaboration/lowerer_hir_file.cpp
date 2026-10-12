@@ -583,6 +583,33 @@ Lowerer::lower_hir_formatted_string(
                 = use_systemverilog_timeformat_width(
                     conversion.minimum_width,
                     conversion.suppress_leading_zero);
+            // An integral value other than $time is in the module's time
+            // unit (IEEE 1800-2017 21.2.1.3).
+            const auto record = value
+                ? specialized_hir_unit_->find_expression(*value)
+                : std::nullopt;
+            const bool current_time = !record || record->systemverilog == nullptr
+                || (record->systemverilog->kind
+                        == semantic::sv::ExpressionKind::call
+                    && record->systemverilog->text == "$time");
+            const auto width = value
+                ? hir_expression_width(*value, hir_process_scope_)
+                : std::nullopt;
+            const auto value_kind = value
+                ? hir_systemverilog_scalar_kind(*value)
+                : frontend::SystemVerilogScalarKind::None;
+            if (!current_time && width && *width != 0U && *width <= 64U
+                && (value_kind == frontend::SystemVerilogScalarKind::None
+                    || value_kind == frontend::SystemVerilogScalarKind::Time)) {
+                const auto lowered = lower_hir_expression(*value, *width);
+                if (!lowered) {
+                    return false;
+                }
+                operation.first = *lowered;
+                operation.time_unit_femtoseconds
+                    = hir_time_unit_femtoseconds();
+                operation.time_signed = hir_expression_signed(*value);
+            }
             process_.operations.emplace_back(operation);
             return true;
         }
@@ -627,6 +654,15 @@ Lowerer::lower_hir_formatted_string(
             scalar = frontend::SystemVerilogScalarKind::Real;
             value_width = 64U;
         }
+        // %d of a real shows it rounded to an integer (21.2.1.3, 6.12.2).
+        const bool real_decimal = conversion.format
+                == frontend::OutputFormat::Decimal
+            && frontend::is_real_scalar_kind(scalar);
+        if (real_decimal) {
+            lowered = convert_hir_real_to_integral(*lowered, scalar);
+            scalar = frontend::SystemVerilogScalarKind::None;
+            value_width = register_width(*lowered);
+        }
         const auto width_register = allocate_register(
             32U, frontend::ValueDomain::Bit2);
         process_.operations.emplace_back(LoadConstant {
@@ -638,11 +674,13 @@ Lowerer::lower_hir_formatted_string(
         operation.scalar_kind = scalar;
         operation.signed_decimal
             = operation.format == OutputFormat::decimal
-            && hir_expression_signed(*value);
-        operation.minimum_width = hir_systemverilog_decimal_width(*value,
-            operation.format,
-            conversion.suppress_leading_zero || conversion.left_justify,
-            conversion.minimum_width);
+            && (real_decimal || hir_expression_signed(*value));
+        operation.minimum_width = real_decimal
+            ? conversion.minimum_width
+            : hir_systemverilog_decimal_width(*value,
+                  operation.format,
+                  conversion.suppress_leading_zero || conversion.left_justify,
+                  conversion.minimum_width);
         process_.operations.emplace_back(operation);
         return true;
     };
@@ -690,22 +728,26 @@ Lowerer::lower_hir_formatted_string(
     };
 
     std::size_t value_index = default_format ? 0U : 1U;
+    // %t takes an argument when the arguments outnumber the other
+    // conversions; otherwise it shows the current time.
+    const auto other_values = static_cast<std::size_t>(std::ranges::count_if(
+        parsed.conversions,
+        [](const frontend::ParsedOutputConversion& conversion) {
+            return output_conversion_consumes_value(conversion.format);
+        }));
+    auto time_values = arguments.size() > value_index + other_values
+        ? arguments.size() - value_index - other_values
+        : std::size_t { };
     for (const auto& conversion : parsed.conversions) {
-        if (conversion.format == frontend::OutputFormat::Time
-            && value_index < arguments.size()) {
-            const auto value = specialized_hir_unit_->find_expression(
-                arguments[value_index]);
-            if (value && value->systemverilog != nullptr
-                && value->systemverilog->kind
-                    == semantic::sv::ExpressionKind::call
-                && value->systemverilog->text == "$time") {
-                ++value_index;
+        std::optional<semantic::ExpressionId> value;
+        if (conversion.format == frontend::OutputFormat::Time) {
+            if (time_values != 0U && value_index < arguments.size()) {
+                value = arguments[value_index++];
+                --time_values;
             }
+        } else if (output_conversion_consumes_value(conversion.format)) {
+            value = arguments[value_index++];
         }
-        const auto value = output_conversion_consumes_value(
-                               conversion.format)
-            ? std::optional { arguments[value_index++] }
-            : std::nullopt;
         if (!append_value(conversion, value)) {
             return std::nullopt;
         }
@@ -3530,6 +3572,9 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                     output.zero_pad,
                     kind,
                     output.precision,
+                    format == runtime::simir::OutputFormat::time
+                        ? hir_time_unit_femtoseconds()
+                        : 0U,
                 });
                 return true;
             };

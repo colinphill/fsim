@@ -170,6 +170,41 @@ namespace {
             }
         }
 
+        [[nodiscard]] bool genvar_scope(
+            const semantic::ScopeId scope, const std::string_view spelling)
+        {
+            if (!genvar_scopes_) {
+                genvar_scopes_.emplace();
+                const auto collect = [&](const auto& self,
+                    const std::vector<sv::GenerateRegion>& regions) -> void {
+                    for (const auto& region : regions) {
+                        if (region.kind == sv::GenerateKind::iterative
+                            && !region.iterator.empty()) {
+                            genvar_scopes_->insert_or_assign(
+                                region.scope, region.iterator);
+                            // A process of the block has its own scope
+                            // outside the block's scope chain.
+                            for (const auto process : region.processes) {
+                                const auto found = std::ranges::find(
+                                    hir_.processes(), process,
+                                    &sv::Process::id);
+                                if (found != hir_.processes().end()) {
+                                    genvar_scopes_->insert_or_assign(
+                                        found->scope, region.iterator);
+                                }
+                            }
+                        }
+                        self(self, region.nested);
+                    }
+                };
+                for (const auto& unit : hir_.units()) {
+                    collect(collect, unit.generates);
+                }
+            }
+            const auto found = genvar_scopes_->find(scope);
+            return found != genvar_scopes_->end() && found->second == spelling;
+        }
+
         [[nodiscard]] sv::Name name(
             const std::string_view spelling,
             const frontend::SourceSpan& span,
@@ -186,6 +221,11 @@ namespace {
                 }
                 if (!result.overloads.empty()) {
                     break;
+                }
+                // A loop-generate block's genvar hides outer declarations of
+                // its name (IEEE 1800-2017 27.4).
+                if (genvar_scope(*visible_scope, spelling)) {
+                    return result;
                 }
                 visible_scope = parent_scope(*visible_scope);
             }
@@ -1946,6 +1986,8 @@ namespace {
 
         void resolve_expression_names()
         {
+            // The generate regions are complete now.
+            genvar_scopes_.reset();
             for (auto& item : hir_.mutable_expressions()) {
                 if (!item.referenced_name) {
                     continue;
@@ -1953,6 +1995,7 @@ namespace {
                 item.referenced_name->selected.reset();
                 item.referenced_name->overloads.clear();
                 auto visible_scope = std::optional<semantic::ScopeId> { item.scope };
+                bool genvar = false;
                 while (visible_scope) {
                     for (const auto& declaration : hir_.declarations()) {
                         if (declaration.scope == *visible_scope
@@ -1963,7 +2006,17 @@ namespace {
                     if (!item.referenced_name->overloads.empty()) {
                         break;
                     }
+                    // A loop-generate genvar hides outer declarations of its
+                    // name (IEEE 1800-2017 27.4).
+                    if (genvar_scope(*visible_scope,
+                            item.referenced_name->spelling)) {
+                        genvar = true;
+                        break;
+                    }
                     visible_scope = parent_scope(*visible_scope);
+                }
+                if (genvar) {
+                    continue;
                 }
                 if (item.referenced_name->overloads.empty()) {
                     append_imported_name_candidates(
@@ -1977,6 +2030,7 @@ namespace {
 
         semantic::Model& model_;
         sv::Hir& hir_;
+        std::optional<std::map<semantic::ScopeId, std::string>> genvar_scopes_;
         std::set<std::uint32_t> claimed_expressions_;
         std::optional<ExpressionCandidateIndex> expression_identity_candidate_index_;
         std::optional<ExpressionCandidateIndex> hir_expression_candidate_index_;

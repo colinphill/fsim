@@ -362,29 +362,6 @@ namespace fsim::runtime::simir {
         const auto decoded = decode_systemverilog_scalar_payload(value, scalar_kind);
         if (!decoded)
             throw std::runtime_error { "invalid scalar formatted payload" };
-        // %d of a real prints the value rounded to an integer (IEEE
-        // 1800-2017 21.2.1.3, 6.12.2).
-        if (format == OutputFormat::decimal
-            && scalar_kind != SystemVerilogScalarKind::Time) {
-            const auto number = decoded.value.as_shortreal()
-                ? std::optional<double> { static_cast<double>(
-                      *decoded.value.as_shortreal()) }
-                : decoded.value.as_real();
-            if (number && std::isfinite(*number)
-                && std::fabs(*number) < 9.2e18) {
-                auto text = std::to_string(std::llround(*number));
-                if (text.size() < minimum_width) {
-                    const auto padding
-                        = static_cast<std::size_t>(minimum_width) - text.size();
-                    if (left_justify) {
-                        text.append(padding, ' ');
-                    } else {
-                        text.insert(0U, padding, zero_pad ? '0' : ' ');
-                    }
-                }
-                return std::string { prefix } + text + std::string { suffix };
-            }
-        }
         SystemVerilogScalarFormatOptions options;
         options.format = format == OutputFormat::real_scientific
             ? SystemVerilogScalarTextFormat::Scientific
@@ -431,6 +408,56 @@ namespace fsim::runtime::simir {
     result.append(formatted);
     result.append(suffix);
     return result;
+}
+
+[[nodiscard]] std::optional<SimulationTick> integral_time_ticks(
+    const PackedLogic4& value,
+    const bool signed_value,
+    const std::uint64_t unit_femtoseconds,
+    const SystemVerilogTimeFormat& time_format,
+    const SystemVerilogScalarKind scalar_kind)
+{
+    const auto resolution = time_format.resolution_femtoseconds;
+    if (unit_femtoseconds == 0U || resolution == 0U || value.width() == 0U
+        || value.width() > 64U) {
+        return std::nullopt;
+    }
+    // The maximum unit names the project resolution itself.
+    const auto unit = unit_femtoseconds
+            == std::numeric_limits<std::uint64_t>::max()
+        ? resolution
+        : unit_femtoseconds;
+    // A real time rounds to the nearest tick.
+    if (scalar_kind == SystemVerilogScalarKind::Real
+        || scalar_kind == SystemVerilogScalarKind::Realtime
+        || scalar_kind == SystemVerilogScalarKind::ShortReal) {
+        const auto decoded = decode_systemverilog_scalar_payload(
+            value, scalar_kind);
+        const auto number = decoded ? decoded.value.as_real() : std::nullopt;
+        if (!number || !std::isfinite(*number) || *number < 0.0) {
+            return std::nullopt;
+        }
+        const auto ticks = std::round(static_cast<long double>(*number)
+            * static_cast<long double>(unit)
+            / static_cast<long double>(resolution));
+        if (ticks >= 18446744073709551616.0L) {
+            return std::nullopt;
+        }
+        return static_cast<SimulationTick>(ticks);
+    }
+    const auto word = value.low_word();
+    if (word.bval != 0U) {
+        return std::nullopt;
+    }
+    if (signed_value && ((word.aval >> (value.width() - 1U)) & 1U) != 0U) {
+        return std::nullopt;
+    }
+    const auto product = static_cast<unsigned __int128>(word.aval) * unit;
+    const auto ticks = (product + resolution / 2U) / resolution;
+    if (ticks > std::numeric_limits<SimulationTick>::max()) {
+        return std::nullopt;
+    }
+    return static_cast<SimulationTick>(ticks);
 }
 
 [[nodiscard]] std::string make_time_output(

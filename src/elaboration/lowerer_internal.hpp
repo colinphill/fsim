@@ -389,6 +389,9 @@ private:
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<std::int64_t> hir_constant_integer(
         semantic::ExpressionId expression) const;
+    // The time unit of the unit being lowered, for %t of integral values;
+    // the maximum value when it counts in the project resolution.
+    [[nodiscard]] std::uint64_t hir_time_unit_femtoseconds() const;
     // A range bound (a VHDL range constraint or a SystemVerilog packed
     // range), folding a bound that is still an expression.
     template <typename Range>
@@ -461,6 +464,10 @@ private:
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
     [[nodiscard]] std::optional<HirConstantSelection>
+    hir_constant_element_selection(
+        semantic::ExpressionId expression,
+        semantic::ScopeId process_scope) const;
+    [[nodiscard]] std::optional<HirConstantSelection>
     hir_root_constant_selection(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
@@ -488,6 +495,9 @@ private:
     [[nodiscard]] std::optional<std::size_t> hir_dynamic_part_width(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
+    [[nodiscard]] std::optional<RegisterId>
+    lower_hir_systemverilog_indexed_member_offset(
+        semantic::ExpressionId expression, std::size_t source_width);
     [[nodiscard]] std::optional<runtime::simir::DynamicIndex>
     lower_hir_dynamic_index(
         semantic::ExpressionId source,
@@ -750,6 +760,8 @@ private:
         frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
         bool signed_value { };
         std::optional<TaggedMember> tagged;
+        /// The dimensions of a multidimensional packed member.
+        std::vector<HirPackedRange> shape;
     };
     [[nodiscard]] std::optional<std::size_t>
     hir_systemverilog_member_offset(
@@ -758,6 +770,12 @@ private:
     [[nodiscard]] std::optional<HirPackedMemberSelection>
     hir_systemverilog_member_selection(
         semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<HirPackedMemberSelection>
+    hir_systemverilog_indexed_member(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<HirPackedMemberSelection>
+    hir_systemverilog_member_path(
+        semantic::DeclarationId declaration, std::string_view path) const;
     // An enumeration method (IEEE 1800-2017 6.19.5): `e.first()`, or the
     // parenthesis-free `e.next` that the frontend keeps as a dotted name.
     struct HirEnumerationMethod {
@@ -1096,6 +1114,10 @@ private:
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_systemverilog_parameter_pattern(
         semantic::ExpressionId parameter, semantic::ExpressionId value);
+    [[nodiscard]] std::optional<RegisterId>
+    lower_hir_systemverilog_packed_array_pattern(
+        semantic::ExpressionId expression,
+        const semantic::sv::TypeReference& type, std::size_t expected_width);
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_systemverilog_packed_pattern(
         semantic::ExpressionId expression,
@@ -2391,6 +2413,8 @@ private:
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<SignalId> hir_hierarchical_signal(
         std::string_view name) const;
+    [[nodiscard]] bool hir_genvar_hides_signal(
+        std::string_view name, semantic::ScopeId scope) const;
 };
 
 } // namespace fsim::elaboration
