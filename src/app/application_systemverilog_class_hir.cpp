@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_systemverilog_hir_internal.hpp"
 
+#include <limits>
+#include <map>
+#include <optional>
 #include <set>
+#include <string_view>
 #include <sstream>
 
 namespace fsim::app::application_detail {
@@ -75,6 +79,119 @@ frontend::TaskArgument task_argument(
     return { input.name, input.type, input.direction, input.span,
         input.reference, input.default_value, input.const_reference,
         input.static_reference };
+}
+
+// The value of a class constant initializer made of decimal or based
+// integer literals joined by `+` (class enum literals, IEEE 1800-2017 6.19).
+std::optional<std::uint64_t> class_constant_value(
+    const frontend::Expression& expression)
+{
+    if (expression.kind == frontend::ExpressionKind::Binary
+        && expression.text == "+" && expression.operands.size() == 2U) {
+        const auto left = class_constant_value(expression.operands[0]);
+        const auto right = class_constant_value(expression.operands[1]);
+        if (!left || !right) {
+            return std::nullopt;
+        }
+        return *left + *right;
+    }
+    if (expression.kind != frontend::ExpressionKind::IntegerLiteral) {
+        return std::nullopt;
+    }
+    std::string digits;
+    unsigned base = 10U;
+    const auto quote = expression.text.find('\'');
+    auto text = std::string_view { expression.text };
+    if (quote != std::string_view::npos) {
+        text.remove_prefix(quote + 1U);
+        if (!text.empty() && (text.front() == 's' || text.front() == 'S')) {
+            text.remove_prefix(1U);
+        }
+        if (text.empty()) {
+            return std::nullopt;
+        }
+        switch (text.front()) {
+        case 'd': case 'D': base = 10U; break;
+        case 'h': case 'H': base = 16U; break;
+        case 'b': case 'B': base = 2U; break;
+        case 'o': case 'O': base = 8U; break;
+        default: return std::nullopt;
+        }
+        text.remove_prefix(1U);
+    }
+    std::uint64_t value { };
+    bool any { };
+    for (const auto character : text) {
+        if (character == '_') {
+            continue;
+        }
+        unsigned digit { };
+        if (character >= '0' && character <= '9') {
+            digit = static_cast<unsigned>(character - '0');
+        } else if (character >= 'a' && character <= 'f') {
+            digit = static_cast<unsigned>(character - 'a') + 10U;
+        } else if (character >= 'A' && character <= 'F') {
+            digit = static_cast<unsigned>(character - 'A') + 10U;
+        } else {
+            return std::nullopt;
+        }
+        if (digit >= base
+            || value > (std::numeric_limits<std::uint64_t>::max() - digit)
+                / base) {
+            return std::nullopt;
+        }
+        value = value * base + digit;
+        any = true;
+    }
+    if (!any) {
+        return std::nullopt;
+    }
+    return value;
+}
+
+
+// The values of an enumeration type's literals in declaration order; an
+// implicit value follows the previous one (IEEE 1800-2017 6.19). Empty
+// when the type is not an enumeration or a value is not a literal sum.
+std::vector<std::uint64_t> enumeration_values(const frontend::Type& type)
+{
+    std::vector<std::uint64_t> result;
+    std::uint64_t next { };
+    std::map<std::string, std::uint64_t, std::less<>> earlier;
+    const auto evaluate = [&](const auto& self,
+                              const frontend::Expression& expression)
+        -> std::optional<std::uint64_t> {
+        if (expression.kind == frontend::ExpressionKind::Identifier) {
+            const auto found = earlier.find(expression.text);
+            return found == earlier.end()
+                ? std::nullopt
+                : std::optional { found->second };
+        }
+        if (expression.kind == frontend::ExpressionKind::Binary
+            && expression.text == "+" && expression.operands.size() == 2U) {
+            const auto left = self(self, expression.operands[0]);
+            const auto right = self(self, expression.operands[1]);
+            return left && right
+                ? std::optional { *left + *right }
+                : std::nullopt;
+        }
+        return class_constant_value(expression);
+    };
+    for (std::size_t index = 0; index < type.enumeration_literals.size();
+         ++index) {
+        std::optional<std::uint64_t> value = next;
+        if (index < type.systemverilog_enumeration_values.size()) {
+            value = evaluate(evaluate,
+                type.systemverilog_enumeration_values[index]);
+        }
+        if (!value) {
+            return { };
+        }
+        earlier.insert_or_assign(type.enumeration_literals[index], *value);
+        result.push_back(*value);
+        next = *value + 1U;
+    }
+    return result;
 }
 
 } // namespace
@@ -328,6 +445,28 @@ std::optional<sv::ConstraintBinding> SystemVerilogHirBuilder::property_binding(
     binding.specialization_identity = specialization.specialization_identity;
     binding.canonical_identity = found->owner_identity + "::" + found->name;
     binding.type = class_property_type(found->type, binding_source);
+    // A property of this class keeps its declared type, as its runtime
+    // descriptor does, so an enumeration keeps its nominal type.
+    if (found->owner_identity == declaration.canonical_identity) {
+        const auto declared = std::ranges::find_if(declaration.properties,
+            [&](const frontend::SystemVerilogClassProperty& property) {
+                return property.declaration.name == found->name;
+            });
+        if (declared != declaration.properties.end()
+            && !declared->declaration.type.enumeration_literals.empty()) {
+            const auto declared_type = class_property_type(
+                declared->declaration.type, binding_source);
+            binding.type.target = declared_type.target;
+            binding.type.value_form = declared_type.value_form;
+        }
+    }
+    // A class constant, such as a class enum literal, is a constant of
+    // the constraint (IEEE 1800-2017 18.5.1).
+    if (found->is_static && found->is_const && found->initializer) {
+        if (const auto value = class_constant_value(*found->initializer)) {
+            binding.constant_value = std::to_string(*value);
+        }
+    }
     return binding;
 }
 
@@ -430,6 +569,55 @@ void SystemVerilogHirBuilder::resolve_constraint_expression(
                     binding = parameter_binding(
                         declaration, specialization, expression.text,
                         expression.source);
+                }
+                // A literal of an enumerated property's type is a constant
+                // (IEEE 1800-2017 18.5, 6.19).
+                if (!binding) {
+                    for (const auto& property : declaration.properties) {
+                        const auto& type = property.declaration.type;
+                        const auto literal = std::ranges::find(
+                            type.enumeration_literals, expression.text);
+                        if (literal == type.enumeration_literals.end()) {
+                            continue;
+                        }
+                        const auto values = enumeration_values(type);
+                        const auto index = static_cast<std::size_t>(
+                            literal - type.enumeration_literals.begin());
+                        if (index >= values.size()) {
+                            continue;
+                        }
+                        sv::ConstraintBinding constant;
+                        constant.kind = sv::ConstraintReferenceKind::parameter;
+                        constant.specialization_identity
+                            = specialization.specialization_identity;
+                        constant.canonical_identity
+                            = declaration.canonical_identity + "::"
+                            + expression.text;
+                        // The layout gives the width; the declaration the
+                        // enumeration's nominal type.
+                        const auto layout = std::ranges::find_if(
+                            specialization.properties,
+                            [&](const frontend::SystemVerilogClassPropertyLayout&
+                                    candidate) {
+                                return candidate.name
+                                        == property.declaration.name
+                                    && candidate.owner_identity
+                                        == declaration.canonical_identity;
+                            });
+                        if (layout == specialization.properties.end()) {
+                            continue;
+                        }
+                        constant.type = class_property_type(
+                            layout->type, expression.source);
+                        const auto declared_type = class_property_type(
+                            type, expression.source);
+                        constant.type.target = declared_type.target;
+                        constant.type.value_form = declared_type.value_form;
+                        constant.constant_value
+                            = std::to_string(values[index]);
+                        binding = std::move(constant);
+                        break;
+                    }
                 }
             }
         } else if (expression.kind == sv::ConstraintExpressionKind::call) {
@@ -708,6 +896,10 @@ void SystemVerilogHirBuilder::add_class(
         retained.static_storage = property.is_static;
         retained.constant = property.is_const;
         retained.parameter = property.is_parameter;
+        // An enumeration's literal values; an implicit value follows the
+        // previous one (IEEE 1800-2017 6.19).
+        retained.enumeration_domain = enumeration_values(
+            property.declaration.type);
         retained.source = retained_declaration.source;
         retained.origin = retained_declaration.origin;
         output.properties.push_back(std::move(retained));

@@ -4,6 +4,7 @@
 #include <boost/multiprecision/cpp_int.hpp>
 
 #include <bit>
+#include <cmath>
 
 namespace fsim::runtime::simir {
 
@@ -361,6 +362,29 @@ namespace fsim::runtime::simir {
         const auto decoded = decode_systemverilog_scalar_payload(value, scalar_kind);
         if (!decoded)
             throw std::runtime_error { "invalid scalar formatted payload" };
+        // %d of a real prints the value rounded to an integer (IEEE
+        // 1800-2017 21.2.1.3, 6.12.2).
+        if (format == OutputFormat::decimal
+            && scalar_kind != SystemVerilogScalarKind::Time) {
+            const auto number = decoded.value.as_shortreal()
+                ? std::optional<double> { static_cast<double>(
+                      *decoded.value.as_shortreal()) }
+                : decoded.value.as_real();
+            if (number && std::isfinite(*number)
+                && std::fabs(*number) < 9.2e18) {
+                auto text = std::to_string(std::llround(*number));
+                if (text.size() < minimum_width) {
+                    const auto padding
+                        = static_cast<std::size_t>(minimum_width) - text.size();
+                    if (left_justify) {
+                        text.append(padding, ' ');
+                    } else {
+                        text.insert(0U, padding, zero_pad ? '0' : ' ');
+                    }
+                }
+                return std::string { prefix } + text + std::string { suffix };
+            }
+        }
         SystemVerilogScalarFormatOptions options;
         options.format = format == OutputFormat::real_scientific
             ? SystemVerilogScalarTextFormat::Scientific

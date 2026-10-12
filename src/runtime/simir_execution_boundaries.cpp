@@ -1979,6 +1979,44 @@ void Interpreter::Impl::handle_boundary(
             read_boundary_value(property->source));
         return;
     }
+    if (const auto* property = fsim::runtime::simir::operation_get_if<
+            ClassPropertyContainerRead>(&operation)) {
+        if (!class_property_container_hook) {
+            fail(process, "class property service is unavailable");
+        }
+        // The destination keeps its declared type; a property never
+        // written reads as that type's default value.
+        auto value = default_container_value(
+            (process.executor
+                    ? process.executor->read_container_register(
+                          property->destination)
+                    : read_container_register(process, property->destination))
+                .type);
+        class_property_container_hook(
+            read_boundary_value(property->receiver).low_word().aval,
+            property->property_identity, value, false);
+        if (process.executor) {
+            process.executor->write_container_register(
+                property->destination, value);
+        } else {
+            get_container_register(process, property->destination)
+                = std::move(value);
+        }
+        return;
+    }
+    if (const auto* property = fsim::runtime::simir::operation_get_if<
+            ClassPropertyContainerWrite>(&operation)) {
+        if (!class_property_container_hook) {
+            fail(process, "class property service is unavailable");
+        }
+        auto value = process.executor
+            ? process.executor->read_container_register(property->source)
+            : read_container_register(process, property->source);
+        class_property_container_hook(
+            read_boundary_value(property->receiver).low_word().aval,
+            property->property_identity, value, true);
+        return;
+    }
     if (const auto* method = fsim::runtime::simir::operation_get_if<ClassMethodCall>(
             &operation)) {
         if (!class_method_call_hook) {

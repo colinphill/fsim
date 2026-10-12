@@ -116,6 +116,8 @@ bool supports_wide_register_operation(
                 || std::is_same_v<OperationType, ClassAllocate>
                 || std::is_same_v<OperationType, ClassPropertyRead>
                 || std::is_same_v<OperationType, ClassPropertyWrite>
+                || std::is_same_v<OperationType, ClassPropertyContainerRead>
+                || std::is_same_v<OperationType, ClassPropertyContainerWrite>
                 || std::is_same_v<OperationType, ClassStaticPropertyRead>
                 || std::is_same_v<OperationType, ClassStaticPropertyWrite>
                 || std::is_same_v<OperationType, ClassMethodCall>

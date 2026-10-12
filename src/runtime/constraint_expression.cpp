@@ -630,7 +630,9 @@ SystemVerilogConstraintClause systemverilog_constraint_expression_clause(
   SystemVerilogConstraintClause clause;
   clause.canonical_identity = std::move(canonical_identity);
   clause.variables = std::move(variables);
-  clause.evaluate = [expression = std::move(expression),
+  clause.expression = std::make_shared<const SystemVerilogConstraintExpression>(
+      std::move(expression));
+  clause.evaluate = [expression = clause.expression,
                      dependencies = clause.variables](
       const SystemVerilogConstraintAssignment& assignment) {
     for (const auto variable : dependencies) {
@@ -639,7 +641,7 @@ SystemVerilogConstraintClause systemverilog_constraint_expression_clause(
       }
     }
     const auto result = evaluate_systemverilog_constraint_expression(
-        expression, assignment);
+        *expression, assignment);
     if (result.width() != 1) {
       throw std::invalid_argument{
           "constraint expression root is not a scalar predicate"};

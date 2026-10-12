@@ -1177,6 +1177,7 @@ specialize_systemverilog_classes(const ParsedDesign& design) {
       layout.is_static = property.is_static;
       layout.is_rand = property.is_rand;
       layout.is_randc = property.is_randc;
+      layout.is_const = property.is_const;
       layout.initializer = property.declaration.initializer;
       if (layout.initializer) {
         if (const auto value = evaluate(*layout.initializer, values)) {

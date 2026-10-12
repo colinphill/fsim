@@ -209,6 +209,14 @@ void validate_prefix_operation(
                             || std::ranges::find(operation.actual_kinds, 1U)
                                 != operation.actual_kinds.end();
                     }
+                    // Value-container class properties run on the
+                    // interpreter.
+                    if constexpr (
+                        std::is_same_v<OperationType, ClassPropertyContainerRead>
+                        || std::is_same_v<OperationType, ClassPropertyContainerWrite>) {
+                        reject_unsupported(process, index,
+                            "class container property access is interpreted");
+                    }
                     validate_class_operation(
                         process, index, operation, record_use, record_definition,
                         constrain_width, validate_string_register);

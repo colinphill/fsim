@@ -216,6 +216,8 @@ struct OperationCacheTraits;
     X(ClassAllocate, "ClassAllocate") \
     X(ClassPropertyRead, "ClassPropertyRead") \
     X(ClassPropertyWrite, "ClassPropertyWrite") \
+    X(ClassPropertyContainerRead, "ClassPropertyContainerRead") \
+    X(ClassPropertyContainerWrite, "ClassPropertyContainerWrite") \
     X(ClassMethodCall, "ClassMethodCall") \
     X(ClassStaticPropertyRead, "ClassStaticPropertyRead") \
     X(ClassStaticPropertyWrite, "ClassStaticPropertyWrite") \
@@ -274,7 +276,7 @@ consteval bool unique_operation_cache_tags()
     return true;
 }
 
-static_assert(operation_cache_tags.size() == 194U);
+static_assert(operation_cache_tags.size() == 196U);
 static_assert(unique_operation_cache_tags());
 #undef FSIM_CACHE_OPERATIONS
 

@@ -403,7 +403,7 @@ void verify_reference_failure(
         output << R"(`timescale 1ns/1ns
 module reference_failure;
   logic [7:0] value;
-  integer invalid_delay;
+  real invalid_delay;
   task automatic fail(ref logic [7:0] target);
     target = 8'hff;
     #(invalid_delay);
@@ -411,7 +411,7 @@ module reference_failure;
   endtask
   initial begin
     value = 8'h07;
-    invalid_delay = -1;
+    invalid_delay = -1.0;
     fail(value);
   end
 endmodule

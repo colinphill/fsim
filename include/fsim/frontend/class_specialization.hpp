@@ -22,6 +22,8 @@ struct SystemVerilogClassPropertyLayout {
   bool is_static{};
   bool is_rand{};
   bool is_randc{};
+  // A constant (`const`) property, such as a class enum literal.
+  bool is_const{};
   std::optional<Expression> initializer;
 };
 

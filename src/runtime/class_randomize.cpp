@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <map>
 #include <new>
 #include <optional>
 #include <set>
@@ -92,8 +93,13 @@ struct SelectedProperty {
     const SystemVerilogClassPropertyValue& property) {
   const auto* random = property.random_state
       ? &*property.random_state : nullptr;
+  // Integer types (`int`, `integer`, `shortint`, ...) have the integer
+  // domain kind, as the constraint lowering gives them.
+  const bool integer_type = property.kind == SystemVerilogClassPropertyKind::Integer
+      || (random != nullptr
+          && random->nominal_type.find("int") != std::string::npos);
   return {
-      property.kind == SystemVerilogClassPropertyKind::Integer
+      integer_type
           ? SystemVerilogConstraintDomainKind::Integer
           : SystemVerilogConstraintDomainKind::BitVector,
       property.packed.width(),
@@ -127,6 +133,17 @@ struct SelectedProperty {
     result.push_back(PackedLogic4::from_aval_bval(width, value, 0));
   }
   return result;
+}
+
+// Whether the request gives a property an exact (enumerated) domain.
+[[nodiscard]] bool has_exact_domain(
+    const SystemVerilogClassRandomizeRequest& request,
+    const std::string_view canonical_identity) {
+  if (request.property_domains.contains(canonical_identity)) return true;
+  const auto separator = canonical_identity.rfind("::");
+  return separator != std::string_view::npos
+      && request.property_domains.contains(
+          canonical_identity.substr(separator + 2U));
 }
 
 [[nodiscard]] std::vector<PackedLogic4> exact_domain(
@@ -191,7 +208,10 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
   } else if (request.variable_list.empty()) {
     for (std::size_t index = 0; index < object.properties.size(); ++index) {
       const auto& random = object.properties[index].random_state;
-      if (random && random->enabled) selected_indices.insert(index);
+      if (random && random->enabled
+          && random->kind != SystemVerilogClassRandomKind::None) {
+        selected_indices.insert(index);
+      }
     }
   } else {
     for (const auto& name : request.variable_list) {
@@ -201,7 +221,30 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
             "SystemVerilog class randomize property '" + name
             + "' does not exist"};
       }
-      const auto& random = object.properties[*index].random_state;
+      auto& property = object.properties[*index];
+      // A listed property is random for this call even when it is not
+      // declared rand (IEEE 1800-2017 18.11).
+      if (!property.random_state && !property.packed.empty()
+          && (property.kind == SystemVerilogClassPropertyKind::Bit2
+              || property.kind == SystemVerilogClassPropertyKind::Logic4
+              || property.kind == SystemVerilogClassPropertyKind::Integer)) {
+        property.random_state = SystemVerilogClassRandomState{
+            SystemVerilogClassRandomKind::None,
+            property.packed.width(),
+            property.kind == SystemVerilogClassPropertyKind::Integer,
+            property.kind == SystemVerilogClassPropertyKind::Integer
+                ? std::string{"int"}
+                : property.kind == SystemVerilogClassPropertyKind::Bit2
+                    ? std::string{"bit"}
+                    : std::string{"logic"},
+            true,
+            0,
+            0,
+            0,
+            0,
+            {}};
+      }
+      const auto& random = property.random_state;
       if (!random) {
         throw std::invalid_argument{
             "SystemVerilog class randomize property '" + name
@@ -224,6 +267,7 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
   // chosen value (IEEE 1800-2017 18.5); a wide one is drawn directly
   // instead of enumerating its complete domain.
   std::set<std::size_t> direct_indices;
+  std::map<std::size_t, std::vector<PackedLogic4>> bounded;
   {
     std::vector<std::size_t> wide;
     for (const auto index : selected_indices) {
@@ -252,6 +296,11 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
           SystemVerilogConstraintVariable variable;
           variable.canonical_identity = object.property_names[index];
           variable.profile = profile(property);
+          if (has_exact_domain(request, object.property_names[index])) {
+            // An enumerated property's constraints use the enumeration
+            // profile (IEEE 1800-2017 18.4).
+            variable.profile.kind = SystemVerilogConstraintDomainKind::Enumeration;
+          }
           variable.domain.push_back(property.packed);
           const auto id = probe.add_variable(std::move(variable));
           probe_variables.emplace(object.property_names[index], id);
@@ -273,11 +322,24 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
         }
         if (probe.distribution_count() == 0U) {
           for (const auto index : wide) {
-            if (!referenced.contains(index)) direct_indices.insert(index);
+            if (!referenced.contains(index)) {
+              direct_indices.insert(index);
+              continue;
+            }
+            // A constrained wide property draws from the values its hard
+            // clauses' comparisons with constants allow.
+            const auto id = probe_variables.at(object.property_names[index]);
+            auto stream = heap.random_stream(handle,
+                request.call_identity + "::" + object.property_names[index]
+                    + "::$bounded");
+            bounded.emplace(index, systemverilog_constraint_variable_domain(
+                probe.clauses(), id, probe.variables()[id].profile,
+                [&stream] { return stream.next_u64(); }));
           }
         }
       } catch (const std::exception&) {
         direct_indices.clear();
+        bounded.clear();
       }
     }
   }
@@ -293,6 +355,9 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
       SystemVerilogConstraintVariable variable;
       variable.canonical_identity = object.property_names[index];
       variable.profile = profile(property);
+      if (has_exact_domain(request, object.property_names[index])) {
+        variable.profile.kind = SystemVerilogConstraintDomainKind::Enumeration;
+      }
       std::vector<PackedLogic4> base_domain;
       std::optional<SystemVerilogClassRandomState> staged_randc;
       if (selected_indices.contains(index)) {
@@ -310,6 +375,13 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_class_object(
           if (width < 64U) value &= (std::uint64_t{1} << width) - 1U;
           base_domain.push_back(
               PackedLogic4::from_aval_bval(width, value, 0));
+        } else if (const auto found = bounded.find(index);
+                   found != bounded.end()) {
+          if (found->second.empty()) {
+            return {SystemVerilogConstraintSolveStatus::Unsatisfiable,
+                SystemVerilogConstraintResource::None, 0, 0};
+          }
+          base_domain = found->second;
         } else {
           base_domain = exact_domain(
               request, object.property_names[index], property, available);

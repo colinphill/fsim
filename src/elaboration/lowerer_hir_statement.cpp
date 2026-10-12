@@ -1596,6 +1596,39 @@ bool Lowerer::lower_hir_statement(
     if (!statement) {
         return false;
     }
+    // Other processes may change this object's container properties while
+    // a task waits: store the cached ones before a statement that can
+    // suspend and reload them after it.
+    using semantic::sv::StatementKind;
+    const auto* const timed = statement->systemverilog;
+    const bool suspends = !hir_class_container_caches_.empty()
+        && timed != nullptr
+        && (timed->kind == StatementKind::delay_control
+            || timed->kind == StatementKind::event_control
+            || timed->kind == StatementKind::wait_statement
+            || timed->kind == StatementKind::wait_fork
+            || timed->kind == StatementKind::wait_order
+            || timed->kind == StatementKind::fork
+            || timed->kind == StatementKind::task_call
+            || (timed->kind == StatementKind::assignment
+                && timed->assignment_control
+                    != semantic::sv::AssignmentControl::none));
+    if (!suspends) {
+        return lower_hir_statement_unsuspended(statement_id);
+    }
+    flush_hir_class_container_caches();
+    const auto lowered = lower_hir_statement_unsuspended(statement_id);
+    reload_hir_class_container_caches();
+    return lowered;
+}
+
+bool Lowerer::lower_hir_statement_unsuspended(
+    const semantic::StatementId statement_id)
+{
+    const auto statement = specialized_hir_unit_->find_statement(statement_id);
+    if (!statement) {
+        return false;
+    }
     semantic::SourceSpanId source;
     std::optional<semantic::ExpressionId> target;
     std::optional<semantic::ExpressionId> value;
@@ -5329,6 +5362,38 @@ bool Lowerer::lower_hir_statement(
                 || access.operands.size() != 2U) {
                 return assignment_rejected(__LINE__);
             }
+            // An element of a container of values held by an object.
+            if (const auto identity = std::string_view { access.text }.substr(
+                    std::string_view { "@sv-container-index:" }.size());
+                hir_class_value_container_type(identity)) {
+                const auto held = lower_hir_class_value_container(
+                    access.operands[0], identity);
+                if (!held || held->container.type.string_indices
+                    || (held->container.type.element_kind
+                            != ContainerElementKind::Packed
+                        && held->container.type.element_kind
+                            != ContainerElementKind::Scalar)) {
+                    return assignment_rejected(__LINE__);
+                }
+                const auto& type = held->container.type;
+                const auto index = lower_hir_expression(access.operands[1],
+                    type.associative ? type.index_width : 32U);
+                auto element = lower_hir_scalar_converted_value(
+                    *value, type.element_width, type.scalar_kind);
+                if (!index || !element || !lower_intra_assignment_control()) {
+                    return assignment_rejected(__LINE__);
+                }
+                if (register_width(*element) != type.element_width) {
+                    element = resize_register(*element, type.element_width,
+                        hir_expression_signed(*value));
+                }
+                process_.operations.emplace_back(ContainerWrite {
+                    held->container.value, *index, *element,
+                    type.associative ? type.signed_indices : true, false,
+                    false });
+                store_hir_class_value_container(*held);
+                return true;
+            }
             const auto receiver = lower_hir_expression(
                 access.operands[0], 64U);
             const auto index_width = hir_expression_width(
@@ -5373,6 +5438,77 @@ bool Lowerer::lower_hir_statement(
             && target_expression->systemverilog->text.starts_with(
                 "@sv-container-property:")) {
             const auto& access = *target_expression->systemverilog;
+            // A container of values held by an object takes the assigned
+            // value: `new[n]`, a pattern or another container (7.5, 7.6).
+            if (const auto identity = std::string_view { access.text }.substr(
+                    std::string_view { "@sv-container-property:" }.size());
+                access.operands.size() == 1U
+                && hir_class_value_container_type(identity)) {
+                const auto held = lower_hir_class_value_container(
+                    access.operands[0], identity);
+                if (signal_assignment || nonblocking || !held) {
+                    return assignment_rejected(__LINE__);
+                }
+                const auto& type = held->container.type;
+                const auto resized = specialized_hir_unit_->find_expression(
+                    *value);
+                const auto constructor = resized && resized->systemverilog
+                        && resized->systemverilog->kind
+                            == semantic::sv::ExpressionKind::index
+                        && resized->systemverilog->operands.size() == 2U
+                    ? specialized_hir_unit_->find_expression(
+                          resized->systemverilog->operands.front())
+                    : std::nullopt;
+                const bool array_constructor = resized
+                    && resized->systemverilog != nullptr
+                    && resized->systemverilog->kind
+                        == semantic::sv::ExpressionKind::call
+                    && resized->systemverilog->text == "@new-array"
+                    && !resized->systemverilog->operands.empty()
+                    && resized->systemverilog->operands.size() <= 2U;
+                if (constructor && constructor->systemverilog != nullptr
+                    && constructor->systemverilog->kind
+                        == semantic::sv::ExpressionKind::name
+                    && constructor->systemverilog->text == "new") {
+                    const auto size = lower_hir_expression(
+                        resized->systemverilog->operands.back(), 32U);
+                    if (!size || !lower_intra_assignment_control()) {
+                        return assignment_rejected(__LINE__);
+                    }
+                    process_.operations.emplace_back(ResizeContainer {
+                        held->container.value, *size, std::nullopt,
+                        type.queue });
+                } else if (array_constructor) {
+                    // `new[n](init)` keeps the initializer's prefix (7.5.1).
+                    const auto& operands = resized->systemverilog->operands;
+                    const auto size = lower_hir_expression(operands[0], 32U);
+                    std::optional<ContainerRegisterId> initializer;
+                    if (operands.size() == 2U) {
+                        const auto initial
+                            = lower_hir_static_container_value(operands[1]);
+                        if (!initial || initial->type != type) {
+                            return assignment_rejected(__LINE__);
+                        }
+                        initializer = initial->value;
+                    }
+                    if (!size || !lower_intra_assignment_control()) {
+                        return assignment_rejected(__LINE__);
+                    }
+                    process_.operations.emplace_back(ResizeContainer {
+                        held->container.value, *size, initializer,
+                        type.queue });
+                } else {
+                    const auto assigned = lower_hir_static_container_actual(
+                        *value, type, held->declaration);
+                    if (!assigned || !lower_intra_assignment_control()) {
+                        return assignment_rejected(__LINE__);
+                    }
+                    process_.operations.emplace_back(CopyContainerRegister {
+                        held->container.value, *assigned });
+                }
+                store_hir_class_value_container(*held);
+                return true;
+            }
             const auto resize_expression
                 = specialized_hir_unit_->find_expression(*value);
             if (signal_assignment || nonblocking
@@ -11489,7 +11625,7 @@ bool Lowerer::lower_hir_statement(
         if (format == semantic::sv::OutputFormat::hierarchy) {
             emit_deferred_assertion_action_handoff();
             process_.operations.emplace_back(Display {
-                std::move(prefix) + hierarchy_ + std::move(suffix),
+                std::move(prefix) + hir_scope_hierarchy() + std::move(suffix),
                 newline,
                 postponed,
             });
@@ -11815,9 +11951,20 @@ bool Lowerer::lower_hir_statement(
         case semantic::sv::StatementKind::continue_loop:
             return lower_loop_control({ }, false);
         case semantic::sv::StatementKind::block:
-            return lower_block(input.label);
-        case semantic::sv::StatementKind::fork:
-            return lower_fork(input);
+        case semantic::sv::StatementKind::fork: {
+            const bool named = !input.label.empty();
+            if (named) {
+                hir_named_blocks_.push_back(input.label);
+            }
+            const auto lowered
+                = input.kind == semantic::sv::StatementKind::block
+                ? lower_block(input.label)
+                : lower_fork(input);
+            if (named) {
+                hir_named_blocks_.pop_back();
+            }
+            return lowered;
+        }
         case semantic::sv::StatementKind::wait_fork:
             process_.operations.emplace_back(WaitFork { });
             return true;
@@ -13066,7 +13213,7 @@ bool Lowerer::lower_hir_statement(
                     prefix = std::move(pending_prefix) + std::move(prefix);
                     if (format
                         == semantic::sv::OutputFormat::hierarchy) {
-                        pending_prefix = std::move(prefix) + hierarchy_;
+                        pending_prefix = std::move(prefix) + hir_scope_hierarchy();
                         return;
                     }
                     MonitorValue monitor_value;
@@ -14922,6 +15069,36 @@ bool Lowerer::lower_hir_statement(
                 || container_call.operands.size() != 2U) {
                 return false;
             }
+            // `push_back` to a queue of values held by an object (7.10.2).
+            if (const auto identity = std::string_view { container_call.text }
+                    .substr(push_prefix.size());
+                hir_class_value_container_type(identity)) {
+                const auto container = lower_hir_class_value_container(
+                    container_call.operands[0], identity);
+                if (!container || !container->container.type.queue
+                    || (container->container.type.element_kind
+                            != ContainerElementKind::Packed
+                        && container->container.type.element_kind
+                            != ContainerElementKind::Scalar)) {
+                    return false;
+                }
+                const auto& type = container->container.type;
+                auto element = lower_hir_scalar_converted_value(
+                    container_call.operands[1], type.element_width,
+                    type.scalar_kind);
+                if (!element) {
+                    return false;
+                }
+                if (register_width(*element) != type.element_width) {
+                    element = resize_register(*element, type.element_width,
+                        hir_expression_signed(container_call.operands[1]));
+                }
+                process_.operations.emplace_back(PushContainer {
+                    container->container.value, *element, false,
+                    std::nullopt });
+                store_hir_class_value_container(*container);
+                return true;
+            }
             const auto receiver = lower_hir_expression(
                 container_call.operands[0], 64U);
             const auto pushed_value = lower_hir_expression(
@@ -15709,6 +15886,23 @@ bool Lowerer::hir_update_reevaluates_target(
     const bool reevaluates = !pure(pure, *statement.target, 0U);
     hir_reevaluation_cache_ = { &statement, specialized_hir_unit_, reevaluates };
     return reevaluates;
+}
+
+std::string Lowerer::hir_scope_hierarchy() const
+{
+    auto result = hierarchy_;
+    for (std::size_t index = 0; index < hir_named_blocks_.size(); ++index) {
+        const auto& label = hir_named_blocks_[index];
+        // A process named by its outermost block already ends with it.
+        if (index == 0U && result.size() > label.size()
+            && result.ends_with(label)
+            && result[result.size() - label.size() - 1U] == '.') {
+            continue;
+        }
+        result += '.';
+        result += label;
+    }
+    return result;
 }
 
 std::optional<StringRegisterId> Lowerer::lower_hir_strength_text(

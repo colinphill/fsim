@@ -138,6 +138,12 @@ struct CompiledVhdlDuplicateCallableProfile {
 /// effective specialization. Binding frames are ordered outermost to
 /// innermost; the newest frame has precedence over the specialization overlay.
 /// Candidate vectors remain available for overload and ambiguity diagnostics.
+// Whether the genvar of a loop generate between `use_scope` and the scope
+// of a declaration named `name` hides that declaration (IEEE 1800-2017
+// 27.4).
+[[nodiscard]] bool systemverilog_genvar_hides(const CompiledDesign& design,
+    ScopeId use_scope, ScopeId declaration_scope, std::string_view name);
+
 class CompiledDesignResolver final {
 public:
     CompiledDesignResolver(const CompiledDesign&, UnitId selected_unit,

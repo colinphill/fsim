@@ -23,6 +23,22 @@ struct ClassPropertyWrite {
   std::string property_identity;
 };
 
+/// Copy a value-container class property (an unpacked array, queue or
+/// associative array of values) into a container register; a property never
+/// written reads as its type's default value.
+struct ClassPropertyContainerRead {
+  ContainerRegisterId destination{};
+  RegisterId receiver{};
+  std::string property_identity;
+};
+
+/// Store a container register into a value-container class property.
+struct ClassPropertyContainerWrite {
+  RegisterId receiver{};
+  ContainerRegisterId source{};
+  std::string property_identity;
+};
+
 struct ClassMethodCall {
   RegisterId destination{};
   RegisterId receiver{};

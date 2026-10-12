@@ -21,6 +21,9 @@ struct Scope {
   // Module and interface instances of the enclosing unit, by instance name,
   // with the name of the instantiated unit.
   std::map<std::string, std::string, std::less<>> instances{};
+  // Statements of a method body (not property initializers or
+  // constraints).
+  bool method_body{};
 };
 
 struct PropertyMatch {
@@ -99,6 +102,10 @@ class Resolver final {
   }
 
   void resolve_generate_body(GenerateBody& body, const Scope& inherited);
+  // Whether `member.rand_mode` or `member.constraint_mode` in a method names
+  // a random property or constraint block of the object itself.
+  [[nodiscard]] bool this_mode_member(
+      std::string_view call, const Scope& scope) const;
   [[nodiscard]] const SystemVerilogClassDeclaration* find_class(
       std::string_view identity) const;
   // Whether a handle of class `from` may be assigned to one of class `to`;

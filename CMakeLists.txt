@@ -731,6 +731,7 @@ add_library(
   src/runtime/uvm_report_catcher.cpp
   src/runtime/uvm_report_handler.cpp
   src/runtime/uvm_report_server.cpp
+    src/runtime/constraint_bounds.cpp
     src/runtime/constraint_expression.cpp
     src/runtime/constraint_solver.cpp
   src/runtime/vhpi_composite.cpp

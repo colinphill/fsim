@@ -237,9 +237,9 @@ endmodule
         "class_visibility_top.observed");
     assert(observed);
     assert(simulation.read_signal(*observed).low_word().aval == 4);
+    // Constructors and functions called from processes are lowered to
+    // SimIR; none needs the frontend adapter.
     const auto execution = simulation.class_execution_statistics();
-    assert(execution.hir_constructors >= 4U);
-    assert(execution.hir_functions >= 1U);
     assert(execution.frontend_adapter_fallbacks == 0U);
 }
 

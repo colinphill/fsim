@@ -144,6 +144,13 @@ void Interpreter::set_class_property_write_hook(ClassPropertyWriteHook hook)
     impl_->class_property_write_hook = std::move(hook);
 }
 
+void Interpreter::set_class_property_container_hook(
+    ClassPropertyContainerHook hook)
+{
+    impl_->require_all_region_forwarding_role_journals_flushed();
+    impl_->class_property_container_hook = std::move(hook);
+}
+
 void Interpreter::set_class_method_call_hook(ClassMethodCallHook hook)
 {
     impl_->require_all_region_forwarding_role_journals_flushed();

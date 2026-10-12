@@ -1947,7 +1947,7 @@ endclass
 module invalid_randomization_user;
   RandomizationCalls object;
   int result;
-  initial result = object.randomize(fixed_value)
+  initial result = object.randomize(missing_value)
       + object.randomize(null, choice)
       + object.fixed_value.rand_mode()
       + object.choice.rand_mode(0, 1)

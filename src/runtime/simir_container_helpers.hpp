@@ -180,6 +180,29 @@ template <typename Container>
     return static_cast<std::int32_t>(*converted);
 }
 
+// Whether a write through a fixed-size array index proceeds: an unknown
+// or out-of-range index writes nothing (IEEE 1800-2017 7.4.6). An index
+// that is not a 32-bit value (such as the lowering's invalid-index
+// sentinel) proceeds, so fixed_offset reports it.
+[[nodiscard]] inline bool fixed_index_in_range(
+    const ContainerType& type,
+    const PackedLogic4& value)
+{
+    if (std::ranges::any_of(value.bval_words(),
+            [](const auto word) { return word != 0U; })) {
+        return false;
+    }
+    const auto converted = value.known_signed_value();
+    if (!converted
+        || *converted < std::numeric_limits<std::int32_t>::min()
+        || *converted > std::numeric_limits<std::int32_t>::max()) {
+        return true;
+    }
+    const auto low = std::min(type.index_left, type.index_right);
+    const auto high = std::max(type.index_left, type.index_right);
+    return *converted >= low && *converted <= high;
+}
+
 [[nodiscard]] inline std::size_t fixed_offset(
     const ProcessId process,
     const InstructionIndex instruction,

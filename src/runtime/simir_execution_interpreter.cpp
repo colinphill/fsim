@@ -510,28 +510,30 @@ void Interpreter::Impl::execute(ProcessId id)
         const auto known_string_index =
             [&](const RegisterId index_register,
                 const bool signed_index,
-                const std::size_t size) -> std::size_t {
+                const std::size_t size) -> std::optional<std::size_t> {
             const auto& value = get_register(process, index_register);
             if (value.width() == 0 || value.width() > 64) {
                 fail(
                     process,
                     "string index must be a nonempty value of at most 64 bits");
             }
+            // An unknown, negative or out-of-range index selects no
+            // character (IEEE 1800-2017 6.16).
             const auto word = value.low_word();
             if (word.bval != 0) {
-                fail(process, "string index contains X or Z");
+                return std::nullopt;
             }
             if (signed_index && word.width != 0
                 && word.width < 64
                 && ((word.aval >> (word.width - 1U)) & 1U) != 0) {
-                fail(process, "string index is negative");
+                return std::nullopt;
             }
             if (signed_index && word.width == 64
                 && (word.aval >> 63U) != 0) {
-                fail(process, "string index is negative");
+                return std::nullopt;
             }
             if (word.aval >= size) {
-                fail(process, "string index is outside the byte range");
+                return std::nullopt;
             }
             return static_cast<std::size_t>(word.aval);
         };
@@ -884,7 +886,10 @@ void Interpreter::Impl::execute(ProcessId id)
                         op.index, op.signed_index, size);
                     std::uint32_t byte { };
                     try {
-                        byte = systemverilog_string_at(source, index);
+                        // An index out of range reads 0 (6.16).
+                        byte = index
+                            ? systemverilog_string_at(source, *index)
+                            : 0U;
                     } catch (const std::invalid_argument& error) {
                         fail(process, error.what());
                     }
@@ -902,13 +907,19 @@ void Interpreter::Impl::execute(ProcessId id)
                     }
                     const auto index = known_string_index(
                         op.index, op.signed_index, size);
+                    if (!index) {
+                        // A write out of range leaves the string unchanged
+                        // (6.16).
+                        ++process.pc;
+                        return;
+                    }
                     const auto byte = get_register(process, op.source).low_word();
                     if (byte.bval != 0) {
                         fail(process, "string replacement byte contains X or Z");
                     }
                     try {
                         systemverilog_string_replace(
-                            target, index,
+                            target, *index,
                             static_cast<std::uint32_t>(byte.aval),
                             maximum_string_bytes);
                     } catch (const std::exception& error) {
@@ -2360,7 +2371,9 @@ void Interpreter::Impl::execute(ProcessId id)
                         VhdlEnvironmentCallPath>
                     || std::is_same_v<OperationType,
                         VhdlEnvironmentGetCallPath>
-                    || std::is_same_v<OperationType, SignalStrengthText>) {
+                    || std::is_same_v<OperationType, SignalStrengthText>
+                    || std::is_same_v<OperationType, ClassPropertyContainerRead>
+                    || std::is_same_v<OperationType, ClassPropertyContainerWrite>) {
                     boundary = true;
                 } else if constexpr (
                     std::is_same_v<OperationType, ScopeRandomize>) {

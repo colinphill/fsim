@@ -209,7 +209,7 @@ std::uint32_t LlvmProcessExecutor::string_index(
     try {
         const auto& value = state.executor->string_registers_.at(source);
         if (!state.process.valid() || process != state.generated_process
-            || result == nullptr || signed_index > 1 || index_bval != 0) {
+            || result == nullptr || signed_index > 1) {
             throw runtime::simir::InterpreterError(
                 state.process.id(),
                 instruction,
@@ -220,12 +220,12 @@ std::uint32_t LlvmProcessExecutor::string_index(
             ? static_cast<std::int64_t>(static_cast<std::int32_t>(raw))
             : static_cast<std::int64_t>(raw);
         const auto length = runtime::systemverilog_string_length(value);
-        if (index < 0
+        // An unknown, negative or out-of-range index reads 0 (IEEE
+        // 1800-2017 6.16).
+        if (index_bval != 0 || index < 0
             || static_cast<std::uint64_t>(index) >= length) {
-            throw runtime::simir::InterpreterError(
-                state.process.id(),
-                instruction,
-                "string index is outside the current byte range");
+            *result = 0U;
+            return 0;
         }
         *result = runtime::systemverilog_string_at(
             value, static_cast<std::size_t>(index));
@@ -254,7 +254,7 @@ std::uint32_t LlvmProcessExecutor::string_replace_byte(
     try {
         auto& value = state.executor->string_registers_.at(target);
         if (!state.process.valid() || process != state.generated_process
-            || signed_index > 1 || index_bval != 0) {
+            || signed_index > 1) {
             throw runtime::simir::InterpreterError(
                 state.process.id(),
                 instruction,
@@ -265,12 +265,11 @@ std::uint32_t LlvmProcessExecutor::string_replace_byte(
             ? static_cast<std::int64_t>(static_cast<std::int32_t>(raw))
             : static_cast<std::int64_t>(raw);
         const auto length = runtime::systemverilog_string_length(value);
-        if (selected < 0
+        // A write through an unknown or out-of-range index leaves the
+        // string unchanged (6.16).
+        if (index_bval != 0 || selected < 0
             || static_cast<std::uint64_t>(selected) >= length) {
-            throw runtime::simir::InterpreterError(
-                state.process.id(),
-                instruction,
-                "string index is outside the current byte range");
+            return 0;
         }
         if (source_bval != 0) {
             throw runtime::simir::InterpreterError(

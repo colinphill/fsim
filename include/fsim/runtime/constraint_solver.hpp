@@ -9,6 +9,7 @@
 #include <functional>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -70,6 +71,8 @@ class SystemVerilogConstraintAssignment final {
   std::span<const std::optional<PackedLogic4>> values_;
 };
 
+struct SystemVerilogConstraintExpression;
+
 enum class SystemVerilogConstraintClauseState : std::uint8_t {
   Undetermined,
   Satisfied,
@@ -82,6 +85,9 @@ struct SystemVerilogConstraintClause {
   std::function<SystemVerilogConstraintClauseState(
       const SystemVerilogConstraintAssignment&)> evaluate;
   bool soft{};
+  // The predicate's expression graph when the clause was built from one;
+  // bound analysis narrows variable domains from it.
+  std::shared_ptr<const SystemVerilogConstraintExpression> expression{};
 };
 
 enum class SystemVerilogConstraintDistributionWeight : std::uint8_t {
@@ -277,6 +283,35 @@ class SystemVerilogConstraintExpressionBuilder final {
 [[nodiscard]] PackedLogic4 evaluate_systemverilog_constraint_expression(
     const SystemVerilogConstraintExpression& expression,
     const SystemVerilogConstraintAssignment& assignment);
+
+/// An inclusive range of value keys. A key is a value's bits with the sign
+/// bit inverted for a signed variable, so keys order like the values.
+struct SystemVerilogConstraintKeyRange {
+  std::uint64_t low{};
+  std::uint64_t high{};
+};
+
+/// The values of one variable (1 to 64 bits wide) that can satisfy a
+/// predicate, as sorted disjoint key ranges. Comparisons of the variable
+/// with constants, combined by `&&`, `||` and `!`, narrow the set; any other
+/// term is treated as satisfiable, so the result may be a superset.
+[[nodiscard]] std::vector<SystemVerilogConstraintKeyRange>
+systemverilog_constraint_key_ranges(
+    const SystemVerilogConstraintExpression& expression,
+    SystemVerilogConstraintVariableId variable,
+    const SystemVerilogConstraintVariableProfile& profile);
+
+/// A solver domain for a 1- to 64-bit variable from the clauses that depend
+/// on it, in ascending value order. The hard clauses' comparisons with
+/// constants bound it; within those bounds it holds every value when there
+/// are at most 4096, otherwise each range's ends and a uniform sample drawn
+/// with `random`, and likewise the values each soft clause prefers. It is
+/// empty when the hard clauses exclude every value.
+[[nodiscard]] std::vector<PackedLogic4> systemverilog_constraint_variable_domain(
+    std::span<const SystemVerilogConstraintClause> clauses,
+    SystemVerilogConstraintVariableId variable,
+    const SystemVerilogConstraintVariableProfile& profile,
+    const std::function<std::uint64_t()>& random);
 
 [[nodiscard]] SystemVerilogConstraintClause
 systemverilog_constraint_expression_clause(

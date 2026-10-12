@@ -2293,6 +2293,12 @@ void Interpreter::Impl::write_container_object_element_value(
         write_container_object_value(id, replacement, process, origin);
         return;
     }
+    // A fixed-size array ignores a write through an unknown or out-of-range
+    // index (IEEE 1800-2017 7.4.6).
+    if (target.type.fixed && !linear_index
+        && !fixed_index_in_range(target.type, index)) {
+        return;
+    }
     // A queue or dynamic array ignores a write through an unknown, negative
     // or out-of-range index; a queue write one past its last element appends
     // (IEEE 1800-2017 7.4.6, 7.10.1).
@@ -2469,6 +2475,10 @@ void Interpreter::Impl::write_container_object_dynamic_part_element_value(
             "dynamic part-select write range is outside its packed target");
     }
 
+    if (!linear_index && !fixed_index_in_range(type, index)) {
+        // An unknown or out-of-range index writes nothing (7.4.6).
+        return;
+    }
     const auto selected = linear_index
         ? known_index(
               process, instruction, index, true,

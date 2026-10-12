@@ -20,7 +20,7 @@ Statement VerilogParser::parse_fork_statement(const Token& start) {
          && current().text != "join_any"
          && current().text != "join_none") {
     const auto before = position();
-    if ((is_declaration_start() || keyword("parameter") || keyword("localparam"))) {
+    if ((is_block_declaration_start() || keyword("parameter") || keyword("localparam"))) {
       // Verilog declares block items only in named blocks (IEEE 1364-2005
       // 9.8.3).
       if (language_ != Language::SystemVerilog2017 && statement.label.empty()) {

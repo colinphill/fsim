@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/runtime/scope_randomize.hpp"
 
+#include <algorithm>
 #include <limits>
+#include <map>
 #include <new>
 #include <set>
 #include <stdexcept>
@@ -116,13 +118,75 @@ SystemVerilogClassRandomizeResult randomize_systemverilog_scope(
         if (!request.inline_constraints) {
             return randomize_unconstrained(request);
         }
+        // A wide variable takes a uniformly chosen value when no clause
+        // depends on it, and otherwise draws from the values its hard
+        // clauses' comparisons with constants allow (IEEE 1800-2017 18.12).
+        auto selection = request.selection;
+        std::set<std::size_t> direct;
+        std::map<std::size_t, std::vector<PackedLogic4>> bounded;
+        {
+            std::vector<std::size_t> wide;
+            for (std::size_t index = 0; index < request.variables.size(); ++index) {
+                const auto& input = request.variables[index];
+                if (input.domain.empty() && input.profile.width > 16U
+                    && input.profile.width <= 64U) {
+                    wide.push_back(index);
+                }
+            }
+            if (!wide.empty()) {
+                try {
+                    SystemVerilogConstraintSolver probe;
+                    SystemVerilogClassRandomizeVariables probe_variables;
+                    for (const auto& input : request.variables) {
+                        const auto id = probe.add_variable({ input.canonical_identity,
+                            input.profile, { *input.target } });
+                        probe_variables.emplace(input.canonical_identity, id);
+                    }
+                    request.inline_constraints(probe, probe_variables);
+                    if (probe.distribution_count() == 0U) {
+                        for (const auto index : wide) {
+                            const auto& input = request.variables[index];
+                            const auto id = probe_variables.at(input.canonical_identity);
+                            const bool referenced = std::ranges::any_of(
+                                probe.clauses(), [&](const auto& clause) {
+                                    return std::ranges::find(clause.variables, id)
+                                        != clause.variables.end();
+                                });
+                            if (!referenced) {
+                                direct.insert(index);
+                                continue;
+                            }
+                            bounded.emplace(index,
+                                systemverilog_constraint_variable_domain(
+                                    probe.clauses(), id, input.profile,
+                                    [&selection] { return next_selection(selection); }));
+                        }
+                    }
+                } catch (const std::exception&) {
+                    direct.clear();
+                    bounded.clear();
+                }
+            }
+        }
         SystemVerilogConstraintSolver solver { request.limits };
         SystemVerilogClassRandomizeVariables variables;
         std::size_t domain_values { };
-        for (const auto& input : request.variables) {
+        for (std::size_t index = 0; index < request.variables.size(); ++index) {
+            const auto& input = request.variables[index];
             SystemVerilogConstraintVariable variable {
                 input.canonical_identity, input.profile, input.domain
             };
+            if (direct.contains(index)) {
+                variable.domain.push_back(
+                    arbitrary_value(input.profile.width, selection));
+            } else if (const auto found = bounded.find(index);
+                       found != bounded.end()) {
+                if (found->second.empty()) {
+                    return { SystemVerilogConstraintSolveStatus::Unsatisfiable,
+                        SystemVerilogConstraintResource::None, 0, 0 };
+                }
+                variable.domain = found->second;
+            }
             if (variable.domain.empty()) {
                 const auto available = request.limits.maximum_domain_values
                         >= domain_values

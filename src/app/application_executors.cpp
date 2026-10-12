@@ -1020,6 +1020,10 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::ClassPropertyWrite>(operation)
             || fsim::runtime::simir::operation_holds<
+                runtime::simir::ClassPropertyContainerRead>(operation)
+            || fsim::runtime::simir::operation_holds<
+                runtime::simir::ClassPropertyContainerWrite>(operation)
+            || fsim::runtime::simir::operation_holds<
                 runtime::simir::ClassMethodCall>(operation)
             || fsim::runtime::simir::operation_holds<
                 runtime::simir::ClassStaticPropertyRead>(operation)

@@ -51,9 +51,8 @@ namespace {
         const Number right,
         const SystemVerilogScalarKind kind) noexcept
     {
-        if (operation == SystemVerilogScalarArithmetic::Divide && right == Number { }) {
-            return { { }, SystemVerilogScalarError::DivideByZero };
-        }
+        // Real arithmetic is IEEE 754: division by zero and overflow give
+        // infinities or NaN (IEEE 1800-2017 6.12).
         Number value { };
         switch (operation) {
         case SystemVerilogScalarArithmetic::Add:
@@ -69,8 +68,6 @@ namespace {
             value = left / right;
             break;
         }
-        if (!std::isfinite(value))
-            return { { }, SystemVerilogScalarError::Nonfinite };
         return {
             kind == SystemVerilogScalarKind::ShortReal
                 ? SystemVerilogScalarValue::shortreal(static_cast<float>(value))
@@ -227,7 +224,7 @@ SystemVerilogScalarResult systemverilog_scalar_arithmetic(
     }
     const auto lhs = left.as_real();
     const auto rhs = right.as_real();
-    if (!lhs || !rhs || !std::isfinite(*lhs) || !std::isfinite(*rhs)) {
+    if (!lhs || !rhs) {
         return { { }, SystemVerilogScalarError::Nonfinite };
     }
     if (kind == SystemVerilogScalarKind::ShortReal) {
@@ -445,19 +442,28 @@ SystemVerilogScalarResult convert_systemverilog_scalar(
         }
     }
     const auto number = value.as_real();
-    if (!number || !std::isfinite(*number)) {
+    if (!number) {
+        return { { }, SystemVerilogScalarError::Nonfinite };
+    }
+    if (target == SystemVerilogScalarKind::None && !std::isfinite(*number)) {
+        // An infinity or NaN has no integer value; it converts as zero.
+        return { SystemVerilogScalarValue::integral(0), { } };
+    }
+    if (!std::isfinite(*number)) {
         return { { }, SystemVerilogScalarError::Nonfinite };
     }
     const auto rounded = rounded_value(*number, rounding);
     const auto extended = static_cast<long double>(rounded);
     if (target == SystemVerilogScalarKind::None) {
-        constexpr long double lower = -9223372036854775808.0L;
-        constexpr long double upper = 9223372036854775808.0L;
-        if (extended < lower || extended >= upper) {
-            return { { }, SystemVerilogScalarError::Overflow };
+        // The rounded value keeps its low 64 bits (IEEE 1800-2017 6.12.2
+        // converts to the integral type, which truncates to its width).
+        constexpr long double modulus = 18446744073709551616.0L;
+        auto wrapped = std::fmod(extended, modulus);
+        if (wrapped < 0.0L) {
+            wrapped += modulus;
         }
-        return { SystemVerilogScalarValue::integral(
-                     static_cast<std::int64_t>(rounded)),
+        return { SystemVerilogScalarValue::integral(std::bit_cast<std::int64_t>(
+                     static_cast<std::uint64_t>(wrapped))),
             { } };
     }
     constexpr long double upper = 18446744073709551616.0L;
@@ -477,9 +483,17 @@ SystemVerilogScalarResult systemverilog_scalar_from_packed(
     if (value.width() == 0 || value.width() > 64) {
         return { { }, SystemVerilogScalarError::Overflow };
     }
-    const auto word = value.low_word();
-    if (word.bval != 0)
-        return { { }, SystemVerilogScalarError::UnknownValue };
+    auto word = value.low_word();
+    if (word.bval != 0) {
+        // x and z bits convert to zero in a real (IEEE 1800-2017 6.12.2).
+        if (target != SystemVerilogScalarKind::Real
+            && target != SystemVerilogScalarKind::ShortReal
+            && target != SystemVerilogScalarKind::Realtime) {
+            return { { }, SystemVerilogScalarError::UnknownValue };
+        }
+        word.aval &= ~word.bval;
+        word.bval = 0;
+    }
     const auto mask = word.width == 64
         ? std::numeric_limits<std::uint64_t>::max()
         : (std::uint64_t { 1 } << word.width) - 1U;
@@ -689,12 +703,7 @@ namespace {
         if (value.width() == 0) {
             return { { }, SystemVerilogScalarError::Overflow };
         }
-        for (std::size_t bit = 0; bit < value.width(); ++bit) {
-            const auto state = value.get(bit);
-            if (state != Logic4::zero && state != Logic4::one) {
-                return { { }, SystemVerilogScalarError::UnknownValue };
-            }
-        }
+        // x and z bits convert as zero (IEEE 1800-2017 6.12.2).
         if (std::fegetround() != FE_TONEAREST) {
             return { { }, SystemVerilogScalarError::UnsupportedRoundingMode };
         }

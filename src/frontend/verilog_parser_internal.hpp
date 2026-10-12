@@ -571,6 +571,10 @@ class VerilogParser final : private detail::ParserBase {
       const Token& start);
 
   Type parse_parameter_type();
+
+  Expression signed_parameter_value(
+
+      Expression value, bool signing_only, bool is_signed);
   Type parse_type_parameter_actual();
 
   void add_parameter(
@@ -661,6 +665,8 @@ class VerilogParser final : private detail::ParserBase {
   bool parse_optional_container_dimension(Type& type);
 
   [[nodiscard]] bool is_declaration_start() const;
+
+  [[nodiscard]] bool is_block_declaration_start() const;
 
   [[nodiscard]] bool instance_start() const;
 
@@ -772,7 +778,7 @@ class VerilogParser final : private detail::ParserBase {
   static std::optional<DecimalRatio> decimal_ratio(
       const std::string_view spelling);
 
-  DelayAlternative parse_verilog_delay_alternative();
+  DelayAlternative parse_verilog_delay_alternative(bool parenthesized = true);
 
   static void set_selected_delay(
       Delay& delay,
@@ -918,6 +924,8 @@ class VerilogParser final : private detail::ParserBase {
   std::size_t next_bind_unit_ { };
   bool module_has_non_time_item_{};
   bool program_generate_context_{};
+  // The last parameter type was a signing without a range (6.20.2).
+  bool parameter_signing_only_{};
   bool in_verilog_attribute_ { };
   std::vector<SystemVerilogFsmPragma> pending_systemverilog_fsm_pragmas_;
   std::optional<std::size_t>

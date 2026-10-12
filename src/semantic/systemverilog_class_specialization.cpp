@@ -1569,6 +1569,7 @@ private:
             retained.static_storage = property.static_storage;
             retained.constant = property.constant;
             retained.parameter = property.parameter;
+            retained.enumeration_domain = property.enumeration_domain;
             retained.source = property.source;
             retained.origin = property.origin;
             if (property.static_storage) {

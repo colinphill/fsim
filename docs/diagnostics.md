@@ -1679,7 +1679,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-CLASS-013` | error | A class method selection has no compatible profile or remains ambiguous after argument association. |
 | `FSIM-SV-CLASS-014` | error | A class construction expression has no destination class-handle type. |
 | `FSIM-SV-CLASS-015` | error | `$cast` lacks a writable class-handle destination or compatible source expression. |
-| `FSIM-SV-CLASS-019` | error | An object `randomize` variable list selects a missing or nonrandom property. |
+| `FSIM-SV-CLASS-019` | error | An object `randomize` variable list selects a missing or static property. |
 | `FSIM-SV-CLASS-020` | error | A randomization mode call has invalid arity or selects no random property or constraint block. |
 | `FSIM-SV-CLASS-021` | error | A randomization mode call violates local or protected class-member access. |
 | `FSIM-SV-CLASS-022` | error | The special `null` object-randomize checker selection is mixed with another variable-list item. |

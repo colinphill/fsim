@@ -321,6 +321,27 @@ Simulation::Impl::class_specialization(const std::string_view identity) const
         request, selected_names);
     request.call_identity = object.specialization_identity
         + "::randomize@source";
+    // A random enumerated property takes only its type's values (IEEE
+    // 1800-2017 18.4).
+    for (const auto& property :
+        class_specialization(object.specialization_identity).properties) {
+        if (property.enumeration_domain.empty() || property.static_storage
+            || property.bit_width == 0U || property.bit_width > 64U) {
+            continue;
+        }
+        auto& domain = request.property_domains[property.canonical_identity];
+        domain.clear();
+        for (const auto value : property.enumeration_domain) {
+            const auto masked = property.bit_width == 64U
+                ? value
+                : value & ((std::uint64_t { 1 } << property.bit_width) - 1U);
+            const auto encoded = runtime::PackedLogic4::from_aval_bval(
+                property.bit_width, masked, 0U);
+            if (std::ranges::find(domain, encoded) == domain.end()) {
+                domain.push_back(encoded);
+            }
+        }
+    }
     request.class_constraints
         = [this, handle,
               specialization = object.specialization_identity](
@@ -502,8 +523,15 @@ Simulation::Impl::static_property_parts(const std::string_view identity)
     const std::string_view allocation_scope,
     const runtime::SystemVerilogUvmRootHandle requested_root)
 {
-    const auto& specialization = class_specialization(
-        specialization_identity);
+    // `@no-constructor:` allocates the object for a constructor the
+    // elaborated process runs itself.
+    constexpr std::string_view lowered_constructor { "@no-constructor:" };
+    const bool run_constructor
+        = !specialization_identity.starts_with(lowered_constructor);
+    const auto identity = run_constructor
+        ? specialization_identity
+        : specialization_identity.substr(lowered_constructor.size());
+    const auto& specialization = class_specialization(identity);
     const auto handle = allocate_class(
         specialization.specialization_identity,
         declared_type,
@@ -575,8 +603,10 @@ Simulation::Impl::static_property_parts(const std::string_view identity)
         // The UVM base state exists once `super.new` has run, so a
         // user-derived constructor may already report through it; the
         // simulation's UVM services stand in for the library constructors.
-        invoke_source_constructor(
-            specialization, handle, actuals, string_actuals, actual_names);
+        if (run_constructor) {
+            invoke_source_constructor(
+                specialization, handle, actuals, string_actuals, actual_names);
+        }
     } catch (...) {
         if (component_specialization) {
             if (uvm_components.contains(handle)) {

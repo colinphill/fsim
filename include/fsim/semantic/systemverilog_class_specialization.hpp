@@ -87,6 +87,7 @@ struct SpecializedClassProperty {
     bool parameter { };
     SourceSpanId source;
     OriginId origin;
+    std::vector<std::uint64_t> enumeration_domain { };
 };
 
 struct SpecializedClassMethod {

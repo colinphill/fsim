@@ -177,6 +177,7 @@ const Scope* find_scope(const CompiledDesign& design, const ScopeId id)
     return candidate.id == id ? &candidate : nullptr;
 }
 
+
 std::optional<CompiledDeclarationView> find_declaration(
     const CompiledDesign& design, const SpecializedHirUnit* effective,
     const DeclarationId id)
@@ -984,7 +985,61 @@ bool builtin_standard_package_exports(const std::string_view library,
     return false;
 }
 
+// Whether `scope` is the block of a loop generate whose genvar is `name`;
+// the genvar hides outer declarations of that name (IEEE 1800-2017 27.4).
+bool systemverilog_genvar_scope(
+    const CompiledDesign& design, const ScopeId scope,
+    const std::string_view name)
+{
+    const auto* record = find_scope(design, scope);
+    if (record == nullptr || !record->parent) {
+        return false;
+    }
+    const auto unit = design.find_unit(record->unit);
+    if (!unit || unit->systemverilog == nullptr
+        || unit->systemverilog->generates.empty()) {
+        return false;
+    }
+    const auto visit = [&](const auto& self,
+                           const std::vector<sv::GenerateRegion>& regions)
+        -> bool {
+        for (const auto& region : regions) {
+            if (region.scope == scope) {
+                return region.kind == sv::GenerateKind::iterative
+                    && region.iterator == name;
+            }
+            if (self(self, region.nested)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    return visit(visit, unit->systemverilog->generates);
+}
+
+
 } // namespace
+
+// Whether a genvar between `use_scope` and the scope of a declaration
+// hides that declaration.
+bool systemverilog_genvar_hides(
+    const CompiledDesign& design, ScopeId use_scope,
+    const ScopeId declaration_scope, const std::string_view name)
+{
+    std::size_t depth { };
+    while (use_scope.valid() && use_scope != declaration_scope
+        && depth++ <= design.semantics.scopes().size()) {
+        if (systemverilog_genvar_scope(design, use_scope, name)) {
+            return true;
+        }
+        const auto* record = find_scope(design, use_scope);
+        if (record == nullptr || !record->parent) {
+            break;
+        }
+        use_scope = *record->parent;
+    }
+    return false;
+}
 
 std::optional<DeclarationId>
 CompiledDeclarationResolution::unique() const noexcept
@@ -1439,6 +1494,13 @@ CompiledDesignResolver::resolve_systemverilog_name(
             || declaration->systemverilog->name == name.spelling;
     };
     if (name.selected && retained_is_valid(*name.selected)) {
+        const auto declaration = find_declaration(
+            *design_, effective_, *name.selected);
+        if (simple_name && declaration
+            && systemverilog_genvar_hides(*design_, use_scope,
+                declaration->systemverilog->scope, name.spelling)) {
+            return { CompiledResolutionStatus::not_found, { } };
+        }
         return { CompiledResolutionStatus::unique, { *name.selected } };
     }
     const auto normalize_synthetic_duplicate
@@ -1523,6 +1585,9 @@ CompiledDesignResolver::resolve_systemverilog(
             const auto tier = declarations_in_scope(scope);
             if (tier.status != CompiledResolutionStatus::not_found) {
                 return tier;
+            }
+            if (systemverilog_genvar_scope(*design_, scope, member)) {
+                return { CompiledResolutionStatus::not_found, { } };
             }
             if (stop_scope && scope == *stop_scope) {
                 break;

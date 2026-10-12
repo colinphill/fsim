@@ -181,6 +181,7 @@ docs/api.md
 docs/architecture.md
 docs/changelog-v2.md
 docs/changelog-v3.md
+docs/class-function-lowering-plan.md
 docs/code-coverage.md
 docs/cross-language-semantics.md
 docs/design-specific-jit-scheduling.md
@@ -1163,6 +1164,7 @@ src/runtime/class_methods.cpp
 src/runtime/class_randomize.cpp
 src/runtime/class_static.cpp
 src/runtime/code_coverage.cpp
+src/runtime/constraint_bounds.cpp
 src/runtime/constraint_expression.cpp
 src/runtime/constraint_solver.cpp
 src/runtime/coverage_aggregation.cpp
@@ -2030,6 +2032,7 @@ tests/fixtures/compliance/sv_language_details_batch46.sv
 tests/fixtures/compliance/sv_language_details_batch47.sv
 tests/fixtures/compliance/sv_language_details_batch48.sv
 tests/fixtures/compliance/sv_language_details_batch49.sv
+tests/fixtures/compliance/sv_language_details_batch50.sv
 tests/fixtures/compliance/sv_module_items.sv
 tests/fixtures/compliance/sv_net_data_types.sv
 tests/fixtures/compliance/sv_nonblocking_struct_members.sv

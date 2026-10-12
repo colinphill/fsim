@@ -426,8 +426,11 @@ def verilator_cases(root: Path) -> list[Case]:
             skip = "requires a C++ harness"
         if "test.lint(" in source and "test.execute(" not in source:
             skip = skip or "lint-only test"
-        if re.search(r"have_solver|have_sc\b|test\.pli_filename|vpi|dpi|sc_main", source, re.I):
-            skip = skip or "requires solver, SystemC, PLI/VPI or DPI harness"
+        # Cases Verilator gates on its constraint solver run: class and
+        # scope randomization bound wide variables instead of enumerating
+        # them (2026-10-12).
+        if re.search(r"have_sc\b|test\.pli_filename|vpi|dpi|sc_main", source, re.I):
+            skip = skip or "requires SystemC, PLI/VPI or DPI harness"
         # Verilator extensions and behaviour it marks non-standard are outside
         # the IEEE LRMs (owner decision, 2026-10-12).
         out_of_scope = None
@@ -568,13 +571,21 @@ def ivtest_cases(root: Path) -> list[Case]:
         directory = fields[2] if len(fields) > 2 else ""
         gold = None
         module = None
+        diff = None
         if len(fields) > 3:
             extra = fields[3]
             if extra.startswith("gold="):
                 gold = base / "gold" / extra[5:]
             elif extra.startswith("unordered="):
                 gold = base / "gold" / extra[10:]
-            elif not extra.startswith("diff="):
+            elif extra.startswith("diff="):
+                # diff=work/out:gold/expected[:skip] compares a file the test
+                # writes with a gold file, ignoring the first `skip` lines.
+                parts = extra[5:].split(":")
+                if len(parts) >= 2:
+                    diff = [parts[0], str(base / parts[1]),
+                            int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0]
+            else:
                 module = extra
         source = base / directory / f"{name}.v"
         language, standard = "verilog", "2005"
@@ -673,7 +684,8 @@ def ivtest_cases(root: Path) -> list[Case]:
             expect=expect,
             fail_by="elaborate" if test_type == "CE" else "simulate",
             checker="ivtest",
-            checker_data={"gold": str(gold) if gold else None, "type": test_type},
+            checker_data={"gold": str(gold) if gold else None, "type": test_type,
+                          "diff": diff},
             skip=skip,
             out_of_scope=out_of_scope,
         ))
@@ -1107,6 +1119,11 @@ def check_outcome(case: Case, steps: list[StepResult], workdir: Path) -> tuple[s
             return "fail", f"rejected late at {failed_step.stage}"
         if case.checker in ("vhdl_clean", "ivtest", "verilator") and hdl_errors:
             return "pass", "runtime error reported"
+        # The Verilator harness counts $stop as a failing run, as it does for
+        # expected-pass cases below.
+        if case.checker == "verilator" \
+                and re.search(r"^\$stop paused the simulation", sim_output, re.M):
+            return "pass", "stopped"
         if case.checker == "sv_tests" and STAGE_ORDER[case.fail_by] >= 2 and hdl_errors:
             return "pass", "runtime error reported"
         return "fail", "accepted invalid input"
@@ -1132,6 +1149,17 @@ def check_outcome(case: Case, steps: list[StepResult], workdir: Path) -> tuple[s
     if case.checker == "ivtest":
         gold = case.checker_data.get("gold")
         lines = simulation_lines(sim_output)
+        diff = case.checker_data.get("diff")
+        if diff:
+            written, expected_file, skip = diff
+            produced = workdir / written
+            if not produced.is_file() or not Path(expected_file).is_file():
+                return "fail", "compared output file missing"
+            ours = read_text(produced).splitlines()[skip:]
+            theirs = read_text(Path(expected_file)).splitlines()[skip:]
+            if [l.rstrip() for l in ours] != [l.rstrip() for l in theirs]:
+                return "fail", "output file differs from gold"
+            return "pass", ""
         if gold:
             expected = [l.rstrip() for l in read_text(Path(gold)).splitlines()
                         if not re.match(r"^(VCD info:|.*\$finish called|.*: warning)", l)]

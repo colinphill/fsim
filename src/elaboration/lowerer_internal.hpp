@@ -1728,6 +1728,12 @@ private:
         bool static_method { };
         bool automatic { true };
     };
+    // Call actuals bound to a class method's formals by position or name,
+    // with each unbound formal's default (13.5.3).
+    [[nodiscard]] std::optional<std::vector<HirClassMethodActual>>
+    bind_hir_class_actuals(semantic::DeclarationId callable,
+        std::span<const semantic::sv::TaskAssociation> associations,
+        semantic::ScopeId process_scope) const;
     [[nodiscard]] std::optional<HirClassTaskProfile>
     hir_class_task_profile(
         semantic::StatementId statement,
@@ -1738,6 +1744,110 @@ private:
         semantic::StatementId statement,
         const HirClassTaskProfile& profile,
         std::optional<RegisterId> receiver);
+    // The value of a lowered class function call (none for a task).
+    struct HirClassCallResult {
+        std::optional<RegisterId> packed;
+        std::optional<StringRegisterId> string;
+    };
+    // Invoke a class task or function body as a deferred SimIR subroutine
+    // with `receiver` as `this`.
+    [[nodiscard]] std::optional<HirClassCallResult>
+    lower_hir_class_callable_invocation(
+        semantic::SourceSpanId source,
+        const HirClassTaskProfile& profile,
+        std::optional<RegisterId> receiver,
+        bool function);
+    // The overrides of a virtual method in classes derived from its owner,
+    // most derived first (IEEE 1800-2017 8.20); empty for a non-virtual
+    // method.
+    struct HirClassOverride {
+        std::string owner_identity;
+        semantic::DeclarationId declaration;
+        std::string identity;
+    };
+    [[nodiscard]] std::vector<HirClassOverride> hir_class_method_overrides(
+        semantic::DeclarationId declaration) const;
+    // A non-static class function call lowered as a subroutine, dispatched
+    // on the receiver's class; none when the call needs the runtime path.
+    [[nodiscard]] std::optional<HirClassCallResult>
+    lower_hir_class_function_call(
+        semantic::ExpressionId expression,
+        const HirClassMethodProfile& profile,
+        std::optional<RegisterId> receiver);
+    // Undo a partly lowered call: drop its operations and the call and
+    // frame-push sites recorded past `mark`, and unqueue frames created
+    // since `frames`.
+    void rollback_hir_lowering(std::size_t mark, std::size_t frames);
+    // A non-parameterized class outside the UVM library whose bases are
+    // too; its construction can be lowered (8.7).
+    [[nodiscard]] const semantic::sv::ClassDeclaration*
+    hir_lowerable_constructor_class(std::string_view identity) const;
+    [[nodiscard]] bool hir_class_derives_from_uvm(
+        std::string_view identity) const;
+    // Run the constructor of `declaration` on `receiver` with the call
+    // actuals: the explicit constructor body, or the implicit base
+    // construction and property initializers.
+    [[nodiscard]] bool lower_hir_class_construction(
+        const semantic::sv::ClassDeclaration& declaration,
+        RegisterId receiver,
+        std::span<const semantic::sv::TaskAssociation> actuals,
+        semantic::SourceSpanId source);
+    // The property initializers of `declaration` other than literals, which
+    // the object's descriptor holds (8.7).
+    [[nodiscard]] bool lower_hir_class_property_initializers(
+        const semantic::sv::ClassDeclaration& declaration,
+        RegisterId receiver);
+    // Before a constructor body without `super.new(...)`: the base class's
+    // implicit construction and this class's property initializers.
+    [[nodiscard]] bool lower_hir_constructor_prologue(
+        semantic::DeclarationId callable,
+        std::span<const semantic::StatementId> statements);
+    // `super.new(...)` in a lowered constructor body.
+    [[nodiscard]] bool lower_hir_base_constructor_call(
+        semantic::StatementId statement);
+    // Value-container properties of `this` cached in container registers
+    // while a class function or constructor body is lowered (none for a
+    // task, which may suspend).
+    struct HirClassContainerCache {
+        ContainerRegisterId value { };
+        std::string identity;
+        semantic::DeclarationId declaration;
+    };
+    std::vector<HirClassContainerCache> hir_class_container_caches_;
+    // Cache the container properties of the class owning `callable` for a
+    // body that runs on `receiver`.
+    void cache_hir_class_container_properties(
+        semantic::DeclarationId callable, RegisterId receiver);
+    // A value-container property (`obj.v`) materialized in a container
+    // register: the cache of `this`, or a copy read from `receiver` that
+    // store_hir_class_value_container writes back after a change.
+    struct HirClassContainerAccess {
+        HirStaticContainerValue container;
+        std::optional<RegisterId> receiver;
+        std::string identity;
+        semantic::DeclarationId declaration;
+    };
+    [[nodiscard]] std::optional<ContainerType> hir_class_value_container_type(
+        std::string_view identity) const;
+    [[nodiscard]] std::optional<HirClassContainerAccess>
+    lower_hir_class_value_container(
+        semantic::ExpressionId receiver, std::string_view identity);
+    void store_hir_class_value_container(const HirClassContainerAccess& access);
+    // lower_hir_statement without the cache store and reload around a
+    // statement that can suspend.
+    [[nodiscard]] bool lower_hir_statement_unsuspended(
+        semantic::StatementId statement);
+    // Store the cached properties back to the object, and reload them.
+    void flush_hir_class_container_caches();
+    void reload_hir_class_container_caches();
+    // Class function calls are lowered as subroutines unless a retry of the
+    // process turned this off; the flag below records that one was.
+    bool lower_class_functions_ { true };
+    bool class_functions_lowered_ { };
+    [[nodiscard]] std::optional<Process> lower_hir_process_body_once(
+        const HirProcessDescription& description,
+        frontend::Language language,
+        std::string_view hierarchy);
     struct HirInterfaceFunctionProfile {
         semantic::DeclarationId declaration;
         std::string receiver;
@@ -2263,6 +2373,11 @@ private:
         frontend::StandardRevision::SystemVerilog2017
     };
     std::string hierarchy_;
+    // Labels of the named blocks enclosing the statement being lowered.
+    std::vector<std::string> hir_named_blocks_;
+    // `%m` (IEEE 1800-2017 21.2.1.6): the instance and its enclosing named
+    // blocks.
+    [[nodiscard]] std::string hir_scope_hierarchy() const;
     mutable bool hierarchical_reference_used_ { };
     mutable bool hierarchical_reference_missed_ { };
     bool hierarchical_reference_retry_ { };

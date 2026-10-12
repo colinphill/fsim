@@ -2222,6 +2222,10 @@ public:
         std::uint64_t, std::string_view)>;
     using ClassPropertyWriteHook = std::function<void(
         std::uint64_t, std::string_view, const PackedLogic4&)>;
+    // Read (write == false) or store a value-container class property;
+    // a read of a property never written leaves `value` unchanged.
+    using ClassPropertyContainerHook = std::function<void(
+        std::uint64_t, std::string_view, ContainerValue&, bool)>;
     using ClassMethodCallHook = std::function<PackedLogic4(
         std::uint64_t,
         std::string_view,
@@ -2564,6 +2568,7 @@ public:
     void set_class_allocate_hook(ClassAllocateHook hook);
     void set_class_property_read_hook(ClassPropertyReadHook hook);
     void set_class_property_write_hook(ClassPropertyWriteHook hook);
+    void set_class_property_container_hook(ClassPropertyContainerHook hook);
     void set_class_method_call_hook(ClassMethodCallHook hook);
     void set_class_static_property_read_hook(
         ClassStaticPropertyReadHook hook);

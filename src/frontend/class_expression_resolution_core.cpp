@@ -1507,6 +1507,15 @@ void Resolver::retain_result_type(
       const auto type = resolve_alias_type(
           match.property->declaration.type,
           match.owner->canonical_identity);
+      // In a method body, an unpacked array, queue or associative array
+      // of values stays a name of the property, which the elaborated
+      // method reads and writes as a container of the object.
+      if (scope.method_body && !match.property->is_static
+          && type.systemverilog_container && !class_identity(type)
+          && (type.named_type.empty()
+              || resolve_class_name(type.named_type, scope).empty())) {
+        return type;
+      }
       Expression receiver{
           ExpressionKind::Identifier, "this", {}, expression.span};
       receiver.nominal_type = scope.class_owner->canonical_identity;
@@ -1523,6 +1532,30 @@ void Resolver::retain_result_type(
       if (!match.property->is_static) {
         expression.operands = {std::move(receiver)};
       }
+      retain_result_type(expression, type);
+      if (const auto identity = class_identity(type)) {
+        expression.nominal_type = *identity;
+      }
+      return type;
+    }
+    // A nested class sees the static properties of its enclosing classes
+    // (IEEE 1800-2017 8.23).
+    for (std::string_view enclosing = scope.class_owner->canonical_identity;;) {
+      const auto separator = enclosing.rfind("::");
+      if (separator == std::string_view::npos) break;
+      enclosing = enclosing.substr(0U, separator);
+      if (find_class(enclosing) == nullptr) break;
+      const auto outer = find_property(enclosing, expression.text);
+      if (!outer.property) continue;
+      if (!outer.property->is_static) break;
+      const auto type = resolve_alias_type(
+          outer.property->declaration.type, outer.owner->canonical_identity);
+      expression.kind = ExpressionKind::Call;
+      expression.text =
+          (type.systemverilog_container ? "@sv-static-container-property:"
+                                        : "@sv-static-property:")
+          + outer.owner->canonical_identity + "::"
+          + outer.property->declaration.name;
       retain_result_type(expression, type);
       if (const auto identity = class_identity(type)) {
         expression.nominal_type = *identity;

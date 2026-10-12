@@ -1478,7 +1478,7 @@ std::optional<std::int64_t> evaluate_binary(
     if (operation == "xnor") {
         return ~(left ^ right);
     }
-    if (operation == "<<" || operation == "sll"
+    if (operation == "<<" || operation == "<<<" || operation == "sll"
         || operation == "sla") {
         if (right < 0 || right >= 63 || left < 0
             || static_cast<std::uint64_t>(left)
@@ -1489,7 +1489,7 @@ std::optional<std::int64_t> evaluate_binary(
         }
         return left << static_cast<unsigned>(right);
     }
-    if (operation == ">>" || operation == "srl"
+    if (operation == ">>" || operation == ">>>" || operation == "srl"
         || operation == "sra") {
         if (right < 0 || right >= 63) {
             return std::nullopt;
@@ -6635,9 +6635,23 @@ private:
             if (!declaration) {
                 return false;
             }
+            // A step such as `i++` written as `i = i++` updates the
+            // variable once.
+            if (const auto record = unit_.find_expression(value);
+                record && record->systemverilog != nullptr
+                && record->systemverilog->kind == sv::ExpressionKind::update
+                && record->systemverilog->operands.size() == 1U
+                && expression_declaration(
+                       record->systemverilog->operands.front())
+                    == declaration) {
+                return evaluate(value).has_value();
+            }
             auto integral = coerce_systemverilog_value(
                 *declaration, evaluate(value));
-            auto string = evaluate_string(value);
+            // A value is evaluated once, so its side effects happen once.
+            auto string = integral
+                ? std::optional<std::string> { }
+                : evaluate_string(value);
             if (!integral && !string) {
                 return false;
             }
@@ -8188,6 +8202,19 @@ private:
                 // A member of a structure parameter (`P.m`) is not the
                 // whole parameter's value.
                 const auto selected = unit_.find_declaration(*declaration);
+                if (systemverilog && selected
+                    && selected->systemverilog != nullptr) {
+                    if (const auto hierarchy = hierarchy_identities_.find(
+                            std::string { expression.text });
+                        hierarchy != hierarchy_identities_.end()
+                        && systemverilog_genvar_hides(unit_.design(),
+                            expression.scope,
+                            selected->systemverilog->scope,
+                            expression.text)) {
+                        ++hierarchy_reads_;
+                        return hierarchy->second;
+                    }
+                }
                 const auto dot = expression.text.find('.');
                 if (dot != std::string::npos && selected
                     && selected->systemverilog != nullptr
@@ -8222,6 +8249,46 @@ private:
             && vhdl_operator_overloaded_by_design(unit_.design(), expression.text)) {
             return std::nullopt;
         }
+        // An increment or decrement in a constant function updates its
+        // variable and yields the old (post) or new (pre) value (IEEE
+        // 1800-2017 11.4.2); elsewhere it is not a constant.
+        if constexpr (systemverilog) {
+            if (expression.kind == Kind::update) {
+                if (expression.operands.size() != 1U
+                    || call_frames_.empty()) {
+                    return std::nullopt;
+                }
+                const auto operand = unit_.find_expression(
+                    expression.operands.front());
+                if (!operand || operand->systemverilog == nullptr
+                    || operand->systemverilog->kind != Kind::name) {
+                    return std::nullopt;
+                }
+                const auto declaration = find_actual_declaration(
+                    operand->systemverilog->text,
+                    operand->systemverilog->scope, systemverilog);
+                if (!declaration) {
+                    return std::nullopt;
+                }
+                auto& frame = call_frames_.back();
+                const auto found = frame.values.find(*declaration);
+                if (found == frame.values.end() || !found->second) {
+                    return std::nullopt;
+                }
+                const auto old_value = *found->second;
+                const bool increment = expression.text.ends_with("++");
+                const auto new_value = increment
+                    ? checked_add(old_value, 1)
+                    : checked_subtract(old_value, 1);
+                if (!new_value) {
+                    return std::nullopt;
+                }
+                frame.values.insert_or_assign(*declaration, *new_value);
+                return expression.text.starts_with("post")
+                    ? std::optional<std::int64_t> { old_value }
+                    : new_value;
+            }
+        }
         if (expression.kind == Kind::unary
             || expression.kind == Kind::update) {
             if (expression.operands.size() != 1U) {
@@ -8235,6 +8302,26 @@ private:
         if (expression.kind == Kind::binary) {
             if (expression.operands.size() != 2U) {
                 return std::nullopt;
+            }
+            // An unsized `'1`, `'x` or `'z` fills the operation's width,
+            // which an integer value cannot express (5.7.1).
+            if constexpr (systemverilog) {
+                const auto fill_literal = [&](const auto operand) {
+                    const auto record = unit_.find_expression(operand);
+                    if (!record || record->systemverilog == nullptr
+                        || record->systemverilog->kind
+                            != Kind::logic_literal) {
+                        return false;
+                    }
+                    const auto& text = record->systemverilog->text;
+                    return text.size() == 2U && text.front() == '\''
+                        && std::string_view { "1xXzZ?" }.find(text[1])
+                            != std::string_view::npos;
+                };
+                if (fill_literal(expression.operands[0])
+                    || fill_literal(expression.operands[1])) {
+                    return std::nullopt;
+                }
             }
             const auto left = evaluate(expression.operands[0]);
             const auto right = evaluate(expression.operands[1]);

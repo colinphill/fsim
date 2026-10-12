@@ -1486,3 +1486,73 @@ gives fsim's result in each case checked.
   (Verilator `$c`, Verilator non-standard checks, Icarus-only system
   tasks or gold output containing Icarus warnings) as skipped with the
   reason.
+
+## Class functions and constructors in SimIR, interval randomization (batch 50)
+
+- Class functions and constructors are lowered as SimIR subroutines with
+  `this` in a receiver register, as class tasks were. A virtual method
+  (declared virtual in its class or a base, 8.20) dispatches on the
+  object's class through checked casts, most derived first; `super.` calls
+  and non-virtual methods call the named body. Static class functions are
+  lowered the same way without a receiver. A process whose class function
+  bodies cannot all be lowered (or that reports errors while lowering them)
+  is lowered again with those calls left to the runtime interpreter.
+- `new` allocates the object with its literal property defaults and runs
+  the constructor chain in the process: the explicit `super.new(...)` call
+  or an implicit one, then the class's other property initializers, then
+  the rest of the body (8.7). Omitted positional constructor arguments take
+  their defaults (`new(5, , "x")`). Classes with parameters or UVM bases
+  keep the runtime constructor.
+- Class properties that are unpacked arrays, queues or associative arrays
+  of values are stored per object (`ClassPropertyContainerRead`/`Write`).
+  A class function or constructor body caches them in container registers,
+  storing them back before calls and at exit, so the ordinary container
+  operations work on them.
+- A void class function called as a statement runs like a task; a method
+  called by its simple name inside another method runs on `this`.
+- Class `randomize()` and `std::randomize()` bound 17- to 64-bit random
+  variables by the comparisons with constants in their hard constraints
+  (combined with `&&`, `||` and `!`) and enumerate up to 4096 values or
+  sample 512, plus the values each soft constraint prefers (18.5). Verilator
+  cases gated on its solver now run.
+- A constant expression whose operator is context-determined is evaluated
+  at the context width (`1'b1 << 3` in an 8-bit context is 8, 11.6.1).
+- `%m` includes the enclosing named blocks (21.2.1.6).
+- Randomization: a random enumerated property takes only its enumeration's
+  values, and an enumeration literal in a constraint is a constant of that
+  type (18.4, 6.19); a property listed in `randomize(v)` is random for that
+  call even when not declared `rand` (18.11); an unqualified `randomize()`
+  or `c.constraint_mode(0)` in a method acts on `this` (18.6.1, 18.8); a
+  `dist` item without a weight has weight `:= 1` (18.5.4); a constraint
+  `foreach (a[i, j])` iterates both dimensions (18.5.8.1).
+- Real arithmetic is IEEE 754: division by zero and overflow give
+  infinities or NaN; x and z bits convert to zero in a real; a real
+  converted to an integer keeps its low 64 bits (6.12, 6.12.2). `%d` of a
+  real prints the rounded integer (21.2.1.3).
+- File I/O: `$fopen` returns 0 when a file under the project root cannot be
+  opened (a name outside the root is still an error); a zero, closed or
+  unknown descriptor reads end of file and writes nothing;
+  `0x80000001`/`0x80000002` are STDOUT/STDERR and `$fopen` descriptors
+  start at 3; a closed multichannel descriptor bit can be opened again
+  (21.3.1). An ivtest `diff=` entry compares the file the test writes.
+- Writes through an unknown or out-of-range fixed-array index, and string
+  reads and writes out of range, do nothing (reads give 0 or the default)
+  (7.4.6, 6.16). An unknown delay is zero; a negative integral delay is
+  read as an unsigned time (9.4.1).
+- Copy-out to a two-state actual turns x and z into 0, and a signed formal
+  extends to a wider actual by its sign (13.3, 6.11.2).
+- Parsing: `$stop`/`$finish` in functions; any assignment operator as a
+  genvar step (27.4); a null generate item `;` in Verilog too; repeated
+  `timeunit`/`timeprecision` that match the earlier ones (3.14.2.2), and
+  a prior `` `timescale `` taking precedence over a compilation-unit
+  `timeunit` for a module (3.14.2.3); `#1 'h5`, `#100'b0` and `#(32'hf0)`
+  delays (A.2.2.3); `const`, `var` and `virtual` interface types in block
+  declarations (A.2.8); parameter ports of unpacked array type without a
+  default (6.20.1).
+- Parameters with only a signing (`parameter signed p = 4'd15`) take the
+  value's range with that signing (6.20.2); declared ranges written with
+  parameters (`[base+15:base]`, base negative) give the right select
+  offsets; an unsized fill literal on an input port fills its width
+  (5.7.1); a nested class reads its enclosing class's static properties
+  (8.23); an increment inside a constant function updates its variable
+  (11.4.2).

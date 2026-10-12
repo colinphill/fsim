@@ -643,7 +643,7 @@ void test_simir_text_files()
     borrower.name = "file_borrower";
     borrower.register_count = 1;
     borrower.operations = {
-        LoadConstant { 0, number(UINT32_C(0x80000001)) },
+        LoadConstant { 0, number(UINT32_C(0x80000003)) },
         FileClose { 0 },
         Halt { }
     };

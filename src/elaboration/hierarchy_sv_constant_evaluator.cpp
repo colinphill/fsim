@@ -768,6 +768,18 @@ struct SmallWords {
     const std::uint32_t width,
     const bool signed_value)
 {
+    // An unsized fill literal (`'0`, `'1`, `'x`, `'z`) sets every bit of
+    // the context width (5.7.1).
+    if (value.unsized && value.width == 1U && width > 1U) {
+        value.packed = runtime::PackedLogic4(
+            width, value.packed.get(0));
+        value.width = width;
+        value.signed_value = signed_value;
+        return value;
+    }
+    // Operands take the context's signedness before they are extended
+    // (11.8.1).
+    value.signed_value = signed_value;
     value = resized(std::move(value), width);
     value.signed_value = signed_value;
     return value;
@@ -2366,9 +2378,11 @@ private:
                 std::string_view { "@sv-cast:" }.size());
             std::optional<semantic::sv::TypeReference> type;
             if (const auto width = parse_integer<std::uint32_t>(name)) {
+                // A size cast keeps the expression's signedness (6.24.1).
                 type.emplace();
                 type->executable_width = *width;
                 type->four_state = true;
+                type->signed_value = result->signed_value;
                 type->target.spelling = std::string { name };
             } else if (name == "bit" || name == "logic"
                 || name == "reg") {

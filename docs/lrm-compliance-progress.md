@@ -253,6 +253,68 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 50: class functions in SimIR, enumerated randomization, IEEE reals, file descriptors
+
+Fixture: `sv_language_details_batch50.sv` (passes on xsim).
+
+- Class functions, virtual and `super.` calls, static class functions and
+  constructors run as lowered SimIR subroutines; value-container class
+  properties are stored per object (8.7, 8.10, 8.20). See
+  `docs/class-function-lowering-plan.md` (dedicated project, steps 1 to 4).
+- Randomization: interval bounds for 17- to 64-bit random variables (solver
+  step 1; Verilator `have_solver` cases run), enumerated properties limited
+  to their literals and enumeration literals in constraints, `randomize(v)`
+  of a non-`rand` property, unqualified `randomize()` and
+  `c.constraint_mode()` in methods, `dist` items without a weight,
+  multi-index constraint `foreach` (18.4 to 18.11).
+- Reals follow IEEE 754 (inf and NaN); x and z convert to zero; `%d` of a
+  real rounds (6.12, 21.2.1.3).
+- File I/O tolerates zero, closed and unknown descriptors; STDOUT/STDERR
+  descriptors; `$fopen` failure returns 0 under the project root (21.3).
+- Out-of-range fixed-array and string accesses, unknown and negative
+  delays, two-state copy-out, signed parameters without a range,
+  parameter-dependent ranges, unsized fill literals on ports,
+  nested-class static access, `++` in constant functions (7.4.6, 6.16,
+  9.4.1, 13.3, 6.20.2, 5.7.1, 8.23, 11.4.2).
+- Parsing: `$stop` in functions, compound genvar steps, null generate
+  items, repeated time declarations and `` `timescale `` precedence,
+  based-literal delays, `const`/`var`/`virtual` block declarations,
+  defaultless array parameter ports.
+- Runner: ivtest `diff=` output files; a `$stop` counts as the expected
+  failure of a Verilator `fails` case.
+
+Out of scope: Verilator `t_timing_osc` (`timeunit` after other items),
+`t_sys_readmem_bad_*` (Verilator error policy); ivtest `cast_int`
+(inf to x), `pr556`/`pr2138979d` (unseeded `$random` sequence),
+`pr2486350` (`$simtime`).
+
+Investigated and left open: the `%t` group (integer `%t` arguments need
+the module time unit at run time; `$monitor` prints the current time for
+every `%t`; about 9 ivtest cases); packed arrays of packed structures;
+a genvar shadowed by a later module declaration of the same name
+(`genvar_compressed`, `genvar_inc_dec`); real/integer conversion wider
+than 64 bits; inline constraints naming the caller's locals; container
+randomization (class-lowering step 5); `%E`/`%G` upper case; a signed
+4-state output formal copied to a wider actual (`implicit_cast11`).
+
+Measurement (failures of b50a and the fast set rerun with wip50i; VHDL
+suites unchanged, fast-set VHDL cases all pass). The batch 49 column is
+the batch 49 measurement; five of the batch 50 gains (four Verilator
+semaphore cases and ivtest `pr2794144`) were credited to batch 49.
+
+ctest: the `vhdl`, `systemverilog` and `compliance` labels fail only the 11
+known tests. `fsim.runtime.fused_staging_failure` (not labelled) fails on
+a fused static cohort check unrelated to this batch.
+
+| Suite | Batch 49 (wip48) | Batch 50 (wip50i) |
+|---|---:|---:|
+| VESTs | 3337/3648 | 3337/3648 |
+| nvc regress | 643/1482 | 643/1482 |
+| VHDL Compliance-Tests | 33/72 | 33/72 |
+| ivtest | 2292/2826 | 2345/2826 |
+| Verilator test_regress | 1222/2415 | 1287/2415 |
+| sv-tests | 1411/1497 | 1413/1497 |
+
 ### Batch 49: binds, real conversions, untyped parameters, virtual tasks, preprocessing
 
 Fixture: `sv_language_details_batch49.sv` (passes on xsim).
@@ -2605,7 +2667,7 @@ them are not counted as gaps.
 | SV: pure virtual tasks called through a base handle, and string-returning class methods called from inside another class method (string results elsewhere done in batch 38) | Verilator/sv-tests class cases |
 | SV: a class declared in `$unit` uses the caller's time unit for `$time` and `$printtimescale` (packages and `$unit` subroutines done in batch 38) | ivtest br1003a |
 | SV: a format held in a string variable (`$display(fmt, ...)`, `$sformatf(fmt, ...)`, `$sformat`): formatting needs a run-time format parser over lowered arguments (21.2.1, 21.3.3) | ~8 ivtest/Verilator cases (`FSIM-ELAB-SVSTRING-019`) |
-| SV: constrained randomization of wide variables: the solver enumerates domains; interval domains and bound extraction are the planned first step | 167 Verilator `have_solver` cases (skipped), sv-tests chapter 18 |
+| SV: constrained randomization: relations between wide variables, bit-level constraints, `dist` over sampled domains, container properties (interval bounds done in batch 50) | Verilator `have_solver` cases, sv-tests chapter 18 |
 | SV: MOS and CMOS switches with an unknown control (L and H outputs), switch and primitive delays on `tranif`, and `$countdrivers` | ivtest `cmos`, `pr1787394*`, `switch_primitives`, `pr2941939`, `countdrivers*` |
 | SV: `new` for a variable of a specialized class type (`box #(5) b; b = new;`) constructs the default specialization | testbenches using parameterized classes |
 | VHDL: user resolution functions other than a single OR/AND reduction (a runtime resolver calling the function on the driver values) | 28 VESTs cases (`FSIM-ELAB-VHRESOLVE-002`/`-004`), nvc |
@@ -2618,6 +2680,8 @@ them are not counted as gaps.
 | SV: an X/Z or out-of-range dynamic index in a signal write must skip the write instead of failing (interpreter and LLVM paths) | Verilator, ivtest (`FSIM-RUN-0001`) |
 | SV: `void'($fgets(...))` and other discarded system-function calls | sv-tests chapter 21 |
 | SV: packed arrays of a named type (`T [3:0] v;`, `typedef T1 [7:0] T2;`) | ~80 ivtest/Verilator cases (`FSIM-SV-UNSUPPORTED-004`/`-024`) |
+| SV: `%t` of integer expressions and time-array elements (scaled from the module unit to `$timeformat`), and `$monitor` `%t` arguments other than `$time` | ~9 ivtest cases |
+| SV: a genvar hides a later module-level declaration of the same name | ivtest `genvar_compressed`, `genvar_inc_dec`, `pr2109179` |
 | VHDL: conversion functions on formals of directly instantiated entities, and of inout formals with only a formal conversion (component output and inout formals done in batch 25) | VESTs (`FSIM-ELAB-VHCOMP-009`) |
 | VHDL: individual association of output-port subelements | VESTs, nvc |
 | SV legality: an enum base that names a non-integral typedef; unpacked array assignment between enum and integer element types | ivtest negative cases |

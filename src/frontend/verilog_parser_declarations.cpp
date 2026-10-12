@@ -830,6 +830,13 @@ void VerilogParser::parse_virtual_interface_declaration(
       "FSIM-SV-PARSE-289");
 }
 
+[[nodiscard]] bool VerilogParser::is_block_declaration_start() const {
+  // A block may declare a virtual interface variable (IEEE 1800-2017 25.9).
+  return is_declaration_start()
+      || (language_ == Language::SystemVerilog2017 && keyword("virtual")
+          && !keyword("class", 1));
+}
+
 [[nodiscard]] bool VerilogParser::is_declaration_start() const  {
   if (language_ == Language::SystemVerilog2017
       && (keyword("var") || keyword("const"))) {
@@ -1445,8 +1452,28 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
   // A parameter of a block, function or task is a local parameter (IEEE
   // 1800-2017 6.20.1); it is kept as a local initialized by its value.
   const bool local_parameter = match_keyword("parameter") || match_keyword("localparam");
-  const bool static_lifetime = match_keyword("static");
-  const bool automatic = match_keyword("automatic");
+  // block_item_declaration ::= [const] [var] [lifetime] data_type_or_implicit
+  // (IEEE 1800-2017 A.2.8, 6.8, 6.20.6). A constant variable is never
+  // written by legal code, so it is an ordinary initialized variable here.
+  bool explicit_variable { };
+  bool static_lifetime { };
+  bool automatic { };
+  for (bool qualified = true; qualified && !local_parameter;) {
+    qualified = false;
+    if (language_ == Language::SystemVerilog2017 && match_keyword("const")) {
+      qualified = true;
+    } else if (language_ == Language::SystemVerilog2017
+        && match_keyword("var")) {
+      explicit_variable = true;
+      qualified = true;
+    } else if (match_keyword("static")) {
+      static_lifetime = true;
+      qualified = true;
+    } else if (match_keyword("automatic")) {
+      automatic = true;
+      qualified = true;
+    }
+  }
   Type type = default_verilog_type();
   if (local_parameter && at(TokenKind::Identifier) && at(TokenKind::Assign, 1)) {
     // An untyped parameter takes an integer value.
@@ -1459,8 +1486,16 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
     type = std::move(*expanded);
   } else if (is_named_type_reference_start()) {
     type = parse_named_type();
+  } else if (language_ == Language::SystemVerilog2017 && keyword("virtual")) {
+    // A virtual interface variable (IEEE 1800-2017 25.9).
+    const auto virtual_start = advance();
+    type = parse_virtual_interface_type(virtual_start);
   } else {
     parse_optional_net_type(type);
+  }
+  // `var` with an implicit data type declares a logic variable (6.8).
+  if (explicit_variable && type.named_type.empty() && type.spelling == "wire") {
+    type.spelling = "logic";
   }
   if (local_parameter && type.named_type.empty() && type.spelling == "wire") {
     type.spelling = "logic";
@@ -1587,7 +1622,11 @@ bool VerilogParser::update_existing_port_type(
   DesignUnit& unit, const SignalDeclaration& declaration) {
   for (auto& existing : unit.ports) {
     if (existing.name == declaration.name) {
+      // The port is signed when either its port or its data declaration
+      // says so (IEEE 1800-2017 23.2.2.1).
+      const auto port_signed = existing.type.is_signed;
       existing.type = declaration.type;
+      existing.type.is_signed = existing.type.is_signed || port_signed;
       existing.net_delay = declaration.net_delay;
       existing.drive_strength = declaration.drive_strength;
       existing.charge_strength = declaration.charge_strength;

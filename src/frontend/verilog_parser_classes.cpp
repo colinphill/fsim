@@ -432,6 +432,7 @@ std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
                     choice = parse_expression();
                 }
                 std::string weight_kind;
+                std::optional<Expression> weight;
                 if (match(TokenKind::ColonEqual)) {
                     weight_kind = "@dist-:=";
                 } else if (match(TokenKind::Colon)) {
@@ -440,6 +441,14 @@ std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
                         "'/' after ':' in dist weight",
                         "FSIM-SV-PARSE-271");
                     weight_kind = "@dist-:/";
+                } else if (at(TokenKind::Comma)
+                    || at(TokenKind::RightBrace)) {
+                    // An item without a weight has weight `:= 1` (IEEE
+                    // 1800-2017 18.5.4).
+                    weight_kind = "@dist-:=";
+                    weight = Expression {
+                        ExpressionKind::IntegerLiteral, "1", { },
+                        choice.span };
                 } else {
                     error(
                         current(),
@@ -447,12 +456,14 @@ std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
                         "a dist item requires ':=' or ':/' weight syntax");
                     weight_kind = "@dist-:=";
                 }
-                auto weight = parse_expression();
-                const auto item_span = cover(dist.span, weight.span);
+                if (!weight) {
+                    weight = parse_expression();
+                }
+                const auto item_span = cover(dist.span, weight->span);
                 operands.push_back(Expression {
                     ExpressionKind::Call,
                     std::move(weight_kind),
-                    { std::move(choice), std::move(weight) },
+                    { std::move(choice), std::move(*weight) },
                     item_span });
                 if (!match(TokenKind::Comma))
                     break;
@@ -621,6 +632,51 @@ std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
                 TokenKind::LeftParen,
                 "'(' after constraint foreach",
                 "FSIM-SV-PARSE-277");
+            // `foreach (a[i, j])` iterates `a[i]` and, within it, `a[i][j]`
+            // (IEEE 1800-2017 18.5.8.1, 12.7.3). The loop-variable list is
+            // read as `a[i][j]` and the loops nest.
+            std::size_t loop_variables = 1;
+            {
+                std::size_t depth { };
+                std::optional<std::size_t> list_open;
+                for (auto at_index = index_; at_index < tokens_.size();
+                     ++at_index) {
+                    const auto kind = tokens_[at_index].kind;
+                    if (kind == TokenKind::LeftParen
+                        || kind == TokenKind::LeftBracket
+                        || kind == TokenKind::LeftBrace) {
+                        if (kind == TokenKind::LeftBracket && depth == 0U) {
+                            list_open = at_index;
+                        }
+                        ++depth;
+                    } else if (kind == TokenKind::RightParen
+                        || kind == TokenKind::RightBracket
+                        || kind == TokenKind::RightBrace) {
+                        if (depth == 0U) {
+                            break;
+                        }
+                        --depth;
+                    } else if (kind == TokenKind::Comma && depth == 1U
+                        && list_open
+                        && tokens_[at_index - 1U].kind
+                            == TokenKind::Identifier
+                        && at_index + 1U < tokens_.size()
+                        && tokens_[at_index + 1U].kind
+                            == TokenKind::Identifier) {
+                        auto close = tokens_[at_index];
+                        close.kind = TokenKind::RightBracket;
+                        close.text = "]";
+                        auto open = close;
+                        open.kind = TokenKind::LeftBracket;
+                        open.text = "[";
+                        tokens_[at_index] = close;
+                        tokens_.insert(tokens_.begin()
+                                + static_cast<std::ptrdiff_t>(at_index) + 1,
+                            open);
+                        ++loop_variables;
+                    }
+                }
+            }
             auto selection = parse_expression();
             expect(
                 TokenKind::RightParen,
@@ -628,12 +684,28 @@ std::vector<Expression> VerilogParser::parse_constraint_block_expressions(
                 "FSIM-SV-PARSE-278");
             auto body = parse_constraint_set();
             const auto item_span = cover(foreach_token.span, body.span);
-            return Expression {
+            auto result = Expression {
                 ExpressionKind::Call,
                 "@constraint-foreach",
-                { std::move(selection), std::move(body) },
+                { selection, std::move(body) },
                 item_span
             };
+            // Wrap each outer dimension around the loop over its elements.
+            const auto* outer = &selection;
+            for (std::size_t level = 1; level < loop_variables; ++level) {
+                if (outer->kind != ExpressionKind::Index
+                    || outer->operands.empty()) {
+                    break;
+                }
+                outer = &outer->operands.front();
+                result = Expression {
+                    ExpressionKind::Call,
+                    "@constraint-foreach",
+                    { *outer, std::move(result) },
+                    item_span
+                };
+            }
+            return result;
         }
         return parse_plain_constraint();
     };

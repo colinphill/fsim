@@ -566,7 +566,7 @@ Lowerer::lower_hir_formatted_string(
                                   const std::optional<semantic::ExpressionId> value) {
         append_literal(conversion.prefix);
         if (conversion.format == frontend::OutputFormat::Hierarchy) {
-            append_literal(hierarchy_);
+            append_literal(hir_scope_hierarchy());
             return true;
         }
         StringMethod operation;
@@ -3305,7 +3305,7 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                         + output.prefix;
                     if (output.format
                         == semantic::sv::OutputFormat::hierarchy) {
-                        pending_prefix = std::move(prefix) + hierarchy_;
+                        pending_prefix = std::move(prefix) + hir_scope_hierarchy();
                         return;
                     }
                     MonitorValue value;
@@ -3420,7 +3420,7 @@ bool Lowerer::lower_hir_systemverilog_file_statement(
                 if (output.format == semantic::sv::OutputFormat::hierarchy) {
                     process_.operations.emplace_back(FileWriteLiteral {
                         *handle,
-                        output.prefix + hierarchy_ + std::move(suffix),
+                        output.prefix + hir_scope_hierarchy() + std::move(suffix),
                         newline,
                     });
                     return true;

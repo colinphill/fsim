@@ -72,6 +72,14 @@ void validate_class_operation(
         record_use(operation.receiver, index);
         constrain_width(operation.receiver, 64U, index);
         record_use(operation.source, index);
+    } else if constexpr (
+        std::is_same_v<OperationType, ClassPropertyContainerRead>
+        || std::is_same_v<OperationType, ClassPropertyContainerWrite>) {
+        if (operation.property_identity.empty()) {
+            reject(process, index, "class container property access requires an identity");
+        }
+        record_use(operation.receiver, index);
+        constrain_width(operation.receiver, 64U, index);
     } else if constexpr (std::is_same_v<OperationType, ClassMethodCall>) {
         if (operation.method_identity.empty() || operation.result_width == 0
             || operation.actual_names.size() != operation.actuals.size()

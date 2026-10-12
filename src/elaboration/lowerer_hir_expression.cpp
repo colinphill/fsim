@@ -7455,7 +7455,27 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             std::string error;
             const auto value = evaluate_hir_systemverilog_constant(
                 *specialized_hir_unit_, expression_id, error);
-            if (value && !value->unbounded) {
+            // A context-determined operator evaluates at the context width
+            // (11.6.1): `1'b1 << 3` in an 8-bit context is 8, not 0.
+            const auto& folded = *expression->systemverilog;
+            const bool context_operator
+                = ((folded.kind == semantic::sv::ExpressionKind::binary
+                       || folded.kind == semantic::sv::ExpressionKind::unary)
+                      && (folded.text == "+" || folded.text == "-"
+                          || folded.text == "*" || folded.text == "/"
+                          || folded.text == "%" || folded.text == "&"
+                          || folded.text == "|" || folded.text == "^"
+                          || folded.text == "~" || folded.text == "^~"
+                          || folded.text == "~^" || folded.text == "<<"
+                          || folded.text == ">>" || folded.text == "<<<"
+                          || folded.text == ">>>" || folded.text == "**")
+                      && !(folded.kind == semantic::sv::ExpressionKind::unary
+                          && folded.text != "+" && folded.text != "-"
+                          && folded.text != "~"))
+                || (folded.kind == semantic::sv::ExpressionKind::call
+                    && folded.text == "?:");
+            if (value && !value->unbounded
+                && !(context_operator && value->width < *width)) {
                 const auto domain = hir_expression_domain(
                     expression_id, hir_process_scope_)
                                         .value_or(value->domain);
@@ -7723,7 +7743,27 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 }
             }
         }
-        const auto value = hir_vhdl_active_package_constant(expression_id)
+        // An expression with an increment or decrement keeps its side
+        // effect even when its value folds (IEEE 1800-2017 11.4.2).
+        const auto has_update = [&](const auto& self,
+                                    const semantic::ExpressionId id,
+                                    const std::size_t depth) -> bool {
+            const auto record = specialized_hir_unit_->find_expression(id);
+            if (!record || record->systemverilog == nullptr || depth > 64U) {
+                return false;
+            }
+            if (record->systemverilog->kind
+                == semantic::sv::ExpressionKind::update) {
+                return true;
+            }
+            return std::ranges::any_of(record->systemverilog->operands,
+                [&](const semantic::ExpressionId operand) {
+                    return self(self, operand, depth + 1U);
+                });
+        };
+        const auto value = has_update(has_update, expression_id, 0U)
+            ? std::optional<std::int64_t> { }
+            : hir_vhdl_active_package_constant(expression_id)
             ? hir_constant_integer(expression_id)
             : specialized_hir_unit_->evaluate_integral_expression(
                   expression_id);
@@ -9122,6 +9162,51 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         if (allocation.class_identity.empty()) {
             return std::nullopt;
         }
+        // The object is allocated with its property defaults and the
+        // process runs the constructor chain itself when it can (8.7).
+        const auto* const lowerable = lower_class_functions_
+            ? hir_lowerable_constructor_class(allocation.class_identity)
+            : nullptr;
+        if (lowerable != nullptr) {
+            const auto mark = process_.operations.size();
+            const auto frames = hir_callable_frames_.size();
+            std::vector<semantic::sv::TaskAssociation> associations;
+            associations.reserve(allocation.operands.size());
+            // The call associations keep an omitted actual's position
+            // (`new(5, , "x")`).
+            for (const auto& call : allocation.call_arguments) {
+                associations.push_back({ call.formal, call.actual, call.source });
+            }
+            for (std::size_t index { }; allocation.call_arguments.empty()
+                 && index < allocation.operands.size();
+                 ++index) {
+                semantic::sv::TaskAssociation association;
+                if (allocation.argument_names.size()
+                        == allocation.operands.size()
+                    && !allocation.argument_names[index].empty()) {
+                    association.formal = allocation.argument_names[index];
+                }
+                association.actual = allocation.operands[index];
+                association.source = allocation.source;
+                associations.push_back(std::move(association));
+            }
+            const auto handle = allocate_register(
+                64U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(ClassAllocate {
+                handle,
+                "@no-constructor:" + allocation.class_identity,
+                allocation.class_identity,
+                { },
+                { },
+                { },
+            });
+            if (lower_hir_class_construction(
+                    *lowerable, handle, associations, allocation.source)) {
+                class_functions_lowered_ = true;
+                return handle;
+            }
+            rollback_hir_lowering(mark, frames);
+        }
         std::vector<RegisterId> actuals;
         std::vector<std::uint8_t> actual_kinds;
         actuals.reserve(allocation.operands.size());
@@ -9344,6 +9429,39 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         if (access.operands.size() != 2U) {
             return std::nullopt;
         }
+        // An element of an unpacked array, queue or associative array of
+        // values held by an object.
+        if (const auto identity = std::string_view { access.text }.substr(
+                std::string_view { "@sv-container-index:" }.size());
+            hir_class_value_container_type(identity)) {
+            const auto container = lower_hir_class_value_container(
+                access.operands[0], identity);
+            if (!container || container->container.type.string_indices
+                || (container->container.type.element_kind
+                        != ContainerElementKind::Packed
+                    && container->container.type.element_kind
+                        != ContainerElementKind::Scalar)) {
+                return std::nullopt;
+            }
+            const auto& type = container->container.type;
+            const auto index = lower_hir_expression(access.operands[1],
+                type.associative ? type.index_width : 32U);
+            if (!index) {
+                return std::nullopt;
+            }
+            const auto selected = allocate_register(type.element_width,
+                type.two_state ? frontend::ValueDomain::Bit2
+                               : frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(ContainerRead {
+                selected, container->container.value, *index,
+                type.associative ? type.signed_indices : true, false,
+                type.string_indices });
+            return expected_width != 0U
+                    && expected_width != type.element_width
+                ? std::optional { resize_register(
+                      selected, expected_width, type.signed_elements) }
+                : std::optional { selected };
+        }
         const auto receiver = lower_hir_expression(
             access.operands[0], 64U);
         const auto index_width = hir_expression_width(
@@ -9388,6 +9506,45 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         const auto query_size = operation.starts_with("size:");
         if ((!pop && !query_size) || call.operands.size() != 1U) {
             return std::nullopt;
+        }
+        // `size()` and `pop_front()` of a container of values held by an
+        // object (7.5.1, 7.10.2).
+        if (const auto identity = operation.substr(
+                pop ? std::string_view { "pop_front:" }.size()
+                    : std::string_view { "size:" }.size());
+            hir_class_value_container_type(identity)) {
+            const auto container = lower_hir_class_value_container(
+                call.operands.front(), identity);
+            if (!container) {
+                return std::nullopt;
+            }
+            const auto& type = container->container.type;
+            if (query_size) {
+                const auto size = allocate_register(
+                    32U, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(ContainerSize {
+                    size, container->container.value });
+                return expected_width != 0U && expected_width != 32U
+                    ? std::optional { resize_register(
+                          size, expected_width, true) }
+                    : std::optional { size };
+            }
+            if (!type.queue
+                || (type.element_kind != ContainerElementKind::Packed
+                    && type.element_kind != ContainerElementKind::Scalar)) {
+                return std::nullopt;
+            }
+            const auto selected = allocate_register(type.element_width,
+                type.two_state ? frontend::ValueDomain::Bit2
+                               : frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(PopContainer {
+                selected, container->container.value, true });
+            store_hir_class_value_container(*container);
+            return expected_width != 0U
+                    && expected_width != type.element_width
+                ? std::optional { resize_register(
+                      selected, expected_width, type.signed_elements) }
+                : std::optional { selected };
         }
         const auto receiver = lower_hir_expression(
             call.operands.front(), 64U);
@@ -17655,7 +17812,7 @@ bool Lowerer::lower_hir_vhdl_aggregate_copy_out(
 
 bool Lowerer::lower_hir_packed_copy_out(
     const semantic::ExpressionId target,
-    const RegisterId source,
+    const RegisterId copied_source,
     const HirPackedCopyOutMode mode)
 {
     const auto expression = specialized_hir_unit_ != nullptr
@@ -17664,6 +17821,14 @@ bool Lowerer::lower_hir_packed_copy_out(
     if (!expression) {
         return false;
     }
+    // A two-state actual receives x and z bits as zero (IEEE 1800-2017
+    // 6.11.2, 13.3).
+    const auto source = expression->systemverilog != nullptr
+            && hir_expression_domain(target, hir_process_scope_)
+                == frontend::ValueDomain::Bit2
+            && register_domain(copied_source) != frontend::ValueDomain::Bit2
+        ? convert_to_two_state(copied_source)
+        : copied_source;
     if (mode != HirPackedCopyOutMode::systemverilog_active_update
         && expression->systemverilog != nullptr) {
         // An output actual through a virtual interface (`f(vif.data)`).

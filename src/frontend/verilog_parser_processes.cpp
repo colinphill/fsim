@@ -666,7 +666,7 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                             : std::optional<Type> { prior->second } });
                     current_procedural_types_.insert_or_assign(alias.name, alias.type);
                 }
-            } else if (is_declaration_start() || keyword("parameter")
+            } else if (is_block_declaration_start() || keyword("parameter")
                 || keyword("localparam")) {
               // Verilog declares block items only in named blocks
               // (IEEE 1364-2005 9.8.3).

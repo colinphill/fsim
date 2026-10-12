@@ -358,13 +358,16 @@ runtime::simir::FileHandle LlvmProcessExecutor::checked_file_handle(
     const std::uint64_t aval,
     const std::uint64_t bval)
 {
-    if (bval != 0
-        || aval
-            > std::numeric_limits<
-                runtime::simir::FileHandle>::max()) {
+    // A descriptor with unknown bits selects no file (IEEE 1800-2017
+    // 21.3.1); only an out-of-range value is an error.
+    if (aval
+        > std::numeric_limits<runtime::simir::FileHandle>::max()) {
         throw std::runtime_error {
             "file handle must be a known 32-bit integral value"
         };
+    }
+    if (bval != 0) {
+        return 0;
     }
     return static_cast<runtime::simir::FileHandle>(aval);
 }

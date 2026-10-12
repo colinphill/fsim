@@ -239,7 +239,7 @@ void verify_suspension(
     assert(
         read_text(config.base_directory / "output.txt")
         == "value=7\ntail0111\na5\n245\n0111a5245\n"
-           "strobe=file_top/0/a5\n1010\na5\n245\n"
+           "strobe=file_top.worker/0/a5\n1010\na5\n245\n"
            "|chars=97/0/81/0/0/-1/1\n"
            "scan=2/13/alpha/2/42/done\n"
            "scalar=1.25/17/0/3\n"
@@ -811,7 +811,7 @@ end architecture;
         assert(reference.result.time == 4);
         assert(reference.output_file
             == "value=7\ntail0111\na5\n245\n0111a5245\n"
-               "strobe=file_top/0/a5\n1010\na5\n245\n"
+               "strobe=file_top.worker/0/a5\n1010\na5\n245\n"
                "|chars=97/0/81/0/0/-1/1\n"
                "scan=2/13/alpha/2/42/done\n"
                "scalar=1.25/17/0/3\n"
@@ -923,7 +923,7 @@ end architecture;
         assert(changed_input.saved_line == "Zeta\n");
         assert(changed_input.output_file
             == "value=7\ntail0111\na5\n245\n0111a5245\n"
-               "strobe=file_top/0/a5\n1010\na5\n245\n"
+               "strobe=file_top.worker/0/a5\n1010\na5\n245\n"
                "|chars=98/0/81/0/0/-1/1\n"
                "scan=2/21/beta/2/42/done\n"
                "scalar=1.25/17/0/3\n"
@@ -957,7 +957,7 @@ end architecture;
         const auto changed_source = run_once(config, fsim::app::SimulationEngine::compiled);
         assert(changed_source.output_file
             == "changed=7\ntail0111\na5\n245\n0111a5245\n"
-               "strobe=file_top/0/a5\n1010\na5\n245\n"
+               "strobe=file_top.worker/0/a5\n1010\na5\n245\n"
                "|chars=98/0/81/0/0/-1/1\n"
                "scan=2/21/beta/2/42/done\n"
                "scalar=1.25/17/0/3\n"

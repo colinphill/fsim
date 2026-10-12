@@ -120,6 +120,44 @@ FileHandle Interpreter::Impl::open_file(
     const std::string_view path_text,
     const std::string_view mode_text)
 {
+    if (processes.scheduling_domain(process)
+        != ProcessSchedulingDomain::systemverilog) {
+        return open_file_unchecked(process, path_text, mode_text);
+    }
+    // $fopen returns zero when the file cannot be opened (IEEE 1800-2017
+    // 21.3.1).
+    // A name outside the manifest root stays an error: file access is
+    // confined to the project.
+    try {
+        return open_file_unchecked(process, path_text, mode_text);
+    } catch (const std::runtime_error& error) {
+        const std::string_view message { error.what() };
+        if (message.find("manifest root") != std::string_view::npos
+            || message.find("escapes") != std::string_view::npos) {
+            throw;
+        }
+        return 0;
+    } catch (const std::length_error&) {
+        return 0;
+    }
+}
+
+Interpreter::Impl::FileState* Interpreter::Impl::open_systemverilog_file(
+    const FileHandle handle)
+{
+    const auto found = files.find(handle);
+    if (handle == 0 || found == files.end() || found->second.closed
+        || !found->second.stream) {
+        return nullptr;
+    }
+    return &found->second;
+}
+
+FileHandle Interpreter::Impl::open_file_unchecked(
+    const ProcessId process,
+    const std::string_view path_text,
+    const std::string_view mode_text)
+{
     if (files.size() >= maximum_open_file_handles) {
         throw std::length_error {
             "SimIR file-handle lifetime ceiling is exhausted"
@@ -193,11 +231,25 @@ FileHandle Interpreter::Impl::open_file(
     FileHandle handle { };
     if (multichannel) {
         if (next_multichannel_channel >= 31U) {
-            throw std::length_error {
-                "SystemVerilog multichannel descriptor space is exhausted"
-            };
+            // A closed channel may be opened again.
+            for (std::uint32_t channel = 1; channel < 31U; ++channel) {
+                const auto bit = FileHandle { 1U } << channel;
+                if (const auto found = files.find(bit);
+                    found != files.end() && found->second.closed) {
+                    files.erase(found);
+                    handle = bit;
+                    break;
+                }
+            }
+            if (handle == 0) {
+                throw std::length_error {
+                    "SystemVerilog multichannel descriptor space is "
+                    "exhausted"
+                };
+            }
+        } else {
+            handle = FileHandle { 1U } << next_multichannel_channel++;
         }
-        handle = FileHandle { 1U } << next_multichannel_channel++;
     } else {
         if (next_file_handle == 0
             || next_file_handle >= file_descriptor_flag) {
@@ -226,9 +278,27 @@ FileHandle Interpreter::Impl::open_file(
 Interpreter::Impl::FileState& Interpreter::Impl::checked_file(
     // File descriptors are design-wide (IEEE 1800-2017 21.3.1): any process
     // may use a file another process opened.
-    const ProcessId /*process*/,
+    const ProcessId process,
     const FileHandle handle)
 {
+    // A SystemVerilog operation through a descriptor that names no open
+    // file reads end of file and records the error for $ferror (IEEE
+    // 1800-2017 21.3).
+    if (processes.scheduling_domain(process)
+            == ProcessSchedulingDomain::systemverilog
+        && open_systemverilog_file(handle) == nullptr) {
+        auto& invalid = invalid_systemverilog_file;
+        if (!invalid.stream) {
+            invalid.stream = std::make_unique<std::fstream>();
+        }
+        invalid.stream->clear();
+        invalid.pushback.reset();
+        invalid.closed = false;
+        invalid.readable = false;
+        invalid.writable = false;
+        invalid.last_error = "invalid file descriptor";
+        return invalid;
+    }
     if (handle == 0) {
         throw std::runtime_error {
             "invalid zero SimIR file handle"
@@ -269,17 +339,33 @@ void Interpreter::Impl::close_file(
             throw std::runtime_error { file.last_error };
         }
     };
+    const bool systemverilog = processes.scheduling_domain(process)
+        == ProcessSchedulingDomain::systemverilog;
     if ((handle & file_descriptor_flag) != 0) {
+        if (systemverilog) {
+            // Closing a descriptor that names no open file does nothing
+            // (IEEE 1800-2017 21.3.1).
+            if (auto* file = open_systemverilog_file(handle)) {
+                close_one(*file);
+            }
+            return;
+        }
         close_one(checked_file(process, handle));
         return;
     }
-    if (handle == 0) {
+    if (handle == 0 && !systemverilog) {
         static_cast<void>(checked_file(process, handle));
     }
     std::vector<FileState*> selected;
     for (std::uint32_t channel = 1; channel < 31U; ++channel) {
         const auto bit = FileHandle { 1U } << channel;
         if ((handle & bit) != 0) {
+            if (systemverilog) {
+                if (auto* file = open_systemverilog_file(bit)) {
+                    selected.push_back(file);
+                }
+                continue;
+            }
             selected.push_back(&checked_file(process, bit));
         }
     }
@@ -311,13 +397,43 @@ void Interpreter::Impl::write_file(
             throw std::runtime_error { file.last_error };
         }
     };
+    const bool systemverilog = processes.scheduling_domain(process)
+        == ProcessSchedulingDomain::systemverilog;
+    const auto write_standard = [&](std::ostream& stream) {
+        stream.write(text.data(), static_cast<std::streamsize>(text.size()));
+        if (newline)
+            stream.put('\n');
+        stream.flush();
+    };
     if ((handle & file_descriptor_flag) != 0) {
+        if (systemverilog) {
+            // Descriptors 0x80000001 and 0x80000002 are the preopened
+            // STDOUT and STDERR (IEEE 1800-2017 21.3.1); a write through a
+            // descriptor that names no open file does nothing.
+            if (handle == (file_descriptor_flag | 1U)) {
+                write_standard(std::cout);
+                return;
+            }
+            if (handle == (file_descriptor_flag | 2U)) {
+                write_standard(std::cerr);
+                return;
+            }
+            if (auto* file = open_systemverilog_file(handle)) {
+                validate(*file);
+                write_one(*file);
+            }
+            return;
+        }
         auto& file = checked_file(process, handle);
         validate(file);
         write_one(file);
         return;
     }
     if (handle == 0) {
+        if (systemverilog) {
+            // A zero multichannel descriptor selects no file.
+            return;
+        }
         throw std::runtime_error {
             "invalid zero SystemVerilog multichannel descriptor"
         };
@@ -326,6 +442,13 @@ void Interpreter::Impl::write_file(
     for (std::uint32_t channel = 1; channel < 31U; ++channel) {
         const auto bit = FileHandle { 1U } << channel;
         if ((handle & bit) != 0) {
+            if (systemverilog) {
+                if (auto* file = open_systemverilog_file(bit)) {
+                    validate(*file);
+                    selected.push_back(file);
+                }
+                continue;
+            }
             auto& file = checked_file(process, bit);
             validate(file);
             selected.push_back(&file);
@@ -552,6 +675,10 @@ void Interpreter::Impl::flush_file(
             return;
         }
         if (*handle == 0) {
+            if (processes.scheduling_domain(process)
+                == ProcessSchedulingDomain::systemverilog) {
+                return;
+            }
             throw std::runtime_error {
                 "invalid zero SystemVerilog multichannel descriptor"
             };
@@ -586,6 +713,13 @@ FileHandle Interpreter::Impl::known_file_handle(
         ? process.executor->read_register(handle_register, 32U)
         : get_register(process, handle_register);
     const auto word = value.low_word();
+    // A SystemVerilog descriptor with unknown bits selects no file (IEEE
+    // 1800-2017 21.3.1).
+    if (word.width != 0 && word.width <= 32 && word.bval != 0
+        && processes.scheduling_domain(process.id)
+            == ProcessSchedulingDomain::systemverilog) {
+        return 0;
+    }
     if (word.width == 0 || word.width > 32
         || word.bval != 0
         || word.aval

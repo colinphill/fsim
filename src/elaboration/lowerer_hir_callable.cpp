@@ -1312,6 +1312,17 @@ Lowerer::lower_hir_static_container_value(
     const auto selection = selection_syntax
         ? hir_static_container_selection(expression_id)
         : std::nullopt;
+    constexpr std::string_view container_property { "@sv-container-property:" };
+    if (expression && expression->systemverilog != nullptr
+        && expression->systemverilog->text.starts_with(container_property)
+        && expression->systemverilog->operands.size() == 1U) {
+        if (const auto access = lower_hir_class_value_container(
+                expression->systemverilog->operands.front(),
+                std::string_view { expression->systemverilog->text }.substr(
+                    container_property.size()))) {
+            return access->container;
+        }
+    }
     if (expression && expression->vhdl != nullptr) {
         const auto value
             = lower_hir_vhdl_environment_call_path_container_expression(
@@ -1782,8 +1793,16 @@ Lowerer::hir_class_property_profile(
         == semantic::sv::ExpressionKind::class_property;
     const auto static_access = access.kind
         == semantic::sv::ExpressionKind::class_static_property;
+    // A property read in a property initializer carries its identity only
+    // in the access text.
+    constexpr std::string_view property_prefix { "@sv-property:" };
+    const auto member_identity = !access.class_member_identity.empty()
+        ? std::string_view { access.class_member_identity }
+        : std::string_view { access.text }.starts_with(property_prefix)
+        ? std::string_view { access.text }.substr(property_prefix.size())
+        : std::string_view { };
     if ((!instance && !static_access)
-        || access.class_member_identity.empty()
+        || member_identity.empty()
         || (instance && access.operands.size() != 1U)
         || (static_access && !access.operands.empty())) {
         return std::nullopt;
@@ -1793,7 +1812,7 @@ Lowerer::hir_class_property_profile(
         *specialized_hir_unit_, hir_generic_binding_frames_
     };
     const auto* selected = resolver.resolve_systemverilog_class_property(
-        access.class_member_identity, static_access).unique();
+        std::string { member_identity }, static_access).unique();
     if (string_property) {
         if (selected == nullptr
             || selected->static_storage != static_access
@@ -2439,10 +2458,16 @@ Lowerer::hir_class_task_profile(
         };
         selected = resolver.resolve_systemverilog_class_method(
             identity, static_call).unique();
+        // A class function called as a statement (a void function, or a
+        // discarded result) runs like a task when class functions are
+        // lowered (13.4.1).
         if (selected == nullptr
             || (!native_uvm
                 && selected->kind
-                    != semantic::sv::ClassMethodKind::task)
+                    != semantic::sv::ClassMethodKind::task
+                && !(lower_class_functions_
+                    && selected->kind
+                        == semantic::sv::ClassMethodKind::function))
             || ((selected->pure || !selected->defined) && !native_uvm)) {
             return std::nullopt;
         }
@@ -2490,10 +2515,13 @@ Lowerer::hir_class_task_profile(
         return std::nullopt;
     }
     const auto& callable = *declaration->systemverilog;
+    const bool statement_function = class_call && lower_class_functions_
+        && callable.callable && callable.callable->function;
     if (!callable.callable
         || (!native_uvm
-            && (callable.form != semantic::sv::DeclarationForm::task
-                || callable.callable->function
+            && ((callable.form != semantic::sv::DeclarationForm::task
+                    && !statement_function)
+                || (callable.callable->function && !statement_function)
                 || !callable.nested_scope))) {
         return std::nullopt;
     }
@@ -2529,6 +2557,32 @@ Lowerer::hir_class_task_profile(
         result.receiver = *receiver.actual;
     }
 
+    auto actuals = bind_hir_class_actuals(*selected_declaration,
+        std::span { call.task_arguments }.subspan(actual_offset),
+        process_scope);
+    if (!actuals) {
+        return std::nullopt;
+    }
+    result.actuals = std::move(*actuals);
+    return result;
+}
+
+std::optional<std::vector<Lowerer::HirClassMethodActual>>
+Lowerer::bind_hir_class_actuals(
+    const semantic::DeclarationId callable_declaration,
+    const std::span<const semantic::sv::TaskAssociation> associations,
+    const semantic::ScopeId process_scope) const
+{
+    const auto declaration = specialized_hir_unit_->find_declaration(
+        callable_declaration);
+    if (!declaration || declaration->systemverilog == nullptr
+        || !declaration->systemverilog->callable) {
+        return std::nullopt;
+    }
+    const auto& callable = *declaration->systemverilog;
+    if (associations.size() > callable.callable->formals.size()) {
+        return std::nullopt;
+    }
     std::vector<std::optional<HirClassMethodActual>> bound(
         callable.callable->formals.size());
     const auto make_actual = [&](const semantic::DeclarationId formal_id,
@@ -2591,20 +2645,28 @@ Lowerer::hir_class_task_profile(
         return actual;
     };
     std::size_t positional { };
-    for (std::size_t actual_index = actual_offset;
-        actual_index < call.task_arguments.size(); ++actual_index) {
-        const auto& association = call.task_arguments[actual_index];
-        if (!association.actual) {
-            return std::nullopt;
-        }
+    std::vector<bool> defaulted(bound.size());
+    for (const auto& association : associations) {
         auto formal_index = positional;
         if (!association.formal || association.formal->empty()) {
             while (formal_index < bound.size()
-                && bound[formal_index].has_value()) {
+                && (bound[formal_index].has_value()
+                    || defaulted[formal_index])) {
                 ++formal_index;
             }
             positional = formal_index + 1U;
+            // An omitted positional actual takes the default (13.5.3).
+            if (!association.actual) {
+                if (formal_index >= bound.size()) {
+                    return std::nullopt;
+                }
+                defaulted[formal_index] = true;
+                continue;
+            }
         } else {
+            if (!association.actual) {
+                return std::nullopt;
+            }
             const auto found = std::ranges::find_if(
                 callable.callable->formals,
                 [&](const semantic::DeclarationId formal) {
@@ -2651,9 +2713,10 @@ Lowerer::hir_class_task_profile(
             return std::nullopt;
         }
     }
-    result.actuals.reserve(bound.size());
+    std::vector<HirClassMethodActual> result;
+    result.reserve(bound.size());
     for (auto& actual : bound) {
-        result.actuals.push_back(std::move(*actual));
+        result.push_back(std::move(*actual));
     }
     return result;
 }
@@ -2709,6 +2772,555 @@ bool Lowerer::can_lower_hir_class_method_call(
         });
 }
 
+void Lowerer::rollback_hir_lowering(
+    const std::size_t mark, const std::size_t frames)
+{
+    process_.operations.resize(mark);
+    for (auto& frame : hir_callable_frames_) {
+        std::erase_if(frame.call_sites,
+            [&](const auto site) { return site >= mark; });
+        std::erase_if(frame.invocation_push_sites,
+            [&](const auto site) { return site >= mark; });
+    }
+    // A frame created for the abandoned call has no call site; it is
+    // lowered only if another call uses it.
+    std::erase_if(pending_hir_callables_, [&](const auto index) {
+        return index >= frames;
+    });
+    for (auto index = frames; index < hir_callable_frames_.size(); ++index) {
+        if (!hir_callable_frames_[index].lowered) {
+            hir_callable_frames_[index].queued = false;
+        }
+    }
+}
+
+bool Lowerer::hir_class_derives_from_uvm(
+    const std::string_view identity) const
+{
+    // A class extending the UVM library relies on the runtime's UVM
+    // services (factory, phases, reporting) for its methods.
+    const auto& classes
+        = specialized_hir_unit_->design().systemverilog_hir.classes();
+    std::set<std::string_view> visited;
+    for (auto current = identity; !current.empty();) {
+        if (current.find("uvm_") != std::string_view::npos) {
+            return true;
+        }
+        if (!visited.insert(current).second) {
+            return false;
+        }
+        const auto found = std::ranges::find(classes, current,
+            &semantic::sv::ClassDeclaration::canonical_identity);
+        if (found == classes.end()) {
+            return false;
+        }
+        if (found->base && found->base->name.find("uvm_")
+                != std::string::npos) {
+            return true;
+        }
+        current = found->base_declaration_identity;
+    }
+    return false;
+}
+
+const semantic::sv::ClassDeclaration*
+Lowerer::hir_lowerable_constructor_class(const std::string_view identity) const
+{
+    const auto& classes
+        = specialized_hir_unit_->design().systemverilog_hir.classes();
+    const auto find_class = [&](const std::string_view name)
+        -> const semantic::sv::ClassDeclaration* {
+        const auto found = std::ranges::find(classes, name,
+            &semantic::sv::ClassDeclaration::canonical_identity);
+        return found == classes.end() ? nullptr : &*found;
+    };
+    const auto* const selected = find_class(identity);
+    if (hir_class_derives_from_uvm(identity)) {
+        return nullptr;
+    }
+    std::set<std::string_view> visited;
+    for (const auto* current = selected; current != nullptr;) {
+        if (!visited.insert(current->canonical_identity).second
+            || !current->parameters.empty() || current->interface_class
+            || current->canonical_identity.find("uvm_pkg::")
+                != std::string::npos
+            || (current->base && !current->base->actuals.empty())) {
+            return nullptr;
+        }
+        if (current->base_declaration_identity.empty()) {
+            return selected;
+        }
+        current = find_class(current->base_declaration_identity);
+    }
+    return nullptr;
+}
+
+bool Lowerer::lower_hir_class_property_initializers(
+    const semantic::sv::ClassDeclaration& declaration,
+    const RegisterId receiver)
+{
+    const auto saved_receiver = hir_class_receiver_register_;
+    hir_class_receiver_register_ = receiver;
+    const auto restore = [&] { hir_class_receiver_register_ = saved_receiver; };
+    for (const auto& property : declaration.properties) {
+        if (property.static_storage || property.parameter
+            || !property.initializer || property.type.container_form) {
+            continue;
+        }
+        const auto initializer = specialized_hir_unit_->find_expression(
+            *property.initializer);
+        using semantic::sv::ExpressionKind;
+        if (!initializer || initializer->systemverilog == nullptr) {
+            restore();
+            return false;
+        }
+        const auto kind = initializer->systemverilog->kind;
+        if (kind == ExpressionKind::integer_literal
+            || kind == ExpressionKind::boolean_literal
+            || kind == ExpressionKind::string_literal) {
+            continue;
+        }
+        if (property.type.value_form == semantic::sv::TypeForm::string) {
+            const auto text = lower_hir_string_expression(*property.initializer);
+            if (!text) {
+                restore();
+                return false;
+            }
+            ClassMethodCall call;
+            call.destination = allocate_register(1U, frontend::ValueDomain::Bit2);
+            call.receiver = receiver;
+            call.method_identity = property.canonical_identity;
+            call.virtual_dispatch = false;
+            prepare_string_property_call(call, *text, true);
+            process_.operations.emplace_back(std::move(call));
+            continue;
+        }
+        const auto width = hir_systemverilog_type_width(property.type);
+        if (!width || *width == 0U) {
+            restore();
+            return false;
+        }
+        const auto spelling = std::string_view { property.type.target.spelling };
+        const auto scalar = spelling == "real"
+            ? frontend::SystemVerilogScalarKind::Real
+            : spelling == "shortreal"
+            ? frontend::SystemVerilogScalarKind::ShortReal
+            : spelling == "realtime"
+            ? frontend::SystemVerilogScalarKind::Realtime
+            : frontend::SystemVerilogScalarKind::None;
+        auto value = lower_hir_scalar_converted_value(
+            *property.initializer, *width, scalar);
+        if (!value) {
+            restore();
+            return false;
+        }
+        if (register_width(*value) != *width) {
+            value = resize_register(*value, *width,
+                hir_expression_signed(*property.initializer));
+        }
+        process_.operations.emplace_back(ClassPropertyWrite {
+            receiver, *value, property.canonical_identity });
+    }
+    restore();
+    return true;
+}
+
+bool Lowerer::lower_hir_class_construction(
+    const semantic::sv::ClassDeclaration& declaration,
+    const RegisterId receiver,
+    const std::span<const semantic::sv::TaskAssociation> actuals,
+    const semantic::SourceSpanId source)
+{
+    const auto constructor = std::ranges::find_if(declaration.methods,
+        [&](const semantic::sv::ClassMethod& method) {
+            return method.kind == semantic::sv::ClassMethodKind::constructor
+                && method.owner_identity == declaration.canonical_identity;
+        });
+    if (constructor != declaration.methods.end()) {
+        if (!constructor->defined || constructor->pure) {
+            return false;
+        }
+        auto bound = bind_hir_class_actuals(
+            constructor->declaration, actuals, hir_process_scope_);
+        if (!bound) {
+            return false;
+        }
+        const HirClassTaskProfile profile {
+            constructor->declaration,
+            constructor->canonical_identity,
+            std::nullopt,
+            std::nullopt,
+            std::move(*bound),
+            false,
+            true,
+        };
+        return lower_hir_class_callable_invocation(
+                   source, profile, receiver, false)
+            .has_value();
+    }
+    // The implicit constructor calls `super.new()` and runs the property
+    // initializers (8.7).
+    if (!actuals.empty()) {
+        return false;
+    }
+    if (!declaration.base_declaration_identity.empty()) {
+        const auto* const base = hir_lowerable_constructor_class(
+            declaration.base_declaration_identity);
+        if (base == nullptr
+            || !lower_hir_class_construction(*base, receiver, { }, source)) {
+            return false;
+        }
+    }
+    return lower_hir_class_property_initializers(declaration, receiver);
+}
+
+namespace {
+
+constexpr std::string_view base_constructor_prefix { "@sv-base-constructor:" };
+
+} // namespace
+
+bool Lowerer::lower_hir_constructor_prologue(
+    const semantic::DeclarationId callable,
+    const std::span<const semantic::StatementId> statements)
+{
+    const semantic::sv::ClassDeclaration* owner = nullptr;
+    for (const auto& candidate :
+        specialized_hir_unit_->design().systemverilog_hir.classes()) {
+        for (const auto& method : candidate.methods) {
+            if (method.declaration == callable
+                && method.kind == semantic::sv::ClassMethodKind::constructor) {
+                owner = &candidate;
+            }
+        }
+    }
+    if (owner == nullptr) {
+        return true;
+    }
+    if (std::ranges::any_of(statements, [&](const semantic::StatementId id) {
+            const auto statement = specialized_hir_unit_->find_statement(id);
+            return statement && statement->systemverilog != nullptr
+                && statement->systemverilog->kind
+                    == semantic::sv::StatementKind::task_call
+                && statement->systemverilog->task.spelling.starts_with(
+                    base_constructor_prefix);
+        })) {
+        return true;
+    }
+    if (!hir_class_receiver_register_) {
+        return false;
+    }
+    const auto receiver = *hir_class_receiver_register_;
+    if (!owner->base_declaration_identity.empty()) {
+        const auto* const base = hir_lowerable_constructor_class(
+            owner->base_declaration_identity);
+        if (base == nullptr
+            || !lower_hir_class_construction(
+                *base, receiver, { }, owner->source)) {
+            return false;
+        }
+    }
+    return lower_hir_class_property_initializers(*owner, receiver);
+}
+
+bool Lowerer::lower_hir_base_constructor_call(
+    const semantic::StatementId statement_id)
+{
+    const auto statement = specialized_hir_unit_->find_statement(
+        statement_id);
+    if (!statement || statement->systemverilog == nullptr
+        || !active_hir_callable_ || !hir_class_receiver_register_
+        || *active_hir_callable_ >= hir_callable_frames_.size()) {
+        return false;
+    }
+    const auto callable
+        = hir_callable_frames_[*active_hir_callable_].declaration;
+    const semantic::sv::ClassDeclaration* owner = nullptr;
+    for (const auto& candidate :
+        specialized_hir_unit_->design().systemverilog_hir.classes()) {
+        for (const auto& method : candidate.methods) {
+            if (method.declaration == callable
+                && method.kind == semantic::sv::ClassMethodKind::constructor) {
+                owner = &candidate;
+            }
+        }
+    }
+    if (owner == nullptr || owner->base_declaration_identity.empty()) {
+        return false;
+    }
+    const auto* const base = hir_lowerable_constructor_class(
+        owner->base_declaration_identity);
+    if (base == nullptr) {
+        return false;
+    }
+    // The first association names `super` when the call was written
+    // `super.new(...)`.
+    std::span<const semantic::sv::TaskAssociation> actuals {
+        statement->systemverilog->task_arguments
+    };
+    if (!actuals.empty() && actuals.front().actual) {
+        const auto first = specialized_hir_unit_->find_expression(
+            *actuals.front().actual);
+        if (first && first->systemverilog != nullptr
+            && first->systemverilog->text == "super") {
+            actuals = actuals.subspan(1U);
+        }
+    }
+    const auto receiver = *hir_class_receiver_register_;
+    return lower_hir_class_construction(
+               *base, receiver, actuals, statement->systemverilog->source)
+        && lower_hir_class_property_initializers(*owner, receiver);
+}
+
+void Lowerer::cache_hir_class_container_properties(
+    const semantic::DeclarationId callable, const RegisterId receiver)
+{
+    const auto& classes
+        = specialized_hir_unit_->design().systemverilog_hir.classes();
+    const semantic::sv::ClassDeclaration* owner = nullptr;
+    for (const auto& candidate : classes) {
+        for (const auto& method : candidate.methods) {
+            if (method.declaration == callable) {
+                owner = &candidate;
+            }
+        }
+    }
+    std::set<std::string> visited;
+    for (const auto* current = owner; current != nullptr
+         && visited.insert(current->canonical_identity).second;) {
+        for (const auto& property : current->properties) {
+            // Containers of class handles keep the object's handle storage.
+            if (property.static_storage || !property.type.container_form
+                || !property.type.class_identity.empty()) {
+                continue;
+            }
+            const auto type = hir_systemverilog_container_type(property.type);
+            if (!type) {
+                continue;
+            }
+            const auto value = allocate_container_register(*type);
+            process_.operations.emplace_back(ClassPropertyContainerRead {
+                value, receiver, property.canonical_identity });
+            hir_local_container_registers_.insert_or_assign(
+                property.declaration.value(), value);
+            hir_local_container_types_.insert_or_assign(
+                property.declaration.value(), *type);
+            hir_class_container_caches_.push_back(
+                { value, property.canonical_identity, property.declaration });
+        }
+        const auto base = std::ranges::find(classes,
+            current->base_declaration_identity,
+            &semantic::sv::ClassDeclaration::canonical_identity);
+        current = base == classes.end() ? nullptr : &*base;
+    }
+}
+
+std::optional<ContainerType> Lowerer::hir_class_value_container_type(
+    const std::string_view identity) const
+{
+    const semantic::CompiledDesignResolver resolver {
+        *specialized_hir_unit_, hir_generic_binding_frames_
+    };
+    const auto* property = resolver.resolve_systemverilog_class_property(
+        std::string { identity }, false).unique();
+    if (property == nullptr || property->static_storage
+        || !property->type.container_form
+        || !property->type.class_identity.empty()) {
+        return std::nullopt;
+    }
+    return hir_systemverilog_container_type(property->type);
+}
+
+std::optional<Lowerer::HirClassContainerAccess>
+Lowerer::lower_hir_class_value_container(
+    const semantic::ExpressionId receiver_expression,
+    const std::string_view identity)
+{
+    const auto type = hir_class_value_container_type(identity);
+    if (!type) {
+        return std::nullopt;
+    }
+    const semantic::CompiledDesignResolver resolver {
+        *specialized_hir_unit_, hir_generic_binding_frames_
+    };
+    const auto declaration = resolver.resolve_systemverilog_class_property(
+        std::string { identity }, false).unique()->declaration;
+    const auto receiver_record = specialized_hir_unit_->find_expression(
+        receiver_expression);
+    const auto cache = std::ranges::find(hir_class_container_caches_,
+        identity, &HirClassContainerCache::identity);
+    if (receiver_record && receiver_record->systemverilog != nullptr
+        && (receiver_record->systemverilog->text == "this"
+            || receiver_record->systemverilog->text == "super")
+        && cache != hir_class_container_caches_.end()) {
+        return HirClassContainerAccess { { cache->value, *type },
+            std::nullopt, std::string { identity }, declaration };
+    }
+    const auto receiver = lower_hir_expression(receiver_expression, 64U);
+    if (!receiver || register_width(*receiver) != 64U) {
+        return std::nullopt;
+    }
+    const auto value = allocate_container_register(*type);
+    process_.operations.emplace_back(ClassPropertyContainerRead {
+        value, *receiver, std::string { identity } });
+    return HirClassContainerAccess {
+        { value, *type }, receiver, std::string { identity }, declaration };
+}
+
+void Lowerer::store_hir_class_value_container(
+    const HirClassContainerAccess& access)
+{
+    if (access.receiver) {
+        process_.operations.emplace_back(ClassPropertyContainerWrite {
+            *access.receiver, access.container.value, access.identity });
+    }
+}
+
+void Lowerer::flush_hir_class_container_caches()
+{
+    if (!hir_class_receiver_register_) {
+        return;
+    }
+    for (const auto& cache : hir_class_container_caches_) {
+        process_.operations.emplace_back(ClassPropertyContainerWrite {
+            *hir_class_receiver_register_, cache.value, cache.identity });
+    }
+}
+
+void Lowerer::reload_hir_class_container_caches()
+{
+    if (!hir_class_receiver_register_) {
+        return;
+    }
+    for (const auto& cache : hir_class_container_caches_) {
+        process_.operations.emplace_back(ClassPropertyContainerRead {
+            cache.value, *hir_class_receiver_register_, cache.identity });
+    }
+}
+
+std::optional<Lowerer::HirClassCallResult>
+Lowerer::lower_hir_class_function_call(
+    const semantic::ExpressionId expression,
+    const HirClassMethodProfile& profile,
+    const std::optional<RegisterId> receiver)
+{
+    // Methods the runtime provides (randomization, process and UVM
+    // services) keep their runtime calls.
+    if (!lower_class_functions_ || profile.static_method != !receiver
+        || profile.identity.empty() || profile.identity.starts_with('@')
+        || profile.identity.find("uvm_") != std::string::npos) {
+        return std::nullopt;
+    }
+    if (const auto separator = profile.identity.rfind("::");
+        separator != std::string::npos
+        && hir_class_derives_from_uvm(
+            std::string_view { profile.identity }.substr(0U, separator))) {
+        return std::nullopt;
+    }
+    const semantic::sv::ClassMethod* method = nullptr;
+    for (const auto& candidate :
+        specialized_hir_unit_->design().systemverilog_hir.classes()) {
+        for (const auto& item : candidate.methods) {
+            if (item.declaration == profile.declaration) {
+                method = &item;
+            }
+        }
+    }
+    static constexpr std::array runtime_methods {
+        std::string_view { "randomize" },
+        std::string_view { "pre_randomize" },
+        std::string_view { "post_randomize" },
+        std::string_view { "srandom" },
+        std::string_view { "get_randstate" },
+        std::string_view { "set_randstate" },
+    };
+    if (method == nullptr || !method->defined || method->pure
+        || method->kind != semantic::sv::ClassMethodKind::function
+        || std::ranges::find(runtime_methods, method->name)
+            != runtime_methods.end()) {
+        return std::nullopt;
+    }
+    const auto record = specialized_hir_unit_->find_expression(expression);
+    const auto type = hir_callable_type(profile.declaration);
+    if (!record || record->systemverilog == nullptr || !type
+        || type->container || type->string != profile.string_result) {
+        return std::nullopt;
+    }
+    const HirClassTaskProfile call {
+        profile.declaration,
+        profile.identity,
+        profile.receiver,
+        std::nullopt,
+        profile.actuals,
+        profile.static_method,
+        true,
+    };
+    HirClassCallResult result;
+    if (type->string) {
+        result.string = allocate_string_register();
+    } else {
+        result.packed = allocate_register(type->width, type->domain);
+    }
+    const auto keep = [&](const HirClassCallResult& value) {
+        if (result.string && value.string) {
+            process_.operations.emplace_back(CopyStringRegister {
+                *result.string, *value.string });
+            return true;
+        }
+        if (result.packed && value.packed) {
+            process_.operations.emplace_back(CopyRegister {
+                *result.packed, *value.packed });
+            return true;
+        }
+        return false;
+    };
+    const auto source = record->systemverilog->source;
+    std::vector<InstructionIndex> exits;
+    const auto overrides = profile.virtual_dispatch && receiver
+        ? hir_class_method_overrides(profile.declaration)
+        : std::vector<HirClassOverride> { };
+    for (const auto& item : overrides) {
+        const auto selected = allocate_register(
+            1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(ClassMethodCall {
+            selected, *receiver, "@checked-cast:" + item.owner_identity,
+            { }, { }, { }, 1U, false,
+        });
+        const auto branch = static_cast<InstructionIndex>(
+            process_.operations.size());
+        process_.operations.emplace_back(Branch {
+            selected, branch + 1U, 0U, UnknownBranchPolicy::when_false });
+        auto override_call = call;
+        override_call.declaration = item.declaration;
+        override_call.identity = item.identity;
+        const auto value = lower_hir_class_callable_invocation(
+            source, override_call, receiver, true);
+        if (!value || !keep(*value)) {
+            return std::nullopt;
+        }
+        exits.push_back(static_cast<InstructionIndex>(
+            process_.operations.size()));
+        process_.operations.emplace_back(Jump { });
+        process_.operations[branch] = Branch {
+            selected,
+            branch + 1U,
+            static_cast<InstructionIndex>(process_.operations.size()),
+            UnknownBranchPolicy::when_false,
+        };
+    }
+    const auto value = lower_hir_class_callable_invocation(
+        source, call, receiver, true);
+    if (!value || !keep(*value)) {
+        return std::nullopt;
+    }
+    for (const auto exit : exits) {
+        process_.operations[exit] = Jump {
+            static_cast<InstructionIndex>(process_.operations.size()) };
+    }
+    class_functions_lowered_ = true;
+    return result;
+}
+
 std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
     const semantic::ExpressionId expression,
     const std::size_t expected_width,
@@ -2730,6 +3342,32 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
         if (!receiver || register_width(*receiver) != 64U) {
             return std::nullopt;
         }
+    }
+    // A class function runs as a lowered subroutine when it can; otherwise
+    // the runtime interprets it.
+    if (receiver.has_value() != profile->static_method
+        && inline_constraints->empty()) {
+        const auto mark = process_.operations.size();
+        const auto frames = hir_callable_frames_.size();
+        if (const auto lowered = lower_hir_class_function_call(
+                expression, *profile, receiver)) {
+            if (lowered->string) {
+                *string_result = *lowered->string;
+                const auto unused = allocate_register(
+                    std::max<std::size_t>(profile->result_width, 1U),
+                    frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(LoadConstant {
+                    unused, unsigned_value(0U, register_width(unused)) });
+                return unused;
+            }
+            if (expected_width != 0U
+                && expected_width != register_width(*lowered->packed)) {
+                return resize_register(
+                    *lowered->packed, expected_width, profile->result_signed);
+            }
+            return lowered->packed;
+        }
+        rollback_hir_lowering(mark, frames);
     }
 
     std::vector<RegisterId> actuals;
@@ -3054,6 +3692,13 @@ bool Lowerer::allocate_hir_static_callable_declarations(
 bool Lowerer::lower_hir_class_task_call(
     const semantic::StatementId statement_id)
 {
+    if (const auto statement = specialized_hir_unit_->find_statement(
+            statement_id);
+        statement && statement->systemverilog != nullptr
+        && statement->systemverilog->task.spelling.starts_with(
+            base_constructor_prefix)) {
+        return lower_hir_base_constructor_call(statement_id);
+    }
     const auto profile = hir_class_task_profile(
         statement_id, hir_process_scope_);
     if (!profile) {
@@ -3067,6 +3712,11 @@ bool Lowerer::lower_hir_class_task_call(
         if (!receiver || register_width(*receiver) != 64U) {
             return false;
         }
+    } else if (!profile->static_method && hir_class_receiver_register_
+        && !profile->interface_receiver) {
+        // A method called by its simple name inside another method of the
+        // object runs on `this` (8.11).
+        receiver = *hir_class_receiver_register_;
     }
 
     if (native_uvm) {
@@ -3154,73 +3804,14 @@ bool Lowerer::lower_hir_class_task_call(
     // the object's dynamic class (IEEE 1800-2017 8.20): test the handle
     // against each overriding class, most derived first.
     if (receiver && !profile->static_method) {
-        const auto& classes
-            = specialized_hir_unit_->design().systemverilog_hir.classes();
-        const semantic::sv::ClassDeclaration* owner = nullptr;
-        const semantic::sv::ClassMethod* called = nullptr;
-        for (const auto& candidate : classes) {
-            for (const auto& method : candidate.methods) {
-                if (method.declaration == profile->declaration) {
-                    owner = &candidate;
-                    called = &method;
-                }
-            }
-        }
-        struct Override {
-            const semantic::sv::ClassDeclaration* owner;
-            const semantic::sv::ClassMethod* method;
-            std::size_t depth;
-        };
-        std::vector<Override> overrides;
-        if (owner != nullptr && called != nullptr) {
-            const auto find_class = [&](const std::string& identity)
-                -> const semantic::sv::ClassDeclaration* {
-                const auto found = std::ranges::find(classes, identity,
-                    &semantic::sv::ClassDeclaration::canonical_identity);
-                return found == classes.end() ? nullptr : &*found;
-            };
-            for (const auto& candidate : classes) {
-                if (&candidate == owner) {
-                    continue;
-                }
-                std::size_t depth { };
-                bool derived { };
-                std::set<std::string> visited;
-                for (auto* current = &candidate; current != nullptr
-                     && !current->base_declaration_identity.empty()
-                     && visited.insert(current->canonical_identity).second;) {
-                    ++depth;
-                    if (current->base_declaration_identity
-                        == owner->canonical_identity) {
-                        derived = true;
-                        break;
-                    }
-                    current = find_class(current->base_declaration_identity);
-                }
-                if (!derived) {
-                    continue;
-                }
-                const auto method = std::ranges::find_if(candidate.methods,
-                    [&](const semantic::sv::ClassMethod& item) {
-                        return item.name == called->name
-                            && item.kind == called->kind && item.defined
-                            && !item.static_method;
-                    });
-                if (method != candidate.methods.end()) {
-                    overrides.push_back({ &candidate, &*method, depth });
-                }
-            }
-            std::ranges::stable_sort(overrides, std::greater { },
-                &Override::depth);
-        }
         std::vector<InstructionIndex> exits;
-        for (const auto& item : overrides) {
+        for (const auto& item : hir_class_method_overrides(profile->declaration)) {
             const auto selected = allocate_register(
                 1U, frontend::ValueDomain::Logic4);
             process_.operations.emplace_back(ClassMethodCall {
                 selected,
                 *receiver,
-                "@checked-cast:" + item.owner->canonical_identity,
+                "@checked-cast:" + item.owner_identity,
                 { },
                 { },
                 { },
@@ -3232,8 +3823,8 @@ bool Lowerer::lower_hir_class_task_call(
             process_.operations.emplace_back(Branch {
                 selected, branch + 1U, 0U, UnknownBranchPolicy::when_false });
             auto override_profile = *profile;
-            override_profile.declaration = item.method->declaration;
-            override_profile.identity = item.method->canonical_identity;
+            override_profile.declaration = item.declaration;
+            override_profile.identity = item.identity;
             if (!lower_hir_class_task_invocation(statement_id, override_profile, receiver)) {
                 return false;
             }
@@ -3259,17 +3850,132 @@ bool Lowerer::lower_hir_class_task_call(
     return lower_hir_class_task_invocation(statement_id, *profile, receiver);
 }
 
+std::vector<Lowerer::HirClassOverride> Lowerer::hir_class_method_overrides(
+    const semantic::DeclarationId declaration) const
+{
+    const auto& classes
+        = specialized_hir_unit_->design().systemverilog_hir.classes();
+    const semantic::sv::ClassDeclaration* owner = nullptr;
+    const semantic::sv::ClassMethod* called = nullptr;
+    for (const auto& candidate : classes) {
+        for (const auto& method : candidate.methods) {
+            if (method.declaration == declaration) {
+                owner = &candidate;
+                called = &method;
+            }
+        }
+    }
+    if (owner == nullptr || called == nullptr || called->static_method) {
+        return { };
+    }
+    const auto find_class = [&](const std::string& identity)
+        -> const semantic::sv::ClassDeclaration* {
+        const auto found = std::ranges::find(classes, identity,
+            &semantic::sv::ClassDeclaration::canonical_identity);
+        return found == classes.end() ? nullptr : &*found;
+    };
+    const auto same_method = [&](const semantic::sv::ClassMethod& item) {
+        return item.name == called->name && item.kind == called->kind
+            && !item.static_method;
+    };
+    // A method is virtual when it, or the method it overrides in a base
+    // class, is declared virtual (8.20).
+    bool virtual_method = called->virtual_method;
+    {
+        std::set<std::string> visited;
+        for (auto* current = find_class(owner->base_declaration_identity);
+             !virtual_method && current != nullptr
+             && visited.insert(current->canonical_identity).second;
+             current = find_class(current->base_declaration_identity)) {
+            virtual_method = std::ranges::any_of(current->methods,
+                [&](const semantic::sv::ClassMethod& item) {
+                    return same_method(item) && item.virtual_method;
+                });
+        }
+    }
+    if (!virtual_method) {
+        return { };
+    }
+    struct Ranked {
+        HirClassOverride item;
+        std::size_t depth;
+    };
+    std::vector<Ranked> overrides;
+    for (const auto& candidate : classes) {
+        if (&candidate == owner) {
+            continue;
+        }
+        std::size_t depth { };
+        bool derived { };
+        std::set<std::string> visited;
+        for (auto* current = &candidate; current != nullptr
+             && !current->base_declaration_identity.empty()
+             && visited.insert(current->canonical_identity).second;) {
+            ++depth;
+            if (current->base_declaration_identity
+                == owner->canonical_identity) {
+                derived = true;
+                break;
+            }
+            current = find_class(current->base_declaration_identity);
+        }
+        if (!derived) {
+            continue;
+        }
+        const auto method = std::ranges::find_if(candidate.methods,
+            [&](const semantic::sv::ClassMethod& item) {
+                return same_method(item) && item.defined;
+            });
+        if (method != candidate.methods.end()) {
+            overrides.push_back({ { candidate.canonical_identity,
+                method->declaration, method->canonical_identity }, depth });
+        }
+    }
+    std::ranges::stable_sort(overrides, std::greater { }, &Ranked::depth);
+    std::vector<HirClassOverride> result;
+    result.reserve(overrides.size());
+    for (auto& item : overrides) {
+        result.push_back(std::move(item.item));
+    }
+    return result;
+}
+
 bool Lowerer::lower_hir_class_task_invocation(
     const semantic::StatementId statement_id,
     const HirClassTaskProfile& profile,
     const std::optional<RegisterId> receiver)
+{
+    const auto statement = specialized_hir_unit_->find_statement(
+        statement_id);
+    const auto callable = specialized_hir_unit_->find_declaration(
+        profile.declaration);
+    if (!statement || statement->systemverilog == nullptr || !callable
+        || callable->systemverilog == nullptr
+        || !callable->systemverilog->callable) {
+        return false;
+    }
+    const bool function = callable->systemverilog->callable->function;
+    if (function) {
+        class_functions_lowered_ = true;
+    }
+    return lower_hir_class_callable_invocation(
+               statement->systemverilog->source, profile, receiver, function)
+        .has_value();
+}
+
+std::optional<Lowerer::HirClassCallResult>
+Lowerer::lower_hir_class_callable_invocation(
+    const semantic::SourceSpanId source,
+    const HirClassTaskProfile& profile,
+    const std::optional<RegisterId> receiver,
+    const bool function)
 {
     const auto declaration = specialized_hir_unit_->find_declaration(
         profile.declaration);
     if (!declaration || declaration->systemverilog == nullptr
         || !declaration->systemverilog->callable
         || !declaration->systemverilog->nested_scope) {
-        return false;
+        return std::nullopt;
     }
     const auto& callable = *declaration->systemverilog;
     const auto scope = *callable.nested_scope;
@@ -3278,7 +3984,7 @@ bool Lowerer::lower_hir_class_task_invocation(
         callable.callable->formals.end(),
     };
     if (formals.size() != profile.actuals.size()) {
-        return false;
+        return std::nullopt;
     }
 
     auto frame_index = hir_callable_frames_.size();
@@ -3317,11 +4023,27 @@ bool Lowerer::lower_hir_class_task_invocation(
             false,
             std::nullopt,
         };
+        if (function) {
+            const auto type = hir_callable_type(profile.declaration);
+            if (!type || type->container) {
+                return std::nullopt;
+            }
+            frame.type = *type;
+            frame.type.automatic = profile.automatic;
+        }
         frame.interface_receiver = profile.interface_receiver;
         frame.formals = formals;
         bind_hir_instance_parameters(frame);
         frame.debug_name = callable.name;
-        frame.function = false;
+        frame.function = function;
+        if (function && frame.type.string) {
+            frame.string_result = allocate_string_register();
+            frame.invocation_strings.push_back(frame.string_result);
+        } else if (function) {
+            frame.result = allocate_register(
+                frame.type.width, frame.type.domain);
+            frame.invocation_registers.push_back(frame.result);
+        }
         frame.invocation_identity = next_callable_invocation_identity_++;
         if (frame.invocation_identity == 0U) {
             frame.invocation_identity
@@ -3341,7 +4063,7 @@ bool Lowerer::lower_hir_class_task_invocation(
                 ? callable_direction(*record)
                 : frontend::PortDirection::Unknown;
             if (direction == frontend::PortDirection::Unknown) {
-                return false;
+                return std::nullopt;
             }
             const auto string = profile.actuals[index].string;
             const auto container = profile.actuals[index].container;
@@ -3351,7 +4073,7 @@ bool Lowerer::lower_hir_class_task_invocation(
                 const auto container_type = hir_systemverilog_container_type(
                     *record->systemverilog->type);
                 if (!container_type) {
-                    return false;
+                    return std::nullopt;
                 }
                 frame.arguments.push_back({ });
                 frame.string_arguments.push_back({ });
@@ -3378,7 +4100,7 @@ bool Lowerer::lower_hir_class_task_invocation(
                 if (!binding
                     || binding->kind != HirRuntimeBindingKind::local
                     || !callable_scalar_domain(binding->domain)) {
-                    return false;
+                    return std::nullopt;
                 }
                 frame.arguments.push_back(allocate_register(
                     binding->width, binding->domain));
@@ -3393,7 +4115,7 @@ bool Lowerer::lower_hir_class_task_invocation(
         frame.allocated = true;
         hir_callable_frames_.push_back(std::move(frame));
         if (!allocate_hir_static_callable_declarations(frame_index)) {
-            return false;
+            return std::nullopt;
         }
     }
 
@@ -3436,7 +4158,7 @@ bool Lowerer::lower_hir_class_task_invocation(
                 const auto value = lower_hir_static_container_actual(
                     actual.expression, formal_type, formals[index]);
                 if (!value) {
-                    return false;
+                    return std::nullopt;
                 }
                 process_.operations.emplace_back(CopyContainerRegister {
                     storage, *value });
@@ -3456,7 +4178,7 @@ bool Lowerer::lower_hir_class_task_invocation(
             lowered_string_actuals[index]
                 = lower_hir_string_expression(actual.expression);
             if (!lowered_string_actuals[index]) {
-                return false;
+                return std::nullopt;
             }
             continue;
         }
@@ -3472,7 +4194,7 @@ bool Lowerer::lower_hir_class_task_invocation(
             : lower_hir_callable_actual(
                   actual.expression, formals[index], actual.width);
         if (!lowered_actuals[index]) {
-            return false;
+            return std::nullopt;
         }
         if (register_width(*lowered_actuals[index]) != actual.width) {
             lowered_actuals[index] = resize_register(
@@ -3487,11 +4209,7 @@ bool Lowerer::lower_hir_class_task_invocation(
         }
     }
 
-    const auto statement = specialized_hir_unit_->find_statement(
-        statement_id);
-    emit_debug_point(
-        DebugPointKind::call,
-        hir_source_span(statement->systemverilog->source));
+    emit_debug_point(DebugPointKind::call, hir_source_span(source));
     emit_deferred_assertion_action_handoff();
     auto& frame = hir_callable_frames_[frame_index];
     if (frame.type.automatic) {
@@ -3510,7 +4228,7 @@ bool Lowerer::lower_hir_class_task_invocation(
     }
     if (receiver) {
         if (!frame.class_receiver) {
-            return false;
+            return std::nullopt;
         }
         process_.operations.emplace_back(CopyRegister {
             *frame.class_receiver, *receiver });
@@ -3521,7 +4239,7 @@ bool Lowerer::lower_hir_class_task_invocation(
             if (frame.directions[index]
                 == frontend::PortDirection::Output) {
                 if (!frame.container_output_defaults[index]) {
-                    return false;
+                    return std::nullopt;
                 }
                 process_.operations.emplace_back(CopyContainerRegister {
                     frame.container_arguments[index],
@@ -3533,7 +4251,7 @@ bool Lowerer::lower_hir_class_task_invocation(
                     *lowered_container_actuals[index],
                 });
             } else {
-                return false;
+                return std::nullopt;
             }
         } else if (frame.argument_is_string[index]) {
             if (lowered_string_actuals[index]) {
@@ -3559,6 +4277,17 @@ bool Lowerer::lower_hir_class_task_invocation(
             });
         }
     }
+    if (function && frame.type.string) {
+        process_.operations.emplace_back(LoadStringConstant {
+            frame.string_result, { } });
+    } else if (function) {
+        process_.operations.emplace_back(LoadConstant {
+            frame.result,
+            callable_default_value(frame.type.width, frame.type.domain),
+        });
+    }
+    // The callee sees, and may change, this object's container properties.
+    flush_hir_class_container_caches();
     const auto call_site = static_cast<InstructionIndex>(
         process_.operations.size());
     process_.operations.emplace_back(Call {
@@ -3586,7 +4315,7 @@ bool Lowerer::lower_hir_class_task_invocation(
         }
         if (frame.argument_is_container[index]) {
             if (!lowered_container_actuals[index]) {
-                return false;
+                return std::nullopt;
             }
             process_.operations.emplace_back(CopyContainerRegister {
                 *lowered_container_actuals[index],
@@ -3617,6 +4346,19 @@ bool Lowerer::lower_hir_class_task_invocation(
             preserve_strings.push_back(*copy_out);
         }
     }
+    HirClassCallResult result;
+    if (function && frame.type.string) {
+        result.string = allocate_string_register();
+        process_.operations.emplace_back(CopyStringRegister {
+            *result.string, frame.string_result });
+        preserve_strings.push_back(*result.string);
+    } else if (function) {
+        result.packed = allocate_register(
+            frame.type.width, frame.type.domain);
+        process_.operations.emplace_back(CopyRegister {
+            *result.packed, frame.result });
+        preserve_packed.push_back(*result.packed);
+    }
     if (frame.type.automatic) {
         process_.operations.emplace_back(CallableFramePop {
             frame.invocation_identity,
@@ -3625,6 +4367,7 @@ bool Lowerer::lower_hir_class_task_invocation(
             std::move(preserve_containers),
         });
     }
+    reload_hir_class_container_caches();
     for (std::size_t index = 0U;
         index < string_copy_outs.size(); ++index) {
         if (frame.argument_is_container[index]
@@ -3633,7 +4376,7 @@ bool Lowerer::lower_hir_class_task_invocation(
                 || !lower_hir_container_copy_out(
                     profile.actuals[index].expression,
                     *lowered_container_actuals[index])) {
-                return false;
+                return std::nullopt;
             }
             continue;
         }
@@ -3690,23 +4433,30 @@ bool Lowerer::lower_hir_class_task_invocation(
                         copied_value, *width, true);
                 }
             }
+            // A two-state actual receives x and z bits as zero (IEEE
+            // 1800-2017 6.11.2).
+            if (hir_expression_domain(profile.actuals[index].expression,
+                    hir_process_scope_)
+                == frontend::ValueDomain::Bit2) {
+                copied_value = convert_to_two_state(copied_value);
+            }
             const auto copied = packed_copy_out_targets[index]
                 ? write_hir_packed_update_target(
                       *packed_copy_out_targets[index], copied_value)
                 : lower_hir_packed_copy_out(
                       profile.actuals[index].expression, copied_value);
             if (!copied) {
-                return false;
+                return std::nullopt;
             }
             continue;
         }
         if (!lower_hir_string_copy_out(
                 profile.actuals[index].expression,
                 *string_copy_outs[index])) {
-            return false;
+            return std::nullopt;
         }
     }
-    return true;
+    return result;
 }
 
 
@@ -6949,6 +7699,35 @@ Lowerer::lower_hir_function_call_value(
             return std::nullopt;
         }
         if (!string_copy_outs[index] && packed_copy_outs[index]) {
+            // A signed formal extends to a wider actual by its own sign
+            // (IEEE 1800-2017 13.3, 10.7).
+            const auto formal = index < frame.formals.size()
+                ? specialized_hir_unit_->find_declaration(
+                      frame.formals[index])
+                : std::nullopt;
+            const auto actual_width = hir_expression_width(
+                (*actuals)[index], hir_process_scope_);
+            if (formal && formal->systemverilog != nullptr
+                && formal->systemverilog->type
+                && formal->systemverilog->type->signed_value
+                && actual_width
+                && *actual_width > register_width(*packed_copy_outs[index])
+                && !frontend::is_real_scalar_kind(
+                    hir_systemverilog_scalar_kind((*actuals)[index]))
+                && formal->systemverilog->type->target.spelling != "real"
+                && formal->systemverilog->type->target.spelling != "shortreal"
+                && formal->systemverilog->type->target.spelling
+                    != "realtime") {
+                packed_copy_outs[index] = resize_register(
+                    *packed_copy_outs[index], *actual_width, true);
+            }
+            // A two-state actual receives x and z bits as zero (IEEE
+            // 1800-2017 6.11.2).
+            if (hir_expression_domain((*actuals)[index], hir_process_scope_)
+                == frontend::ValueDomain::Bit2) {
+                packed_copy_outs[index]
+                    = convert_to_two_state(*packed_copy_outs[index]);
+            }
             const auto copied = packed_copy_out_targets[index]
                 ? write_hir_packed_update_target(
                       *packed_copy_out_targets[index],
@@ -8366,15 +9145,36 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
                 == semantic::vhdl::ExpressionKind::aggregate
             && formal_declaration && formal_declaration->vhdl != nullptr
             && formal_declaration->vhdl->subtype;
+        auto copied_value = *copy_out_values[index];
+        if (formal_declaration && formal_declaration->systemverilog != nullptr
+            && formal_declaration->systemverilog->type) {
+            // A signed formal extends to a wider actual by its own sign,
+            // as an assignment does (IEEE 1800-2017 13.3, 10.7), and a
+            // two-state actual receives x and z bits as zero (6.11.2).
+            const auto actual_width = hir_expression_width(
+                (*actuals)[index], hir_process_scope_);
+            if (formal_declaration->systemverilog->type->signed_value
+                && actual_width
+                && *actual_width > register_width(copied_value)
+                && !frontend::is_real_scalar_kind(
+                    hir_systemverilog_scalar_kind((*actuals)[index]))) {
+                copied_value = resize_register(
+                    copied_value, *actual_width, true);
+            }
+            if (hir_expression_domain((*actuals)[index], hir_process_scope_)
+                == frontend::ValueDomain::Bit2) {
+                copied_value = convert_to_two_state(copied_value);
+            }
+        }
         const auto copied = aggregate_actual
             ? lower_hir_vhdl_aggregate_copy_out((*actuals)[index],
                   *copy_out_values[index],
                   *formal_declaration->vhdl->subtype)
             : copy_out_targets[index]
             ? write_hir_packed_update_target(
-                  *copy_out_targets[index], *copy_out_values[index])
+                  *copy_out_targets[index], copied_value)
             : lower_hir_packed_copy_out(
-                  (*actuals)[index], *copy_out_values[index]);
+                  (*actuals)[index], copied_value);
         if (!copied) {
             return false;
         }
@@ -8584,7 +9384,10 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
     auto saved_loops = std::move(loop_controls_);
     const auto saved_active = active_hir_callable_;
     const auto saved_class_receiver = hir_class_receiver_register_;
+    auto saved_container_caches = std::move(hir_class_container_caches_);
+    hir_class_container_caches_.clear();
     const auto restore_context = [&] {
+        hir_class_container_caches_ = std::move(saved_container_caches);
         active_hir_callable_ = saved_active;
         loop_controls_ = std::move(saved_loops);
         string_locals_ = std::move(saved_string_locals);
@@ -8949,7 +9752,14 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             task_declaration->name,
             hir_source_span(task_declaration->source), true);
     }
+    if (declarations_ready && initial_frame.class_receiver) {
+        cache_hir_class_container_properties(
+            hir_callable_frames_[callable_index].declaration,
+            *initial_frame.class_receiver);
+    }
     const auto lowered = declarations_ready
+        && lower_hir_constructor_prologue(
+            hir_callable_frames_[callable_index].declaration, statements)
         && lower_hir_statements(statements);
     if (lowered) {
         const auto epilogue = static_cast<InstructionIndex>(
@@ -8958,6 +9768,7 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             hir_callable_frames_[callable_index].return_jumps) {
             process_.operations[jump] = Jump { epilogue };
         }
+        flush_hir_class_container_caches();
         if (task_declaration != nullptr) {
             emit_disable_scope_marker(DebugPointKind::block_exit,
                 task_declaration->name,
@@ -8975,7 +9786,14 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             }
             for (auto id = container_begin;
                 id < next_container_register_; ++id) {
-                completed.invocation_containers.push_back(id);
+                // A cached container property is reloaded after each call,
+                // so a nested invocation need not preserve it.
+                if (std::ranges::none_of(hir_class_container_caches_,
+                        [&](const HirClassContainerCache& cache) {
+                            return cache.value == id;
+                        })) {
+                    completed.invocation_containers.push_back(id);
+                }
             }
             for (const auto push_site : completed.invocation_push_sites) {
                 process_.operations[push_site] = CallableFramePush {

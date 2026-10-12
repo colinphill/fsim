@@ -74,27 +74,24 @@ namespace fsim::runtime::simir {
         const auto decoded = decode_systemverilog_scalar_payload(
             payload, wait.source_kind);
         const auto ticks = decoded ? decoded.value.as_time() : std::nullopt;
-        if (!ticks) {
-            throw std::invalid_argument {
-                "runtime WaitFor requires a known time delay"
-            };
-        }
-        magnitude = *ticks;
+        // An unknown or high-impedance delay is zero (IEEE 1800-2017
+        // 9.4.1).
+        magnitude = ticks ? *ticks : 0U;
     } else if (wait.source_kind == SystemVerilogScalarKind::None) {
         const auto word = payload.low_word();
         if (word.bval != 0) {
-            throw std::invalid_argument {
-                "runtime WaitFor requires a known integral delay"
-            };
-        }
-        if (wait.source_signed
-            && payload.width() != 0
+            // An unknown or high-impedance delay is zero (9.4.1).
+            magnitude = 0U;
+        } else if (wait.source_signed
+            && payload.width() != 0 && payload.width() < 64U
             && ((word.aval >> (payload.width() - 1U)) & 1U) != 0) {
-            throw std::invalid_argument {
-                "runtime WaitFor delay cannot be negative"
-            };
+            // A negative delay is the two's-complement value read as an
+            // unsigned 64-bit time (9.4.1).
+            magnitude = word.aval
+                | (~std::uint64_t { } << payload.width());
+        } else {
+            magnitude = word.aval;
         }
-        magnitude = word.aval;
     } else {
         throw std::invalid_argument {
             "runtime WaitFor has an invalid delay value kind"
@@ -115,6 +112,8 @@ namespace fsim::runtime::simir {
     return operation_holds<ClassAllocate>(operation)
         || operation_holds<ClassPropertyRead>(operation)
         || operation_holds<ClassPropertyWrite>(operation)
+        || operation_holds<ClassPropertyContainerRead>(operation)
+        || operation_holds<ClassPropertyContainerWrite>(operation)
         || operation_holds<ClassMethodCall>(operation)
         || operation_holds<ClassStaticPropertyRead>(operation)
         || operation_holds<ClassStaticPropertyWrite>(operation)
@@ -156,6 +155,8 @@ namespace fsim::runtime::simir {
         || operation_holds<VhdlEnvironmentDirectory>(operation)
         || operation_holds<VhdlEnvironmentGetenv>(operation)
         || operation_holds<SignalStrengthText>(operation)
+        || operation_holds<ClassPropertyContainerRead>(operation)
+        || operation_holds<ClassPropertyContainerWrite>(operation)
         || operation_holds<VhdlEnvironmentCallPath>(operation)
         || operation_holds<VhdlEnvironmentGetCallPath>(operation)
         || operation_holds<StochasticQueueOperation>(operation)

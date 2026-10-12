@@ -653,6 +653,11 @@ struct ClassProperty {
     SourceSpanId source;
     OriginId origin;
     ResidualDependencies dependencies;
+    // The values of an enumerated property's type, in declaration order;
+    // empty when the type is not an enumeration or a value is not a
+    // literal. A random enumerated property takes only these values (IEEE
+    // 1800-2017 18.4).
+    std::vector<std::uint64_t> enumeration_domain { };
 };
 
 struct ClassMethod {

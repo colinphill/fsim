@@ -485,7 +485,7 @@ SystemVerilogClassRandomState& SystemVerilogClassHeap::random_state(
     const SystemVerilogClassHandle handle,
     const std::string_view name) {
   auto& state = property(handle, name).random_state;
-  if (!state) {
+  if (!state || state->kind == SystemVerilogClassRandomKind::None) {
     throw std::invalid_argument{
         "SystemVerilog class property '" + std::string{name}
         + "' is not randomizable"};
@@ -497,7 +497,7 @@ const SystemVerilogClassRandomState& SystemVerilogClassHeap::random_state(
     const SystemVerilogClassHandle handle,
     const std::string_view name) const {
   const auto& state = property(handle, name).random_state;
-  if (!state) {
+  if (!state || state->kind == SystemVerilogClassRandomKind::None) {
     throw std::invalid_argument{
         "SystemVerilog class property '" + std::string{name}
         + "' is not randomizable"};

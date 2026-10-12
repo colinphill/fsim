@@ -619,6 +619,23 @@ Simulation::Impl::Impl(
               }
               return runtime::PackedLogic4(1U, runtime::Logic4::zero);
           };
+    interpreter->set_class_property_container_hook(
+        [this](const std::uint64_t handle, const std::string_view property,
+            runtime::simir::ContainerValue& value, const bool write) {
+            if (!class_heap.contains(handle)) {
+                throw std::invalid_argument {
+                    "class container property access through a null or "
+                    "released handle"
+                };
+            }
+            const auto key = std::pair { handle, std::string { property } };
+            if (write) {
+                class_value_containers.insert_or_assign(key, value);
+            } else if (const auto found = class_value_containers.find(key);
+                       found != class_value_containers.end()) {
+                value = found->second;
+            }
+        });
     interpreter->set_class_property_read_hook(
         [this](const std::uint64_t handle, const std::string_view property) {
             return packed_property_value(class_heap.property(handle, property));

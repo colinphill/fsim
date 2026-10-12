@@ -293,6 +293,37 @@ void VerilogParser::parse_time_declaration(
       "';' after time declaration",
       "FSIM-SV-PARSE-133");
 
+  // A declaration may be repeated, even after other items, when it matches
+  // the earlier one in the same time scope (IEEE 1800-2017 3.14.2.2).
+  {
+    const bool unit_known = unit == nullptr
+        ? compilation_time_unit_declared_
+        : module_time_unit_declared_;
+    const bool precision_known = unit == nullptr
+        ? compilation_time_precision_declared_
+        : module_time_precision_declared_;
+    const auto& known_unit = unit == nullptr
+        ? compilation_time_unit_ : module_time_unit_;
+    const auto known_magnitude = unit == nullptr
+        ? compilation_time_unit_magnitude_ : module_time_unit_magnitude_;
+    const auto& known_precision = unit == nullptr
+        ? compilation_time_precision_ : module_time_precision_;
+    const auto same_unit = [&](const DeclaredTime& value) {
+      return unit_known && value.valid && value.unit == known_unit
+          && value.magnitude == known_magnitude;
+    };
+    const auto same_precision = [&](const DeclaredTime& value) {
+      return precision_known && value.valid
+          && value.spelling() == known_precision;
+    };
+    const bool repeated = declares_unit
+        ? same_unit(primary)
+            && (!combined_precision || same_precision(*combined_precision))
+        : same_precision(primary);
+    if (repeated) {
+      return;
+    }
+  }
   if (unit == nullptr && compilation_unit_has_design_item_) {
     error(
         declaration,
@@ -704,15 +735,17 @@ DesignUnit VerilogParser::parse_module(
     declared_genvars_.clear();
     external_genvar_uses_.clear();
     next_implicit_generate_scope_ = 1;
-    module_time_unit_magnitude_ = compilation_time_unit_.empty()
-        ? current_time_unit_magnitude_
-        : compilation_time_unit_magnitude_;
-    module_time_unit_ = compilation_time_unit_.empty()
-        ? current_time_unit_
-        : compilation_time_unit_;
-    module_time_precision_ = compilation_time_precision_.empty()
-        ? current_time_precision_
-        : compilation_time_precision_;
+    // A module without its own timeunit takes the last `timescale, else
+    // the compilation-unit timeunit (IEEE 1800-2017 3.14.2.3).
+    module_time_unit_magnitude_ = current_time_unit_.empty()
+        ? compilation_time_unit_magnitude_
+        : current_time_unit_magnitude_;
+    module_time_unit_ = current_time_unit_.empty()
+        ? compilation_time_unit_
+        : current_time_unit_;
+    module_time_precision_ = current_time_precision_.empty()
+        ? compilation_time_precision_
+        : current_time_precision_;
     module_time_unit_declared_ = false;
     module_time_precision_declared_ = false;
     module_has_non_time_item_ = false;

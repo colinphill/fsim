@@ -414,6 +414,13 @@ void Resolver::retain_task_profile(
     const auto built_in_mode = expression.text == ".rand_mode"
         || expression.text == ".constraint_mode";
     if (built_in_mode
+        && expression.operands.front().kind == ExpressionKind::Identifier
+        && this_mode_member(
+            expression.operands.front().text + expression.text, scope)) {
+      expression.operands.front().text =
+          "this." + expression.operands.front().text;
+    }
+    if (built_in_mode
         && expression.operands.front().kind == ExpressionKind::Identifier) {
       const auto selected = expression.operands.front().text.rfind('.');
       if (selected != std::string::npos) {
@@ -605,13 +612,13 @@ void Resolver::retain_task_profile(
             expression.operands[index].kind == ExpressionKind::Identifier
                 ? find_property(receiver_identity, selected_name)
                 : PropertyMatch{};
-        if (!selected.property
-            || (!selected.property->is_rand
-                && !selected.property->is_randc)) {
+        // Any property may be listed; it is random for this call (IEEE
+        // 1800-2017 18.11).
+        if (!selected.property || selected.property->is_static) {
           diagnose(
               diagnostics_,
               "FSIM-SV-CLASS-019",
-              "object randomize variable list requires a rand or randc "
+              "object randomize variable list requires a non-static "
               "property of class '" + receiver_identity + "'",
               expression.operands[index].span);
           continue;
@@ -713,6 +720,23 @@ void Resolver::retain_task_profile(
     }
   }
 
+  // An unqualified randomize call in a class method randomizes the object
+  // itself (IEEE 1800-2017 18.6.1, 18.7).
+  if (scope.class_owner != nullptr && scope.method_body
+      && expression.text == "randomize") {
+    Expression receiver{
+        ExpressionKind::Identifier, "this", {}, expression.span};
+    receiver.nominal_type = scope.class_owner->canonical_identity;
+    expression.operands.insert(
+        expression.operands.begin(), std::move(receiver));
+    if (!expression.call_argument_names.empty()) {
+      expression.call_argument_names.insert(
+          expression.call_argument_names.begin(), std::string{});
+    }
+    expression.text = ".randomize";
+    return resolve_call(
+        expression, scope, expected_class, expected_scalar);
+  }
   if (scope.class_owner != nullptr) {
     const auto visible = find_methods(
         scope.class_owner->canonical_identity,
@@ -931,7 +955,33 @@ std::optional<Type> Resolver::resolve_typed_expression(
   }
   return resolved;
 }
+bool Resolver::this_mode_member(
+    const std::string_view call, const Scope& scope) const {
+  const auto dot = call.find('.');
+  if (scope.class_owner == nullptr || !scope.method_body
+      || dot == std::string_view::npos || dot != call.rfind('.')) {
+    return false;
+  }
+  const auto member = call.substr(0, dot);
+  const auto method = call.substr(dot + 1U);
+  if (scope.objects.contains(member)) return false;
+  const auto& owner = scope.class_owner->canonical_identity;
+  if (method == "constraint_mode") {
+    return find_constraint(owner, member).constraint != nullptr;
+  }
+  if (method != "rand_mode") return false;
+  const auto property = find_property(owner, member);
+  return property.property
+      && (property.property->is_rand || property.property->is_randc)
+      && !class_identity(property.property->declaration.type);
+}
+
 void Resolver::resolve_task_call(Statement& statement, const Scope& scope) {
+  // In a method, `c.constraint_mode(0);` and `v.rand_mode(0);` select a
+  // member of the object itself (IEEE 1800-2017 18.8, 18.9).
+  if (this_mode_member(statement.task_name, scope)) {
+    statement.task_name = "this." + statement.task_name;
+  }
   const auto dot = statement.task_name.rfind('.');
   // `obj.c.constraint_mode(0);` or `obj.v.rand_mode(0);` selects a
   // constraint block or random property, not an object (18.8, 18.9).
@@ -1580,8 +1630,47 @@ void Resolver::resolve_class(SystemVerilogClassDeclaration& declaration, Scope s
     inherit_type(method.return_type);
     for (auto& variable : method.variables) inherit_type(variable.type);
   }
+  // A property of an enumeration typedef keeps the enumeration's literals,
+  // which bound its random values (IEEE 1800-2017 18.4).
+  for (auto& property : declaration.properties) {
+    auto& type = property.declaration.type;
+    if (type.named_type.empty() || !type.enumeration_literals.empty()
+        || type.systemverilog_container) {
+      continue;
+    }
+    auto resolved = resolve_alias_type(
+        type, declaration.canonical_identity);
+    // A compilation-unit typedef is held by the unit's package.
+    if (resolved.enumeration_literals.empty()
+        && type.named_type.find("::") == std::string::npos) {
+      const Type* found{};
+      std::size_t matches{};
+      for (const auto& unit : design_.units) {
+        if (unit.kind != UnitKind::SystemVerilogPackage
+            || !unit.name.starts_with("fsim_unit_")) {
+          continue;
+        }
+        for (const auto& alias : unit.type_aliases) {
+          if (alias.name == type.named_type
+              && !alias.type.enumeration_literals.empty()) {
+            found = &alias.type;
+            ++matches;
+          }
+        }
+      }
+      if (matches == 1U) resolved = *found;
+    }
+    if (!resolved.enumeration_literals.empty()
+        && resolved.enumeration_literals.size()
+            == resolved.systemverilog_enumeration_values.size()) {
+      type.enumeration_literals = resolved.enumeration_literals;
+      type.systemverilog_enumeration_values
+          = resolved.systemverilog_enumeration_values;
+    }
+  }
   for (auto& method : declaration.methods) {
     auto method_scope = scope;
+    method_scope.method_body = true;
     add_objects(method_scope, method.arguments);
     // A formal typed by an array typedef of class handles keeps the array
     // (`typedef C list_t[string]; function f(ref list_t l)`).

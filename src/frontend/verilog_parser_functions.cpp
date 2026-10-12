@@ -390,7 +390,7 @@ FunctionDeclaration VerilogParser::parse_function(
           TokenKind::Semicolon,
           "';' after classic function argument declaration",
           "FSIM-SV-PARSE-197");
-    } else if (is_declaration_start() || keyword("parameter")
+    } else if (is_block_declaration_start() || keyword("parameter")
         || keyword("localparam")) {
       parse_procedural_declaration(body);
     } else if (auto statement = parse_statement()) {
@@ -580,9 +580,7 @@ void VerilogParser::validate_function_body(
               || (statement.kind == StatementKind::Fork
                   && statement.fork_join_kind != ForkJoinKind::None)
               || statement.kind == StatementKind::WaitFork
-              || statement.kind == StatementKind::DisableFork
-              || statement.kind == StatementKind::Pause
-              || statement.kind == StatementKind::Finish;
+              || statement.kind == StatementKind::DisableFork;
           // IEEE 1800-2009 13.4.4 introduced fork...join_none background
           // processes in functions.
           if (statement.kind == StatementKind::Fork
@@ -923,7 +921,7 @@ TaskDeclaration VerilogParser::parse_task(
           TokenKind::Semicolon,
           "';' after classic task argument declaration",
           "FSIM-SV-PARSE-198");
-    } else if (is_declaration_start() || keyword("parameter")
+    } else if (is_block_declaration_start() || keyword("parameter")
         || keyword("localparam")) {
       parse_procedural_declaration(body);
     } else if (auto statement = parse_statement()) {

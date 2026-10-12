@@ -30,6 +30,8 @@ using runtime::simir::ClassAllocate;
 using runtime::simir::ClassMethodCall;
 using runtime::simir::ClassPropertyRead;
 using runtime::simir::ClassPropertyWrite;
+using runtime::simir::ClassPropertyContainerRead;
+using runtime::simir::ClassPropertyContainerWrite;
 using runtime::simir::ClassStaticMethodCall;
 using runtime::simir::ClassStaticPropertyRead;
 using runtime::simir::ClassStaticPropertyWrite;

@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
+#include <iostream>
 #include <limits>
 #include <tuple>
 
@@ -2650,6 +2652,40 @@ std::optional<Process> Lowerer::lower_hir_process_body(
     const frontend::Language language,
     const std::string_view hierarchy)
 {
+    // A process whose lowered class function bodies cannot all be lowered
+    // is lowered again with those calls left to the runtime interpreter.
+    const auto diagnostics_before = diagnostics_.size();
+    const auto processes_before = design_.process_count();
+    class_functions_lowered_ = false;
+    auto lowered = lower_hir_process_body_once(
+        description, language, hierarchy);
+    // A pass that reported errors failed too, even if it produced a
+    // process.
+    if ((lowered && diagnostics_.size() == diagnostics_before)
+        || !class_functions_lowered_ || !lower_class_functions_
+        || design_.process_count() != processes_before) {
+        return lowered;
+    }
+    if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES") != nullptr) {
+        for (auto index = diagnostics_before; index < diagnostics_.size();
+             ++index) {
+            std::cerr << "[fsim-hir-lower] class-function retry after "
+                      << diagnostics_[index].code << ": "
+                      << diagnostics_[index].message << '\n';
+        }
+    }
+    diagnostics_.resize(diagnostics_before);
+    lower_class_functions_ = false;
+    lowered = lower_hir_process_body_once(description, language, hierarchy);
+    lower_class_functions_ = true;
+    return lowered;
+}
+
+std::optional<Process> Lowerer::lower_hir_process_body_once(
+    const HirProcessDescription& description,
+    const frontend::Language language,
+    const std::string_view hierarchy)
+{
     [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
         *this
     };
@@ -3007,8 +3043,15 @@ std::optional<Process> Lowerer::lower_hir_process_body(
                 actual, signal.width, signal.systemverilog_scalar);
             extend_signed = true;
         }
+        // An unsized fill literal (`'1`) fills the port's width (IEEE
+        // 1800-2017 5.7.1).
+        const auto fill_literal = [](const std::string_view text) {
+            return text == "'0" || text == "'1" || text == "'x"
+                || text == "'X" || text == "'z" || text == "'Z";
+        };
         if (!value && actual_expression
-            && actual_expression->systemverilog != nullptr) {
+            && actual_expression->systemverilog != nullptr
+            && !fill_literal(actual_expression->systemverilog->text)) {
             const auto natural = hir_expression_width(
                 actual, hir_process_scope_);
             if (natural && *natural != 0U && *natural < signal.width) {
@@ -3078,6 +3121,15 @@ std::optional<Process> Lowerer::lower_hir_process_body(
                       value, signal.is_signed, actual_kind)
                 : convert_hir_real_to_integral(
                       value, signal.systemverilog_scalar);
+        }
+        // A signed output port connected to a wider actual extends by its
+        // own signedness, as a continuous assignment does (23.3.3.7).
+        if (const auto actual_width = hir_expression_width(
+                *description.output_actual, hir_process_scope_);
+            !description.actual_slice && signal.is_signed && actual_width
+            && *actual_width > register_width(value)
+            && !frontend::is_real_scalar_kind(signal.systemverilog_scalar)) {
+            value = resize_register(value, *actual_width, true);
         }
         if (description.actual_slice) {
             // One instance of an instance array drives its slice of the

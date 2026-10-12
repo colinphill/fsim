@@ -11,7 +11,8 @@ namespace fsim::frontend {
 [[nodiscard]] std::optional<StandardRevision>
 verilog_system_service_standard(std::string_view name);
 
-DelayAlternative VerilogParser::parse_verilog_delay_alternative()
+DelayAlternative VerilogParser::parse_verilog_delay_alternative(
+    const bool parenthesized)
 {
     // `#1 ->e;` triggers an event after the delay; `->` is not an
     // implication inside a delay value.
@@ -45,8 +46,34 @@ DelayAlternative VerilogParser::parse_verilog_delay_alternative()
     const bool explicit_time_literal = at(TokenKind::Number)
         && at(TokenKind::Identifier, 1)
         && time_unit_femtoseconds(current(1).text).has_value();
+    // An unparenthesized delay is a single number (IEEE 1800-2017 A.2.2.3),
+    // so in `#1 'h5` or `#100'b0` the based literal is the next expression,
+    // and in `#69 - 1` the delay is 69.
+    if (!parenthesized && !explicit_time_literal && at(TokenKind::Number)) {
+        auto& token = tokens_[index_];
+        const auto quote = token.text.find('\'');
+        if (quote != std::string::npos && quote != 0U
+            && std::ranges::all_of(token.text.substr(0U, quote),
+                [](const char character) {
+                    return (character >= '0' && character <= '9')
+                        || character == '_';
+                })) {
+            auto rest = token;
+            rest.text = token.text.substr(quote);
+            token.text.resize(quote);
+            tokens_.insert(
+                tokens_.begin() + static_cast<std::ptrdiff_t>(index_) + 1,
+                std::move(rest));
+        }
+    }
+    const bool lone_number = !parenthesized && !explicit_time_literal
+        && at(TokenKind::Number)
+        && current().text.find('\'') == std::string::npos;
     auto expression = explicit_time_literal
         ? Expression { }
+        : lone_number
+        ? Expression { ExpressionKind::IntegerLiteral, advance().text, { },
+              previous().span }
         : parse_expression();
     const bool plain_decimal_literal = expression.kind == ExpressionKind::IntegerLiteral
         && decimal_ratio(expression.text).has_value();
@@ -91,8 +118,10 @@ DelayAlternative VerilogParser::parse_verilog_delay_alternative()
         // project resolution, the implementation's default time unit
         // (IEEE 1800-2017 3.14.2.3), and rounds to it.
     } else if (
-        expression.kind == ExpressionKind::IntegerLiteral
-        || expression.kind == ExpressionKind::LogicLiteral) {
+        (expression.kind == ExpressionKind::IntegerLiteral
+            || expression.kind == ExpressionKind::LogicLiteral)
+        && (expression.text.find('\'') == std::string::npos
+            || !parenthesized)) {
         const bool nondecimal = expression.text.find('\'') != std::string::npos;
         error(
             start,
@@ -102,6 +131,8 @@ DelayAlternative VerilogParser::parse_verilog_delay_alternative()
                 : "delay magnitude must be a representable nonnegative "
                   "decimal literal");
     } else {
+        // A parenthesized delay is any constant or run-time expression,
+        // including a based literal (`#(32'hf0)`, A.2.2.3).
         alternative.expression = std::move(expression);
         if (!module_time_unit_.empty()) {
             alternative.magnitude = module_time_unit_magnitude_;
@@ -127,7 +158,7 @@ void VerilogParser::set_selected_delay(
 Delay VerilogParser::parse_verilog_delay_value(const bool parenthesized)
 {
     Delay delay;
-    auto first = parse_verilog_delay_alternative();
+    auto first = parse_verilog_delay_alternative(parenthesized);
     set_selected_delay(delay, first);
     if (match(TokenKind::Colon)) {
         if (!parenthesized) {

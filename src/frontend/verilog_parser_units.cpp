@@ -34,17 +34,17 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
   external_genvar_uses_.clear();
   next_implicit_generate_scope_ = 1;
   module_time_unit_magnitude_ =
-      compilation_time_unit_.empty()
-          ? current_time_unit_magnitude_
-          : compilation_time_unit_magnitude_;
+      current_time_unit_.empty()
+          ? compilation_time_unit_magnitude_
+          : current_time_unit_magnitude_;
   module_time_unit_ =
-      compilation_time_unit_.empty()
-          ? current_time_unit_
-          : compilation_time_unit_;
+      current_time_unit_.empty()
+          ? compilation_time_unit_
+          : current_time_unit_;
   module_time_precision_ =
-      compilation_time_precision_.empty()
-          ? current_time_precision_
-          : compilation_time_precision_;
+      current_time_precision_.empty()
+          ? compilation_time_precision_
+          : current_time_precision_;
   module_time_unit_declared_ = false;
   module_time_precision_declared_ = false;
   module_has_non_time_item_ = false;
@@ -767,13 +767,32 @@ GenerateRegion VerilogParser::parse_iterative_generate(const Token& start) {
         update.kind == TokenKind::PlusPlus ? "+" : "-",
         one(),
         cover(iteration_variable.span, update.span));
-  } else if (
-      match(TokenKind::PlusAssign)
-      || match(TokenKind::MinusAssign)) {
-    const auto update = previous();
+  } else if (const auto compound = [&]() -> std::optional<std::string> {
+               // Any assignment operator may step a genvar (IEEE
+               // 1800-2017 27.4, genvar_iteration).
+               static constexpr std::pair<TokenKind, const char*>
+                   operators[] = {
+                       {TokenKind::PlusAssign, "+"},
+                       {TokenKind::MinusAssign, "-"},
+                       {TokenKind::StarAssign, "*"},
+                       {TokenKind::SlashAssign, "/"},
+                       {TokenKind::PercentAssign, "%"},
+                       {TokenKind::AmpersandAssign, "&"},
+                       {TokenKind::PipeAssign, "|"},
+                       {TokenKind::CaretAssign, "^"},
+                       {TokenKind::ShiftLeftAssign, "<<"},
+                       {TokenKind::ShiftRightAssign, ">>"},
+                       {TokenKind::ArithmeticShiftLeftAssign, "<<<"},
+                       {TokenKind::ArithmeticShiftRightAssign, ">>>"},
+                   };
+               for (const auto& [kind, text] : operators) {
+                 if (match(kind)) return std::string{text};
+               }
+               return std::nullopt;
+             }()) {
     auto amount = parse_expression();
     result.iteration = stepped_iteration(
-        update.kind == TokenKind::PlusAssign ? "+" : "-",
+        *compound,
         std::move(amount),
         cover(iteration_variable.span, previous().span));
   } else {
@@ -1022,9 +1041,9 @@ void VerilogParser::parse_generate_branch(
         if (auto statement = parse_statement()) {
             body.concurrent_statements.push_back(std::move(*statement));
         }
-    } else if (language_ == Language::SystemVerilog2017
-        && match(TokenKind::Semicolon)) {
-        // An empty generate item (`if (0);`, A.4.1.1).
+    } else if (match(TokenKind::Semicolon)) {
+        // An empty generate item (`if (0);`, IEEE 1800-2017 A.4.1.1;
+        // generate_block_or_null in IEEE 1364-2005 12.4).
     } else if (is_gate_primitive()) {
         parse_gate_primitive(
             body.concurrent_statements, body.signals, { });
@@ -1319,6 +1338,7 @@ void VerilogParser::parse_generated_parameter_group(
         "a generate block parameter must be a localparam in Verilog-2005");
   }
   const auto type = parse_parameter_type();
+  const bool signing_only = parameter_signing_only_;
   for (;;) {
     const auto name = expect_identifier(
         local
@@ -1326,7 +1346,8 @@ void VerilogParser::parse_generated_parameter_group(
             : "generated parameter name");
     Expression value;
     if (match(TokenKind::Assign)) {
-      value = parse_expression();
+      value = signed_parameter_value(parse_expression(), signing_only,
+          type.is_signed);
     } else {
       error(
           current(),
@@ -1392,7 +1413,36 @@ void VerilogParser::parse_generated_parameter_group(
       "FSIM-SV-PARSE-051");
 }
 
+Expression VerilogParser::signed_parameter_value(Expression value,
+    const bool signing_only, const bool is_signed) {
+  // A parameter declared with only a signing takes its value's range with
+  // that signing (IEEE 1800-2017 6.20.2).
+  // A real value keeps its real type.
+  const auto real_valued = [](const auto& self,
+                               const Expression& expression) -> bool {
+    if (expression.kind == ExpressionKind::IntegerLiteral
+        && expression.text.find('\'') == std::string::npos
+        && expression.text.find_first_of(".eE") != std::string::npos) {
+      return true;
+    }
+    if (expression.kind == ExpressionKind::Call
+        && (expression.text == "$itor" || expression.text == "$bitstoreal"
+            || expression.text == "$realtime")) {
+      return true;
+    }
+    return std::ranges::any_of(expression.operands,
+        [&](const Expression& operand) { return self(self, operand); });
+  };
+  if (!signing_only || real_valued(real_valued, value)) {
+    return value;
+  }
+  const auto span = value.span;
+  return Expression{ExpressionKind::Call,
+      is_signed ? "$signed" : "$unsigned", {std::move(value)}, span};
+}
+
 Type VerilogParser::parse_parameter_type() {
+  parameter_signing_only_ = false;
   if (at(TokenKind::Identifier)
       && declaration_word_standard(current().text)
       && !keyword_reserved(keyword_set_, current().text)
@@ -1475,9 +1525,21 @@ Type VerilogParser::parse_parameter_type() {
   } else if (
       keyword("signed") || keyword("unsigned")
       || at(TokenKind::LeftBracket)) {
+    const bool signing_only = !at(TokenKind::LeftBracket);
     type.spelling = "logic";
     type.domain = ValueDomain::Logic4;
     type.is_signed = false;
+    parse_optional_signedness(type);
+    parse_optional_range(type);
+    // A signing without a range takes the range of the parameter's final
+    // value (IEEE 1800-2017 6.20.2).
+    if (signing_only && !type.packed_range && !type.packed_range_expression
+        && type.systemverilog_packed_dimensions.empty()) {
+      type.spelling = "implicit";
+      type.domain = ValueDomain::Integer;
+      parameter_signing_only_ = true;
+    }
+    return type;
   } else if (is_named_type_reference_start()) {
     return parse_named_type();
   }
@@ -1610,6 +1672,8 @@ void VerilogParser::parse_parameter_group(
   auto type =
       type_parameter || implicit_value_type
           ? Type{} : parse_parameter_type();
+  const bool signing_only = !type_parameter && !implicit_value_type
+      && parameter_signing_only_;
   if (implicit_value_type) {
     type.spelling = "implicit";
     type.domain = ValueDomain::Integer;
@@ -1628,7 +1692,9 @@ void VerilogParser::parse_parameter_group(
       std::optional<Expression> initializer;
       if (match(TokenKind::Assign)) {
         initializer = parse_expression();
-      } else {
+      } else if (!port_list || local) {
+        // A parameter port without a default must be overridden by every
+        // instance (IEEE 1800-2017 6.20.1).
         error(
             current(),
             "FSIM-SV-PARSE-050",
@@ -1677,7 +1743,8 @@ void VerilogParser::parse_parameter_group(
         default_type = imported ? std::move(*imported)
                                 : parse_type_parameter_actual();
       } else {
-        value = parse_expression();
+        value = signed_parameter_value(parse_expression(), signing_only,
+            type.is_signed);
       }
     } else if (!type_parameter
         && !((port_list || class_list) && !local

@@ -1954,7 +1954,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<std::string> plusargs;
     SystemVerilogTimeFormat time_format;
     std::map<FileHandle, FileState> files;
-    FileHandle next_file_handle { 1 };
+    // What a SystemVerilog file operation reads through a descriptor that
+    // names no open file: nothing is readable or writable.
+    FileState invalid_systemverilog_file;
+    // Descriptors 0x80000000-0x80000002 are STDIN, STDOUT and STDERR (IEEE
+    // 1800-2017 21.3.1).
+    FileHandle next_file_handle { 3 };
     std::uint32_t next_multichannel_channel { 1 };
     std::vector<std::uint8_t> direct_signal_read_capabilities;
     std::uint64_t direct_signal_read_owner_token { };
@@ -3894,6 +3899,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     ClassAllocateHook class_allocate_hook;
     ClassPropertyReadHook class_property_read_hook;
     ClassPropertyWriteHook class_property_write_hook;
+    ClassPropertyContainerHook class_property_container_hook;
     ClassMethodCallHook class_method_call_hook;
     ClassStaticPropertyReadHook class_static_property_read_hook;
     ClassStaticPropertyWriteHook class_static_property_write_hook;
@@ -4252,6 +4258,13 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessId process,
         std::string_view path,
         std::string_view mode);
+    [[nodiscard]] FileHandle open_file_unchecked(
+        ProcessId process,
+        std::string_view path,
+        std::string_view mode);
+    // An open file for a SystemVerilog descriptor, or nullptr when the
+    // descriptor names no open file.
+    [[nodiscard]] FileState* open_systemverilog_file(FileHandle handle);
     [[nodiscard]] bool soft_unreadable_file(
         ProcessId process, FileState& file);
     [[nodiscard]] FileState& checked_file(

@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <future>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <set>
@@ -414,6 +415,11 @@ struct Simulation::Impl {
     bool vpi_runtime_updates_enabled { true };
 
     runtime::SystemVerilogClassHeap class_heap;
+    // Value-container class properties (unpacked arrays, queues and
+    // associative arrays of values), by object and property identity.
+    std::map<std::pair<std::uint64_t, std::string>,
+        runtime::simir::ContainerValue>
+        class_value_containers;
 
     runtime::SystemVerilogChandleRegistry chandle_registry;
 

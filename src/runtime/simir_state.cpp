@@ -1101,8 +1101,8 @@ Interpreter::Impl::get_container_object(
             };
         }
         const auto classification = classify_systemverilog_scalar(decoded.value);
-        if (kind != SystemVerilogScalarKind::Chandle
-            && (!classification || !classification.finite)) {
+        // A real may hold an infinity or NaN (IEEE 754).
+        if (kind != SystemVerilogScalarKind::Chandle && !classification) {
             throw std::invalid_argument {
                 "SimIR scalar signal requires a finite value"
             };

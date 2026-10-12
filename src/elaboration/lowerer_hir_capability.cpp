@@ -1202,6 +1202,29 @@ std::optional<std::int64_t> Lowerer::hir_constant_integer(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
+    // An increment or decrement is never a constant: its side effect must
+    // be kept (IEEE 1800-2017 11.4.2, 11.2.1).
+    {
+        const auto has_update = [&](const auto& self,
+                                    const semantic::ExpressionId id,
+                                    const std::size_t depth) -> bool {
+            const auto record = specialized_hir_unit_->find_expression(id);
+            if (!record || record->systemverilog == nullptr || depth > 64U) {
+                return false;
+            }
+            if (record->systemverilog->kind
+                == semantic::sv::ExpressionKind::update) {
+                return true;
+            }
+            return std::ranges::any_of(record->systemverilog->operands,
+                [&](const semantic::ExpressionId operand) {
+                    return self(self, operand, depth + 1U);
+                });
+        };
+        if (has_update(has_update, expression_id, 0U)) {
+            return std::nullopt;
+        }
+    }
     if (const auto actual = hir_generic_actual(expression_id)) {
         return hir_constant_integer(*actual);
     }
@@ -2092,20 +2115,22 @@ std::optional<Lowerer::HirPackedRange> Lowerer::hir_expression_range(
         }
         if (declaration->systemverilog != nullptr) {
             const auto& source = *declaration->systemverilog;
-            if (source.type && source.type->packed_range
-                && source.type->packed_range->left
-                && source.type->packed_range->right) {
-                const auto& range = *source.type->packed_range;
-                if (index_distance(*range.left, *range.right) + 1U
-                        != *width
-                    || (*range.left != *range.right
-                        && range.descending
-                            != (*range.left > *range.right))) {
+            // A bound may still be an expression of parameters
+            // (`[base+15:base]`).
+            const auto left = source.type && source.type->packed_range
+                ? hir_range_left(*source.type->packed_range)
+                : std::nullopt;
+            const auto right = source.type && source.type->packed_range
+                ? hir_range_right(*source.type->packed_range)
+                : std::nullopt;
+            if (left && right) {
+                const bool descending = *left == *right
+                    ? source.type->packed_range->descending
+                    : *left > *right;
+                if (index_distance(*left, *right) + 1U != *width) {
                     return std::nullopt;
                 }
-                return HirPackedRange {
-                    *range.left, *range.right, range.descending
-                };
+                return HirPackedRange { *left, *right, descending };
             }
         } else {
             const auto& source = *declaration->vhdl;
@@ -4989,6 +5014,28 @@ Lowerer::hir_container_object_binding(
 {
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
+    }
+    // A container property of `this` in a lowered class body reads its
+    // cached register.
+    if (const auto access = specialized_hir_unit_->find_expression(
+            expression_id);
+        access && access->systemverilog != nullptr
+        && !hir_class_container_caches_.empty()
+        && access->systemverilog->text.starts_with("@sv-container-property:")
+        && access->systemverilog->operands.size() == 1U) {
+        const auto receiver = specialized_hir_unit_->find_expression(
+            access->systemverilog->operands.front());
+        const auto identity = std::string_view { access->systemverilog->text }
+            .substr(std::string_view { "@sv-container-property:" }.size());
+        const auto cache = std::ranges::find(hir_class_container_caches_,
+            identity, &HirClassContainerCache::identity);
+        if (receiver && receiver->systemverilog != nullptr
+            && (receiver->systemverilog->text == "this"
+                || receiver->systemverilog->text == "super")
+            && cache != hir_class_container_caches_.end()) {
+            return hir_container_object_binding_for_declaration(
+                cache->declaration);
+        }
     }
     const auto declaration_id = hir_referenced_declaration(
         expression_id);
@@ -11269,6 +11316,16 @@ std::optional<std::size_t> Lowerer::hir_expression_width(
         if (source.kind == semantic::sv::ExpressionKind::call
             && source.text.starts_with(container_index_prefix)) {
             return 64U;
+        }
+        // size() and num() of an unpacked container return int (IEEE
+        // 1800-2017 7.5.2, 7.9.1, 7.10.2.1).
+        if (source.kind == semantic::sv::ExpressionKind::call
+            && (source.text == ".size" || source.text == ".num")
+            && source.operands.size() == 1U
+            && (hir_container_object_binding(source.operands.front())
+                || hir_static_container_expression_type(
+                    source.operands.front()))) {
+            return 32U;
         }
         if (source.kind == semantic::sv::ExpressionKind::call
             && source.text.starts_with(container_method_prefix)) {
