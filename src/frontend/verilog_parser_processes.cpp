@@ -1827,10 +1827,23 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
     }
 
     const auto potential_complex_call = [&]() {
+        // Parentheses inside an index (`a[(i)] <= #1 v`) are not a call.
+        std::size_t square_depth { };
         for (std::size_t lookahead = 1U;
             !at(TokenKind::Semicolon, lookahead)
             && !at(TokenKind::EndOfFile, lookahead);
             ++lookahead) {
+            if (at(TokenKind::LeftBracket, lookahead)) {
+                ++square_depth;
+                continue;
+            }
+            if (at(TokenKind::RightBracket, lookahead) && square_depth != 0U) {
+                --square_depth;
+                continue;
+            }
+            if (square_depth != 0U) {
+                continue;
+            }
             if (at(TokenKind::Assign, lookahead)
                 || at(TokenKind::LessEqual, lookahead)
                 || at(TokenKind::PlusAssign, lookahead)

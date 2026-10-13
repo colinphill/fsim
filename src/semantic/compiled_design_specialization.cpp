@@ -1695,6 +1695,46 @@ public:
         return evaluate_nonzero(expression);
     }
 
+    // A generate condition: x or z is false (IEEE 1800-2017 12.4, 27.5).
+    [[nodiscard]] std::optional<bool> evaluate_condition_truth(
+        const ExpressionId expression)
+    {
+        if (const auto known = evaluate_nonzero(expression)) {
+            return known;
+        }
+        // A condition that is x or z is false (IEEE 1800-2017 12.4): a
+        // value with a 1 bit is true, otherwise any x or z bit makes it
+        // false, as does an equality or relational operator with an x or z
+        // operand bit.
+        const auto unknown = [](const std::string& bits) {
+            return bits.find_first_of("xXzZ") != std::string::npos;
+        };
+        if (const auto bits = canonical_systemverilog_bits(expression)) {
+            if (bits->find('1') != std::string::npos) {
+                return true;
+            }
+            return unknown(*bits) ? std::optional { false } : std::nullopt;
+        }
+        const auto view = unit_.find_expression(expression);
+        if (!view || view->systemverilog == nullptr
+            || view->systemverilog->kind != sv::ExpressionKind::binary
+            || view->systemverilog->operands.size() != 2U) {
+            return std::nullopt;
+        }
+        const auto& operation = view->systemverilog->text;
+        if (operation != "==" && operation != "!=" && operation != "<"
+            && operation != "<=" && operation != ">" && operation != ">=") {
+            return std::nullopt;
+        }
+        for (const auto operand : view->systemverilog->operands) {
+            if (const auto bits = canonical_systemverilog_bits(operand);
+                bits && unknown(*bits)) {
+                return false;
+            }
+        }
+        return std::nullopt;
+    }
+
     [[nodiscard]] std::optional<std::string>
     evaluate_systemverilog_bits(const ExpressionId expression)
     {
@@ -8391,7 +8431,11 @@ private:
         if constexpr (systemverilog) {
             if (const auto dotted
                 = systemverilog_dotted_enumeration_method(expression)) {
+                // Folded only inside constant functions, as for the
+                // parenthesized methods.
                 return dotted->methods.back() == "name"
+                        || (call_frames_.empty()
+                            && dotted->methods.back() != "num")
                     ? std::nullopt
                     : evaluate_dotted_enumeration_value(*dotted, true);
             }
@@ -8819,10 +8863,17 @@ private:
                 }
                 return std::nullopt;
             }
+            // Enumeration methods are folded inside constant functions. In
+            // other expressions this width-free evaluator would lose the
+            // value's enumerated type (its width and signedness) that
+            // `$signed` and mixed-sign comparisons depend on (11.8.1).
             if (expression.kind == Kind::call
                 && (expression.text == ".first" || expression.text == ".last"
                     || expression.text == ".next" || expression.text == ".prev"
                     || expression.text == ".num")) {
+                if (call_frames_.empty() && expression.text != ".num") {
+                    return std::nullopt;
+                }
                 return evaluate_systemverilog_enumeration_method(expression);
             }
             if (expression.kind == Kind::call) {
@@ -9258,7 +9309,7 @@ void select_systemverilog_generate(const sv::GenerateRegion& generate,
     if (generate.kind == sv::GenerateKind::conditional) {
         const auto condition = selector
             ? std::optional<bool> { *selector != 0 }
-            : evaluator.evaluate_truth(*generate.condition);
+            : evaluator.evaluate_condition_truth(*generate.condition);
         if (!condition) {
             preserve_generate_subtree(generate, output);
             return;
@@ -12393,6 +12444,17 @@ SpecializedHirUnit::evaluate_systemverilog_truth_expression(
         nullptr, initializer_memo_context_
     };
     return evaluator.evaluate_truth(expression);
+}
+
+std::optional<bool>
+SpecializedHirUnit::evaluate_systemverilog_condition_truth(
+    const ExpressionId expression) const
+{
+    HirIntegralEvaluator evaluator {
+        *this, nullptr, "FSIM-ELAB-SVCONST-002", "constant evaluation",
+        nullptr, initializer_memo_context_
+    };
+    return evaluator.evaluate_condition_truth(expression);
 }
 
 std::optional<std::string>

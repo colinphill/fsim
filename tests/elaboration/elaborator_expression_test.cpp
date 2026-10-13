@@ -1728,10 +1728,12 @@ endmodule
             return fsim::runtime::simir::operation_holds<
                 fsim::runtime::simir::Call>(operation);
         });
-    if (membership_calls != 4) {
+    // `failing(8'h00)` divides by zero and folds to x (IEEE 1800-2017
+    // 11.4.2).
+    if (membership_calls != 3) {
         std::cerr << "membership call count: " << membership_calls << '\n';
     }
-    assert(membership_calls == 4);
+    assert(membership_calls == 3);
     auto interpreter = elaborated.design->create_interpreter();
     (void)interpreter->run();
     const auto value = [&](const std::string_view name) {
@@ -1916,7 +1918,9 @@ endmodule
             return fsim::runtime::simir::operation_holds<fsim::runtime::simir::Call>(
                 operation);
         });
-    assert(case_calls == 4);
+    // `failing(8'h00)` divides by zero and folds to x (IEEE 1800-2017
+    // 11.4.2); the three `observed` calls remain.
+    assert(case_calls == 3);
     auto interpreter = elaborated.design->create_interpreter();
     (void)interpreter->run();
     const auto value = [&](const std::string_view name) {

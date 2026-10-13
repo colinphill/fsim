@@ -13375,7 +13375,7 @@ Lowerer::hir_vhdl_synopsys_numeric_context(
 
 std::optional<std::size_t> Lowerer::hir_systemverilog_member_offset(
     const semantic::sv::TypeDefinition& type,
-    const std::size_t member_index) const
+    const std::size_t member_index, const bool unpacked_structures) const
 {
     if (member_index >= type.members.size()) {
         return std::nullopt;
@@ -13384,7 +13384,9 @@ std::optional<std::size_t> Lowerer::hir_systemverilog_member_offset(
         || type.form == semantic::sv::TypeForm::tagged_union) {
         return 0U;
     }
-    if (type.form != semantic::sv::TypeForm::packed_structure) {
+    if (type.form != semantic::sv::TypeForm::packed_structure
+        && !(unpacked_structures
+            && type.form == semantic::sv::TypeForm::unpacked_structure)) {
         return std::nullopt;
     }
 
@@ -13512,7 +13514,7 @@ std::optional<Lowerer::HirPackedMemberSelection>
 Lowerer::hir_systemverilog_type_member_path(
     const semantic::sv::TypeReference& type, const semantic::ScopeId scope,
     const semantic::DeclarationId declaration_id,
-    std::string_view remaining) const
+    std::string_view remaining, const bool unpacked_structures) const
 {
     auto current = type;
     std::size_t offset { };
@@ -13551,7 +13553,10 @@ Lowerer::hir_systemverilog_type_member_path(
         const auto& declared = *definition->systemverilog;
         if (declared.form != semantic::sv::TypeForm::packed_structure
             && declared.form != semantic::sv::TypeForm::packed_union
-            && declared.form != semantic::sv::TypeForm::tagged_union) {
+            && declared.form != semantic::sv::TypeForm::tagged_union
+            && !(unpacked_structures
+                && declared.form
+                    == semantic::sv::TypeForm::unpacked_structure)) {
             return std::nullopt;
         }
         const auto separator = remaining.find('.');
@@ -13597,7 +13602,7 @@ Lowerer::hir_systemverilog_type_member_path(
             };
         }
         const auto member_offset = hir_systemverilog_member_offset(
-            declared, member_index);
+            declared, member_index, unpacked_structures);
         if (!member_offset
             || *member_offset
                 > std::numeric_limits<std::size_t>::max() - offset) {

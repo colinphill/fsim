@@ -67,6 +67,12 @@ evaluate_hir_systemverilog_typed_constant(
     const semantic::sv::TypeReference& type,
     std::string& error);
 
+/// The bit width of a type in a specialization, or nullopt when it is not a
+/// fixed-width type.
+[[nodiscard]] std::optional<std::uint64_t> hir_systemverilog_type_bits(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::TypeReference& type);
+
 /// Return true when an expression contains real-family, time, or chandle HIR
 /// that requires the scalar evaluator instead of the packed evaluator.
 [[nodiscard]] bool hir_systemverilog_scalar_expression_applicable(

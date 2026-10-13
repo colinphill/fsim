@@ -347,6 +347,7 @@ namespace {
         // elaboration diagnostics may stem from a missing design context
         // (generic values, bindings) or from bounded-runtime limits.
         static const std::set<std::string, std::less<>> analysis_codes {
+            "FSIM-VHDL-SEM-129",
             "FSIM-ELAB-048", "FSIM-ELAB-051", "FSIM-ELAB-053", "FSIM-ELAB-059",
             "FSIM-ELAB-068", "FSIM-ELAB-074", "FSIM-ELAB-077", "FSIM-ELAB-079",
             "FSIM-ELAB-082", "FSIM-ELAB-091", "FSIM-ELAB-092",

@@ -178,7 +178,7 @@ CollectionResult collect_occurrences(
         if (generate.kind == Kind::conditional) {
             const auto constant = generate.condition
                 ? parent_specialization
-                      .evaluate_systemverilog_truth_expression(
+                      .evaluate_systemverilog_condition_truth(
                           *generate.condition)
                 : std::nullopt;
             if (!constant) {

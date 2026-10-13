@@ -431,6 +431,24 @@ ICARUS_NONSTANDARD = {
     "br_gh889": "expects output that ignores the SDF file",
     "sv_packed_port1": "expects z from an undriven variable bit",
     "sv_packed_port2": "expects z from an undriven variable bit",
+    # SystemVerilog preprocessor features in Icarus's default Verilog-2005
+    # mode (IEEE 1364-2005 has neither `" nor `__LINE__).
+    **{name: "uses `\" or `__LINE__ in Verilog-2005 mode" for name in (
+        "attrib_expr", "br_gh484", "module_output_port_list_def",
+        "nb_ec_concat", "parameter_1bit", "real_array_multi_dim",
+        "string13", "string14")},
+    # Icarus's ``NAME macro-text stringification is not in either standard.
+    **{name: "uses Icarus ``NAME macro stringification" for name in (
+        "pr622", "pr639", "pr1741212", "pr1912112", "pr1925360")},
+    "pr1716276": "omits a positional parameter override (`#( , 4)`)",
+    **{name: "calls $urandom_range in Verilog-2005 mode" for name in (
+        "urand_r", "urand_r2", "urand_r3")},
+    # IEEE 1800-2017 7.5.1: the new[] initializer is an array.
+    "sv_darray_args3": "initializes new[] with a scalar",
+    "sv_darray_args4": "initializes new[] with a scalar",
+    # IEEE 1800-2017 Table 11-20: z and z under an unknown condition is x.
+    "pr2172606b": "expects z from ?: of two z operands under an unknown "
+        "condition",
 }
 # Verilator's C++ escape functions ($c, $c8..$c64, $cpure).
 VERILATOR_C_TASKS = re.compile(r"\$c(pure|\d+)?\s*\(")
@@ -480,6 +498,10 @@ VERILATOR_NONSTANDARD = {
     "t_sys_readmem_eof": "reads a file the Verilator driver generates",
     "t_strength_strongest_non_tristate": "needs clocks the Verilator "
         "harness drives",
+    # IEEE 1800-2017 11.8.1: an unsigned operand makes the power's
+    # context-determined left operand unsigned; the case guards these checks
+    # from other simulators.
+    "t_math_pow3": "keeps a power operand signed in an unsigned comparison",
 }
 
 def verilator_cases(root: Path) -> list[Case]:
@@ -928,6 +950,13 @@ def vests_group(directory: str, relative: str) -> str:
     return "ashenden/" + (match.group(1) if match else "misc")
 
 
+# nvc cases that need nvc's own extensions.
+NVC_NONSTANDARD = {
+    # `a ~& b` and `a ~| b` are not binary operators in IEEE 1364 or 1800.
+    "binary8": "uses ~& and ~| as binary operators",
+    "wide7": "uses ~& and ~| as binary operators",
+}
+
 NVC_SKIP_FLAGS = {
     "vhpi", "wave", "cover", "tcl", "shell", "plugin", "gtkw", "relaxed", "relax",
     "dump-arrays", "export", "define", "H", "exit", "mixed",
@@ -974,11 +1003,16 @@ def nvc_cases(root: Path) -> list[Case]:
                 skip = skip or f"nvc-specific test kind {key}"
             elif key.startswith("guut."):
                 skip = skip or "hierarchical generic override"
+        if name in NVC_NONSTANDARD:
+            skip = skip or "out of scope: " + NVC_NONSTANDARD[name]
         if verilog:
             source = next((base / f"{name}{ext}" for ext in (".v", ".sv")
                            if (base / f"{name}{ext}").exists()), base / f"{name}.v")
+            # nvc's Verilog tests use SystemVerilog operators (`++`, `+=`) in
+            # .v files; like the Verilator suite, they compile as
+            # SystemVerilog.
             compile_args = ["compile", "-q"] + standard_args(
-                "systemverilog" if source.suffix == ".sv" else "verilog", None)
+                "systemverilog", "2017")
             top = name
         else:
             source = base / f"{name}.vhd"

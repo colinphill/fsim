@@ -315,11 +315,13 @@ void verify(
                   << calls << '\n';
     }
     assert(calls == expected_call_points);
-    if (capture.call_operations != 43) {
+    // `failing(8'd0)` folds to x (IEEE 1800-2017 11.4.2), so its two calls
+    // are not lowered.
+    if (capture.call_operations != 41) {
         std::cerr << "unexpected lowered Call operation count: "
                   << capture.call_operations << '\n';
     }
-    assert(capture.call_operations == 43);
+    assert(capture.call_operations == 41);
     assert(std::ranges::find(
                capture.locals, "inner.temporary")
         != capture.locals.end());

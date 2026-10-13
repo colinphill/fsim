@@ -420,6 +420,23 @@ std::size_t maximum_container_string_length(const Value& value) noexcept
     return result;
 }
 
+// A new[] initializer is a dynamic array or a queue of the target's
+// elements (IEEE 1800-2017 7.5.1, 7.6).
+[[nodiscard]] bool new_initializer_compatible(
+    const ContainerType& initializer, const ContainerType& target)
+{
+    if (initializer == target) {
+        return true;
+    }
+    if (!initializer.queue) {
+        return false;
+    }
+    auto as_dynamic = initializer;
+    as_dynamic.queue = false;
+    as_dynamic.maximum_elements.reset();
+    return as_dynamic == target;
+}
+
 } // namespace
 
 ContainerReferenceRefresh
@@ -2555,7 +2572,7 @@ void resize_container_value(
     }
     if (initializer) {
         validate_container_value(*initializer);
-        if (initializer->type != target.type) {
+        if (!new_initializer_compatible(initializer->type, target.type)) {
             throw std::invalid_argument {
                 "dynamic-array initializer type mismatch"
             };
@@ -2760,7 +2777,7 @@ void Interpreter::Impl::execute_container(
     if (operation.initializer) {
         const auto& source = read_container_register(
             process, *operation.initializer);
-        if (source.type != target.type) {
+        if (!new_initializer_compatible(source.type, target.type)) {
             container_error(
                 process.id, process.pc,
                 "dynamic-array initializer type mismatch");

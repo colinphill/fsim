@@ -253,6 +253,102 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 54: constant-expression widths, hierarchical typedefs and members, unpacked slices and concatenations, nvc Verilog
+
+Fixtures: `sv_language_details_batch54.sv`, `vhdl_assertion_sensitivity.vhd`.
+
+- Constant expressions: operands take the width of the whole expression
+  before their operators apply, so carries are kept (`3'd4 * 3'd4 * 2 + 3'd3`
+  is 35), through unary `-`/`~`, `?:` and relational operands (11.6.1,
+  11.8.2). A parameter without a type has the width of its value (6.20.2).
+  Division or modulus by zero gives x, and a real division gives an IEEE 754
+  infinity or NaN (11.4.2). The real math functions are constant functions
+  (11.2.1, 20.8.2).
+- Generate: an unknown condition selects the else branch (12.4, 27.5).
+  `blk.P` names a parameter of a selected generate block (27.6).
+- Hierarchical names: `$bits(T)` of a type parameter and `$bits(inst.t)` of
+  another instance's typedef (20.6.2); members of a packed structure signal
+  read and sized hierarchically (`bus.rs.data`); a nested interface instance
+  reached through an interface port (`io.types.P`).
+- Unpacked arrays: continuous and nonblocking slice copies (the nonblocking
+  form publishes each element in the NBA region); continuous and nonblocking
+  assignment patterns; unpacked concatenations assigned to a fixed array or
+  a slice (10.10); a conditional whose alternative is a pattern or function
+  (11.4.11); `new[n](q)` with a queue initializer (7.5.1, 7.6).
+- Ports and selects: an output port connected to a select partly or wholly
+  outside the declared range, and a continuous assignment to such a select,
+  write only the in-range bits (11.5.1).
+- Processes: `@*` with no readable signals never runs (9.4.2.2); `a[(i)] <=
+  #1 v` parses as an intra-assignment delay.
+- Classes: members of unpacked-structure class properties; a property
+  declared with a class type parameter has the specialization's type.
+- VHDL: a concurrent assertion is sensitive to the longest static prefix of
+  each signal name in its condition (11.5, 10.2); a null waveform element
+  to an unguarded signal is an analysis error (10.5.2.2); an external name
+  must have the type of the signal it denotes (8.7).
+- Runner: nvc's Verilog tests compile as SystemVerilog, like the Verilator
+  suite (they use `++` and `+=` in .v files).
+- Out of scope:
+  - ivtest: SystemVerilog preprocessor features in Icarus's default
+    Verilog-2005 mode (`` `" ``, `` `__LINE__ ``; 8 cases), ``` ``NAME ```
+    stringification (5), an omitted positional parameter override (1),
+    `$urandom_range` in Verilog-2005 mode (3), scalar `new[]` initializers
+    (2), and `?:` of two z values under an unknown condition expected to
+    give z (1; Table 11-20 gives x).
+  - Verilator: `t_math_pow3`, which keeps a power operand signed in an
+    unsigned comparison (11.8.1).
+  - nvc: `binary8` and `wide7`, which use `~&` and `~|` as binary operators.
+
+Regressions found by the full run and fixed: four MOS-switch ivtest cases
+(batch 53's `?:` z/z change; switches now pass z data through as z),
+`enum_method_signed1`/`3` (batch 52 folded enumeration methods without
+their width and sign; they are now folded only inside constant functions),
+VESTs `tc1329` and nvc `issue907` (batch 53; see above). One remains:
+ivtest `param-extend`, which fails since batch 51: an untyped `-1`
+parameter is sign-extended in an unsigned expression.
+
+Investigated and left open: `$bits` of interface members as parameter
+actuals; class functions returning unpacked arrays; static function locals
+kept between calls; unsized literals wider than 32 bits; string literals as
+packed values in untyped parameters; the parameterized-class runtime for
+`Bar#(Baz)` properties; VHDL binding generic maps that reference component
+generics.
+
+Measurement: a full six-suite run (b54b) on wip54e and the fast set,
+compared with batch 53. 51 cases close (ivtest 6, Verilator 20, nvc 25);
+the only case that passed in batch 53 and fails now is `param-extend`
+(above), and the fast set passes. The first full run (b54a, wip54d) found
+the regressions listed above, which batch 54 fixes.
+
+ctest: the `vhdl`, `systemverilog` and `compliance` labels fail only the 11
+known tests.
+
+Excluded (out-of-scope) cases:
+
+- ivtest 160: Icarus diagnostics in gold output (53), Icarus system tasks
+  (23), Icarus process order (22), implementation-defined or Icarus-only
+  results (22), iverilog options and test types (18), Icarus syntax (11),
+  SystemVerilog features in Verilog-2005 mode (11).
+- Verilator 199: SystemC, PLI/VPI or DPI harness (85), `$c` (32),
+  non-standard behaviour, flags and configuration (29), C++ harness (24),
+  lint-only (21), missing top file (8).
+- nvc 217: nvc-specific test kinds (shell, VHPI, cover, wave, mixed, Tcl,
+  relaxed, plugin; 208), nvc options (5), named work libraries (2), nvc
+  operator extensions (2).
+- sv-tests, VESTs, VHDL Compliance-Tests: none.
+
+| Suite | Batch 53 (wip53c) | Batch 54 (wip54e) |
+|---|---:|---:|
+| VESTs | 3383/3648 | 3383/3648 |
+| nvc regress | 663/1267 | 688/1265 |
+| VHDL Compliance-Tests | 33/72 | 33/72 |
+| ivtest | 2389/2685 | 2394/2666 |
+| Verilator test_regress | 1343/2217 | 1363/2216 |
+| sv-tests | 1418/1497 | 1418/1497 |
+
+Batch 53's ivtest, Verilator and nvc columns use batch 53's scope; batch 54
+excludes 19 more ivtest cases, 1 more Verilator case and 2 more nvc cases.
+
 ### Batch 53: unpacked-array parameters, class property members, guarded signals, VHDL runtime checks
 
 Fixtures: `sv_language_details_batch53.sv`, `vhdl_guarded_and_real_ranges.vhd`,

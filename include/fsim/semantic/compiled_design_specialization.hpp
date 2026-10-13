@@ -309,6 +309,10 @@ public:
     [[nodiscard]] std::optional<bool>
     evaluate_systemverilog_truth_expression(
         ExpressionId expression) const;
+    /// A generate condition, where an x or z value is false (IEEE 1800-2017
+    /// 12.4, 27.5).
+    [[nodiscard]] std::optional<bool>
+    evaluate_systemverilog_condition_truth(ExpressionId expression) const;
 
     /// Evaluate a SystemVerilog constant while preserving four-state bits.
     /// This is used by case-generate validation, where X and Z are legal

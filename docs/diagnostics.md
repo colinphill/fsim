@@ -965,7 +965,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-SEM-126` | error | An indexed name or slice has a scalar attribute value as its prefix (IEEE 1076-1993 6.4). |
 | `FSIM-VHDL-SEM-127` | error | A signal assignment in a guarded block targets the block's implicit GUARD signal, which has no sources (IEEE 1076-1993 9.1). |
 | `FSIM-VHDL-SEM-128` | error | A block guard expression is an integer expression, not BOOLEAN (IEEE 1076-1993 9.1). |
-| `FSIM-VHDL-SEM-129` | error | A guarded signal is the target of an unguarded concurrent signal assignment, or an aggregate target names both guarded and unguarded signals (IEEE 1076-2008 11.6). |
+| `FSIM-VHDL-SEM-129` | error | A guarded signal is the target of an unguarded concurrent signal assignment, an aggregate target names both guarded and unguarded signals (IEEE 1076-2008 11.6), or a null waveform element targets an unguarded signal (10.5.2.2). |
 | `FSIM-VHDL-SEM-130` | error | A package body names a deferred constant in a constant declaration before the constant's full declaration (IEEE 1076-2008 4.8). |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
@@ -1941,7 +1941,6 @@ scheduler.
 | `FSIM-ELAB-058` | error | A local variable initializer or assignment would implicitly lose four- or nine-state values. |
 | `FSIM-ELAB-059` | error | A dynamic wait names an unknown signal. |
 | `FSIM-ELAB-060` | error | An edge-qualified dynamic wait names a nonscalar signal. |
-| `FSIM-ELAB-061` | error | A wildcard process has no readable signal dependency. |
 | `FSIM-ELAB-062` | error | A dynamic wildcard event control has no readable signal dependency. |
 | `FSIM-ELAB-063` | error | A case-item choice width does not match its selector width. |
 | `FSIM-ELAB-064` | error | A conditional-expression condition is not scalar in the bounded executable slice. |

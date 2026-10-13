@@ -14490,6 +14490,33 @@ bool HierarchyBuilder::append_compiled_systemverilog_parameter_metadata(
     }
     using Form = semantic::sv::DeclarationForm;
     const auto form = declaration->systemverilog->form;
+    // A typedef's width, for `$bits(instance.type_t)` from another scope
+    // (IEEE 1800-2017 20.6.2, 23.6).
+    if (form == Form::typedef_declaration
+        && declaration->systemverilog->declared_type
+        && std::ranges::find(unit.declarations, declaration_id)
+            != unit.declarations.end()) {
+        const auto definition = specialized.find_type(
+            *declaration->systemverilog->declared_type);
+        const auto name = "$bits:" + declaration->systemverilog->name;
+        if (definition && definition->systemverilog != nullptr
+            && !published_parameter_names.contains(name)) {
+            if (const auto width = hir_systemverilog_type_bits(
+                    specialized, definition->systemverilog->base);
+                width && *width <= 0x7fffffffU) {
+                published_parameter_names.insert(name);
+                HirSystemVerilogConstant bits;
+                bits.packed = runtime::PackedLogic4::from_aval_bval(
+                    32U, *width, 0U);
+                bits.width = 32U;
+                bits.signed_value = true;
+                bits.domain = frontend::ValueDomain::Integer;
+                specialization.parameter_identity_values.emplace_back(
+                    name, bits.canonical());
+            }
+        }
+        return true;
+    }
     if (form != Form::parameter && form != Form::local_parameter
         && form != Form::type_parameter) {
         return true;

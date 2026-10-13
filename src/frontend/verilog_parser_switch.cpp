@@ -26,16 +26,26 @@ Expression inverted(Expression value, const SourceSpan& source) {
       span};
 }
 
+// A switch passes its data when the control is on and z when it is off;
+// z data stays z whatever the control (IEEE 1800-2017 28.9, Table 28-6),
+// unlike `?:`, which merges two z values to x under an unknown condition.
 Expression conditional(
     Expression control,
     Expression value,
     const SourceSpan& source) {
+  const auto high_impedance = Expression{
+      ExpressionKind::LogicLiteral, "1'bz", {}, source};
+  auto floating = Expression{
+      ExpressionKind::Binary, "===", {value, high_impedance}, source};
+  auto gated = Expression{
+      ExpressionKind::Call,
+      "?:",
+      {std::move(control), std::move(value), high_impedance},
+      source};
   return Expression{
       ExpressionKind::Call,
       "?:",
-      {std::move(control), std::move(value),
-       Expression{
-           ExpressionKind::LogicLiteral, "1'bz", {}, source}},
+      {std::move(floating), high_impedance, std::move(gated)},
       source};
 }
 

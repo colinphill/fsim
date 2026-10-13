@@ -7228,6 +7228,35 @@ private:
                     }
                 }
             }
+            // A null waveform element disconnects a driver, so its target
+            // must be a guarded signal (IEEE 1076-2008 10.5.2.2).
+            if (statement.kind
+                    == semantic::vhdl::StatementKind::signal_assignment
+                && statement.target && !statement.guarded_assignment
+                && std::ranges::any_of(statement.waveform,
+                    [](const semantic::vhdl::WaveformElement& element) {
+                        return element.disconnect;
+                    })) {
+                const auto target = specialization_.find_expression(
+                    *statement.target);
+                const auto declaration = target && target->vhdl != nullptr
+                        && target->vhdl->kind
+                            == semantic::vhdl::ExpressionKind::name
+                        && target->vhdl->referenced_name
+                        && target->vhdl->referenced_name->selected
+                    ? specialization_.find_declaration(
+                          *target->vhdl->referenced_name->selected)
+                    : std::nullopt;
+                if (declaration && declaration->vhdl != nullptr
+                    && declaration->vhdl->form
+                        == semantic::vhdl::DeclarationForm::signal
+                    && declaration->vhdl->guarded_kind == 0U) {
+                    report("FSIM-VHDL-SEM-129",
+                        "a null waveform element targets the unguarded "
+                        "signal '" + declaration->vhdl->name + "'",
+                        statement.source);
+                }
+            }
             if (statement.kind
                     == semantic::vhdl::StatementKind::signal_assignment
                 && statement.target) {

@@ -685,12 +685,12 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(empty_wildcard.ok());
-    const auto rejected_empty_wildcard =
+    // `@*` with no readable signals never triggers (IEEE 1800-2017
+    // 9.4.2.2); the process is accepted and never runs.
+    const auto accepted_empty_wildcard =
         compile_and_elaborate(
             empty_wildcard.design, "sv:work.empty_wildcard");
-    assert(!rejected_empty_wildcard.ok());
-    assert(has_diagnostic(
-        rejected_empty_wildcard, "FSIM-ELAB-061"));
+    assert(accepted_empty_wildcard.ok());
 
     const auto callable_wildcard = fsim::frontend::parse_text(
         "callable_wildcard.sv",

@@ -3195,12 +3195,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     return true;
                 }
                 // A partially out-of-range select writes only the bits
-                // inside the declared range.
+                // inside the declared range, procedurally or continuously
+                // (IEEE 1800-2017 11.5.1).
                 const auto* input = statement->systemverilog != nullptr
                     ? &*statement->systemverilog : nullptr;
                 if ((low < range_low || high > range_high) && input != nullptr
-                    && input->assignment_kind
-                        != semantic::sv::AssignmentKind::continuous
                     && ((input->assignment_control
                                 == semantic::sv::AssignmentControl::none
                             && !input->delay)
@@ -3756,9 +3755,20 @@ bool Lowerer::lower_hir_statement_unsuspended(
             && container_value_expression->systemverilog->kind
                 == semantic::sv::ExpressionKind::assignment_pattern) {
             const auto& input = *statement->systemverilog;
-            if (signal_assignment || nonblocking
-                || input.assignment_kind
-                    != semantic::sv::AssignmentKind::blocking
+            // A time-free continuous assignment writes as its process
+            // evaluates (10.3); a nonblocking one publishes the whole value
+            // in the NBA region (10.4.2).
+            const bool continuous_copy = signal_assignment && !nonblocking
+                && input.assignment_kind
+                    == semantic::sv::AssignmentKind::continuous;
+            const bool nonblocking_copy = nonblocking && !container->local
+                && input.assignment_kind
+                    == semantic::sv::AssignmentKind::nonblocking;
+            if ((signal_assignment && !continuous_copy && !nonblocking_copy)
+                || (nonblocking && !nonblocking_copy)
+                || (input.assignment_kind
+                        != semantic::sv::AssignmentKind::blocking
+                    && !continuous_copy && !nonblocking_copy)
                 || input.assignment_control
                     != semantic::sv::AssignmentControl::none
                 || input.delay
@@ -3786,7 +3796,8 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 process_.operations.emplace_back(CopyContainerRegister {
                     destination, *lowered });
                 process_.operations.emplace_back(WriteContainerObject {
-                    container->object, destination, std::nullopt });
+                    container->object, destination, std::nullopt,
+                    nonblocking_copy });
             }
             return true;
         }
@@ -3896,14 +3907,27 @@ bool Lowerer::lower_hir_statement_unsuspended(
             return true;
         }
         // An assignment pattern assigned to a row of a multidimensional
-        // array (`d[0] = '{a, b, c, d}`, 10.9.1).
+        // array (`d[0] = '{a, b, c, d}`, 10.9.1), or a conditional whose
+        // alternatives take the type of a row or of a whole array
+        // (`a = c ? f() : '{1, 2, 3}`, 11.4.11).
+        const bool whole_array_conditional = target_expression->systemverilog
+                != nullptr
+            && target_expression->systemverilog->kind
+                == semantic::sv::ExpressionKind::name
+            && container_value_expression
+            && container_value_expression->systemverilog != nullptr
+            && container_value_expression->systemverilog->kind
+                == semantic::sv::ExpressionKind::call
+            && container_value_expression->systemverilog->text == "?:"
+            && !value_static_type;
         if (statement->systemverilog != nullptr && target_static_type
             && target_static_type->fixed
             && target_expression->systemverilog != nullptr
-            && target_expression->systemverilog->kind
-                == semantic::sv::ExpressionKind::index
-            && !hir_container_object_binding(*target)
-            && !hir_container_element_binding(*target)
+            && ((target_expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::index
+                    && !hir_container_object_binding(*target)
+                    && !hir_container_element_binding(*target))
+                || whole_array_conditional)
             && container_value_expression
             && container_value_expression->systemverilog != nullptr
             && (container_value_expression->systemverilog->kind
@@ -3969,18 +3993,45 @@ bool Lowerer::lower_hir_statement_unsuspended(
             }
             return lower_hir_container_copy_out(*target, *row);
         }
+        // An unpacked array concatenation assigned to a fixed array or a
+        // slice of one (IEEE 1800-2017 10.10): its items fill the target's
+        // elements from the left.
+        const bool fixed_concatenation_value = target_static_type
+            && target_static_type->fixed
+            && target_static_type->dimensions.size() == 1U
+            && (target_static_type->element_kind == ContainerElementKind::Packed
+                || target_static_type->element_kind
+                    == ContainerElementKind::Scalar)
+            && container_value_expression
+            && container_value_expression->systemverilog != nullptr
+            && container_value_expression->systemverilog->kind
+                == semantic::sv::ExpressionKind::concatenation
+            && !value_static_type;
         if (statement->systemverilog != nullptr
             && (target_static_type
                 || unpacked_slice_candidate(*target))
             && (value_static_type
                 || unresolved_static_array_call
                 || unpacked_slice_candidate(*value)
-                || hir_container_object_binding(*value))
-            && !hir_container_object_binding(*target)) {
+                || hir_container_object_binding(*value)
+                || fixed_concatenation_value)
+            && (!hir_container_object_binding(*target)
+                || fixed_concatenation_value)) {
             const auto& input = *statement->systemverilog;
-            if (signal_assignment || nonblocking
-                || input.assignment_kind
-                    != semantic::sv::AssignmentKind::blocking
+            // A time-free continuous assignment to a slice writes it as its
+            // process evaluates (10.3), as a blocking copy does.
+            const bool continuous_copy = signal_assignment && !nonblocking
+                && input.assignment_kind
+                    == semantic::sv::AssignmentKind::continuous;
+            // A nonblocking one publishes each element in the NBA region.
+            const bool nonblocking_copy = nonblocking
+                && input.assignment_kind
+                    == semantic::sv::AssignmentKind::nonblocking;
+            if ((signal_assignment && !continuous_copy && !nonblocking_copy)
+                || (nonblocking && !nonblocking_copy)
+                || (input.assignment_kind
+                        != semantic::sv::AssignmentKind::blocking
+                    && !continuous_copy && !nonblocking_copy)
                 || input.assignment_control
                     != semantic::sv::AssignmentControl::none
                 || input.delay
@@ -3988,13 +4039,42 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 return assignment_rejected(__LINE__);
             }
             const auto diagnostics_before = diagnostics_.size();
+            if (fixed_concatenation_value) {
+                auto items = *target_static_type;
+                items.fixed = false;
+                items.queue = true;
+                items.dimensions.clear();
+                items.maximum_elements.reset();
+                const auto built = lower_hir_container_concatenation(
+                    items, container_value_expression->systemverilog->operands);
+                if (!built) {
+                    return assignment_rejected(__LINE__);
+                }
+                const auto fixed = allocate_container_register(
+                    *target_static_type);
+                const auto origin = allocate_register(
+                    32U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(LoadConstant {
+                    origin, unsigned_value(0U, 32U) });
+                copy_hir_static_container_ordinals(fixed,
+                    *target_static_type, *built, *target_static_type,
+                    std::nullopt, origin);
+                if (!lower_hir_container_copy_out(
+                        *target, fixed, nonblocking_copy)) {
+                    return assignment_rejected(__LINE__);
+                }
+                return true;
+            }
             const auto container_source
                 = lower_hir_static_container_value(*value);
             if (!container_source) {
                 return diagnostics_.size() != diagnostics_before;
             }
-            return lower_hir_container_copy_out(
-                *target, container_source->value);
+            if (!lower_hir_container_copy_out(
+                    *target, container_source->value, nonblocking_copy)) {
+                return assignment_rejected(__LINE__);
+            }
+            return true;
         }
         // An unpacked array concatenation assigned to a queue or dynamic
         // array (IEEE 1800-2017 10.10): `q = {q, x}`, `q = {}`.
@@ -4250,8 +4330,22 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     && container_source.operands.size() == 2U) {
                     const auto initial = hir_container_object_binding(
                         container_source.operands.back());
+                    // A queue of the same elements is an assignment-
+                    // compatible initializer too (IEEE 1800-2017 7.5.1, 7.6).
+                    const auto compatible = [&](const ContainerType& type) {
+                        if (type == *container->type) {
+                            return true;
+                        }
+                        if (!type.queue) {
+                            return false;
+                        }
+                        auto as_dynamic = type;
+                        as_dynamic.queue = false;
+                        as_dynamic.maximum_elements.reset();
+                        return as_dynamic == *container->type;
+                    };
                     if (!initial || initial->type == nullptr
-                        || *initial->type != *container->type) {
+                        || !compatible(*initial->type)) {
                         report(
                             "FSIM-ELAB-SVCONTAINER-023",
                             "new[size](initializer) requires an exactly "
@@ -15872,6 +15966,24 @@ bool Lowerer::lower_hir_statement_unsuspended(
             bool unfiltered_part { };
             for (const auto& sensitivity : input.sensitivities) {
                 std::optional<SignalId> signal;
+                // An external name (IEEE 1076-2008 8.7).
+                if (const auto external = sensitivity.expression
+                        ? specialized_hir_unit_->find_expression(
+                              *sensitivity.expression)
+                        : std::nullopt;
+                    external && external->vhdl != nullptr
+                    && external->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::call
+                    && external->vhdl->text == "@vhdl-external") {
+                    const auto denoted = hir_vhdl_external_signal(
+                        *sensitivity.expression);
+                    if (!denoted) {
+                        return true;
+                    }
+                    waited_signals.push_back(*denoted);
+                    whole_signals.push_back(*denoted);
+                    continue;
+                }
                 if (sensitivity.expression) {
                     const auto declaration = hir_referenced_declaration(
                         *sensitivity.expression);

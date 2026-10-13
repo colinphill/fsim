@@ -1348,6 +1348,31 @@ private:
             if (declaration && declaration->systemverilog != nullptr) {
                 const auto& declaration_record
                     = *declaration->systemverilog;
+                // A parameter without a type or range has the width of its
+                // final value (IEEE 1800-2017 6.20.2).
+                const bool implicit_parameter
+                    = (declaration_record.form
+                              == semantic::sv::DeclarationForm::parameter
+                          || declaration_record.form
+                              == semantic::sv::DeclarationForm::local_parameter)
+                    && declaration_record.type
+                    && declaration_record.type->target.spelling == "implicit"
+                    && !declaration_record.type->packed_range;
+                if (implicit_parameter) {
+                    const auto& actuals
+                        = specialization_.specialization().actual_identities;
+                    const auto actual = std::ranges::find(actuals, *selected,
+                        &semantic::SpecializedHirActualIdentity::declaration);
+                    if (actual != actuals.end()) {
+                        if (const auto parsed
+                            = parse_canonical(actual->identity)) {
+                            return finish(parsed->width);
+                        }
+                    } else if (declaration_record.initializer) {
+                        return finish(expression_width(
+                            *declaration_record.initializer, visiting));
+                    }
+                }
                 if (declaration_record.type) {
                     std::unordered_set<std::uint32_t> type_visiting;
                     if (const auto width = resolved_type_width(
@@ -1579,9 +1604,22 @@ private:
         if (record.operands.size() != 1U) {
             return std::nullopt;
         }
+        // `-`, `~` and `+` take the context width of their expression
+        // before applying (IEEE 1800-2017 11.6.1).
+        const auto context = (record.text == "-" || record.text == "~"
+                                 || record.text == "+")
+            ? take_context(record.id)
+            : std::nullopt;
+        if (context) {
+            contexts_[record.operands.front().value()] = *context;
+        }
         auto operand = evaluate(record.operands.front());
+        contexts_.erase(record.operands.front().value());
         if (!operand) {
             return std::nullopt;
+        }
+        if (context && !operand->unbounded && operand->width < *context) {
+            *operand = resized(std::move(*operand), *context);
         }
         if (operand->unbounded) {
             error_ = "symbolic unbounded '$' is only valid as a parameter "
@@ -1834,8 +1872,49 @@ private:
         if (record.operands.size() != 2U) {
             return std::nullopt;
         }
+        // Operands of arithmetic and bitwise operators take the width of
+        // the whole expression, those of a relational operator the wider
+        // of the two, and the left operand of a power or shift its context
+        // (IEEE 1800-2017 11.6.1, 11.8.2); they are extended before the
+        // operator applies, so no carry is lost.
+        const auto& op = record.text;
+        const bool arithmetic_context = op == "+" || op == "-" || op == "*"
+            || op == "/" || op == "%" || op == "&" || op == "|" || op == "^"
+            || op == "~^" || op == "^~";
+        const bool relational_context = op == "==" || op == "!="
+            || op == "===" || op == "!==" || op == "<" || op == "<="
+            || op == ">" || op == ">=";
+        const bool left_context = op == "**" || op == "<<" || op == ">>"
+            || op == "<<<" || op == ">>>";
+        const auto outer = arithmetic_context || left_context
+            ? take_context(record.id)
+            : std::nullopt;
+        std::optional<std::uint32_t> target;
+        if (arithmetic_context || relational_context || left_context) {
+            const auto left_width = expression_width(record.operands.front());
+            const auto right_width = left_context
+                ? std::optional<std::uint32_t> { 0U }
+                : expression_width(record.operands.back());
+            if (left_width && right_width) {
+                auto width = std::max(*left_width, *right_width);
+                if (outer) {
+                    width = std::max(width, *outer);
+                }
+                if (width != 0U && width <= maximum_constant_width) {
+                    target = width;
+                }
+            }
+        }
+        if (target) {
+            contexts_[record.operands.front().value()] = *target;
+            if (!left_context) {
+                contexts_[record.operands.back().value()] = *target;
+            }
+        }
         auto left = evaluate(record.operands.front());
+        contexts_.erase(record.operands.front().value());
         if (!left) {
+            contexts_.erase(record.operands.back().value());
             return std::nullopt;
         }
         if (record.text == "&&" && truth(*left) == Truth::false_value) {
@@ -1845,6 +1924,7 @@ private:
             return logical_result(Truth::true_value);
         }
         auto right = evaluate(record.operands.back());
+        contexts_.erase(record.operands.back().value());
         if (!right) {
             return std::nullopt;
         }
@@ -1852,6 +1932,35 @@ private:
             error_ = "symbolic unbounded '$' is only valid as a parameter "
                      "value or an argument to $isunbounded";
             return std::nullopt;
+        }
+        if (target) {
+            if (left_context) {
+                if (left->width < *target) {
+                    *left = resized(std::move(*left), *target);
+                }
+            } else {
+                // An unsigned operand makes both unsigned (11.8.1), so a
+                // signed operand is zero-extended, except a negated literal
+                // (`-1`), whose negation applies after the extension.
+                const bool both_signed
+                    = left->signed_value && right->signed_value;
+                const auto extend = [&](Value& value,
+                                        const semantic::ExpressionId id) {
+                    const bool negated = value.signed_value
+                        && context_determined_operator(id);
+                    if (!both_signed && !negated) {
+                        value.signed_value = false;
+                    }
+                    if (value.width < *target) {
+                        value = resized(std::move(value), *target);
+                    }
+                    if (!both_signed) {
+                        value.signed_value = false;
+                    }
+                };
+                extend(*left, record.operands.front());
+                extend(*right, record.operands.back());
+            }
         }
         // The context of an arithmetic, bitwise or relational operator
         // reaches into an operand that is itself such an operator (`-1` in
@@ -2015,10 +2124,9 @@ private:
             }
             result = left_value * right_value;
         } else if (record.text == "/" || record.text == "%") {
+            // Division or modulus by zero gives x (IEEE 1800-2017 11.4.2).
             if (right_value == 0) {
-                error_ = "division by zero in SystemVerilog constant "
-                         "expression";
-                return std::nullopt;
+                return make_unknown(width, signed_value);
             }
             const auto minimum = -(cpp_int { 1U } << (width - 1U));
             if (signed_value && left_value == minimum
@@ -2454,6 +2562,41 @@ private:
         if (record.operands.empty()) {
             return std::nullopt;
         }
+        // `$bits(T)` of a type parameter takes its actual type (20.6.2).
+        if (record.text == "$bits" && record.operands.size() == 1U) {
+            const auto view = specialization_.find_expression(
+                record.operands.front());
+            const auto declaration_id = view && view->systemverilog != nullptr
+                    && view->systemverilog->kind == ExpressionKind::name
+                ? systemverilog_constant_name_declaration(
+                      specialization_, *view->systemverilog)
+                : std::nullopt;
+            const auto declaration = declaration_id
+                ? specialization_.find_declaration(*declaration_id)
+                : std::nullopt;
+            if (declaration && declaration->systemverilog != nullptr
+                && declaration->systemverilog->form
+                    == semantic::sv::DeclarationForm::type_parameter) {
+                const auto& actuals
+                    = specialization_.specialization().actual_identities;
+                const auto actual = std::ranges::find(actuals,
+                    *declaration_id,
+                    &semantic::SpecializedHirActualIdentity::declaration);
+                const auto type = actual != actuals.end()
+                        && actual->systemverilog_type
+                    ? actual->systemverilog_type
+                    : declaration->systemverilog->type;
+                if (type) {
+                    std::unordered_set<std::uint32_t> visiting;
+                    if (const auto width = resolved_type_width(
+                            *type, &specialization_, visiting);
+                        width && *width != 0U) {
+                        return make_known(*width, 32U, true, false,
+                            frontend::ValueDomain::Integer);
+                    }
+                }
+            }
+        }
         const auto operand = evaluate(record.operands.front());
         if (!operand) {
             return std::nullopt;
@@ -2654,12 +2797,24 @@ private:
             }
             const auto state = truth(*condition);
             if (state != Truth::unknown) {
-                auto result = evaluate(record.operands[
-                    state == Truth::true_value ? 1U : 2U]);
                 const auto when_true_width = expression_width(
                     record.operands[1]);
                 const auto when_false_width = expression_width(
                     record.operands[2]);
+                // The selected operand takes the expression's context
+                // width (IEEE 1800-2017 11.6.1).
+                const auto selected = record.operands[
+                    state == Truth::true_value ? 1U : 2U];
+                const auto outer = take_context(record.id);
+                if (when_true_width && when_false_width) {
+                    auto width = std::max(*when_true_width, *when_false_width);
+                    if (outer) {
+                        width = std::max(width, *outer);
+                    }
+                    contexts_[selected.value()] = width;
+                }
+                auto result = evaluate(selected);
+                contexts_.erase(selected.value());
                 if (result && when_true_width && when_false_width) {
                     result = common_operand(
                         *result,
@@ -3806,10 +3961,20 @@ private:
         return std::nullopt;
     }
 
+    // The context width an enclosing operator gives an operand.
+    [[nodiscard]] std::optional<std::uint32_t> take_context(
+        const semantic::ExpressionId id) const
+    {
+        const auto found = contexts_.find(id.value());
+        return found == contexts_.end() ? std::nullopt
+                                        : std::optional { found->second };
+    }
+
     const semantic::SpecializedHirUnit& specialization_;
     std::string& error_;
     std::vector<std::pair<std::size_t, std::uint32_t>> active_expressions_;
     std::unordered_set<std::uint32_t> active_declarations_;
+    std::unordered_map<std::uint32_t, std::uint32_t> contexts_;
     std::vector<Frame> frames_;
     std::uint64_t work_units_used_ { };
 };
@@ -4038,6 +4203,43 @@ private:
         return left * right;
     }
     return std::nullopt;
+}
+
+struct RealMathFunction {
+    std::size_t arguments { };
+    double (*evaluate)(double, double) { };
+};
+
+[[nodiscard]] std::optional<RealMathFunction> real_math_function(
+    const std::string_view name)
+{
+    using Entry = std::pair<std::string_view, RealMathFunction>;
+    static const std::array functions {
+        Entry { "$ln", { 1U, [](double x, double) { return std::log(x); } } },
+        Entry { "$log10", { 1U, [](double x, double) { return std::log10(x); } } },
+        Entry { "$exp", { 1U, [](double x, double) { return std::exp(x); } } },
+        Entry { "$sqrt", { 1U, [](double x, double) { return std::sqrt(x); } } },
+        Entry { "$pow", { 2U, [](double x, double y) { return std::pow(x, y); } } },
+        Entry { "$floor", { 1U, [](double x, double) { return std::floor(x); } } },
+        Entry { "$ceil", { 1U, [](double x, double) { return std::ceil(x); } } },
+        Entry { "$sin", { 1U, [](double x, double) { return std::sin(x); } } },
+        Entry { "$cos", { 1U, [](double x, double) { return std::cos(x); } } },
+        Entry { "$tan", { 1U, [](double x, double) { return std::tan(x); } } },
+        Entry { "$asin", { 1U, [](double x, double) { return std::asin(x); } } },
+        Entry { "$acos", { 1U, [](double x, double) { return std::acos(x); } } },
+        Entry { "$atan", { 1U, [](double x, double) { return std::atan(x); } } },
+        Entry { "$atan2", { 2U, [](double y, double x) { return std::atan2(y, x); } } },
+        Entry { "$hypot", { 2U, [](double x, double y) { return std::hypot(x, y); } } },
+        Entry { "$sinh", { 1U, [](double x, double) { return std::sinh(x); } } },
+        Entry { "$cosh", { 1U, [](double x, double) { return std::cosh(x); } } },
+        Entry { "$tanh", { 1U, [](double x, double) { return std::tanh(x); } } },
+        Entry { "$asinh", { 1U, [](double x, double) { return std::asinh(x); } } },
+        Entry { "$acosh", { 1U, [](double x, double) { return std::acosh(x); } } },
+        Entry { "$atanh", { 1U, [](double x, double) { return std::atanh(x); } } },
+    };
+    const auto found = std::ranges::find(functions, name, &Entry::first);
+    return found == functions.end() ? std::nullopt
+                                    : std::optional { found->second };
 }
 
 class HirScalarEvaluator final {
@@ -4395,16 +4597,15 @@ private:
             result = *lhs - *rhs;
         } else if (record.text == "*") {
             result = *lhs * *rhs;
-        } else if (record.text == "/" && *rhs != 0.0) {
+        } else if (record.text == "/") {
             result = *lhs / *rhs;
         } else {
-            error_ = *rhs == 0.0 && record.text == "/"
-                ? "scalar constant division by zero"
-                : "unsupported scalar constant operator '" + record.text
-                    + "'";
+            error_ = "unsupported scalar constant operator '" + record.text
+                + "'";
             return std::nullopt;
         }
-        if (!std::isfinite(result)) {
+        // A real division by zero gives an IEEE 754 infinity or NaN.
+        if (!std::isfinite(result) && record.text != "/") {
             error_ = "scalar constant operation produced a nonfinite result";
             return std::nullopt;
         }
@@ -4467,6 +4668,28 @@ private:
                 return frontend::convert_systemverilog_scalar_constant(
                     *operand, target, error_);
             }
+        }
+        // The real math functions are constant system functions (IEEE
+        // 1800-2017 11.2.1, 20.8.2); their results follow IEEE 754.
+        if (const auto function = real_math_function(record.text);
+            function && record.operands.size() == function->arguments) {
+            std::array<double, 2U> arguments { };
+            for (std::size_t index { }; index < function->arguments; ++index) {
+                const auto operand = evaluate(record.operands[index]);
+                if (!operand) {
+                    return std::nullopt;
+                }
+                if (const auto real = operand->real()) {
+                    arguments[index] = *real;
+                } else if (const auto integral = operand->integral()) {
+                    arguments[index] = static_cast<double>(*integral);
+                } else {
+                    error_ = "a math function argument is not numeric";
+                    return std::nullopt;
+                }
+            }
+            return scalar_real(
+                function->evaluate(arguments[0], arguments[1]), ScalarKind::Real);
         }
         error_ = "expression is not a supported scalar constant form";
         return std::nullopt;
@@ -4540,7 +4763,8 @@ private:
             || record.text == "@sv-cast:real"
             || record.text == "@sv-cast:realtime"
             || record.text == "@sv-cast:time"
-            || record.text == "@sv-cast:chandle")) {
+            || record.text == "@sv-cast:chandle"
+            || real_math_function(record.text))) {
         return true;
     }
     if (record.kind == ExpressionKind::name) {
@@ -4662,6 +4886,15 @@ evaluate_hir_systemverilog_constant(
         expression);
     results.emplace(expression.value(), std::pair { value, error });
     return value;
+}
+
+std::optional<std::uint64_t> hir_systemverilog_type_bits(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::TypeReference& type)
+{
+    std::unordered_set<std::uint32_t> visiting;
+    const auto width = resolved_type_width(type, &specialization, visiting);
+    return width && *width != 0U ? width : std::nullopt;
 }
 
 std::optional<HirSystemVerilogConstant>

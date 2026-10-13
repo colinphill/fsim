@@ -2095,6 +2095,59 @@ std::optional<Process> Lowerer::lower_hir_concurrent_statement(
     description.wildcard_sensitivity = true;
     description.require_wildcard_dependency = false;
     description.always_comb_or_latch = true;
+    // A concurrent assertion is sensitive to the longest static prefix of
+    // each signal name in it (IEEE 1076-2008 10.2, 11.5): a statically
+    // selected element subscribes to its bits only.
+    if (source->vhdl != nullptr
+        && source->vhdl->kind == semantic::vhdl::StatementKind::assertion
+        && source->vhdl->condition) {
+        std::vector<runtime::simir::Sensitivity> sensitivities;
+        bool complete = true;
+        const auto collect = [&](const auto& self,
+                                 const semantic::ExpressionId id) -> void {
+            const auto node = specialized_hir_unit_->find_expression(id);
+            if (!complete || !node || node->vhdl == nullptr) {
+                complete = false;
+                return;
+            }
+            const auto& expression = *node->vhdl;
+            if (expression.kind == semantic::vhdl::ExpressionKind::index
+                || expression.kind == semantic::vhdl::ExpressionKind::slice
+                || expression.kind == semantic::vhdl::ExpressionKind::call) {
+                const auto dependencies = hir_signal_dependencies(
+                    id, semantic::ScopeId { });
+                if (const auto selection = dependencies.size() == 1U
+                        ? hir_root_constant_selection(id, semantic::ScopeId { })
+                        : std::nullopt;
+                    selection && selection->width != 0U
+                    && dependencies.front() < design_.signal_info_.size()
+                    && selection->offset + selection->width
+                        <= design_.signal_info_[dependencies.front()].width) {
+                    sensitivities.push_back({ dependencies.front(),
+                        runtime::simir::EdgeKind::any,
+                        static_cast<std::uint32_t>(selection->offset),
+                        static_cast<std::uint32_t>(selection->width) });
+                    return;
+                }
+            }
+            if (expression.kind == semantic::vhdl::ExpressionKind::name) {
+                for (const auto dependency : hir_signal_dependencies(
+                         id, semantic::ScopeId { })) {
+                    sensitivities.push_back(
+                        { dependency, runtime::simir::EdgeKind::any });
+                }
+                return;
+            }
+            for (const auto operand : expression.operands) {
+                self(self, operand);
+            }
+        };
+        collect(collect, *source->vhdl->condition);
+        if (complete && !sensitivities.empty()) {
+            description.wildcard_sensitivity = false;
+            description.sensitivities = std::move(sensitivities);
+        }
+    }
     if (source->vhdl != nullptr) {
         description.vhdl_guarded_assignment
             = source->vhdl->guarded_assignment;
@@ -2546,6 +2599,64 @@ bool Lowerer::lower_hir_output_actual_write(
                 member_selection->offset,
                 member_selection->width,
             };
+        }
+    }
+    // A constant select partly or wholly outside the declared range writes
+    // only its bits inside the range (IEEE 1800-2017 11.5.1).
+    if (selected && expression->systemverilog != nullptr && !nested_select
+        && !member_selection && !constant_selection) {
+        const auto range = hir_expression_range(
+            operands.front(), hir_process_scope_);
+        const auto first = hir_constant_integer(operands[1]);
+        const auto second = slice
+            ? hir_constant_integer(operands[2]) : first;
+        if (range && first && second) {
+            auto low = *first;
+            auto high = *first;
+            if (slice && selection_operation == "+:") {
+                high = *first + *second - 1;
+            } else if (slice && selection_operation == "-:") {
+                low = *first - *second + 1;
+            } else if (slice) {
+                low = std::min(*first, *second);
+                high = std::max(*first, *second);
+            }
+            const auto range_low = std::min(range->left, range->right);
+            const auto range_high = std::max(range->left, range->right);
+            if (high >= low && high - low < 4096
+                && (low < range_low || high > range_high)) {
+                if (high < range_low || low > range_high) {
+                    return true;
+                }
+                const auto width = static_cast<std::size_t>(high - low + 1);
+                if (register_width(source) != width) {
+                    source = resize_register(
+                        source, width, binding->signed_value);
+                }
+                const auto clipped_low = std::max(low, range_low);
+                const auto clipped_high = std::min(high, range_high);
+                const bool descending = range->left >= range->right;
+                const auto value_offset = descending
+                    ? clipped_low - low : high - clipped_high;
+                const auto signal_offset = descending
+                    ? clipped_low - range_low : range_high - clipped_high;
+                const auto clipped_width = static_cast<std::uint32_t>(
+                    clipped_high - clipped_low + 1);
+                const auto clipped = allocate_register(
+                    clipped_width, register_domain(source));
+                process_.operations.emplace_back(Extract { clipped, source,
+                    static_cast<std::uint32_t>(value_offset), clipped_width });
+                process_.operations.emplace_back(WriteUpdateSlice {
+                    *binding->signal,
+                    clipped,
+                    static_cast<std::uint32_t>(signal_offset),
+                    process_.scheduling_domain
+                            == ProcessSchedulingDomain::systemverilog
+                        ? SignalUpdateDomain::systemverilog_active
+                        : SignalUpdateDomain::generic,
+                });
+                return true;
+            }
         }
     }
     const auto dynamic_part_width = slice && !constant_selection
@@ -3546,6 +3657,7 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             "suspend",
             hir_source_span(description.source));
     }
+    bool wildcard_never_runs { };
     if (description.wildcard_sensitivity) {
         for (const auto dependency : implicit_signal_dependencies_) {
             process_.static_sensitivity.push_back(dependency);
@@ -3553,11 +3665,9 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         if (description.require_wildcard_dependency
             && !description.always_comb_or_latch
             && process_.static_sensitivity.empty()) {
-            report(
-                "FSIM-ELAB-061",
-                "wildcard process sensitivity has no readable signal "
-                "dependencies",
-                hir_source_span(description.source));
+            // `@*` with no readable signals waits for an event that never
+            // occurs (IEEE 1800-2017 9.4.2.2), so the process never runs.
+            wildcard_never_runs = true;
         }
     }
     runtime::simir::normalize_sensitivities(process_.static_sensitivity);
@@ -3597,14 +3707,21 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         || (language != frontend::Language::Vhdl2008
             && !description.initial && !description.always_comb_or_latch
             && !process_.static_sensitivity.empty());
-    if (waits_before_first_execution && !description.event_expression) {
+    if ((waits_before_first_execution || wildcard_never_runs)
+        && !description.event_expression) {
         for (auto& operation : process_.operations) {
             relocate_instruction_targets(operation, resume_entry);
         }
         shift_readonly_output_writes(resume_entry, 1U);
-        process_.operations.insert(
-            process_.operations.cbegin() + resume_entry,
-            WaitSensitivity { });
+        if (wildcard_never_runs) {
+            process_.operations.insert(
+                process_.operations.cbegin() + resume_entry,
+                WaitForever { });
+        } else {
+            process_.operations.insert(
+                process_.operations.cbegin() + resume_entry,
+                WaitSensitivity { });
+        }
         ++callable_body_begin;
     }
 

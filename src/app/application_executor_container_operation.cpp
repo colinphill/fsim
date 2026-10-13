@@ -963,7 +963,15 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             const runtime::simir::ContainerValue* initializer { };
             if (resize->initializer) {
                 const auto& source = read_container(*resize->initializer);
-                require_same(target, source);
+                // A queue of the target's elements also initializes a
+                // dynamic array (IEEE 1800-2017 7.5.1, 7.6).
+                auto as_dynamic = source.type;
+                as_dynamic.queue = false;
+                as_dynamic.maximum_elements.reset();
+                if (source.type != target.type
+                    && !(source.type.queue && as_dynamic == target.type)) {
+                    require_same(target, source);
+                }
                 initializer = &source;
             }
             runtime::simir::resize_container_value(

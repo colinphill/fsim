@@ -1643,9 +1643,50 @@ void Resolver::retain_result_type(
       return std::nullopt;
     }
     expression.kind = ExpressionKind::Call;
-    const auto type = resolve_alias_type(
+    auto type = resolve_alias_type(
         match.property->declaration.type,
         match.owner->canonical_identity);
+    // A property declared with a type parameter of the receiver's class
+    // has the specialization's type actual (IEEE 1800-2017 8.25).
+    if (const auto& named = match.property->declaration.type.named_type;
+        !named.empty() && class_identity(*receiver_type)
+            && *class_identity(*receiver_type)
+                == match.owner->canonical_identity) {
+      const auto& parameters = match.owner->parameters;
+      const auto formal = std::ranges::find_if(parameters,
+          [&](const ParameterDeclaration& parameter) {
+            return parameter.kind == ParameterKind::Type
+                && parameter.name == named;
+          });
+      if (formal != parameters.end()) {
+        const auto position = static_cast<std::size_t>(
+            std::distance(parameters.begin(), formal));
+        const auto& actuals =
+            receiver_type->systemverilog_class_parameter_actuals;
+        for (std::size_t index = 0; index < actuals.size(); ++index) {
+          const auto& actual = actuals[index];
+          if ((actual.name && *actual.name != named)
+              || (!actual.name && index != position)) {
+            continue;
+          }
+          if (actual.type_actual) {
+            type = canonicalize_selected_type(*actual.type_actual, scope);
+          } else if (actual.value.kind == ExpressionKind::Identifier
+              && !actual.value.text.empty()) {
+            // A positional actual that names a type is parsed as a name.
+            Type named_actual;
+            named_actual.named_type = actual.value.text;
+            named_actual.spelling = actual.value.text;
+            named_actual = canonicalize_selected_type(
+                std::move(named_actual), scope);
+            if (!named_actual.systemverilog_class_declaration.empty()) {
+              type = std::move(named_actual);
+            }
+          }
+          break;
+        }
+      }
+    }
     if (match.property->is_static) {
       // A static property reached through an object handle denotes the
       // class's single storage (IEEE 1800-2017 8.9).

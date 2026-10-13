@@ -783,7 +783,7 @@ private:
     [[nodiscard]] std::optional<std::size_t>
     hir_systemverilog_member_offset(
         const semantic::sv::TypeDefinition& type,
-        std::size_t member_index) const;
+        std::size_t member_index, bool unpacked_structures = false) const;
     [[nodiscard]] std::optional<HirPackedMemberSelection>
     hir_systemverilog_member_selection(
         semantic::ExpressionId expression) const;
@@ -794,11 +794,13 @@ private:
     hir_systemverilog_member_path(
         semantic::DeclarationId declaration, std::string_view path) const;
     // A member path through a packed structure type, as a declaration's
-    // members (`declaration` is recorded in the result).
+    // members (`declaration` is recorded in the result). With
+    // `unpacked_structures`, unpacked structures are laid out as packed ones
+    // (class properties store them so).
     [[nodiscard]] std::optional<HirPackedMemberSelection>
     hir_systemverilog_type_member_path(const semantic::sv::TypeReference& type,
         semantic::ScopeId scope, semantic::DeclarationId declaration,
-        std::string_view path) const;
+        std::string_view path, bool unpacked_structures = false) const;
     // An enumeration method (IEEE 1800-2017 6.19.5): `e.first()`, or the
     // parenthesis-free `e.next` that the frontend keeps as a dotted name.
     struct HirEnumerationMethod {
@@ -1663,9 +1665,12 @@ private:
         semantic::ExpressionId expression,
         const runtime::simir::ContainerType& formal_type,
         semantic::DeclarationId contextual_declaration = { });
+    // With `nonblocking`, a selection of a module array publishes each
+    // selected element in the NBA region (IEEE 1800-2017 10.4.2).
     [[nodiscard]] bool lower_hir_container_copy_out(
         semantic::ExpressionId target,
-        runtime::simir::ContainerRegisterId source);
+        runtime::simir::ContainerRegisterId source,
+        bool nonblocking = false);
     void copy_hir_static_container_ordinals(
         runtime::simir::ContainerRegisterId destination,
         const runtime::simir::ContainerType& destination_range,
@@ -2167,8 +2172,26 @@ private:
             frontend::SystemVerilogScalarKind::None
         };
     };
+    // The signal an external name denotes (IEEE 1076-2008 8.7), checked
+    // against the name's subtype; a mismatch is reported.
+    [[nodiscard]] std::optional<SignalId> hir_vhdl_external_signal(
+        semantic::ExpressionId expression);
+    // A member of a packed structure signal named hierarchically.
+    struct HirHierarchicalSignalMember {
+        SignalId signal { };
+        std::uint64_t offset { };
+        std::uint64_t width { };
+        bool signed_value { };
+    };
+    [[nodiscard]] std::optional<HirHierarchicalSignalMember>
+    hir_hierarchical_signal_member(semantic::ExpressionId expression) const;
+    // A parameter or local parameter of a selected, non-loop generate block
+    // of this unit named by its block labels (`blk.P`, IEEE 1800-2017 27.6).
     [[nodiscard]] std::optional<HirHierarchicalParameter>
-    hir_hierarchical_parameter(semantic::ExpressionId expression) const;
+    hir_generate_block_parameter(std::string_view name) const;
+    [[nodiscard]] std::optional<HirHierarchicalParameter>
+    hir_hierarchical_parameter(semantic::ExpressionId expression,
+        std::string_view published_prefix = { }) const;
     [[nodiscard]] std::optional<SignalId> hir_monitor_expression_signal(
         semantic::ExpressionId expression);
 

@@ -652,7 +652,7 @@ endmodule
 module generated_sv_bad_constant;
   generate
     if (1) begin : selected
-      localparam int BAD_VALUE = 1 / 0;
+      localparam int BAD_VALUE = $random;
     end
   endgenerate
 endmodule

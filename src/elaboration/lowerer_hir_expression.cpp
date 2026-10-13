@@ -6280,7 +6280,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_untraced(
 
 std::optional<Lowerer::HirHierarchicalParameter>
 Lowerer::hir_hierarchical_parameter(
-    const semantic::ExpressionId expression_id) const
+    const semantic::ExpressionId expression_id,
+    const std::string_view published_prefix) const
 {
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
@@ -6345,20 +6346,51 @@ Lowerer::hir_hierarchical_parameter(
         name.remove_prefix(6U);
     }
     const auto instance = name.substr(0U, name.find_last_of('.'));
-    const auto parameter = name.substr(name.find_last_of('.') + 1U);
+    // A published name such as `$bits:type_t` (a typedef's width).
+    const auto parameter = std::string { published_prefix }
+        + std::string { name.substr(name.find_last_of('.') + 1U) };
     const auto lookup = [&](const std::string& path)
         -> std::optional<HirHierarchicalParameter> {
         // An interface port or array element names the interface instance
         // with the same handle (25.5).
         std::optional<std::uint64_t> handle;
+        // A nested instance reached through an interface port
+        // (`io.types.P`): the port's handle names the connected instance,
+        // whose nested instance has the rest of the path.
+        std::string through_port;
         if (systemverilog_interface_handles_ != nullptr) {
             if (const auto found = systemverilog_interface_handles_->find(path);
                 found != systemverilog_interface_handles_->end()) {
                 handle = found->second;
+            } else {
+                for (auto dot = path.find_last_of('.');
+                     dot != std::string::npos && dot != 0U && through_port.empty();
+                     dot = path.find_last_of('.', dot - 1U)) {
+                    const auto prefix
+                        = systemverilog_interface_handles_->find(path.substr(0U, dot));
+                    if (prefix == systemverilog_interface_handles_->end()) {
+                        continue;
+                    }
+                    for (const auto& candidate : design_.specializations_) {
+                        const auto owner = systemverilog_interface_handles_->find(
+                            candidate.instance);
+                        if (candidate.instance != path.substr(0U, dot)
+                            && owner != systemverilog_interface_handles_->end()
+                            && owner->second == prefix->second) {
+                            through_port = candidate.instance + path.substr(dot);
+                            break;
+                        }
+                    }
+                    if (dot == 0U) {
+                        break;
+                    }
+                }
             }
         }
         for (const auto& specialization : design_.specializations_) {
             if (specialization.instance != path
+                && (through_port.empty()
+                    || specialization.instance != through_port)
                 && !(handle
                     && [&] {
                            const auto found
@@ -6414,7 +6446,96 @@ Lowerer::hir_hierarchical_parameter(
         hierarchical_reference_used_ = true;
         return found;
     }
+    if (published_prefix.empty()) {
+        if (auto local = hir_generate_block_parameter(name)) {
+            return local;
+        }
+    }
     hierarchical_reference_missed_ = true;
+    return std::nullopt;
+}
+
+std::optional<Lowerer::HirHierarchicalParameter>
+Lowerer::hir_generate_block_parameter(const std::string_view name) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto unit = specialized_hir_unit_->design().find_unit(
+        specialized_hir_unit_->unit());
+    if (!unit || unit->systemverilog == nullptr) {
+        return std::nullopt;
+    }
+    const auto selected = specialized_hir_unit_->selected_generates();
+    const std::vector<semantic::sv::GenerateRegion>* regions
+        = &unit->systemverilog->generates;
+    const semantic::sv::GenerateRegion* region = nullptr;
+    auto remaining = name;
+    for (auto dot = remaining.find('.'); dot != std::string_view::npos;
+         dot = remaining.find('.')) {
+        const auto label = remaining.substr(0U, dot);
+        // An `else` alternative is nested in its `if` region and has the
+        // same label.
+        const auto find_selected = [&](const auto& self,
+                                       const std::vector<semantic::sv::GenerateRegion>&
+                                           candidates)
+            -> const semantic::sv::GenerateRegion* {
+            for (const auto& candidate : candidates) {
+                if (candidate.label != label
+                    || candidate.kind == semantic::sv::GenerateKind::iterative) {
+                    continue;
+                }
+                if (std::ranges::find(selected, candidate.declaration)
+                    != selected.end()) {
+                    return &candidate;
+                }
+                if (const auto* nested = self(self, candidate.nested)) {
+                    return nested;
+                }
+            }
+            return nullptr;
+        };
+        const auto* found = find_selected(find_selected, *regions);
+        if (found == nullptr) {
+            return std::nullopt;
+        }
+        region = found;
+        regions = &found->nested;
+        remaining = remaining.substr(dot + 1U);
+    }
+    if (region == nullptr) {
+        return std::nullopt;
+    }
+    for (const auto declaration_id : region->declarations) {
+        const auto declaration
+            = specialized_hir_unit_->find_declaration(declaration_id);
+        if (!declaration || declaration->systemverilog == nullptr
+            || declaration->systemverilog->name != remaining
+            || (declaration->systemverilog->form
+                    != semantic::sv::DeclarationForm::parameter
+                && declaration->systemverilog->form
+                    != semantic::sv::DeclarationForm::local_parameter)
+            || !declaration->systemverilog->initializer) {
+            continue;
+        }
+        const auto value = specialized_hir_unit_->evaluate_integral_expression(
+            *declaration->systemverilog->initializer);
+        if (!value) {
+            return std::nullopt;
+        }
+        const auto width = declaration->systemverilog->type
+            ? hir_systemverilog_type_width(*declaration->systemverilog->type)
+                  .value_or(32U)
+            : 32U;
+        if (width == 0U || width > 64U) {
+            return std::nullopt;
+        }
+        const bool signed_value = declaration->systemverilog->type
+            ? declaration->systemverilog->type->signed_value
+            : true;
+        return HirHierarchicalParameter {
+            integer_value(*value, width), signed_value };
+    }
     return std::nullopt;
 }
 
@@ -6500,6 +6621,175 @@ std::optional<RegisterId> Lowerer::lower_hir_virtual_interface_handle(
     return handle;
 }
 
+std::optional<SignalId> Lowerer::hir_vhdl_external_signal(
+    const semantic::ExpressionId expression_id)
+{
+    const auto expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->kind != semantic::vhdl::ExpressionKind::call
+        || expression->vhdl->text != "@vhdl-external") {
+        return std::nullopt;
+    }
+    constexpr auto profile_prefix
+        = std::string_view { "@fsim-vhdl-external:" };
+    const auto& external = *expression->vhdl;
+    const auto target = external.operands.size() == 2U
+        ? specialized_hir_unit_->find_expression(
+              external.operands.front())
+        : std::nullopt;
+    const auto profile = std::string_view { external.nominal_type };
+    const auto separator = profile.starts_with(profile_prefix)
+        ? profile.find(':', profile_prefix.size())
+        : std::string_view::npos;
+    std::size_t declared_width { };
+    unsigned declared_domain { };
+    const auto width_text = separator == std::string_view::npos
+        ? std::string_view { }
+        : profile.substr(
+              profile_prefix.size(), separator - profile_prefix.size());
+    const auto domain_text = separator == std::string_view::npos
+        ? std::string_view { }
+        : profile.substr(separator + 1U);
+    const auto width_parse = std::from_chars(
+        width_text.data(), width_text.data() + width_text.size(),
+        declared_width);
+    const auto domain_parse = std::from_chars(
+        domain_text.data(), domain_text.data() + domain_text.size(),
+        declared_domain);
+    const auto signal = target && target->vhdl != nullptr
+            && target->vhdl->kind
+                == semantic::vhdl::ExpressionKind::name
+        ? design_.signal_by_name_.find(target->vhdl->text)
+        : design_.signal_by_name_.end();
+    const auto profile_domain
+        = static_cast<frontend::ValueDomain>(declared_domain);
+    const bool valid_profile = !width_text.empty()
+        && width_parse.ec == std::errc { }
+        && width_parse.ptr == width_text.data() + width_text.size()
+        && !domain_text.empty() && domain_parse.ec == std::errc { }
+        && domain_parse.ptr == domain_text.data() + domain_text.size();
+    if (!valid_profile || signal == design_.signal_by_name_.end()
+        || signal->second >= design_.signal_info_.size()
+        || design_.signal_info_[signal->second].width != declared_width
+        || design_.signal_info_[signal->second].source_domain
+            != profile_domain) {
+        report(
+            "FSIM-ELAB-VHEXTERNAL-001",
+            "VHDL external signal name does not match a bounded signal "
+            "with the declared subtype",
+            hir_source_span(external.source));
+        return std::nullopt;
+    }
+    // The object denoted has the base type of the external name's subtype
+    // (IEEE 1076-2008 8.7).
+    const auto& info = design_.signal_info_[signal->second];
+    if (external.operands.size() == 2U
+        && info.nominal_type.starts_with("vhdl-hir-type:")) {
+        const auto subtype_expression = specialized_hir_unit_->find_expression(
+            external.operands.back());
+        constexpr auto subtype_prefix = std::string_view { "@vhdl-subtype:" };
+        if (subtype_expression && subtype_expression->vhdl != nullptr
+            && subtype_expression->vhdl->text.starts_with(subtype_prefix)) {
+            semantic::vhdl::SubtypeIndication declared;
+            declared.type_mark.spelling = subtype_expression->vhdl->text.substr(
+                subtype_prefix.size());
+            const auto effective = hir_effective_vhdl_subtype(declared);
+            const auto root = [&](semantic::TypeId type) {
+                for (std::size_t depth { }; depth < 32U && type.valid(); ++depth) {
+                    const auto definition = specialized_hir_unit_->find_type(type);
+                    if (!definition || definition->vhdl == nullptr
+                        || (definition->vhdl->form != semantic::vhdl::TypeForm::subtype
+                            && definition->vhdl->form != semantic::vhdl::TypeForm::alias)
+                        || !definition->vhdl->base.type_mark.target.valid()) {
+                        break;
+                    }
+                    type = definition->vhdl->base.type_mark.target;
+                }
+                return type;
+            };
+            const auto identity = std::string_view { info.nominal_type }.substr(
+                std::string_view { "vhdl-hir-type:" }.size());
+            std::uint32_t signal_type { };
+            const auto parsed = std::from_chars(identity.data(),
+                identity.data() + identity.size(), signal_type);
+            if (effective && effective->type_mark.target.valid()
+                && parsed.ec == std::errc { }
+                && root(effective->type_mark.target)
+                    != root(semantic::TypeId::from_index(signal_type))) {
+                report("FSIM-ELAB-VHEXTERNAL-001",
+                    "VHDL external signal name declares a type other than "
+                    "the type of the signal it denotes",
+                    hir_source_span(external.source));
+                return std::nullopt;
+            }
+        }
+    }
+    return signal->second;
+}
+
+std::optional<Lowerer::HirHierarchicalSignalMember>
+Lowerer::hir_hierarchical_signal_member(
+    const semantic::ExpressionId expression_id) const
+{
+    const auto record = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(expression_id)
+        : std::nullopt;
+    if (!record || record->systemverilog == nullptr
+        || record->systemverilog->kind != semantic::sv::ExpressionKind::name
+        || record->systemverilog->text.find('.') == std::string::npos
+        || hir_referenced_declaration(expression_id)
+        || hir_hierarchical_signal(record->systemverilog->text)) {
+        return std::nullopt;
+    }
+    const std::string_view name { record->systemverilog->text };
+    for (auto dot = name.find_last_of('.');
+         dot != std::string_view::npos && dot != 0U;
+         dot = name.find_last_of('.', dot - 1U)) {
+        const auto signal = hir_hierarchical_signal(name.substr(0U, dot));
+        if (!signal) {
+            continue;
+        }
+        const auto& info = design_.signal_info_[*signal];
+        const std::vector<PackedMemberMetadata>* members
+            = &info.packed_members;
+        HirHierarchicalSignalMember result { *signal, 0U, info.width,
+            info.is_signed };
+        auto remaining = name.substr(dot + 1U);
+        while (!remaining.empty()) {
+            const auto separator = remaining.find('.');
+            const auto segment = remaining.substr(0U, separator);
+            const auto member = members == nullptr
+                ? std::vector<PackedMemberMetadata>::const_iterator { }
+                : std::ranges::find(
+                      *members, segment, &PackedMemberMetadata::name);
+            if (members == nullptr || member == members->end()) {
+                return std::nullopt;
+            }
+            const auto width = member->width();
+            if (!width) {
+                return std::nullopt;
+            }
+            result.offset += member->lsb_offset;
+            result.width = *width;
+            result.signed_value = member->is_signed;
+            members = member->nested_types.empty()
+                ? nullptr
+                : &member->nested_types.front().packed_members;
+            if (separator == std::string_view::npos) {
+                break;
+            }
+            remaining = remaining.substr(separator + 1U);
+        }
+        if (result.width == 0U || result.offset + result.width > info.width) {
+            return std::nullopt;
+        }
+        return result;
+    }
+    return std::nullopt;
+}
+
 std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     const semantic::ExpressionId expression_id,
     const std::size_t expected_width,
@@ -6519,6 +6809,28 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         process_.operations.emplace_back(
             LoadConstant { destination, parameter->value });
         return destination;
+    }
+    // A member of a packed structure signal named hierarchically
+    // (`bus_io.rs.data`, IEEE 1800-2017 7.2, 23.6).
+    if (const auto member = hir_hierarchical_signal_member(expression_id)) {
+        const auto& info = design_.signal_info_[member->signal];
+        const auto whole = allocate_register(info.width,
+            info.source_domain == frontend::ValueDomain::Bit2
+                ? frontend::ValueDomain::Bit2
+                : frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(ReadSignal {
+            whole, member->signal, SignalReadKind::current });
+        record_implicit_signal_dependency(member->signal);
+        const auto selected = allocate_register(
+            static_cast<std::size_t>(member->width), register_domain(whole));
+        process_.operations.emplace_back(Extract { selected, whole,
+            static_cast<std::uint32_t>(member->offset),
+            static_cast<std::uint32_t>(member->width) });
+        hierarchical_reference_used_ = true;
+        return expected_width != 0U && expected_width != member->width
+            ? std::optional { resize_register(
+                  selected, expected_width, member->signed_value) }
+            : std::optional { selected };
     }
     // A parameter read in a callable of another module instance
     // (`u.f()`) takes that instance's value.
@@ -7072,56 +7384,12 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         && expression->vhdl->kind
             == semantic::vhdl::ExpressionKind::call
         && expression->vhdl->text == "@vhdl-external") {
-        constexpr auto profile_prefix
-            = std::string_view { "@fsim-vhdl-external:" };
-        const auto& external = *expression->vhdl;
-        const auto target = external.operands.size() == 2U
-            ? specialized_hir_unit_->find_expression(
-                  external.operands.front())
-            : std::nullopt;
-        const auto profile = std::string_view { external.nominal_type };
-        const auto separator = profile.starts_with(profile_prefix)
-            ? profile.find(':', profile_prefix.size())
-            : std::string_view::npos;
-        std::size_t declared_width { };
-        unsigned declared_domain { };
-        const auto width_text = separator == std::string_view::npos
-            ? std::string_view { }
-            : profile.substr(
-                  profile_prefix.size(), separator - profile_prefix.size());
-        const auto domain_text = separator == std::string_view::npos
-            ? std::string_view { }
-            : profile.substr(separator + 1U);
-        const auto width_parse = std::from_chars(
-            width_text.data(), width_text.data() + width_text.size(),
-            declared_width);
-        const auto domain_parse = std::from_chars(
-            domain_text.data(), domain_text.data() + domain_text.size(),
-            declared_domain);
-        const auto signal = target && target->vhdl != nullptr
-                && target->vhdl->kind
-                    == semantic::vhdl::ExpressionKind::name
-            ? design_.signal_by_name_.find(target->vhdl->text)
-            : design_.signal_by_name_.end();
-        const auto profile_domain
-            = static_cast<frontend::ValueDomain>(declared_domain);
-        const bool valid_profile = !width_text.empty()
-            && width_parse.ec == std::errc { }
-            && width_parse.ptr == width_text.data() + width_text.size()
-            && !domain_text.empty() && domain_parse.ec == std::errc { }
-            && domain_parse.ptr == domain_text.data() + domain_text.size();
-        if (!valid_profile || signal == design_.signal_by_name_.end()
-            || signal->second >= design_.signal_info_.size()
-            || design_.signal_info_[signal->second].width != declared_width
-            || design_.signal_info_[signal->second].source_domain
-                != profile_domain) {
-            report(
-                "FSIM-ELAB-VHEXTERNAL-001",
-                "VHDL external signal name does not match a bounded signal "
-                "with the declared subtype",
-                hir_source_span(external.source));
+        const auto external_signal = hir_vhdl_external_signal(expression_id);
+        if (!external_signal) {
             return std::nullopt;
         }
+        const auto signal = design_.signal_by_name_.find(
+            design_.signal_info_[*external_signal].name);
         const auto& info = design_.signal_info_[signal->second];
         auto destination = allocate_register(
             info.width, info.source_domain);
@@ -10013,6 +10281,17 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 if (const auto signal
                     = hir_direct_signal(call.operands.front())) {
                     packed_bits = design_.signal_info_[*signal].width;
+                } else if (const auto member
+                    = hir_hierarchical_signal_member(call.operands.front())) {
+                    packed_bits = static_cast<std::size_t>(member->width);
+                } else if (const auto typedef_bits
+                    = hir_hierarchical_parameter(
+                        call.operands.front(), "$bits:")) {
+                    // A typedef of another instance (`ifc.type_t`).
+                    if (const auto bits
+                        = typedef_bits->value.known_unsigned_value()) {
+                        packed_bits = static_cast<std::size_t>(*bits);
+                    }
                 } else if (hierarchical_reference_missed_) {
                     // The referenced instance is elaborated later; the
                     // statement is lowered again then.

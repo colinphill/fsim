@@ -1647,7 +1647,8 @@ Lowerer::lower_hir_static_container_actual(
 
 bool Lowerer::lower_hir_container_copy_out(
     const semantic::ExpressionId target,
-    const ContainerRegisterId source)
+    const ContainerRegisterId source,
+    const bool nonblocking)
 {
     const auto source_type
         = runtime::simir::process_layout_detail::ProcessLayoutAccess::copy_at(
@@ -1682,6 +1683,9 @@ bool Lowerer::lower_hir_container_copy_out(
             || target_expression->systemverilog->kind
                 == semantic::sv::ExpressionKind::slice);
     if (!selection_syntax) {
+        if (nonblocking) {
+            return false;
+        }
         const auto destination = hir_container_object_binding(target);
         if (!destination || destination->type == nullptr
             || *destination->type != source_type) {
@@ -1749,6 +1753,54 @@ bool Lowerer::lower_hir_container_copy_out(
         selection->selected_type,
         source,
         source_type);
+    if (nonblocking) {
+        // Each selected element is captured now and written in the NBA
+        // region, so other nonblocking writes to the array are kept.
+        if (selection->base.local
+            || (selection->selected_type.element_kind
+                    != ContainerElementKind::Packed
+                && selection->selected_type.element_kind
+                    != ContainerElementKind::Scalar)) {
+            return false;
+        }
+        const auto count = hir_static_element_count(selection->selected_type);
+        for (std::uint64_t ordinal { }; ordinal < count; ++ordinal) {
+            const auto source_index = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(LoadConstant {
+                source_index,
+                unsigned_value(static_cast<std::uint32_t>(ordinal), 32U),
+            });
+            const auto value = allocate_register(
+                selection->selected_type.element_width,
+                selection->selected_type.two_state
+                    ? frontend::ValueDomain::Bit2
+                    : frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(ContainerRead {
+                value, selected_value, source_index, true, true });
+            const auto destination_index = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(LoadConstant {
+                destination_index,
+                unsigned_value(static_cast<std::uint32_t>(ordinal), 32U),
+            });
+            process_.operations.emplace_back(IntegerBinary {
+                IntegerBinaryOperator::add,
+                destination_index,
+                *destination_offset,
+                destination_index,
+            });
+            WriteContainerObjectElement element_write;
+            element_write.object = selection->base.object;
+            element_write.index = destination_index;
+            element_write.source = value;
+            element_write.signed_index = true;
+            element_write.linear_index = true;
+            element_write.nonblocking = true;
+            process_.operations.emplace_back(std::move(element_write));
+        }
+        return true;
+    }
     const auto base = selection->base.local
         ? *selection->base.local
         : allocate_container_register(*selection->base.type);
@@ -1909,18 +1961,18 @@ Lowerer::hir_class_property_member(
         ? property_declaration->systemverilog->scope
         : expression->systemverilog->scope;
     auto member = hir_systemverilog_type_member_path(selected->type,
-        type_scope, semantic::DeclarationId { }, path);
+        type_scope, semantic::DeclarationId { }, path, true);
     if (!member) {
         member = hir_systemverilog_type_member_path(selected->type,
             expression->systemverilog->scope, semantic::DeclarationId { },
-            path);
+            path, true);
     }
     // A class body lowered in a module's process names compilation-unit
     // types as the module does.
     if (!member) {
         member = hir_systemverilog_type_member_path(selected->type,
             specialized_hir_unit_->scope(), semantic::DeclarationId { },
-            path);
+            path, true);
     }
     if (!member || member->tagged || member->width == 0U
         || member->offset + member->width > profile->width) {
