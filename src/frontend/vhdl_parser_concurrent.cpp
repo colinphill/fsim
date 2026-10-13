@@ -325,6 +325,58 @@ GenerateRegion VhdlParser::parse_vhdl_static_block(
       std::move(associations.parameter_overrides);
   result.block_ports = std::move(interface.ports);
   result.block_port_map = std::move(associations.connections);
+  // `f(o) => x` converts an output port's value for its actual (IEEE
+  // 1076-2008 6.5.7.1): the port stays unassociated and the block drives
+  // `x` with `f(o)`. The parser grouped such associations under `f`.
+  {
+    std::vector<PortConnection> kept;
+    for (auto& connection : result.block_port_map) {
+      const auto& group = connection.value;
+      const auto port_named = [&](const std::string_view name) {
+        return std::ranges::find_if(result.block_ports,
+            [&](const SignalDeclaration& port) { return port.name == name; });
+      };
+      const bool convertible = connection.port
+          && port_named(*connection.port) == result.block_ports.end()
+          && group.kind == ExpressionKind::Aggregate
+          && group.text == "@vhdl-formal-subelements"
+          && !group.operands.empty()
+          && group.aggregate_choice_expressions.size()
+              == group.operands.size()
+          && std::ranges::all_of(group.aggregate_choice_expressions,
+              [&](const std::vector<Expression>& choices) {
+                if (choices.size() != 1U
+                    || choices.front().kind != ExpressionKind::Identifier) {
+                  return false;
+                }
+                const auto port = port_named(choices.front().text);
+                return port != result.block_ports.end()
+                    && (port->direction == PortDirection::Output
+                        || port->direction == PortDirection::Buffer);
+              });
+      if (!convertible) {
+        kept.push_back(std::move(connection));
+        continue;
+      }
+      for (std::size_t index{}; index < group.operands.size(); ++index) {
+        const auto& formal = group.aggregate_choice_expressions[index].front();
+        // The block itself reads the port to convert it.
+        if (const auto port = port_named(formal.text);
+            port != result.block_ports.end()) {
+          port->direction = PortDirection::Buffer;
+        }
+        Statement out;
+        out.kind = StatementKind::Assignment;
+        out.assignment_kind = AssignmentKind::Continuous;
+        out.target = group.operands[index];
+        out.value = Expression { ExpressionKind::Call, *connection.port,
+            { formal }, group.operands[index].span };
+        out.span = connection.span;
+        result.then_body.concurrent_statements.push_back(std::move(out));
+      }
+    }
+    result.block_port_map = std::move(kept);
+  }
   (void)parse_vhdl_generate_declarations(
       result.then_body,
       VhdlComponentDeclarationRegion::Block);
@@ -1419,6 +1471,7 @@ Process VhdlParser::parse_process(
           type,
           initializer,
           span_from(name, previous())});
+      note_vhdl_access_object(vhdl_name(name.text), type);
     }
   }
   validate_vhdl_local_declaration_names(

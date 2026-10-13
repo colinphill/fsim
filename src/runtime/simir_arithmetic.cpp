@@ -809,10 +809,14 @@ void check_integer_range(
   if (condition.get(0) == Logic4::zero) {
     return when_false;
   }
+  // Equal 0 or 1 bits survive an unknown select; others, z included,
+  // become x (IEEE 1800-2017 11.4.11, Table 11-20).
   PackedLogic4 result(when_true.width(), Logic4::x);
   for (std::size_t index = 0; index < result.width(); ++index) {
-    if (when_true.get(index) == when_false.get(index)) {
-      result.set(index, when_true.get(index));
+    const auto bit = when_true.get(index);
+    if (bit == when_false.get(index)
+        && (bit == Logic4::zero || bit == Logic4::one)) {
+      result.set(index, bit);
     }
   }
   return result;

@@ -43,8 +43,12 @@ DelayAlternative VerilogParser::parse_verilog_delay_alternative(
         alternative.span = span_from(start, previous());
         return alternative;
     }
+    // A time literal's unit follows its number without space (IEEE
+    // 1800-2017 5.8); `#1 s.x = v` delays an assignment to `s.x`.
     const bool explicit_time_literal = at(TokenKind::Number)
         && at(TokenKind::Identifier, 1)
+        && (!current(1).expansion_stack.empty()
+            || current().span.end.offset == current(1).span.begin.offset)
         && time_unit_femtoseconds(current(1).text).has_value();
     // An unparenthesized delay is a single number (IEEE 1800-2017 A.2.2.3),
     // so in `#1 'h5` or `#100'b0` the based literal is the next expression,
@@ -97,6 +101,8 @@ DelayAlternative VerilogParser::parse_verilog_delay_alternative(
         alternative.magnitude = parsed->numerator;
         alternative.divisor = parsed->denominator;
         if (at(TokenKind::Identifier)
+            && (!current().expansion_stack.empty()
+                || previous().span.end.offset == current().span.begin.offset)
             && time_unit_femtoseconds(current().text)) {
             const auto explicit_unit = advance();
             alternative.unit = explicit_unit.text;
@@ -797,6 +803,8 @@ Expression VerilogParser::parse_primary()
             || token.text.find_first_of("eE") != std::string::npos;
         std::optional<Token> time_unit;
         if (at(TokenKind::Identifier)
+            && (!current().expansion_stack.empty()
+                || token.span.end.offset == current().span.begin.offset)
             && time_unit_femtoseconds(current().text)) {
             time_unit = advance();
         } else if (decimal_form && at(TokenKind::Identifier)

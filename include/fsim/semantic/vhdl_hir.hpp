@@ -692,6 +692,8 @@ struct Declaration {
     std::optional<SourceSpanId> completion_source;
     std::vector<DeclarationId> children;
     std::vector<StatementId> statements;
+    // A guarded signal's kind: 1 for bus, 2 for register (6.4.2.3).
+    std::uint8_t guarded_kind { };
 };
 
 struct OverloadSet {

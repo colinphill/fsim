@@ -889,6 +889,9 @@ struct SignalDeclaration {
         , vhdl_mode_view(std::move(signal_vhdl_mode_view))
     {
     }
+    // A VHDL guarded signal's kind (IEEE 1076-2008 6.4.2.3): 1 for bus, 2
+    // for register, 0 for an ordinary signal.
+    std::uint8_t vhdl_guarded_kind { };
 };
 
 struct VariableDeclaration {
@@ -909,6 +912,11 @@ struct VariableDeclaration {
     // True for a SystemVerilog local declared `static`, which keeps its value
     // across calls of an automatic callable (IEEE 1800-2017 6.21).
     bool systemverilog_static { };
+    // True for an unpacked array value parameter or local parameter (IEEE
+    // 1800-2017 6.20.2); it is kept as a constant container object
+    // initialized by its value. Only a non-local one may be overridden.
+    bool systemverilog_parameter { };
+    bool systemverilog_local_parameter { };
     // True for a VHDL protected-type state object that is not publicly
     // selectable. Legacy body variables are implicitly private; VHDL-2019
     // declaration members can carry the explicit `private` qualifier.

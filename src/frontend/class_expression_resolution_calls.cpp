@@ -332,6 +332,11 @@ void Resolver::retain_task_profile(
     const auto identity = receiver_type
         ? class_identity(*receiver_type) : std::nullopt;
     const auto member = expression.text.substr(selected_member_prefix.size());
+    // A member of a packed structure class property stays a selection.
+    if (!identity && receiver_type
+        && is_class_property_access(expression.operands.front())) {
+      return packed_member_type(*receiver_type, member);
+    }
     if (!identity) {
       auto receiver = std::move(expression.operands.front());
       receiver.text += "." + std::string{member};

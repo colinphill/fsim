@@ -522,6 +522,40 @@ void VhdlParser::parse_package_constant(DesignUnit& unit, const Token& start,
     }
     expect(TokenKind::Semicolon, "';' after package constant declaration",
         "FSIM-VHDL-PARSE-089");
+    // A deferred constant is named before its full declaration only in a
+    // default expression of a local generic, local port or formal parameter
+    // (IEEE 1076-2008 4.8).
+    if (body) {
+        if (const auto pending = vhdl_pending_deferred_constants_.find(unit.name);
+            pending != vhdl_pending_deferred_constants_.end()) {
+            const auto references = [&](const auto& self, const Expression& node)
+                -> const Expression* {
+                if (node.kind == ExpressionKind::Identifier
+                    && pending->second.contains(vhdl_name(node.text))) {
+                    return &node;
+                }
+                for (const auto& operand : node.operands) {
+                    if (const auto* found = self(self, operand)) {
+                        return found;
+                    }
+                }
+                return nullptr;
+            };
+            if (const auto* early = references(references, value)) {
+                error(start, "FSIM-VHDL-SEM-130",
+                    "deferred constant '" + vhdl_name(early->text)
+                        + "' is named before its full declaration");
+            }
+            for (const auto& constant_name : names) {
+                pending->second.erase(vhdl_name(constant_name.text));
+            }
+        }
+    } else if (deferred) {
+        for (const auto& constant_name : names) {
+            vhdl_pending_deferred_constants_[unit.name].insert(
+                vhdl_name(constant_name.text));
+        }
+    }
     for (const auto& constant_name : names) {
         const auto canonical = vhdl_name(constant_name.text);
         if (std::any_of(unit.parameters.begin(), unit.parameters.end(),

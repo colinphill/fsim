@@ -133,8 +133,46 @@ void HierarchyBuilder::lower_compiled_vhdl_resolvers(
         }
         const auto process = program->process.id;
         design_.append_process_record(std::move(program->process));
-        design_.signals_[signal].vhdl_resolver = VhdlSignalResolver {
+        VhdlSignalResolver resolver {
             process, program->input, program->output, found->second };
+        // A guarded signal resolves its connected drivers only; a bus with
+        // none calls the function with a null array (14.7.3.2).
+        if (const auto guarded = vhdl_guarded_signal_kinds_.find(signal);
+            guarded != vhdl_guarded_signal_kinds_.end()) {
+            resolver.guarded_kind = guarded->second;
+            for (std::size_t count { }; count < found->second.size();
+                ++count) {
+                if (count == 0U && guarded->second == 2U) {
+                    resolver.variants.push_back(resolver.variants.empty()
+                            ? VhdlResolverVariant { process, program->input,
+                                  program->output }
+                            : resolver.variants.back());
+                    continue;
+                }
+                const auto diagnostics_before = diagnostics_.size();
+                auto variant = lowerer.lower_hir_vhdl_resolver_process(
+                    signal, pending.body, count, hierarchy);
+                if (count == 0U && diagnostics_.size() != diagnostics_before) {
+                    variant.reset();
+                }
+                if (!variant && count == 0U) {
+                    diagnostics_.resize(diagnostics_before);
+                    // A null array argument is not yet lowered; the bus
+                    // then keeps its value (marked by an invalid process).
+                    resolver.variants.push_back(VhdlResolverVariant {
+                        std::numeric_limits<ProcessId>::max(), 0U, 0U });
+                    continue;
+                }
+                if (!variant) {
+                    break;
+                }
+                const auto variant_process = variant->process.id;
+                design_.append_process_record(std::move(variant->process));
+                resolver.variants.push_back(VhdlResolverVariant {
+                    variant_process, variant->input, variant->output });
+            }
+        }
+        design_.signals_[signal].vhdl_resolver = std::move(resolver);
     }
 }
 

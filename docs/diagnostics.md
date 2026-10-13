@@ -888,7 +888,6 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-SEM-045` | error | A VHDL function end name does not match its designator. |
 | `FSIM-VHDL-SEM-046` | error | A VHDL return statement appears outside a function body. |
 | `FSIM-VHDL-SEM-047` | error | A package-body end name does not match its package name. |
-| `FSIM-VHDL-SEM-048` | error | A bounded VHDL function body has no explicit return statement. |
 | `FSIM-VHDL-SEM-049` | error | A constant-class VHDL procedure parameter has an output or inout mode. |
 | `FSIM-VHDL-SEM-050` | error | A VHDL procedure profile declares the same formal name more than once. |
 | `FSIM-VHDL-SEM-051` | error | A VHDL procedure declaration appears in a region that requires a body. |
@@ -966,6 +965,8 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-SEM-126` | error | An indexed name or slice has a scalar attribute value as its prefix (IEEE 1076-1993 6.4). |
 | `FSIM-VHDL-SEM-127` | error | A signal assignment in a guarded block targets the block's implicit GUARD signal, which has no sources (IEEE 1076-1993 9.1). |
 | `FSIM-VHDL-SEM-128` | error | A block guard expression is an integer expression, not BOOLEAN (IEEE 1076-1993 9.1). |
+| `FSIM-VHDL-SEM-129` | error | A guarded signal is the target of an unguarded concurrent signal assignment, or an aggregate target names both guarded and unguarded signals (IEEE 1076-2008 11.6). |
+| `FSIM-VHDL-SEM-130` | error | A package body names a deferred constant in a constant declaration before the constant's full declaration (IEEE 1076-2008 4.8). |
 | `FSIM-VHDL-UNSUPPORTED-001` | error | Unsupported design unit or context item. |
 | `FSIM-VHDL-UNSUPPORTED-003` | error | Unsupported entity declaration. |
 | `FSIM-VHDL-UNSUPPORTED-004` | error | Unsupported architecture declaration. |

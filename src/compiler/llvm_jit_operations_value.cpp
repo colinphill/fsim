@@ -1465,6 +1465,12 @@ void ValueOperationLowerer::lower(
                               when_true.logic9_plane3,
                               when_false.logic9_plane3))),
                   mask);
+              // Equal x or z bits also become x (IEEE 1800-2017 Table
+              // 11-20).
+              if (destination_kind != ValueKind::logic9) {
+                  different = builder.CreateOr(different,
+                      builder.CreateAnd(when_true.bval, mask));
+              }
               auto *same = builder.CreateXor(different, mask);
               auto *merged_aval = builder.CreateOr(
                   builder.CreateAnd(when_true.aval, same),

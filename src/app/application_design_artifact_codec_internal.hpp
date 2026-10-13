@@ -798,7 +798,16 @@ namespace codec_detail {
     auto archive_fields(T& value)
     {
         return std::tie(
-            value.process, value.input, value.output, value.drivers);
+            value.process, value.input, value.output, value.drivers,
+            value.guarded_kind, value.variants);
+    }
+
+    template <typename T>
+        requires std::same_as<
+            std::remove_cv_t<T>, runtime::simir::VhdlResolverVariant>
+    auto archive_fields(T& value)
+    {
+        return std::tie(value.process, value.input, value.output);
     }
 
     template <typename T>

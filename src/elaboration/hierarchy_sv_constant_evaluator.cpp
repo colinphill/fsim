@@ -2121,8 +2121,8 @@ private:
                     != semantic::sv::DeclarationForm::parameter
                 && declaration->systemverilog->form
                     != semantic::sv::DeclarationForm::local_parameter
-                && declaration->systemverilog->form
-                    != semantic::sv::DeclarationForm::variable)
+                && !declaration->systemverilog->array_parameter
+                && !declaration->systemverilog->array_local_parameter)
             || !fixed_one_dimensional_array_type(
                 *declaration->systemverilog->type)) {
             return std::nullopt;
@@ -2159,14 +2159,22 @@ private:
             : std::nullopt;
         const auto count = static_cast<std::uint64_t>(
             *left >= *right ? *left - *right : *right - *left) + 1U;
-        if (!pattern || pattern->systemverilog == nullptr
+        // An instance's value for the parameter replaces its default.
+        const auto actual = declaration->systemverilog->array_parameter
+            ? specialization_.systemverilog_array_actual(
+                  *base_view->systemverilog->referenced_name->selected)
+            : std::nullopt;
+        if (actual && actual->size() != count) {
+            return std::nullopt;
+        }
+        if (!actual && (!pattern || pattern->systemverilog == nullptr
             || pattern->systemverilog->kind
                 != ExpressionKind::assignment_pattern
             || pattern->systemverilog->associations.size() != count
             || std::ranges::any_of(pattern->systemverilog->associations,
                 [](const auto& association) {
                     return !association.choice_spelling.empty();
-                })) {
+                }))) {
             return std::nullopt;
         }
         const auto index = evaluate(record.operands.back());
@@ -2187,6 +2195,12 @@ private:
         }
         const auto ordinal = static_cast<std::size_t>(
             *integer >= *left ? *integer - *left : *left - *integer);
+        if (actual) {
+            return convert_hir_systemverilog_constant(
+                make_known(static_cast<std::uint64_t>((*actual)[ordinal]),
+                    64U, true, false, frontend::ValueDomain::Bit2),
+                element_type, error_, &specialization_);
+        }
         auto element = evaluate(
             pattern->systemverilog->associations[ordinal].value);
         if (!element) {

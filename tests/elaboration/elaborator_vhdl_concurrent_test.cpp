@@ -151,11 +151,11 @@ end architecture;
       "end architecture;",
       fsim::frontend::Language::Vhdl2008);
   assert(wrong_target.ok());
-  const auto rejected_target = compile_and_elaborate(
+  // A guarded assignment to a signal that is not guarded leaves its
+  // driver unchanged while GUARD is false (IEEE 1076-2008 11.6).
+  const auto accepted_target = compile_and_elaborate(
       wrong_target.design, "vhdl:work.guarded_wrong(rtl)");
-  assert(!rejected_target.ok());
-  assert(has_diagnostic(
-      rejected_target, "FSIM-ELAB-VHDLGUARD-002"));
+  assert(accepted_target.ok());
 
   const auto oscillating = fsim::frontend::parse_text(
       "vhdl_concurrent_nonconvergence.vhd",

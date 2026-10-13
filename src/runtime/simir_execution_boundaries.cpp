@@ -2092,6 +2092,9 @@ void Interpreter::Impl::handle_boundary(
     }
     if (const auto* method = fsim::runtime::simir::operation_get_if<ClassStaticMethodCall>(
             &operation)) {
+        if (try_vhdl_disconnect_call(process.id, method->method_identity)) {
+            return;
+        }
         const auto dpi = std::string_view { method->method_identity }
             .starts_with(systemverilog_dpi_function_prefix);
         if ((dpi && !dpi_function_call_hook)

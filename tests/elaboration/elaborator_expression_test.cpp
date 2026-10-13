@@ -289,6 +289,8 @@ endmodule
             ->signal_value(*conditional_result)
             .to_msb_string()
         == "101Z");
+    // An unknown select merges equal 0 and 1 bits; others, z included,
+    // become x (IEEE 1800-2017 Table 11-20).
     for (const auto unknown : { "x", "z" }) {
         conditional_interpreter->deposit_signal(
             *conditional_select,
@@ -298,7 +300,7 @@ endmodule
             conditional_interpreter
                 ->signal_value(*conditional_result)
                 .to_msb_string()
-            == "10XZ");
+            == "10XX");
     }
 
     const auto sized_conditional = fsim::frontend::parse_text(

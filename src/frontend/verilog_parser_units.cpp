@@ -1708,6 +1708,8 @@ void VerilogParser::parse_parameter_group(
             std::move(initializer),
             cover(start.span, previous().span) };
         variable.systemverilog_const = true;
+        variable.systemverilog_parameter = !local;
+        variable.systemverilog_local_parameter = local;
         unit.variables.push_back(std::move(variable));
       }
       if (!match(TokenKind::Comma)) {

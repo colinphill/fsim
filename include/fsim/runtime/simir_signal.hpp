@@ -43,11 +43,26 @@ struct DriveStrength {
 /// (IEEE 1076-2008 14.7.3.2). The runtime writes the driving values of
 /// `drivers`, in order and leftmost first, to register `input` of `process`,
 /// runs one pass of the program and takes the effective value from `output`.
+/// A resolver program for a given number of connected drivers.
+struct VhdlResolverVariant {
+  ProcessId process{};
+  RegisterId input{};
+  RegisterId output{};
+
+  friend bool operator==(
+      const VhdlResolverVariant&, const VhdlResolverVariant&) = default;
+};
+
 struct VhdlSignalResolver {
   ProcessId process{};
   RegisterId input{};
   RegisterId output{};
   std::vector<ProcessId> drivers;
+  // A guarded signal (IEEE 1076-2008 6.4.2.3): 1 for a bus, 2 for a
+  // register; 0 otherwise. Its drivers may be disconnected; variants[k]
+  // resolves k connected drivers (k below the driver count).
+  std::uint8_t guarded_kind{};
+  std::vector<VhdlResolverVariant> variants{};
 
   friend bool operator==(
       const VhdlSignalResolver&, const VhdlSignalResolver&) = default;

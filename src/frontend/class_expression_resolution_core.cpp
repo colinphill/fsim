@@ -8,6 +8,18 @@
 
 namespace fsim::frontend::class_resolution_detail {
 
+bool is_class_property_access(const Expression& expression)
+{
+  if (expression.kind != ExpressionKind::Call) return false;
+  if (expression.text.starts_with("@sv-property:")
+      || expression.text.starts_with("@sv-static-property:")) {
+    return true;
+  }
+  return expression.text.starts_with("@sv-select:")
+      && expression.operands.size() == 1U
+      && is_class_property_access(expression.operands.front());
+}
+
 
 [[nodiscard]] std::string effective_library(const std::string_view library) {
   return library.empty() ? std::string{"work"} : std::string{library};
@@ -96,6 +108,17 @@ void Resolver::run() {
     add_objects(scope, unit.ports);
     for (const auto& instance : unit.instances) {
       scope.instances.emplace(instance.name, instance.unit_name);
+    }
+    // A specialization's parameter in a module constant, `C#(7)::v`.
+    for (auto& parameter : unit.parameters) {
+      if (parameter.kind == ParameterKind::Value) {
+        substitute_class_parameter_references(parameter.default_value, scope);
+      }
+    }
+    for (auto& instance : unit.instances) {
+      for (auto& override_value : instance.parameter_overrides) {
+        substitute_class_parameter_references(override_value.value, scope);
+      }
     }
     resolve_scoped_types(unit.signals, scope);
     resolve_scoped_types(unit.variables, scope);
@@ -672,6 +695,32 @@ bool Resolver::class_assignable(
     lexical_identity.resize(separator);
   }
 }
+std::optional<Type> Resolver::packed_member_type(
+    const Type& type, const std::string_view member) const {
+  const Type* structure = &type;
+  if (structure->packed_members.empty() && !type.named_type.empty()) {
+    const Type* unique = nullptr;
+    for (const auto& [key, alias] : class_aliases_) {
+      if (!key.ends_with("::" + type.named_type)
+          || alias->packed_members.empty()) {
+        continue;
+      }
+      if (unique != nullptr) return std::nullopt;
+      unique = alias;
+    }
+    if (unique == nullptr) return std::nullopt;
+    structure = unique;
+  }
+  const auto found = std::ranges::find(
+      structure->packed_members, member, &PackedMember::name);
+  if (found == structure->packed_members.end()) return std::nullopt;
+  Type result;
+  result.domain = found->domain;
+  result.spelling = found->spelling;
+  result.packed_range = found->packed_range;
+  result.is_signed = found->is_signed;
+  return result;
+}
 [[nodiscard]] std::string_view Resolver::trim_type_spelling(
     std::string_view spelling) {
   while (!spelling.empty()
@@ -747,6 +796,149 @@ Resolver::selected_parameter_actuals(const std::string_view spelling) {
     }
   }
   return actuals;
+}
+void Resolver::substitute_class_parameter_references(
+    Expression& expression, const Scope& scope, const std::size_t depth) {
+  if (depth > 16U) return;
+  if (expression.kind == ExpressionKind::Identifier
+      && expression.text.find('#') != std::string::npos) {
+    const auto selected = expression.text.rfind("::");
+    if (selected != std::string::npos) {
+      const auto owner_name = expression.text.substr(0, selected);
+      const auto owners = resolve_class_name(owner_name, scope);
+      if (owners.size() == 1U) {
+        if (auto value = class_specialization_parameter_value(*owners.front(),
+                owner_name, expression.text.substr(selected + 2U))) {
+          const auto span = expression.span;
+          expression = std::move(*value);
+          expression.span = span;
+          substitute_class_parameter_references(expression, scope, depth + 1U);
+          return;
+        }
+      }
+    }
+  }
+  for (auto& operand : expression.operands) {
+    substitute_class_parameter_references(operand, scope, depth + 1U);
+  }
+}
+std::optional<Expression> Resolver::class_specialization_parameter_value(
+    const SystemVerilogClassDeclaration& owner, const std::string_view spelling,
+    const std::string_view member) const {
+  const auto trim = [](std::string_view text) {
+    while (!text.empty()
+           && std::isspace(static_cast<unsigned char>(text.front()))) {
+      text.remove_prefix(1U);
+    }
+    while (!text.empty()
+           && std::isspace(static_cast<unsigned char>(text.back()))) {
+      text.remove_suffix(1U);
+    }
+    return text;
+  };
+  // An actual written as a literal or a name.
+  const auto actual_expression = [&](std::string_view text)
+      -> std::optional<Expression> {
+    text = trim(text);
+    if (text.empty()) return std::nullopt;
+    const auto identifier = (std::isalpha(static_cast<unsigned char>(
+                                 text.front())) != 0
+                                || text.front() == '_')
+        && std::ranges::all_of(text, [](const char character) {
+             return std::isalnum(static_cast<unsigned char>(character)) != 0
+                 || character == '_' || character == '$';
+           });
+    const auto literal = (std::isdigit(static_cast<unsigned char>(
+                              text.front())) != 0
+                             || text.front() == '\'')
+        && std::ranges::all_of(text, [](const char character) {
+             return std::isalnum(static_cast<unsigned char>(character)) != 0
+                 || character == '_' || character == '\'';
+           });
+    if (!identifier && !literal) return std::nullopt;
+    return Expression{
+        identifier ? ExpressionKind::Identifier
+            : text.find('\'') != std::string_view::npos
+            ? ExpressionKind::LogicLiteral
+            : ExpressionKind::IntegerLiteral,
+        std::string{text}, {}, {}};
+  };
+  std::map<std::string, Expression, std::less<>> values;
+  const auto actuals = selected_parameter_actuals(spelling);
+  std::size_t position{};
+  for (const auto& parameter : owner.parameters) {
+    if (parameter.local) continue;
+    std::optional<std::string_view> text;
+    for (const auto actual : actuals) {
+      const auto trimmed = trim(actual);
+      if (trimmed.starts_with('.')) {
+        const auto open = trimmed.find('(');
+        if (open != std::string_view::npos && trimmed.ends_with(')')
+            && trim(trimmed.substr(1U, open - 1U)) == parameter.name) {
+          text = trimmed.substr(open + 1U, trimmed.size() - open - 2U);
+        }
+      }
+    }
+    if (!text && position < actuals.size()
+        && !trim(actuals[position]).starts_with('.')) {
+      text = actuals[position];
+    }
+    ++position;
+    if (text) {
+      if (parameter.kind != ParameterKind::Value) continue;
+      auto value = actual_expression(*text);
+      if (!value) return std::nullopt;
+      values.insert_or_assign(parameter.name, std::move(*value));
+    }
+  }
+  const auto selected = std::ranges::find_if(owner.parameters,
+      [&](const ParameterDeclaration& parameter) {
+        return parameter.kind == ParameterKind::Value
+            && parameter.name == member;
+      });
+  const auto substitute = [&](const auto& self, Expression value,
+                              const std::size_t depth)
+      -> std::optional<Expression> {
+    if (depth > 16U) return std::nullopt;
+    if (value.kind == ExpressionKind::Identifier) {
+      if (const auto found = values.find(value.text); found != values.end()) {
+        return found->second;
+      }
+      const auto parameter = std::ranges::find_if(owner.parameters,
+          [&](const ParameterDeclaration& candidate) {
+            return candidate.kind == ParameterKind::Value
+                && candidate.name == value.text;
+          });
+      if (parameter != owner.parameters.end()) {
+        return self(self, parameter->default_value, depth + 1U);
+      }
+      return value;
+    }
+    for (auto& operand : value.operands) {
+      auto replaced = self(self, std::move(operand), depth + 1U);
+      if (!replaced) return std::nullopt;
+      operand = std::move(*replaced);
+    }
+    return value;
+  };
+  if (selected == owner.parameters.end()) {
+    // A local parameter of the class body is kept as a constant property.
+    const auto property = std::ranges::find_if(owner.properties,
+        [&](const SystemVerilogClassProperty& candidate) {
+          return candidate.is_parameter
+              && candidate.declaration.name == member;
+        });
+    if (property == owner.properties.end()
+        || !property->declaration.initializer) {
+      return std::nullopt;
+    }
+    return substitute(substitute, *property->declaration.initializer, 0U);
+  }
+  if (const auto found = values.find(selected->name); found != values.end()) {
+    return found->second;
+  }
+  if (!selected->default_value.valid()) return std::nullopt;
+  return substitute(substitute, selected->default_value, 0U);
 }
 [[nodiscard]] std::optional<ClassSelection> Resolver::resolve_class_selection(
     const std::string_view spelling, const Scope& scope) const {
@@ -1360,6 +1552,17 @@ void Resolver::retain_result_type(
         {},
         expression.span};
     const auto receiver_type = resolve_expression(receiver, scope);
+    // A member of a packed structure class property (`c.p.a`, 7.2, 8.5).
+    if (receiver_type && !class_identity(*receiver_type)
+        && is_class_property_access(receiver)) {
+      const auto member = expression.text.substr(dot + 1U);
+      auto type = packed_member_type(*receiver_type, member);
+      if (!type) return std::nullopt;
+      expression.kind = ExpressionKind::Call;
+      expression.text = "@sv-select:" + member;
+      expression.operands = {std::move(receiver)};
+      return type;
+    }
     if (!receiver_type || !class_identity(*receiver_type)) return std::nullopt;
     const auto member = expression.text.substr(dot + 1U);
     const auto match = find_property(*class_identity(*receiver_type), member);
@@ -1490,6 +1693,18 @@ void Resolver::retain_result_type(
               + owner_name + "#()::" + member + "'",
           expression.span);
       return std::nullopt;
+    }
+    // A value parameter or local parameter of a specialization,
+    // `C#(7)::v` (IEEE 1800-2017 8.25.1): its value expression with the
+    // specialization's parameter values substituted.
+    if (owners.size() == 1U && owner_name.find('#') != std::string::npos) {
+      if (auto value = class_specialization_parameter_value(
+              *owners.front(), owner_name, member)) {
+        const auto span = expression.span;
+        expression = std::move(*value);
+        expression.span = span;
+        return resolve_expression(expression, scope);
+      }
     }
     if (owners.size() == 1U) {
       const auto match = find_property(

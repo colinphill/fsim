@@ -379,8 +379,11 @@ HierarchyBuilder::resolve_compiled_systemverilog_parameters(
                 }
             }
         }
+        // An unpacked array parameter keeps the element-value identity of
+        // its binding (6.20.2).
         if (formal && formal->systemverilog != nullptr
-            && binding.expression && !formal_is_type_parameter) {
+            && binding.expression && !formal_is_type_parameter
+            && !formal->systemverilog->array_parameter) {
             const auto target_scalar = formal->systemverilog->type
                 ? hierarchy_sv_parameters_detail::
                       compiled_systemverilog_scalar_kind(

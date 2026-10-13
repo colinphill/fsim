@@ -5104,6 +5104,23 @@ namespace {
                 return PackedLogic4::from_aval_bval(8U, *position, 0U);
             }
         }
+        // A STRING element: one 8-bit character per position, left first.
+        if (width != 0U && width % 8U == 0U
+            && compiled_vhdl_predefined_subtype(
+                specialization, subtype, scope, "string")) {
+            if (const auto text = specialization.evaluate_string_expression(
+                    expression_id);
+                text && text->size() * 8U == width) {
+                std::string bits;
+                bits.reserve(width);
+                for (const auto character : *text) {
+                    bits += PackedLogic4::from_aval_bval(8U,
+                        static_cast<unsigned char>(character), 0U)
+                                .to_msb_string();
+                }
+                return PackedLogic4::from_logic9_msb_string(bits);
+            }
+        }
         if (type && type->vhdl_array) {
             auto composite = compiled_vhdl_static_composite_initializer(
                 specialization, expression_id, subtype, scope, *type, width);
@@ -5546,8 +5563,11 @@ namespace {
                     expression->vhdl->scope,
                     [](const semantic::CompiledDeclarationView& candidate) {
                         return candidate.vhdl != nullptr
-                            && candidate.vhdl->form
-                                == semantic::vhdl::DeclarationForm::constant;
+                            && (candidate.vhdl->form
+                                    == semantic::vhdl::DeclarationForm::constant
+                                || candidate.vhdl->form
+                                    == semantic::vhdl::DeclarationForm::
+                                        generic_constant);
                     }).unique();
             }
             if (!selected) {
@@ -5555,9 +5575,20 @@ namespace {
             }
             const auto declaration = specialization.find_declaration(
                 *selected);
+            // A generic without an actual denotes its default value.
+            const bool unbound_generic = declaration
+                && declaration->vhdl != nullptr
+                && declaration->vhdl->form
+                    == semantic::vhdl::DeclarationForm::generic_constant
+                && std::ranges::none_of(
+                    specialization.specialization().actual_identities,
+                    [&](const semantic::SpecializedHirActualIdentity& actual) {
+                        return actual.declaration == *selected;
+                    });
             if (!declaration || declaration->vhdl == nullptr
-                || declaration->vhdl->form
-                    != semantic::vhdl::DeclarationForm::constant
+                || (declaration->vhdl->form
+                        != semantic::vhdl::DeclarationForm::constant
+                    && !unbound_generic)
                 || !declaration->vhdl->initializer
                 || *declaration->vhdl->initializer == id) {
                 return std::nullopt;
@@ -8775,6 +8806,40 @@ namespace {
                         }
                     }
                 }
+            }
+            // A resolved class property (`@sv-property:<class>::<name>`),
+            // searched through the class and its bases.
+            constexpr auto property_prefix = std::string_view { "@sv-property:" };
+            if (expression->systemverilog->kind == ExpressionKind::class_property
+                && expression->systemverilog->text.starts_with(property_prefix)) {
+                const auto path = std::string_view { expression->systemverilog->text }
+                                      .substr(property_prefix.size());
+                const auto separator = path.rfind("::");
+                if (separator == std::string_view::npos) {
+                    return nullptr;
+                }
+                auto identity = path.substr(0U, separator);
+                const auto property_name = path.substr(separator + 2U);
+                for (std::size_t depth { }; depth < 32U && !identity.empty(); ++depth) {
+                    const semantic::sv::ClassDeclaration* owner = nullptr;
+                    for (const auto& candidate : compiled.systemverilog_hir.classes()) {
+                        if (candidate.canonical_identity == identity
+                            && !candidate.forward_declaration) {
+                            owner = &candidate;
+                            break;
+                        }
+                    }
+                    if (owner == nullptr) {
+                        return nullptr;
+                    }
+                    for (const auto& property : owner->properties) {
+                        if (property.name == property_name) {
+                            return &property.type;
+                        }
+                    }
+                    identity = owner->base_declaration_identity;
+                }
+                return nullptr;
             }
             if (!expression->systemverilog->referenced_name) {
                 return nullptr;
@@ -15415,9 +15480,10 @@ std::optional<SignalId> HierarchyBuilder::add_compiled_vhdl_constant_signal(
             packed_vector_value = PackedLogic4::from_msb_string(packed->bits);
         }
     }
-    if (bit_elements && !packed_vector_value) {
-        return std::nullopt;
-    }
+    // An array of bits whose value does not fold as a vector (an aggregate
+    // indexed by an enumeration type) is materialized like other
+    // composites.
+    const bool composite_bits = bit_elements && !packed_vector_value;
     if (packed_vector_value) {
         const auto id = static_cast<SignalId>(design_.signals_.size());
         design_.signal_by_name_.emplace(name, id);
@@ -15462,7 +15528,7 @@ std::optional<SignalId> HierarchyBuilder::add_compiled_vhdl_constant_signal(
         && (element.domain == frontend::ValueDomain::Logic9
             || element.domain == frontend::ValueDomain::Logic4
             || element.domain == frontend::ValueDomain::Bit2);
-    if (logic_vector) {
+    if (logic_vector && !composite_bits) {
         return std::nullopt;
     }
     const auto value = compiled_vhdl_static_composite_initializer(
@@ -16680,6 +16746,10 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
     }
     const auto runtime_domain = info.source_domain;
     design_.signal_info_.push_back(std::move(info));
+    if (declaration.guarded_kind != 0U) {
+        vhdl_guarded_signal_kinds_.insert_or_assign(
+            id, declaration.guarded_kind);
+    }
     if (const auto resolution = compiled_vhdl_resolution_function(
             working_specialization, *declaration.subtype,
             declaration.scope)) {

@@ -2000,6 +2000,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
     // programs, last resolved values, and the signals whose drivers changed
     // since their resolver last ran.
     std::unordered_map<SignalId, VhdlSignalResolver> vhdl_resolvers;
+    // Drivers of guarded signals disconnected by a null transaction
+    // (IEEE 1076-2008 10.5.2.2); a later value reconnects them.
+    std::set<std::pair<SignalId, ProcessId>> vhdl_disconnected_drivers;
     std::unordered_map<SignalId, PackedLogic4> vhdl_resolved_values;
     std::unordered_map<SignalId, PackedLogic4> vhdl_driver_initial_values;
     mutable std::vector<SignalId> pending_vhdl_resolutions;
@@ -5042,6 +5045,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
         SignalId signal_id,
         const ForcedDriverMapView* override_maps = nullptr) const;
     [[nodiscard]] PackedLogic4 run_vhdl_resolver(SignalId signal_id);
+    // `@vhdl-disconnect:<signal>:<delay>`: a null transaction on the
+    // calling process's driver. Returns false for other identities.
+    bool try_vhdl_disconnect_call(
+        ProcessId process, std::string_view identity);
+    void schedule_vhdl_disconnect(
+        ProcessId process, SignalId signal, SimulationTick delay);
     void drain_vhdl_resolutions();
     void initialize_vhdl_resolutions();
 

@@ -25,6 +25,33 @@ using namespace hierarchy_sv_parameters_detail;
 
 namespace {
 
+    // A fixed unpacked array of packed elements holding `values`, leftmost
+    // element first through every dimension.
+    [[nodiscard]] std::optional<ContainerValue> array_parameter_container(
+        const ContainerType& type, const std::vector<std::int64_t>& values)
+    {
+        if (!type.fixed || type.associative || type.aggregate_value
+            || type.element_kind != ContainerElementKind::Packed) {
+            return std::nullopt;
+        }
+        auto value = default_container_value(type);
+        if (value.elements.size() != values.size()) {
+            return std::nullopt;
+        }
+        for (std::size_t at = 0; at < values.size(); ++at) {
+            PackedLogic4 element(type.element_width, Logic4::zero);
+            const auto raw = static_cast<std::uint64_t>(values[at]);
+            for (std::size_t bit = 0; bit < type.element_width; ++bit) {
+                const auto set = bit < 64U
+                    ? ((raw >> bit) & 1U) != 0U
+                    : values[at] < 0;
+                element.set(bit, set ? Logic4::one : Logic4::zero);
+            }
+            value.elements[at] = std::move(element);
+        }
+        return value;
+    }
+
     // The constant value of a container declaration initializer: a positional
     // assignment pattern, nested patterns for the dimensions of a fixed
     // array, `default:`, or for a queue or dynamic array an unpacked
@@ -33,7 +60,8 @@ namespace {
     constant_container_initializer(
         const semantic::SpecializedHirUnit& specialization,
         const ContainerType& type,
-        const semantic::ExpressionId initializer)
+        const semantic::ExpressionId initializer,
+        const semantic::sv::TypeReference* const element_type = nullptr)
     {
         using semantic::sv::ExpressionKind;
         // `'{key: value, ...}` for an associative array (7.9.11, 10.9.2).
@@ -141,6 +169,141 @@ namespace {
                         return std::nullopt;
                     }
                     value.elements[position] = *element;
+                }
+            }
+            return value;
+        }
+        // A fixed array of unpacked structures: one structure pattern per
+        // element, its members by position or name (IEEE 1800-2017
+        // 10.9.1, 10.9.2).
+        if (type.fixed && !type.associative && type.dimensions.size() == 1U
+            && type.element_kind == ContainerElementKind::Aggregate) {
+            const auto pattern = specialization.find_expression(initializer);
+            if (!pattern || pattern->systemverilog == nullptr
+                || pattern->systemverilog->kind
+                    != ExpressionKind::assignment_pattern) {
+                return std::nullopt;
+            }
+            auto value = default_container_value(type);
+            std::string error;
+            const auto fill_member = [&](ContainerValue& leaf,
+                                         const semantic::ExpressionId item) {
+                if (leaf.type.element_kind == ContainerElementKind::String
+                    && leaf.string_elements.size() == 1U) {
+                    const auto text
+                        = specialization.evaluate_string_expression(item);
+                    if (!text) {
+                        return false;
+                    }
+                    leaf.string_elements.front() = *text;
+                    return true;
+                }
+                if (leaf.type.element_kind != ContainerElementKind::Packed
+                    || leaf.elements.size() != 1U) {
+                    return false;
+                }
+                const auto constant = evaluate_hir_systemverilog_constant(
+                    specialization, item, error);
+                if (!constant || constant->unbounded) {
+                    return false;
+                }
+                const auto width = leaf.type.element_width;
+                const auto sign = constant->packed.width() != 0U
+                        && constant->signed_value
+                    ? runtime::to_logic4(constant->packed.get_logic9(
+                          constant->packed.width() - 1U))
+                    : Logic4::zero;
+                PackedLogic4 bits(width, Logic4::zero);
+                for (std::size_t bit = 0; bit < width; ++bit) {
+                    bits.set(bit, bit < constant->packed.width()
+                            ? runtime::to_logic4(
+                                  constant->packed.get_logic9(bit))
+                            : sign);
+                }
+                leaf.elements.front() = std::move(bits);
+                return true;
+            };
+            const auto fill_structure = [&](ContainerValue& box,
+                                            const semantic::ExpressionId item) {
+                const auto structure = specialization.find_expression(item);
+                if (!structure || structure->systemverilog == nullptr
+                    || structure->systemverilog->kind
+                        != ExpressionKind::assignment_pattern) {
+                    return false;
+                }
+                const auto& associations
+                    = structure->systemverilog->associations;
+                const auto& names = box.type.member_names;
+                std::optional<semantic::ExpressionId> fallback;
+                std::vector<std::optional<semantic::ExpressionId>> members(
+                    box.nested_elements.size());
+                std::size_t position { };
+                for (const auto& association : associations) {
+                    if (association.choice_spelling == "default") {
+                        fallback = association.value;
+                    } else if (association.choice_spelling.empty()) {
+                        if (position >= members.size()) {
+                            return false;
+                        }
+                        members[position++] = association.value;
+                    } else {
+                        // `name: value`, kept as a keyed choice expression.
+                        auto member_name = association.choice_spelling;
+                        if (member_name == "@key"
+                            && association.choices.size() == 1U) {
+                            const auto choice = specialization.find_expression(
+                                association.choices.front());
+                            if (choice && choice->systemverilog != nullptr
+                                && choice->systemverilog->kind
+                                    == ExpressionKind::name) {
+                                member_name = choice->systemverilog->text;
+                            }
+                        }
+                        const auto found = std::ranges::find(
+                            names, member_name);
+                        if (found == names.end()) {
+                            return false;
+                        }
+                        members[static_cast<std::size_t>(
+                            found - names.begin())] = association.value;
+                    }
+                }
+                for (std::size_t member = 0; member < members.size();
+                    ++member) {
+                    const auto item_value = members[member]
+                        ? members[member]
+                        : fallback;
+                    if (!item_value
+                        || !fill_member(box.nested_elements[member],
+                            *item_value)) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            const auto& items = pattern->systemverilog->associations;
+            std::optional<semantic::ExpressionId> fallback;
+            std::vector<semantic::ExpressionId> positional;
+            for (const auto& association : items) {
+                if (association.choice_spelling == "default") {
+                    fallback = association.value;
+                } else if (association.choice_spelling.empty()) {
+                    positional.push_back(association.value);
+                } else {
+                    return std::nullopt;
+                }
+            }
+            if (value.nested_elements.size() != positional.size()
+                && !(positional.empty() && fallback)) {
+                return std::nullopt;
+            }
+            for (std::size_t index = 0; index < value.nested_elements.size();
+                ++index) {
+                const auto item = positional.empty()
+                    ? *fallback
+                    : positional[index];
+                if (!fill_structure(value.nested_elements[index], item)) {
+                    return std::nullopt;
                 }
             }
             return value;
@@ -275,8 +438,20 @@ namespace {
                 }
                 const auto key = evaluate_hir_systemverilog_constant(
                     specialization, association.choices.front(), key_error);
+                // An unsigned key such as 4'd8 keeps its unsigned value.
+                const auto unsigned_key = key && !key->unbounded
+                        && !key->signed_value
+                    ? key->packed.known_unsigned_value()
+                    : std::nullopt;
                 const auto index = key && !key->unbounded
-                    ? key->packed.known_signed_value()
+                    ? (key->signed_value
+                          ? key->packed.known_signed_value()
+                          : unsigned_key
+                              && *unsigned_key <= static_cast<std::uint64_t>(
+                                  std::numeric_limits<std::int64_t>::max())
+                          ? std::optional<std::int64_t> {
+                                static_cast<std::int64_t>(*unsigned_key) }
+                          : std::nullopt)
                     : std::nullopt;
                 if (!index || *index < std::min(left, right)
                     || *index > std::max(left, right)) {
@@ -420,8 +595,15 @@ namespace {
                     type.element_width, scalar->bits, 0U);
                 return true;
             }
-            const auto constant = evaluate_hir_systemverilog_constant(
+            auto constant = evaluate_hir_systemverilog_constant(
                 specialization, id, error);
+            // A keyed pattern for a packed structure element takes the
+            // element type's layout (10.9.2).
+            if ((!constant || constant->unbounded) && element_type != nullptr) {
+                std::string typed_error;
+                constant = evaluate_hir_systemverilog_typed_constant(
+                    specialization, id, *element_type, typed_error);
+            }
             if (!constant || constant->unbounded) {
                 // A string literal is its characters, eight bits each,
                 // right-justified in the element (5.9).
@@ -810,10 +992,34 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             }
         }
         std::optional<ContainerValue> initial_container;
-        if (declaration.initializer && executable_container_type) {
+        // An instance's value for an unpacked array parameter (6.20.2).
+        const auto array_actual = declaration.array_parameter
+            ? working_specialization.systemverilog_array_actual(
+                  declaration_id)
+            : std::nullopt;
+        if (array_actual) {
+            initial_container = executable_container_type
+                ? array_parameter_container(
+                      *executable_container_type, *array_actual)
+                : std::nullopt;
+            if (!initial_container) {
+                report(
+                    "FSIM-ELAB-PARAM-001",
+                    "unpacked array parameter '" + declaration.name
+                        + "' has an actual with the wrong number of "
+                          "elements",
+                    compiled_source_span(
+                        *compiled_, declaration.source));
+                return false;
+            }
+        } else if (declaration.initializer && executable_container_type) {
+            auto element_type = *declaration.type;
+            element_type.unpacked_dimensions.clear();
+            element_type.container_form.reset();
+            element_type.container_element_types.clear();
             initial_container = constant_container_initializer(
                 working_specialization, *executable_container_type,
-                *declaration.initializer);
+                *declaration.initializer, &element_type);
         }
         // A variable's initializer that is not a constant runs as its
         // time-zero declaration initializer process (6.8).
@@ -1069,7 +1275,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             // A declaration initializer also sets the bridge's value.
             const auto& initial_object
                 = design_.container_objects_.at(id).initial_value;
-            const bool initialized_bridge = declaration.initializer
+            const bool initialized_bridge
+                = (declaration.initializer || array_actual)
                 && container_signal_bridge_width(initial_object.type)
                     == bridge_width;
             Signal signal {

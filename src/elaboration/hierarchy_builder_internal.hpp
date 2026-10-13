@@ -1695,6 +1695,8 @@ private:
         std::shared_ptr<const semantic::SpecializedHirUnit> specialization;
     };
     std::map<SignalId, PendingVhdlResolver> vhdl_function_resolvers_;
+    // Guarded signals: 1 for bus, 2 for register (IEEE 1076-2008 6.4.2.3).
+    std::unordered_map<SignalId, std::uint8_t> vhdl_guarded_signal_kinds_;
     std::unordered_map<std::string, ResolutionKind>
         vhdl_resolution_kinds_;
     std::unordered_map<std::string, ResolutionKind>

@@ -793,6 +793,12 @@ private:
     [[nodiscard]] std::optional<HirPackedMemberSelection>
     hir_systemverilog_member_path(
         semantic::DeclarationId declaration, std::string_view path) const;
+    // A member path through a packed structure type, as a declaration's
+    // members (`declaration` is recorded in the result).
+    [[nodiscard]] std::optional<HirPackedMemberSelection>
+    hir_systemverilog_type_member_path(const semantic::sv::TypeReference& type,
+        semantic::ScopeId scope, semantic::DeclarationId declaration,
+        std::string_view path) const;
     // An enumeration method (IEEE 1800-2017 6.19.5): `e.first()`, or the
     // parenthesis-free `e.next` that the frontend keeps as a dotted name.
     struct HirEnumerationMethod {
@@ -850,7 +856,7 @@ private:
     // A real or shortreal payload rounded to a 64-bit signed integral value
     // (IEEE 1800-2017 6.12.2: to nearest, ties away from zero).
     [[nodiscard]] RegisterId convert_hir_real_to_integral(RegisterId value,
-        frontend::SystemVerilogScalarKind source);
+        frontend::SystemVerilogScalarKind source, std::size_t width = 64U);
     // A value lowered for an element or member of `target` kind (None for
     // integral), converted between real and integral (IEEE 1800-2017
     // 10.9: each pattern item is assigned as if by an assignment).
@@ -1693,6 +1699,8 @@ private:
     enum class HirPackedCopyOutMode : std::uint8_t {
         blocking,
         systemverilog_active_update,
+        // A nonblocking assignment to a concatenation (10.4.2).
+        systemverilog_nonblocking_update,
     };
     [[nodiscard]] bool lower_hir_packed_copy_out(
         semantic::ExpressionId target,
@@ -1719,6 +1727,19 @@ private:
     hir_class_property_profile(
         semantic::ExpressionId expression,
         bool string_property = false) const;
+    // A member of a packed structure class property (`c.p.a`, IEEE
+    // 1800-2017 7.2, 8.5): the property access and the member's position.
+    struct HirClassPropertyMember {
+        semantic::ExpressionId property;
+        HirClassPropertyProfile profile;
+        HirPackedMemberSelection member;
+    };
+    [[nodiscard]] std::optional<HirClassPropertyMember>
+    hir_class_property_member(semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<RegisterId> lower_hir_class_property_member(
+        const HirClassPropertyMember& member);
+    [[nodiscard]] bool lower_hir_class_property_member_write(
+        const HirClassPropertyMember& member, RegisterId value);
     // A string class property read into a string register, or written from
     // one, through the class method boundary.
     [[nodiscard]] std::optional<StringRegisterId>
@@ -1921,6 +1942,13 @@ private:
     [[nodiscard]] std::optional<PackedLogic4> hir_vhdl_default_value(
         const semantic::vhdl::SubtypeIndication& subtype, std::size_t width,
         std::size_t depth = 0U, bool scalar = false) const;
+    // The bounds of a REAL subtype (IEEE 1076-2008 5.2.5), lowest first:
+    // its range constraint when the bounds fold, otherwise REAL's range.
+    // Not a REAL subtype or unfoldable bounds return nullopt.
+    [[nodiscard]] std::optional<std::pair<double, double>>
+    hir_vhdl_real_range(const semantic::vhdl::SubtypeIndication& subtype) const;
+    [[nodiscard]] std::optional<double> hir_vhdl_constant_real(
+        semantic::ExpressionId expression, std::size_t depth = 0U) const;
     // VHDL ordering of one-dimensional discrete arrays of equal length
     // (IEEE 1076-2008 9.2.3), lexicographic from the left element.
     [[nodiscard]] std::optional<RegisterId> lower_hir_vhdl_array_ordering(

@@ -1857,6 +1857,129 @@ Lowerer::hir_class_property_profile(
     return result;
 }
 
+std::optional<Lowerer::HirClassPropertyMember>
+Lowerer::hir_class_property_member(
+    const semantic::ExpressionId expression_id) const
+{
+    if (specialized_hir_unit_ == nullptr) {
+        return std::nullopt;
+    }
+    constexpr std::string_view selected_prefix { "@sv-select:" };
+    std::string path;
+    auto current = expression_id;
+    for (std::size_t depth { }; depth < 16U; ++depth) {
+        const auto expression = specialized_hir_unit_->find_expression(
+            current);
+        if (!expression || expression->systemverilog == nullptr) {
+            return std::nullopt;
+        }
+        const auto& source = *expression->systemverilog;
+        if (source.kind != semantic::sv::ExpressionKind::call
+            || !source.text.starts_with(selected_prefix)
+            || source.operands.size() != 1U) {
+            break;
+        }
+        const auto member = std::string_view { source.text }.substr(
+            selected_prefix.size());
+        path = path.empty() ? std::string { member }
+                            : std::string { member } + "." + path;
+        current = source.operands.front();
+    }
+    if (path.empty()) {
+        return std::nullopt;
+    }
+    const auto profile = hir_class_property_profile(current);
+    const auto expression = specialized_hir_unit_->find_expression(current);
+    if (!profile || !expression || expression->systemverilog == nullptr) {
+        return std::nullopt;
+    }
+    const semantic::CompiledDesignResolver resolver {
+        *specialized_hir_unit_, hir_generic_binding_frames_
+    };
+    const auto* selected = resolver.resolve_systemverilog_class_property(
+        profile->identity, profile->static_storage).unique();
+    if (selected == nullptr) {
+        return std::nullopt;
+    }
+    // The property's type is named in the scope that declares it.
+    const auto property_declaration = specialized_hir_unit_->find_declaration(
+        selected->declaration);
+    const auto type_scope = property_declaration
+            && property_declaration->systemverilog != nullptr
+        ? property_declaration->systemverilog->scope
+        : expression->systemverilog->scope;
+    auto member = hir_systemverilog_type_member_path(selected->type,
+        type_scope, semantic::DeclarationId { }, path);
+    if (!member) {
+        member = hir_systemverilog_type_member_path(selected->type,
+            expression->systemverilog->scope, semantic::DeclarationId { },
+            path);
+    }
+    // A class body lowered in a module's process names compilation-unit
+    // types as the module does.
+    if (!member) {
+        member = hir_systemverilog_type_member_path(selected->type,
+            specialized_hir_unit_->scope(), semantic::DeclarationId { },
+            path);
+    }
+    if (!member || member->tagged || member->width == 0U
+        || member->offset + member->width > profile->width) {
+        return std::nullopt;
+    }
+    return HirClassPropertyMember { current, *profile, std::move(*member) };
+}
+
+std::optional<RegisterId> Lowerer::lower_hir_class_property_member(
+    const HirClassPropertyMember& member)
+{
+    const auto whole = lower_hir_expression(
+        member.property, member.profile.width);
+    if (!whole || register_width(*whole) != member.profile.width) {
+        return std::nullopt;
+    }
+    const auto result = allocate_register(
+        member.member.width, member.member.domain);
+    process_.operations.emplace_back(Extract {
+        result, *whole,
+        static_cast<std::uint32_t>(member.member.offset),
+        static_cast<std::uint32_t>(member.member.width) });
+    return result;
+}
+
+bool Lowerer::lower_hir_class_property_member_write(
+    const HirClassPropertyMember& member, RegisterId value)
+{
+    if (!member.profile.writable) {
+        return false;
+    }
+    if (register_width(value) != member.member.width) {
+        value = resize_register(
+            value, member.member.width, member.member.signed_value);
+    }
+    const auto whole = lower_hir_expression(
+        member.property, member.profile.width);
+    if (!whole || register_width(*whole) != member.profile.width) {
+        return false;
+    }
+    const auto updated = allocate_register(
+        member.profile.width, register_domain(*whole));
+    process_.operations.emplace_back(Insert {
+        updated, *whole, value,
+        static_cast<std::uint32_t>(member.member.offset) });
+    if (member.profile.static_storage) {
+        process_.operations.emplace_back(ClassStaticPropertyWrite {
+            updated, member.profile.identity });
+        return true;
+    }
+    const auto receiver = lower_hir_expression(*member.profile.receiver, 64U);
+    if (!receiver || register_width(*receiver) != 64U) {
+        return false;
+    }
+    process_.operations.emplace_back(ClassPropertyWrite {
+        *receiver, updated, member.profile.identity });
+    return true;
+}
+
 namespace {
 
 // The single string actual of a string property access (see the class
@@ -4690,9 +4813,11 @@ std::optional<semantic::ExpressionId> Lowerer::hir_generic_actual(
         // contains the value selected by specialization. Preserve the child
         // formal whenever that value is available so all width, generate,
         // and process consumers observe the specialized value.
+        // An unpacked array parameter is its container object.
         if (decode_hir_systemverilog_constant(actual->identity)
             || decode_hir_systemverilog_scalar_constant(
                 actual->identity)
+            || specialized_hir_unit_->systemverilog_array_actual(*selected)
             || specialized_hir_unit_->evaluate_integral_expression(
                 expression_id)
             || specialized_hir_unit_->evaluate_string_expression(
@@ -8003,7 +8128,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_resolution_call(
     if (!declaration || declaration->vhdl == nullptr
         || !declaration->vhdl->callable
         || declaration->vhdl->callable->formals.size() != 1U
-        || !declaration->vhdl->nested_scope || driver_count == 0U) {
+        || !declaration->vhdl->nested_scope) {
         return std::nullopt;
     }
     const auto type = hir_callable_type(function, element_width);

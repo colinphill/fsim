@@ -2,6 +2,7 @@
 
 #include "simir_internal.hpp"
 
+#include <charconv>
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -1278,7 +1279,42 @@ PackedLogic4 Interpreter::Impl::run_vhdl_resolver(const SignalId signal_id)
     const auto& resolver = vhdl_resolvers.at(signal_id);
     const auto& signal = get_signal(signal_id);
     const auto width = signal.initial_value.width();
-    const auto count = resolver.drivers.size();
+    // Disconnected drivers of a guarded signal do not take part (IEEE
+    // 1076-2008 14.7.3.2).
+    std::vector<ProcessId> connected;
+    connected.reserve(resolver.drivers.size());
+    for (const auto driver : resolver.drivers) {
+        if (!vhdl_disconnected_drivers.contains({ signal_id, driver })) {
+            connected.push_back(driver);
+        }
+    }
+    const auto count = connected.size();
+    auto program_process = resolver.process;
+    auto program_input = resolver.input;
+    auto program_output = resolver.output;
+    if (count != resolver.drivers.size()) {
+        // A register keeps its value while every driver is disconnected.
+        if (count == 0U
+            && (resolver.guarded_kind == 2U
+                || (!resolver.variants.empty()
+                    && resolver.variants.front().process
+                        == std::numeric_limits<ProcessId>::max()))) {
+            const auto found = vhdl_resolved_values.find(signal_id);
+            return found != vhdl_resolved_values.end()
+                ? found->second
+                : signal.initial_value;
+        }
+        if (count >= resolver.variants.size()) {
+            throw std::invalid_argument {
+                "VHDL guarded signal has no resolver for its connected "
+                "drivers"
+            };
+        }
+        const auto& variant = resolver.variants[count];
+        program_process = variant.process;
+        program_input = variant.input;
+        program_output = variant.output;
+    }
     PackedLogic4 driving { width * count, Logic4::x };
     if (signal.value_kind == ValueKind::logic9) {
         driving.fill(Logic9::u);
@@ -1287,20 +1323,89 @@ PackedLogic4 Interpreter::Impl::run_vhdl_resolver(const SignalId signal_id)
     for (std::size_t index = 0U; index < count; ++index) {
         // The leftmost element of the driving-value array is the first
         // driver, held in the most significant position.
-        const auto* record = values.find(resolver.drivers[index]);
+        const auto* record = values.find(connected[index]);
         const auto& value = record != nullptr
             ? record->value
             : vhdl_driver_initial_values.at(signal_id);
         driving.insert_bits(value, (count - 1U - index) * width);
     }
-    auto& process = get_process(resolver.process);
-    get_register(process, resolver.input) = std::move(driving);
+    auto& process = get_process(program_process);
+    if (count != 0U) {
+        get_register(process, program_input) = std::move(driving);
+    }
     // Each resolution is one complete pass of the program, which halts.
     process.pc = 0U;
     process.halted = false;
-    execute(resolver.process);
+    execute(program_process);
     return coerce_value_kind(
-        get_register(process, resolver.output), signal.value_kind);
+        get_register(process, program_output), signal.value_kind);
+}
+
+bool Interpreter::Impl::try_vhdl_disconnect_call(
+    const ProcessId process, const std::string_view identity)
+{
+    constexpr std::string_view prefix { "@vhdl-disconnect:" };
+    if (!identity.starts_with(prefix)) {
+        return false;
+    }
+    const auto fields = identity.substr(prefix.size());
+    const auto separator = fields.find(':');
+    SignalId signal { };
+    SimulationTick delay { };
+    if (separator == std::string_view::npos
+        || std::from_chars(fields.data(), fields.data() + separator, signal)
+               .ec != std::errc { }
+        || std::from_chars(fields.data() + separator + 1U,
+               fields.data() + fields.size(), delay).ec != std::errc { }) {
+        throw std::invalid_argument { "malformed VHDL disconnection" };
+    }
+    schedule_vhdl_disconnect(process, signal, delay);
+    return true;
+}
+
+void Interpreter::Impl::schedule_vhdl_disconnect(
+    const ProcessId process, const SignalId signal,
+    const SimulationTick delay)
+{
+    if (!vhdl_resolvers.contains(signal)) {
+        return;
+    }
+    if (delay > std::numeric_limits<SimulationTick>::max() - scheduler.now()) {
+        throw std::overflow_error(
+            "simulation time overflow while scheduling a disconnection");
+    }
+    // The null transaction replaces this driver's later transactions
+    // (10.5.2.2).
+    const auto time = scheduler.now() + delay;
+    const auto width = driven_values[signal].width();
+    for (std::size_t bit = 0; bit < width; ++bit) {
+        const auto driver = projected_drivers.find(ProjectedDriverKey {
+            process, signal, static_cast<std::uint32_t>(bit) });
+        if (driver == projected_drivers.end()) {
+            continue;
+        }
+        auto& transactions = driver->second.transactions;
+        const auto first = std::lower_bound(transactions.begin(),
+            transactions.end(), time,
+            [](const ProjectedTransaction& transaction,
+                const SimulationTick candidate) {
+                return transaction.time < candidate;
+            });
+        for (auto transaction = first; transaction != transactions.end();
+            ++transaction) {
+            scheduler.cancel(transaction->handle);
+        }
+        transactions.erase(first, transactions.end());
+    }
+    scheduler.schedule_after(delay, SchedulerPhase::update, process,
+        [this, process, signal](Scheduler&) {
+            if (!vhdl_disconnected_drivers.insert({ signal, process }).second) {
+                return;
+            }
+            auto value = run_vhdl_resolver(signal);
+            vhdl_resolved_values.insert_or_assign(signal, value);
+            commit(signal, apply_force(signal, std::move(value)));
+        });
 }
 
 void Interpreter::Impl::drain_vhdl_resolutions()
@@ -2486,6 +2591,10 @@ void Interpreter::Impl::commit_driver(
 {
     require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
+    // A value reconnects a disconnected guarded driver.
+    if (!vhdl_disconnected_drivers.empty()) {
+        vhdl_disconnected_drivers.erase({ signal_id, process });
+    }
     const auto change_origin = origin.value_or(
         capture_signal_change_origin(process));
     if (route_path && route_module_path_update(
@@ -3309,6 +3418,9 @@ void Interpreter::Impl::commit_driver_slice(
     const std::optional<SignalChangeOrigin> origin,
     const bool route_path)
 {
+    if (!vhdl_disconnected_drivers.empty()) {
+        vhdl_disconnected_drivers.erase({ signal_id, process });
+    }
     require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
     const auto change_origin = origin.value_or(

@@ -397,6 +397,41 @@ ICARUS_EXTENSION_TASKS = re.compile(
 # and `~|` operators (the IEEE LRMs define them only as unary reductions).
 ICARUS_EXTENSION_SYNTAX = re.compile(
     r"\breg\s+bool\b|[\w)\]]\s*~[&|]\s*[\w(]")
+# ivtest cases whose expected output depends on Icarus's own choices:
+# the order of processes in one time step (IEEE 1800-2017 4.7 leaves it
+# undefined), implementation-defined formatting or widths, or Icarus-only
+# semantics and options.
+_ICARUS_RACE = "depends on Icarus's process order within a time step"
+ICARUS_NONSTANDARD = {
+    **{name: _ICARUS_RACE for name in (
+        "br_ml20190806b", "pr3064375", "pr1662508", "pr1861212b",
+        "pr1862744a", "sdw_dsbl", "fork3.19A", "fork3.19B", "pr812",
+        "br1019", "sv_ps_array_cassign", "real_wire_force_rel",
+        "nb_ec_multi_ev", "nb_ec_real", "pv_wr_vec2_nb_ec",
+        "pv_wr_vec2a_nb_ec", "pv_wr_vec4_nb_ec", "pv_wr_vec4a_nb_ec",
+        # Time-zero order of initial blocks, declaration initializers and
+        # continuous assignments (unspecified in IEEE 1364-2005 9.9).
+        "array_lval_select6", "br1008", "br988", "pr1719055")},
+    "pr243": "expects $monitor output in the time step of $finish",
+    "big_int": "expects Icarus's width for unsized literals over 32 bits",
+    "br1029a": "formats a real with %d/%x/%b",
+    "br1029b": "formats a real with %d/%x/%b",
+    "pr1985582": "expects Icarus's default real formatting",
+    "pr2486350": "expects %h of a 64-bit value without leading zeros",
+    "implicit_cast13": "checks only under __ICARUS__",
+    "pr2815398a_std": "needs __ICARUS__",
+    "pr1771903": "needs Icarus -gallow-real-arg-to-bits",
+    "cast_int": "expects infinity and NaN to convert to x",
+    "concat3": "expects side effects from a zero replication",
+    "cfunc_assign_op_mixed": "expects Icarus's compound assignment result",
+    "sv_string6": "expects Icarus's hextoa of a negative value",
+    "module_port_shortreal": "compares a shortreal with a double literal",
+    "signed_a": "expects an out-of-range index to be stripped",
+    "br_gh156": "expects Icarus's VCD layout",
+    "br_gh889": "expects output that ignores the SDF file",
+    "sv_packed_port1": "expects z from an undriven variable bit",
+    "sv_packed_port2": "expects z from an undriven variable bit",
+}
 # Verilator's C++ escape functions ($c, $c8..$c64, $cpure).
 VERILATOR_C_TASKS = re.compile(r"\$c(pure|\d+)?\s*\(")
 # Verilator cases that rely on behaviour Verilator itself calls
@@ -424,6 +459,27 @@ VERILATOR_NONSTANDARD = {
     "t_display_enum_format": "calls $sformatf in a constant expression",
     "t_unroll_nested_param": "calls $sformatf and writes module variables "
         "in a constant function",
+    # Verilator command-line flags the case depends on.
+    "t_assert_disabled": "depends on Verilator --no-assert",
+    "t_flag_main_top_name": "depends on a Verilator command-line flag",
+    "t_flag_parameter_hier": "depends on a Verilator command-line flag",
+    "t_flag_parameter_pkg": "depends on a Verilator command-line flag",
+    "t_fourstate_no_fourstate": "depends on a Verilator command-line flag",
+    "t_vlt_timing": "depends on a Verilator configuration file",
+    "t_net_delay_timing_sc": "requires a SystemC harness",
+    # Two-state initial values (IEEE 1800-2017 6.8 gives x).
+    "t_assert_goto_rep": "assumes two-state initial values",
+    "t_assert_future": "assumes two-state initial values",
+    "t_emit_constw": "assumes two-state initial values",
+    "t_split_var_4": "assumes two-state initial values",
+    "t_split_var_5": "assumes two-state initial values",
+    "t_tri_pull01": "expects a select past the MSB to read 0, not x",
+    "t_sequence_sexpr_throughout": "expects Verilator's count; the case "
+        "notes other simulators differ",
+    "t_sys_system": "expects an implementation-defined $system result",
+    "t_sys_readmem_eof": "reads a file the Verilator driver generates",
+    "t_strength_strongest_non_tristate": "needs clocks the Verilator "
+        "harness drives",
 }
 
 def verilator_cases(root: Path) -> list[Case]:
@@ -672,13 +728,16 @@ def ivtest_cases(root: Path) -> list[Case]:
             # Icarus SORRY or WARNING messages.
             text = read_text(source)
             gold_text = read_text(gold) if gold is not None and gold.is_file() else ""
-            if ICARUS_EXTENSION_TASKS.search(text):
+            if name in ICARUS_NONSTANDARD:
+                out_of_scope = "out of scope: " + ICARUS_NONSTANDARD[name]
+            elif ICARUS_EXTENSION_TASKS.search(text):
                 out_of_scope = "out of scope: Icarus system task extension"
             elif test_type != "CE" and ICARUS_EXTENSION_SYNTAX.search(
                     re.sub(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\\n])*"', "",
                            text, flags=re.S)):
                 out_of_scope = "out of scope: Icarus syntax extension"
-            elif re.search(r"^\s*(SORRY|WARNING)\b|: (sorry|warning): ",
+            elif re.search(r"^\s*(SORRY|WARNING)\b|^warning: "
+                           r"|: (sorry|warning|Warning): ",
                            gold_text, re.M):
                 out_of_scope = "out of scope: Icarus diagnostic in gold output"
         compile_args += standard_args(language, standard)
@@ -1089,8 +1148,9 @@ def run_command(fsim: Path, command: Command, workdir: Path, env: dict,
             pass
         output, _ = process.communicate()
     text = output.decode("utf-8", errors="replace")
-    if len(text) > 400_000:
-        text = text[:200_000] + "\n...[truncated]...\n" + text[-200_000:]
+    # Gold comparisons need the whole output; only very large logs are cut.
+    if len(text) > 16_000_000:
+        text = text[:8_000_000] + "\n...[truncated]...\n" + text[-8_000_000:]
     return StepResult(command.stage, process.returncode, time.monotonic() - started,
                       timed_out, text)
 

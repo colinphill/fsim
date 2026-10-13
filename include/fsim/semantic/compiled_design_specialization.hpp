@@ -347,6 +347,12 @@ public:
     [[nodiscard]] std::optional<std::string>
     evaluate_string_declaration(DeclarationId declaration) const;
 
+    /// The element values an instance gave an unpacked array parameter
+    /// (IEEE 1800-2017 6.20.2), leftmost element first through every
+    /// dimension; nullopt when the parameter keeps its default.
+    [[nodiscard]] std::optional<std::vector<std::int64_t>>
+    systemverilog_array_actual(DeclarationId declaration) const;
+
     /// Return the deterministic specialization identity for a VHDL callable
     /// or package-instance declaration. Generic subprogram instances retain
     /// their template and generic-map identities instead of degrading to the

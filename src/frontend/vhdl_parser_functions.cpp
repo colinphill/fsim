@@ -1018,6 +1018,7 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
           type,
           initializer,
           span_from(local_name, previous())});
+      note_vhdl_access_object(canonical, type);
     }
   }
 
@@ -1138,12 +1139,23 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
       };
   validate_statements(
       validate_statements, function.statements);
+  // A function that completes without a return statement is an error only
+  // when a call reaches its end (IEEE 1076-2008 4.2.1, 10.13); the body
+  // then ends with a failure report.
   if (!saw_return) {
-    error(
-        name,
-        "FSIM-VHDL-SEM-048",
-        "bounded VHDL function '" + function.name
-            + "' requires an explicit return statement");
+    const auto message = "function " + function.name
+        + " completed without a return statement";
+    Statement failure;
+    failure.kind = StatementKind::Report;
+    failure.assertion_severity = AssertionSeverity::Failure;
+    failure.vhdl_report_expression = Expression{
+        ExpressionKind::StringLiteral, "\"" + message + "\"", {},
+        name.span};
+    failure.output_text = message;
+    failure.vhdl_severity_expression = Expression{
+        ExpressionKind::Identifier, "failure", {}, name.span};
+    failure.span = name.span;
+    function.statements.push_back(std::move(failure));
   }
   return function;
 }
@@ -1259,6 +1271,7 @@ ProcedureDeclaration VhdlParser::parse_vhdl_procedure(
           type,
           initializer,
           span_from(local_name, previous())});
+      note_vhdl_access_object(canonical, type);
     }
   }
 

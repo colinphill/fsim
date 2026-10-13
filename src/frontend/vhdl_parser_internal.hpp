@@ -391,6 +391,24 @@ private:
   std::vector<VhdlComponentConfiguration> block_configuration_specifications_;
   bool in_vhdl_function_{};
   bool in_vhdl_procedure_{};
+  // True while parsing a concurrent signal assignment.
+  bool parsing_concurrent_assignment_{};
+  // Access types declared so far, and objects declared with one: a name of
+  // such an object followed by an index or a record element selects from
+  // the designated object (IEEE 1076-2008 8.3, implicit dereference).
+  std::unordered_set<std::string> vhdl_access_type_names_;
+  // Names of signals declared guarded (bus or register, IEEE 1076-2008
+  // 6.4.2.3), for the guarded-target rule of 11.6.
+  std::unordered_set<std::string> vhdl_guarded_signal_names_;
+  // Deferred constants of each package (IEEE 1076-2008 4.8) whose full
+  // declaration a package body has not yet given.
+  std::unordered_map<std::string, std::unordered_set<std::string>>
+      vhdl_pending_deferred_constants_;
+  // Aliases of external names (IEEE 1076-2008 6.6.2, 8.7): each use of the
+  // alias denotes the external name.
+  std::unordered_map<std::string, Expression> vhdl_external_aliases_;
+  std::unordered_set<std::string> vhdl_access_object_names_;
+  void note_vhdl_access_object(const std::string& name, const Type& type);
   bool vhdl_profile_compatible_{true};
   VhdlStandard vhdl_standard_ { VhdlStandard::Vhdl2008 };
 };

@@ -945,8 +945,26 @@ class VhdlExecutableBuilder final {
       driver.vhdl_delay_mechanism =
           frontend::VhdlDelayMechanism::ImplicitInertial;
       driver.span = input.condition.span;
-      output.concurrent_statements.push_back(statement(
-          driver, output.scope, output.origin));
+      const auto driver_id = statement(driver, output.scope, output.origin);
+      output.concurrent_statements.push_back(driver_id);
+      const auto guard = std::ranges::find_if(output.declarations,
+          [&](const semantic::DeclarationId id) {
+            const auto found = std::ranges::find_if(hir_.declarations(),
+                [&](const vh::Declaration& declaration) {
+                  return declaration.id == id;
+                });
+            return found != hir_.declarations().end()
+                && found->form == vh::DeclarationForm::signal
+                && canonical_vhdl_name(found->name) == "guard";
+          });
+      const auto record = std::ranges::find_if(hir_.statements(),
+          [&](const vh::Statement& candidate) {
+            return candidate.id == driver_id;
+          });
+      if (guard != output.declarations.end()
+          && record != hir_.statements().end() && record->target) {
+        implicit_guard_targets_.emplace_back(*record->target, *guard);
+      }
     }
     fill_generate_body(input.then_body, output);
     for (const auto& alternative : input.alternatives) {
@@ -1283,6 +1301,14 @@ class VhdlExecutableBuilder final {
         resolve_name(*expression.referenced_name, expression.scope);
       }
     }
+    for (const auto& [target, guard] : implicit_guard_targets_) {
+      for (auto& expression : hir_.mutable_expressions()) {
+        if (expression.id == target && expression.referenced_name) {
+          expression.referenced_name->selected = guard;
+          expression.referenced_name->overloads = { guard };
+        }
+      }
+    }
     for (auto& statement : hir_.mutable_statements()) {
       if (statement.kind == vh::StatementKind::procedure_call) {
         resolve_name(statement.procedure, statement.scope);
@@ -1588,6 +1614,11 @@ class VhdlExecutableBuilder final {
 
   semantic::Model& model_;
   vh::Hir& hir_;
+  // The implicit GUARD driver of a guarded block assigns the block's own
+  // GUARD signal, while its expression sees an enclosing GUARD (IEEE
+  // 1076-2008 11.2): target expression and declaration.
+  std::vector<std::pair<semantic::ExpressionId, semantic::DeclarationId>>
+      implicit_guard_targets_;
 };
 
 } // namespace

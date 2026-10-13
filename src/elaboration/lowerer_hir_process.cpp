@@ -2995,14 +2995,18 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     } else if (description.vhdl_resolver) {
         const auto& resolver = *description.vhdl_resolver;
         const auto& signal = design_.signal_info_[resolver.signal];
-        if (resolver.driver_count == 0U || signal.width == 0U
-            || signal.width > std::numeric_limits<std::size_t>::max()
-                / resolver.driver_count) {
+        if (signal.width == 0U
+            || (resolver.driver_count != 0U
+                && signal.width > std::numeric_limits<std::size_t>::max()
+                    / resolver.driver_count)) {
             process_ = { };
             return std::nullopt;
         }
+        // Without connected drivers (a guarded bus) the function receives a
+        // null array; the input register keeps one unused element.
         const auto input = allocate_register(
-            signal.width * resolver.driver_count, signal.source_domain);
+            signal.width * std::max<std::size_t>(resolver.driver_count, 1U),
+            signal.source_domain);
         auto resolved = lower_hir_vhdl_resolution_call(
             resolver.function, input, resolver.driver_count, signal.width);
         if (!resolved || register_width(*resolved) != signal.width) {
@@ -3187,18 +3191,57 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             return std::nullopt;
         }
     } else if (description.vhdl_guarded_assignment) {
-        if (!description.vhdl_guard) {
+        // Without a guard expression, a guarded assignment is controlled by
+        // a visible signal named GUARD (IEEE 1076-2008 11.6).
+        std::optional<SignalId> guard_signal;
+        if (!description.vhdl_guard && !description.statements.empty()) {
+            const auto statement = specialized_hir_unit_->find_statement(
+                description.statements.front());
+            if (statement && statement->vhdl != nullptr) {
+                semantic::vhdl::Name reference;
+                reference.spelling = "guard";
+                reference.canonical = "guard";
+                const semantic::CompiledDeclarationPredicate signal_object
+                    = [](const semantic::CompiledDeclarationView& candidate) {
+                          return candidate.vhdl != nullptr
+                              && (candidate.vhdl->form
+                                      == semantic::vhdl::DeclarationForm::signal
+                                  || candidate.vhdl->form
+                                      == semantic::vhdl::DeclarationForm::port);
+                      };
+                const auto declaration = semantic::CompiledDesignResolver {
+                    *specialized_hir_unit_
+                }.resolve_vhdl(reference, statement->vhdl->scope,
+                     signal_object)
+                                             .unique();
+                const auto binding = declaration
+                    ? hir_runtime_binding(
+                          *declaration, hir_process_scope_, false)
+                    : std::nullopt;
+                if (binding && binding->signal && binding->width == 1U) {
+                    guard_signal = binding->signal;
+                }
+            }
+        }
+        if (!description.vhdl_guard && !guard_signal) {
             report(
                 "FSIM-ELAB-VHDLGUARD-001",
                 "a guarded concurrent assignment requires an enclosing "
                 "Boolean-guarded block",
                 hir_source_span(description.source));
         } else {
-            const auto guard_width = hir_expression_width(
-                *description.vhdl_guard, hir_process_scope_)
-                                         .value_or(1U);
-            auto guard = lower_hir_expression(
-                *description.vhdl_guard, guard_width);
+            std::optional<RegisterId> guard;
+            if (guard_signal) {
+                guard = allocate_register(1U, frontend::ValueDomain::Logic4);
+                process_.operations.emplace_back(ReadSignal {
+                    *guard, *guard_signal });
+            } else {
+                const auto guard_width = hir_expression_width(
+                    *description.vhdl_guard, hir_process_scope_)
+                                             .value_or(1U);
+                guard = lower_hir_expression(
+                    *description.vhdl_guard, guard_width);
+            }
             if (guard && register_width(*guard) != 1U) {
                 const auto zero = allocate_register(
                     1U, frontend::ValueDomain::Logic4);
@@ -3280,12 +3323,54 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
                 process_ = { };
                 return std::nullopt;
             }
-            if (binding->domain != frontend::ValueDomain::Logic9) {
-                report(
-                    "FSIM-ELAB-VHDLGUARD-002",
-                    "guarded driver disconnection requires a nine-state "
-                    "resolved signal target",
-                    hir_source_span(description.source));
+            const auto target_record
+                = specialized_hir_unit_->find_declaration(*declaration);
+            const auto guarded_kind = target_record
+                    && target_record->vhdl != nullptr
+                ? target_record->vhdl->guarded_kind
+                : std::uint8_t { };
+            if (binding->domain != frontend::ValueDomain::Logic9
+                && guarded_kind == 0U) {
+                // The target is not a guarded signal: a false guard leaves
+                // its driver unchanged (IEEE 1076-2008 11.6).
+            } else if (binding->domain != frontend::ValueDomain::Logic9) {
+                // A guarded signal's driver is disconnected by a null
+                // transaction after the disconnection delay (6.9).
+                const auto delay = [&]()
+                    -> std::optional<runtime::SimulationTick> {
+                    if (!description.vhdl_disconnection_delay) {
+                        return runtime::SimulationTick { };
+                    }
+                    const auto& source
+                        = description.vhdl_disconnection_delay->primary;
+                    if (!source.expression) {
+                        return source.magnitude;
+                    }
+                    const auto evaluated = specialized_hir_unit_
+                        ->evaluate_integral_expression(*source.expression);
+                    if (!evaluated || *evaluated < 0
+                        || (*evaluated != 0
+                            && source.magnitude
+                                > std::numeric_limits<std::uint64_t>::max()
+                                    / static_cast<std::uint64_t>(
+                                        *evaluated))) {
+                        return std::nullopt;
+                    }
+                    return source.magnitude
+                        * static_cast<std::uint64_t>(*evaluated);
+                }();
+                if (!delay) {
+                    process_ = { };
+                    return std::nullopt;
+                }
+                const auto ignored = allocate_register(
+                    1U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(ClassStaticMethodCall {
+                    ignored,
+                    "@vhdl-disconnect:" + std::to_string(*binding->signal)
+                        + ":" + std::to_string(*delay),
+                    { }, { }, { }, 1U, { } });
+                record_readonly_vhdl_output_write(*binding);
             } else {
                 const auto delay = [&]()
                     -> std::optional<runtime::SimulationTick> {

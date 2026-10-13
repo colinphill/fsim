@@ -761,6 +761,10 @@ void Interpreter::Impl::execute(ProcessId id)
                     ++process.pc;
                 } else if constexpr (
                     std::is_same_v<OperationType, ClassStaticMethodCall>) {
+                    if (try_vhdl_disconnect_call(process.id, op.method_identity)) {
+                        ++process.pc;
+                        return;
+                    }
                     const auto dpi = std::string_view { op.method_identity }
                         .starts_with(systemverilog_dpi_function_prefix);
                     if ((dpi && !dpi_function_call_hook)

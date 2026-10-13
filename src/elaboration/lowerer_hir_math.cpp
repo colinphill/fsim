@@ -404,8 +404,10 @@ RegisterId Lowerer::convert_hir_integral_to_real(const RegisterId value,
 }
 
 RegisterId Lowerer::convert_hir_real_to_integral(const RegisterId value,
-    const frontend::SystemVerilogScalarKind source)
+    const frontend::SystemVerilogScalarKind source, const std::size_t width)
 {
+    // The runtime conversion is 64 bits wide; a wider target is extended.
+    static_cast<void>(width);
     const auto integral = allocate_register(64U, frontend::ValueDomain::Bit2);
     process_.operations.emplace_back(SystemVerilogScalarBinary {
         runtime::SystemVerilogScalarBinaryOperator::Convert,
@@ -438,8 +440,9 @@ std::optional<RegisterId> Lowerer::lower_hir_scalar_converted_value(
         if (!lowered) {
             return std::nullopt;
         }
-        const auto integral = convert_hir_real_to_integral(*lowered, source);
-        return width == 64U ? integral
+        const auto integral = convert_hir_real_to_integral(
+            *lowered, source, width);
+        return register_width(integral) == width ? integral
                             : resize_register(integral, width, true);
     }
     return lower_hir_expression(value, width, target);

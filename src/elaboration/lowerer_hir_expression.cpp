@@ -6061,6 +6061,41 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_untraced(
             if (!source_string) {
                 return std::nullopt;
             }
+            // The index must belong to the string's index range (IEEE
+            // 1076-2008 8.4).
+            const auto length = allocate_register(32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(StringLength { length, *source_string });
+            const auto zero = allocate_register(32U, frontend::ValueDomain::Integer);
+            process_.operations.emplace_back(LoadConstant { zero, integer_value(0, 32U) });
+            const auto below = allocate_register(1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::less_signed, below, offset, zero });
+            const auto beyond = allocate_register(1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::greater_equal_signed, beyond, offset, length });
+            const auto outside = allocate_register(1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::bit_or, outside, below, beyond });
+            const auto branch = static_cast<InstructionIndex>(process_.operations.size());
+            process_.operations.emplace_back(Branch {
+                outside, 0U, 0U, UnknownBranchPolicy::when_false });
+            const auto failure = static_cast<InstructionIndex>(process_.operations.size());
+            const auto span = hir_source_span(element->vhdl->source);
+            process_.operations.emplace_back(Report {
+                "index outside of the index range of a STRING",
+                runtime::simir::AssertionSeverity::failure,
+                SourceLocation {
+                    span.source_name.str(),
+                    static_cast<std::uint32_t>(span.begin.line),
+                    static_cast<std::uint32_t>(span.begin.column),
+                },
+            });
+            process_.operations.emplace_back(Halt { false });
+            process_.operations[branch] = Branch {
+                outside, failure,
+                static_cast<InstructionIndex>(process_.operations.size()),
+                UnknownBranchPolicy::when_false,
+            };
             StringMethod method;
             method.operation = StringMethodOperator::getc;
             method.destination = allocate_register(32U, frontend::ValueDomain::Integer);
@@ -6164,6 +6199,9 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_untraced(
             });
             return result;
         }
+    }
+    if (const auto member = hir_class_property_member(expression_id)) {
+        return lower_hir_class_property_member(*member);
     }
     // A member of an unpacked structure parameter is its pattern item
     // (IEEE 1800-2017 7.2, 6.20).
@@ -8843,10 +8881,14 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             method.argument = *argument;
         }
         process_.operations.emplace_back(method);
+        // compare and icompare return a signed int (IEEE 1800-2017 6.16.8).
+        const bool signed_result
+            = method.operation == StringMethodOperator::compare
+            || method.operation == StringMethodOperator::icompare;
         result = expected_width != 0U
                 && expected_width != method_width
             ? std::optional { resize_register(
-                  method.destination, expected_width, false) }
+                  method.destination, expected_width, signed_result) }
             : std::optional { method.destination };
     } else if (const auto aggregate
         = lower_hir_packed_container_aggregate(
@@ -11013,7 +11055,8 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
             return std::nullopt;
         }
         if (real_operand) {
-            lowered = convert_hir_real_to_integral(*lowered, operand_kind);
+            lowered = convert_hir_real_to_integral(
+                *lowered, operand_kind, cast->width);
         }
         if (register_width(*lowered) != cast->width) {
             lowered = resize_register(*lowered, cast->width,
@@ -18363,8 +18406,14 @@ bool Lowerer::lower_hir_packed_copy_out(
             && register_domain(copied_source) != frontend::ValueDomain::Bit2
         ? convert_to_two_state(copied_source)
         : copied_source;
-    if (mode != HirPackedCopyOutMode::systemverilog_active_update
-        && expression->systemverilog != nullptr) {
+    const bool staged_update
+        = mode == HirPackedCopyOutMode::systemverilog_active_update
+        || mode == HirPackedCopyOutMode::systemverilog_nonblocking_update;
+    const auto staged_domain
+        = mode == HirPackedCopyOutMode::systemverilog_nonblocking_update
+        ? SignalUpdateDomain::systemverilog_nba
+        : SignalUpdateDomain::systemverilog_active;
+    if (!staged_update && expression->systemverilog != nullptr) {
         // An output actual through a virtual interface (`f(vif.data)`).
         if (const auto member = hir_virtual_interface_member(target)) {
             const auto value = register_width(source) == member->width
@@ -18374,7 +18423,7 @@ bool Lowerer::lower_hir_packed_copy_out(
                 *member, value, false, SignalUpdateDomain { });
         }
     }
-    if (mode == HirPackedCopyOutMode::systemverilog_active_update) {
+    if (staged_update) {
         if (expression->systemverilog == nullptr
             || expression->systemverilog->kind
                 != semantic::sv::ExpressionKind::concatenation) {
@@ -18388,6 +18437,10 @@ bool Lowerer::lower_hir_packed_copy_out(
             std::optional<std::uint32_t> destination_offset;
             frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
             bool check_integer_range { };
+            // An element of an unpacked array: its binding and the index
+            // evaluated when the assignment executes.
+            std::optional<HirContainerElementBinding> element { };
+            std::optional<RegisterId> element_index { };
         };
         std::vector<PendingUpdate> updates;
         const auto collect = [&](auto&& self,
@@ -18459,6 +18512,38 @@ bool Lowerer::lower_hir_packed_copy_out(
                 == semantic::sv::ExpressionKind::index;
             const bool slice = selected.kind
                 == semantic::sv::ExpressionKind::slice;
+            if (index) {
+                if (auto element = hir_container_element_binding(lvalue);
+                    element && !element->local && !element->read_only
+                    && element->type != nullptr
+                    && !element->type->string_indices
+                    && (element->selected_type == nullptr
+                        || element->selected_type->element_kind
+                            == ContainerElementKind::Packed)
+                    && element->width != 0U
+                    && element->domain != frontend::ValueDomain::Unknown) {
+                    const auto lvalue_width = hir_expression_width(
+                        lvalue, hir_process_scope_);
+                    if (!lvalue_width || *lvalue_width != element->width
+                        || element->width
+                            > std::numeric_limits<std::uint32_t>::max()) {
+                        return false;
+                    }
+                    const auto element_index
+                        = lower_hir_container_element_index(*element);
+                    if (!element_index) {
+                        return false;
+                    }
+                    PendingUpdate update;
+                    update.source_offset = source_offset;
+                    update.width = static_cast<std::uint32_t>(element->width);
+                    update.domain = element->domain;
+                    update.element_index = element_index;
+                    update.element = std::move(*element);
+                    updates.push_back(std::move(update));
+                    return true;
+                }
+            }
             if ((!name && !index && !slice)
                 || hir_container_object_binding(lvalue)
                 || hir_container_element_binding(lvalue)) {
@@ -18575,6 +18660,9 @@ bool Lowerer::lower_hir_packed_copy_out(
         for (std::size_t left { }; left < updates.size(); ++left) {
             for (std::size_t right = left + 1U;
                 right < updates.size(); ++right) {
+                if (updates[left].element || updates[right].element) {
+                    continue;
+                }
                 if (updates[left].binding.signal
                     != updates[right].binding.signal) {
                     continue;
@@ -18611,6 +18699,27 @@ bool Lowerer::lower_hir_packed_copy_out(
                     converted, value });
                 value = converted;
             }
+            if (update.element) {
+                const auto& element = *update.element;
+                const auto write_guard = begin_hir_fixed_array_write(
+                    element, *update.element_index);
+                process_.operations.emplace_back(
+                    WriteContainerObjectElement {
+                        element.object,
+                        *update.element_index,
+                        value,
+                        element.indices.size() > 1U
+                            || element.type->signed_indices,
+                        element.indices.size() > 1U,
+                        mode
+                            == HirPackedCopyOutMode::
+                                systemverilog_nonblocking_update,
+                        std::nullopt,
+                        std::nullopt, { }
+                    });
+                end_hir_fixed_array_write(write_guard);
+                continue;
+            }
             if (update.check_integer_range
                 && update.binding.integer_range) {
                 process_.operations.emplace_back(IntegerCheck {
@@ -18628,13 +18737,13 @@ bool Lowerer::lower_hir_packed_copy_out(
                     *update.binding.signal,
                     value,
                     *update.destination_offset,
-                    SignalUpdateDomain::systemverilog_active,
+                    staged_domain,
                 });
             } else {
                 process_.operations.emplace_back(WriteUpdate {
                     *update.binding.signal,
                     value,
-                    SignalUpdateDomain::systemverilog_active,
+                    staged_domain,
                 });
             }
             record_readonly_vhdl_output_write(update.binding);

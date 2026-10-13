@@ -253,6 +253,105 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 53: unpacked-array parameters, class property members, guarded signals, VHDL runtime checks
+
+Fixtures: `sv_language_details_batch53.sv`, `vhdl_guarded_and_real_ranges.vhd`,
+and the analysis-error fixtures `unguarded_guarded_target.vhd`,
+`deferred_constant_early.vhd` and `string_index_range.vhd`.
+
+- Parameters: unpacked-array parameters are specialized per instance,
+  so an instance can override them with an array actual
+  (`#(.P('{...}))`, positional, nested or `default:` patterns, or a
+  parent's array parameter) (6.20.2, 23.10). Unpacked arrays of
+  structures take positional, member-keyed and `default:` patterns
+  (10.9.2). Constants of specialized classes (`C#(7)::v`) and class
+  parameters appear in module parameter defaults and overrides (8.25).
+- Classes: a member of a structure-typed property (`c.p.a`) is read and
+  written through the handle, inside and outside methods (8.4). Assigning
+  a non-enumeration value to an enumeration property is an error
+  (6.19.3).
+- Statements: a nonblocking assignment to a concatenation of variables
+  (10.4.2); string `compare` and `icompare` give signed results (6.16.8);
+  `?:` with an unknown condition merges two `z` operands to `x` (11.4.11).
+- Lexical: a time literal's unit must follow the number with no space,
+  except when both come from one macro (5.8); modport expressions may be
+  dotted member names (25.5.4).
+- VHDL guarded signals: `bus` and `register` signals with guarded
+  assignments in blocks, null waveform elements and `disconnect`
+  delays. A register signal whose drivers are all disconnected keeps
+  its value (6.4.2.3, 11.6, 7.4). An unguarded concurrent assignment to a guarded signal, or an
+  aggregate target mixing guarded and unguarded signals, is an error
+  (11.6, new `FSIM-VHDL-SEM-129`).
+- VHDL runtime checks: a REAL value assigned outside its subtype's range
+  (including infinities and NaN), a negative `wait for` timeout, and a
+  STRING index outside its range stop the simulation with a failure.
+  A static STRING index outside a constrained range is an analysis
+  error (5.2.5, 10.2, 8.4).
+- VHDL analysis: a package body naming a deferred constant before its
+  full declaration is an error (4.8, new `FSIM-VHDL-SEM-130`); a function
+  that ends without `return` fails at run time instead of at analysis.
+- VHDL elaboration: implicit dereference of access values by index or
+  member (8.3); aliases of external names (8.7); block port maps with
+  conversion functions; `'length`/`'left`/`'right` of subprogram formals
+  as constants; unbound generics use their defaults in constant
+  initializers; enumeration-indexed bit-array constants; local vector
+  constants up to 65536 bits.
+- Runner: 41 more ivtest cases are out of scope because their expected
+  output depends on Icarus's own choices. These are:
+  - process order within one time step (22; IEEE 1800-2017 4.7 and
+    1364-2005 9.9 leave it undefined);
+  - implementation-defined formatting, widths and conversions (12);
+  - `__ICARUS__` or Icarus options (3);
+  - Icarus's VCD layout, an ignored SDF file, and `z` read from undriven
+    variable bits (4).
+
+  17 more Verilator cases are out of scope: Verilator command-line flags
+  or configuration files (6), two-state initial values (5), a SystemC
+  harness (1), and five that depend on the Verilator driver or report
+  Verilator-specific results. Warnings in ivtest gold output count as
+  Icarus diagnostics (10 more cases), and gold comparisons use outputs up
+  to 16 MB.
+
+Investigated and left open: nested block GUARD signals (tc3155, tc3156);
+resolution of a bus signal with no connected drivers (the resolution
+function's null array); record element range constraints given inline
+(tc489); upward hierarchical references needing global deferral;
+external names with relative paths or written to; deferred constants
+folded into slice bounds lose their type (tc1133); real to integer
+conversion wider than 64 bits; `%E`/`%G`; arrays of events.
+
+Measurement: the batch 51 run b51a with its failures and the fast set
+rerun on wip53c. 53 cases close (ivtest 4, sv-tests 2, Verilator 8,
+VESTs 31, nvc 8); no case that passed in batch 52 fails, and the fast
+set passes.
+
+ctest: the `vhdl`, `systemverilog` and `compliance` labels fail only the 11
+known tests.
+
+Excluded (out-of-scope) cases:
+
+- ivtest 141: Icarus diagnostics in gold output (54), Icarus system tasks
+  (23), Icarus process order (22), implementation-defined or Icarus-only
+  results (19), iverilog options and test types (18), Icarus syntax (5).
+- Verilator 198: SystemC, PLI/VPI or DPI harness (85), `$c` (32),
+  non-standard behaviour, flags and configuration (28), C++ harness (24),
+  lint-only (21), missing top file (8).
+- nvc 215: nvc-specific test kinds (shell, VHPI, cover, wave, mixed, Tcl,
+  relaxed, plugin; 209), nvc options (4), named work libraries (2).
+- sv-tests, VESTs, VHDL Compliance-Tests: none.
+
+| Suite | Batch 52 (wip52e) | Batch 53 (wip53c) |
+|---|---:|---:|
+| VESTs | 3352/3648 | 3383/3648 |
+| nvc regress | 655/1267 | 663/1267 |
+| VHDL Compliance-Tests | 33/72 | 33/72 |
+| ivtest | 2385/2736 | 2389/2685 |
+| Verilator test_regress | 1335/2234 | 1343/2217 |
+| sv-tests | 1416/1497 | 1418/1497 |
+
+Batch 52's ivtest and Verilator columns use batch 52's scope; batch 53
+excludes 51 more ivtest cases and 17 more Verilator cases.
+
 ### Batch 52: virtual-interface methods, string casts and selectors, constant string functions, VHDL physical units
 
 Fixture: `sv_language_details_batch52.sv` (passes on xsim except two

@@ -204,6 +204,7 @@ std::shared_ptr<VhdlProtectedInfo> VhdlParser::parse_vhdl_protected_type(
             canonical_variable, variable_type, initializer,
             span_from(variable_start, previous()), shared, false, std::nullopt,
             body || explicit_private});
+        note_vhdl_access_object(canonical_variable, variable_type);
       }
       continue;
     }
@@ -455,6 +456,7 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
     return;
   }
   if (match_keyword("access", true)) {
+    vhdl_access_type_names_.insert(canonical_name);
     const auto designated_start = current();
     auto designated_type = parse_vhdl_type(true, true);
     const auto designated_span = cover(designated_start.span, previous().span);
@@ -1142,6 +1144,7 @@ void VhdlParser::parse_vhdl_shared_variable(DesignUnit &unit,
     }
     unit.variables.push_back(VariableDeclaration{
         canonical, type, initializer, span_from(start, previous()), true});
+    note_vhdl_access_object(canonical, type);
   }
 }
 
@@ -1660,7 +1663,9 @@ void VhdlParser::parse_signal_declaration(
   }
   // A guarded signal's kind (6.4.2.3); it matters only when every driver is
   // disconnected.
-  (void)(match_keyword("bus", true) || match_keyword("register", true));
+  const std::uint8_t guarded_kind = match_keyword("bus", true) ? 1U
+      : match_keyword("register", true) ? 2U
+      : 0U;
   std::optional<Expression> default_value;
   if (match(TokenKind::ColonEqual)) {
     default_value = parse_expression();
@@ -1691,6 +1696,12 @@ void VhdlParser::parse_signal_declaration(
           canonical, type, PortDirection::Unknown, false,
           span_from(start, previous())};
       declaration.default_value = default_value;
+      declaration.vhdl_guarded_kind = guarded_kind;
+      if (guarded_kind != 0U) {
+        vhdl_guarded_signal_names_.insert(canonical);
+      } else {
+        vhdl_guarded_signal_names_.erase(canonical);
+      }
       signals.push_back(std::move(declaration));
     }
   }
@@ -1761,12 +1772,27 @@ void VhdlParser::parse_vhdl_object_alias(
     type = parse_vhdl_type(true, true);
   }
   expect_keyword("is", true, "FSIM-VHDL-PARSE-236");
+  if (at(TokenKind::ShiftLeft)) {
+    auto external = parse_expression();
+    expect(TokenKind::Semicolon, "';' after alias declaration",
+           "FSIM-VHDL-PARSE-236");
+    vhdl_external_aliases_.insert_or_assign(
+        vhdl_name(name.text), std::move(external));
+    return;
+  }
   const auto target_start = position();
   const auto actual = parse_vhdl_selected_name("alias target");
   // An object alias may denote an element or slice of an object (IEEE
   // 1076-2008 6.6.2): the whole name is kept as an expression.
   std::optional<Expression> actual_expression;
   if (at(TokenKind::LeftParen)) {
+    rewind(target_start);
+    actual_expression = parse_expression();
+  } else if (actual.find('.') != std::string::npos
+      && !at(TokenKind::LeftBracket)
+      && !actual.starts_with("work.") && !actual.starts_with("ieee.")
+      && !actual.starts_with("std.")) {
+    // A record element (`r.f`) is a subelement of its object too.
     rewind(target_start);
     actual_expression = parse_expression();
   }

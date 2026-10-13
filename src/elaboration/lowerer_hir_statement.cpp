@@ -2676,6 +2676,23 @@ bool Lowerer::lower_hir_statement_unsuspended(
         if (!target_expression) {
             return assignment_rejected(__LINE__);
         }
+        // A member of a packed structure class property (`c.p.a = v`).
+        if (const auto member = hir_class_property_member(*target)) {
+            if (signal_assignment || nonblocking
+                || !member->profile.writable
+                || statement->systemverilog == nullptr
+                || statement->systemverilog->assignment_control
+                    != semantic::sv::AssignmentControl::none
+                || statement->systemverilog->delay) {
+                return assignment_rejected(__LINE__);
+            }
+            const auto lowered = lower_hir_expression(
+                *value, member->member.width);
+            if (!lowered) {
+                return assignment_rejected(__LINE__);
+            }
+            return lower_hir_class_property_member_write(*member, *lowered);
+        }
         const auto assignment_value_expression
             = specialized_hir_unit_->find_expression(*value);
         const auto specialization_integer =
@@ -5356,9 +5373,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     == semantic::sv::AssignmentKind::continuous;
             const auto packed_copy_out_mode = continuous_assignment
                 ? HirPackedCopyOutMode::systemverilog_active_update
+                : nonblocking
+                ? HirPackedCopyOutMode::systemverilog_nonblocking_update
                 : HirPackedCopyOutMode::blocking;
             if ((signal_assignment && !continuous_assignment)
-                || nonblocking
                 || input.assignment_control
                     != semantic::sv::AssignmentControl::none
                 || input.delay
@@ -7496,6 +7514,51 @@ bool Lowerer::lower_hir_statement_unsuspended(
             const auto target_domain = member_domain
                 ? *member_domain
                 : binding->domain;
+            // A null transaction disconnects this process's driver of a
+            // guarded signal (IEEE 1076-2008 10.5.2.2).
+            const auto guarded_record = hir_target_declaration(*target);
+            const auto guarded_view = guarded_record
+                ? specialized_hir_unit_->find_declaration(*guarded_record)
+                : std::nullopt;
+            if (target_domain != frontend::ValueDomain::Logic9
+                && !member_domain && binding->signal && guarded_view
+                && guarded_view->vhdl != nullptr
+                && guarded_view->vhdl->guarded_kind != 0U) {
+                const auto& element = statement->vhdl->waveform.front();
+                std::optional<runtime::SimulationTick> delay {
+                    runtime::SimulationTick { } };
+                if (element.delay) {
+                    const auto& primary = element.delay->primary;
+                    delay = primary.magnitude;
+                    if (primary.expression) {
+                        const auto factor = specialized_hir_unit_
+                            ->evaluate_integral_expression(*primary.expression);
+                        delay = factor && *factor >= 0
+                                && (*factor == 0
+                                    || primary.magnitude
+                                        <= std::numeric_limits<
+                                               std::uint64_t>::max()
+                                            / static_cast<std::uint64_t>(
+                                                *factor))
+                            ? std::optional<runtime::SimulationTick> {
+                                  primary.magnitude
+                                  * static_cast<std::uint64_t>(*factor) }
+                            : std::nullopt;
+                    }
+                }
+                if (!delay) {
+                    return assignment_rejected(__LINE__);
+                }
+                const auto ignored = allocate_register(
+                    1U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(ClassStaticMethodCall {
+                    ignored,
+                    "@vhdl-disconnect:" + std::to_string(*binding->signal)
+                        + ":" + std::to_string(*delay),
+                    { }, { }, { }, 1U, { } });
+                record_readonly_vhdl_output_write(*binding);
+                return true;
+            }
             if (target_domain != frontend::ValueDomain::Logic9) {
                 report(
                     "FSIM-ELAB-VHDLGUARD-002",
@@ -7571,7 +7634,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
         }
         if (real_to_integral) {
             lowered = convert_hir_real_to_integral(
-                *lowered, source_scalar_kind);
+                *lowered, source_scalar_kind, *assignment_width);
         }
         if (scalar_conversion
             && source_scalar_kind != scalar_context) {
@@ -7684,6 +7747,73 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 std::max(binding->integer_range->left,
                     binding->integer_range->right),
             });
+        }
+        // IEEE 1076-2008 10.5.2.1 and 10.6.2.1: a REAL value assigned to a
+        // whole object must belong to the target's subtype; infinities and
+        // NaN lie outside every REAL range.
+        if (statement->vhdl != nullptr && !target_is_selected && !member_width
+            && register_width(*lowered) == 64U && target_declaration
+            && target_declaration->vhdl != nullptr
+            && target_declaration->vhdl->subtype) {
+            if (const auto bounds = hir_vhdl_real_range(
+                    *target_declaration->vhdl->subtype)) {
+                const auto bound = [&](const double value) {
+                    const auto result = allocate_register(
+                        64U, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(LoadConstant {
+                        result,
+                        unsigned_value(std::bit_cast<std::uint64_t>(value), 64U),
+                    });
+                    return result;
+                };
+                const auto compare = [&](
+                                         const runtime::SystemVerilogScalarBinaryOperator
+                                             operation,
+                                         const RegisterId limit) {
+                    const auto result = allocate_register(
+                        1U, frontend::ValueDomain::Logic4);
+                    process_.operations.emplace_back(SystemVerilogScalarBinary {
+                        operation, result, *lowered, limit,
+                        frontend::SystemVerilogScalarKind::Real,
+                        frontend::SystemVerilogScalarKind::Real,
+                        frontend::SystemVerilogScalarKind::None });
+                    return result;
+                };
+                const auto above = compare(
+                    runtime::SystemVerilogScalarBinaryOperator::GreaterEqual,
+                    bound(bounds->first));
+                const auto below = compare(
+                    runtime::SystemVerilogScalarBinaryOperator::LessEqual,
+                    bound(bounds->second));
+                const auto inside = allocate_register(
+                    1U, frontend::ValueDomain::Logic4);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::bit_and, inside, above, below });
+                const auto branch = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations.emplace_back(Branch {
+                    inside, 0U, 0U, UnknownBranchPolicy::when_false });
+                const auto failure = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                const auto check_span = hir_source_span(statement->vhdl->source);
+                process_.operations.emplace_back(Report {
+                    "value outside of the REAL subtype range of "
+                        + target_declaration->vhdl->name,
+                    runtime::simir::AssertionSeverity::failure,
+                    SourceLocation {
+                        check_span.source_name.str(),
+                        static_cast<std::uint32_t>(check_span.begin.line),
+                        static_cast<std::uint32_t>(check_span.begin.column),
+                    },
+                });
+                process_.operations.emplace_back(Halt { false });
+                process_.operations[branch] = Branch {
+                    inside,
+                    static_cast<InstructionIndex>(process_.operations.size()),
+                    failure,
+                    UnknownBranchPolicy::when_false,
+                };
+            }
         }
         // IEEE 1800-2017 10.4.2: a nonblocking assignment with an
         // intra-assignment event control schedules its update when the event
@@ -15678,6 +15808,38 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     span);
                 return true;
             }
+            // A negative timeout is an error (IEEE 1076-2008 10.2).
+            const auto zero = allocate_register(
+                register_width(*duration), register_domain(*duration));
+            process_.operations.emplace_back(LoadConstant {
+                zero,
+                PackedLogic4(register_width(*duration), Logic4::zero),
+            });
+            const auto negative = allocate_register(
+                1U, frontend::ValueDomain::Logic4);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::less_signed, negative, *duration, zero });
+            const auto branch = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Branch {
+                negative, 0U, 0U, UnknownBranchPolicy::when_false });
+            const auto failure = static_cast<InstructionIndex>(
+                process_.operations.size());
+            process_.operations.emplace_back(Report {
+                "illegal negative delay in a wait statement",
+                runtime::simir::AssertionSeverity::failure,
+                SourceLocation {
+                    span.source_name.str(),
+                    static_cast<std::uint32_t>(span.begin.line),
+                    static_cast<std::uint32_t>(span.begin.column),
+                },
+            });
+            process_.operations.emplace_back(Halt { false });
+            process_.operations[branch] = Branch {
+                negative, failure,
+                static_cast<InstructionIndex>(process_.operations.size()),
+                UnknownBranchPolicy::when_false,
+            };
             WaitFor wait;
             wait.delay = 1U;
             wait.source = *duration;

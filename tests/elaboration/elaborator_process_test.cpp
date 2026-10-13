@@ -1175,10 +1175,12 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(container_concat_lvalue.ok());
-    const auto rejected_container_concat_lvalue = compile_and_elaborate(
+    // An element of an unpacked array is an lvalue of a concatenation
+    // (IEEE 1800-2017 10.3.1, 11.4.12).
+    const auto accepted_container_concat_lvalue = compile_and_elaborate(
         container_concat_lvalue.design,
         "container_concat_lvalue");
-    assert(!rejected_container_concat_lvalue.ok());
+    assert(accepted_container_concat_lvalue.ok());
 
     const auto delayed_concat_lvalue = fsim::frontend::parse_text(
         "delayed_concat_lvalue.sv",

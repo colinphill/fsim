@@ -101,6 +101,7 @@ void VhdlParser::parse_sequential_block_declarations(
           type,
           initializer,
           span_from(name, previous())});
+      note_vhdl_access_object(vhdl_name(name.text), type);
     }
   }
   validate_vhdl_local_declaration_names(
@@ -983,6 +984,13 @@ Statement VhdlParser::parse_if_branch(const Token& start) {
 }
 
 std::optional<Statement> VhdlParser::parse_assignment(bool concurrent) {
+  struct ConcurrentScope {
+    bool& slot;
+    bool saved;
+    ~ConcurrentScope() { slot = saved; }
+  } concurrent_scope { parsing_concurrent_assignment_,
+                       parsing_concurrent_assignment_ };
+  parsing_concurrent_assignment_ = concurrent;
   const auto start_position = position();
   // An aggregate of names as an assignment target, `(a, b) := v;`
   // (IEEE 1076-2008 10.5.2.1, 10.6.2.1, 11.6).
@@ -1091,6 +1099,37 @@ std::optional<Statement> VhdlParser::parse_assignment(bool concurrent) {
   expect(TokenKind::Semicolon, "';' after assignment",
          "FSIM-VHDL-PARSE-029");
   statement.span = span_from(start, previous());
+  // A guarded target is assigned only by a guarded concurrent assignment,
+  // and an aggregate target names only guarded or only unguarded signals
+  // (IEEE 1076-2008 11.6).
+  if (concurrent && kind == AssignmentKind::Continuous) {
+    const auto guarded = [&](const Expression& name) {
+      return name.kind == ExpressionKind::Identifier
+          && vhdl_guarded_signal_names_.contains(
+              detail::ascii_lower(name.text));
+    };
+    const auto& names = aggregate_targets.empty()
+        ? std::vector<Expression>{statement.target}
+        : aggregate_targets;
+    const auto guarded_count = static_cast<std::size_t>(
+        std::ranges::count_if(names, guarded));
+    const bool all_names = std::ranges::all_of(names,
+        [](const Expression& name) {
+          return name.kind == ExpressionKind::Identifier;
+        });
+    if (all_names && guarded_count != 0U && guarded_count != names.size()) {
+      error(start, "FSIM-VHDL-SEM-129",
+          "an aggregate signal assignment target names both guarded and "
+          "unguarded signals");
+      return statement;
+    }
+    if (guarded_count != 0U && !statement.vhdl_guarded_assignment) {
+      error(start, "FSIM-VHDL-SEM-129",
+          "a guarded signal is the target of an unguarded concurrent "
+          "signal assignment");
+      return statement;
+    }
+  }
   if (!aggregate_targets.empty()) {
     // An aggregate target may not name the same object more than once
     // (IEEE 1076-2008 10.5.2.1, 10.6.2.1).
@@ -1414,9 +1453,13 @@ void VhdlParser::parse_vhdl_waveform(Statement& statement) {
   do {
     const auto start = current();
     VhdlWaveformElement element;
+    // A null transaction must target a guarded signal (IEEE 1076-2008
+    // 10.5.2.2): a sequential one is checked on lowering; a concurrent one
+    // must be a guarded assignment.
     if (match_keyword("null", true)) {
       element.disconnect = true;
-      if (!statement.vhdl_guarded_assignment) {
+      if (!statement.vhdl_guarded_assignment
+          && parsing_concurrent_assignment_) {
         error(
             previous(),
             "FSIM-VHDL-UNSUPPORTED-025",

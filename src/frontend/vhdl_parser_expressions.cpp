@@ -10,6 +10,19 @@
 #include <new>
 
 namespace fsim::frontend {
+
+void VhdlParser::note_vhdl_access_object(
+    const std::string& name, const Type& type) {
+  auto mark = std::string_view { type.spelling };
+  if (const auto dot = mark.find_last_of('.'); dot != std::string_view::npos) {
+    mark.remove_prefix(dot + 1U);
+  }
+  if (vhdl_access_type_names_.contains(vhdl_name(std::string { mark }))) {
+    vhdl_access_object_names_.insert(name);
+  } else {
+    vhdl_access_object_names_.erase(name);
+  }
+}
 namespace {
 
 // A based real literal (IEEE 1076-2008 15.5.3): base # digits . digits #
@@ -1013,8 +1026,27 @@ Expression VhdlParser::parse_primary()
     if (at(TokenKind::Identifier)) {
         const auto name = advance();
         std::string canonical = vhdl_name(name.text);
+        if (const auto external = vhdl_external_aliases_.find(canonical);
+            external != vhdl_external_aliases_.end()
+            && !at(TokenKind::Dot) && !at(TokenKind::Apostrophe)) {
+            auto expression = external->second;
+            expression.span = name.span;
+            return expression;
+        }
         Expression selected { ExpressionKind::Identifier, canonical, { }, name.span };
         bool saw_dereference = false;
+        // An index or element selected through an access object reaches
+        // the designated object (IEEE 1076-2008 8.3).
+        if (vhdl_access_object_names_.contains(canonical)
+            && (at(TokenKind::LeftParen)
+                || (at(TokenKind::Dot) && at(TokenKind::Identifier, 1)
+                    && vhdl_name(current(1).text) != "all"))) {
+            selected = Expression { ExpressionKind::Call,
+                "@vhdl-dereference",
+                { std::move(selected) },
+                name.span };
+            saw_dereference = true;
+        }
         while (match(TokenKind::Dot)) {
             const auto part = expect_identifier("selected name");
             const auto canonical_part = vhdl_name(part.text);
@@ -1048,12 +1080,17 @@ Expression VhdlParser::parse_primary()
         if (saw_dereference) {
             for (;;) {
                 if (match(TokenKind::LeftParen)) {
-                    auto index = parse_expression();
+                    // One index per dimension (IEEE 1076-2008 8.4).
+                    std::vector<Expression> operands;
+                    operands.push_back(std::move(selected));
+                    do {
+                        operands.push_back(parse_expression());
+                    } while (match(TokenKind::Comma));
                     expect(TokenKind::RightParen, "')' after dereferenced index",
                         "FSIM-VHDL-PARSE-251");
                     selected = Expression { ExpressionKind::Index,
                         "index",
-                        { std::move(selected), std::move(index) },
+                        std::move(operands),
                         cover(name.span, previous().span) };
                     continue;
                 }

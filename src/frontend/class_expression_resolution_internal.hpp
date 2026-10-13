@@ -51,6 +51,8 @@ struct MethodMatch {
 [[nodiscard]] Type class_type(
     const SystemVerilogClassDeclaration& declaration);
 [[nodiscard]] Type chandle_type();
+// A class property access, or a member selected from one (`c.p.a`).
+[[nodiscard]] bool is_class_property_access(const Expression& expression);
 [[nodiscard]] bool chandle(const std::optional<Type>& type);
 void diagnose(
     std::vector<Diagnostic>& diagnostics,
@@ -122,12 +124,24 @@ class Resolver final {
       std::string_view identity) const;
   [[nodiscard]] Type resolve_alias_type(
       Type type, std::string lexical_identity) const;
+  // The member of a packed structure type selected by name, following a
+  // typedef visible from the compilation unit.
+  [[nodiscard]] std::optional<Type> packed_member_type(
+      const Type& type, std::string_view member) const;
   [[nodiscard]] static std::string_view trim_type_spelling(
       std::string_view spelling);
   [[nodiscard]] Type selected_type_actual(
       std::string_view source, const Scope& scope) const;
   [[nodiscard]] static std::vector<std::string_view>
   selected_parameter_actuals(std::string_view spelling);
+  // The value of a specialization's parameter or local parameter, with the
+  // specialization's literal or named actuals substituted.
+  // Replaces `C#(...)::name` value references in a module constant.
+  void substitute_class_parameter_references(
+      Expression& expression, const Scope& scope, std::size_t depth = 0U);
+  [[nodiscard]] std::optional<Expression> class_specialization_parameter_value(
+      const SystemVerilogClassDeclaration& owner, std::string_view spelling,
+      std::string_view member) const;
   [[nodiscard]] std::optional<ClassSelection> resolve_class_selection(
       std::string_view spelling, const Scope& scope) const;
   [[nodiscard]] static Type specialize_selected_type(

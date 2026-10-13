@@ -6506,10 +6506,80 @@ private:
         return base;
     }
 
+    // A static index of an object of a constrained STRING subtype must lie
+    // in its index range (IEEE 1076-2008 8.4).
+    void validate_string_index(const semantic::ExpressionId id)
+    {
+        const auto expression = specialization_.find_expression(id);
+        if (!expression || expression->vhdl == nullptr) {
+            return;
+        }
+        const auto& value = *expression->vhdl;
+        std::optional<semantic::DeclarationId> prefix;
+        std::optional<semantic::ExpressionId> index;
+        if (value.kind == semantic::vhdl::ExpressionKind::call
+            && value.operands.size() == 1U && value.referenced_name) {
+            prefix = value.referenced_name->selected;
+            index = value.operands.front();
+        } else if (value.kind == semantic::vhdl::ExpressionKind::index
+            && value.operands.size() == 2U) {
+            const auto base = specialization_.find_expression(
+                value.operands.front());
+            if (base && base->vhdl != nullptr
+                && base->vhdl->kind == semantic::vhdl::ExpressionKind::name
+                && base->vhdl->referenced_name) {
+                prefix = base->vhdl->referenced_name->selected;
+            }
+            index = value.operands.back();
+        }
+        if (!prefix || !index) {
+            return;
+        }
+        const auto declaration = specialization_.find_declaration(*prefix);
+        if (!declaration || declaration->vhdl == nullptr
+            || !declaration->vhdl->subtype) {
+            return;
+        }
+        using Form = semantic::vhdl::DeclarationForm;
+        const auto form = declaration->vhdl->form;
+        if (form != Form::signal && form != Form::constant
+            && form != Form::variable) {
+            return;
+        }
+        const auto& subtype = *declaration->vhdl->subtype;
+        if (!equal_ignoring_ascii_case(
+                simple_name_of(subtype.type_mark.spelling), "string")
+            || subtype.constraints.size() != 1U
+            || subtype.constraints.front().kind
+                != semantic::vhdl::RangeKind::array_index) {
+            return;
+        }
+        const auto selector = specialization_.find_expression(*index);
+        if (!selector || selector->vhdl == nullptr
+            || selector->vhdl->kind
+                != semantic::vhdl::ExpressionKind::integer_literal) {
+            return;
+        }
+        const auto& constraint = subtype.constraints.front();
+        const auto left = bound(constraint.left, constraint.left_expression);
+        const auto right = bound(constraint.right, constraint.right_expression);
+        const auto position = bound(std::nullopt, *index);
+        if (left && right && position
+            && (*position < std::min(*left, *right)
+                || *position > std::max(*left, *right))) {
+            report(
+                "FSIM-ELAB-VHARRAYSEL-003",
+                "VHDL array index is outside its selected source "
+                    "dimension",
+                selector->vhdl->source);
+        }
+    }
+
     void validate_selection(const semantic::ExpressionId id)
     {
         const auto selected = array_selection(id);
         if (!selected) {
+            validate_string_index(id);
             return;
         }
         std::unordered_set<std::uint32_t> visiting;

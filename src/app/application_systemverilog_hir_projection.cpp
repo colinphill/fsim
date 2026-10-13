@@ -705,6 +705,9 @@ template <typename Input>
     if (input.systemverilog_static) {
         declaration(id).lifetime = sv::Lifetime::static_lifetime;
     }
+    declaration(id).array_parameter = input.systemverilog_parameter;
+    declaration(id).array_local_parameter
+        = input.systemverilog_local_parameter;
     if (input.type.systemverilog_virtual_interface) {
         declaration(id).interface_type
             = input.type.systemverilog_interface_type;

@@ -1981,6 +1981,7 @@ tests/fixtures/compliance/analysis_errors/ambiguous_bit_literals.vhd
 tests/fixtures/compliance/analysis_errors/call_arity.vhd
 tests/fixtures/compliance/analysis_errors/case_variable_choice.vhd
 tests/fixtures/compliance/analysis_errors/character_to_bit.vhd
+tests/fixtures/compliance/analysis_errors/deferred_constant_early.vhd
 tests/fixtures/compliance/analysis_errors/guard_assignment.vhd
 tests/fixtures/compliance/analysis_errors/integer_condition.vhd
 tests/fixtures/compliance/analysis_errors/integer_guard.vhd
@@ -1999,9 +2000,11 @@ tests/fixtures/compliance/analysis_errors/reserved_unit_name.vhd
 tests/fixtures/compliance/analysis_errors/run_analysis_error.cmake
 tests/fixtures/compliance/analysis_errors/scalar_to_record_element.vhd
 tests/fixtures/compliance/analysis_errors/signed_factor.vhd
+tests/fixtures/compliance/analysis_errors/string_index_range.vhd
 tests/fixtures/compliance/analysis_errors/type_mark_bound.vhd
 tests/fixtures/compliance/analysis_errors/undeclared_choice.vhd
 tests/fixtures/compliance/analysis_errors/undeclared_procedure.vhd
+tests/fixtures/compliance/analysis_errors/unguarded_guarded_target.vhd
 tests/fixtures/compliance/run_compliance.cmake
 tests/fixtures/compliance/sv_array_sizes_and_methods.sv
 tests/fixtures/compliance/sv_block_labels_and_class_parameters.sv
@@ -2035,6 +2038,7 @@ tests/fixtures/compliance/sv_language_details_batch49.sv
 tests/fixtures/compliance/sv_language_details_batch50.sv
 tests/fixtures/compliance/sv_language_details_batch51.sv
 tests/fixtures/compliance/sv_language_details_batch52.sv
+tests/fixtures/compliance/sv_language_details_batch53.sv
 tests/fixtures/compliance/sv_module_items.sv
 tests/fixtures/compliance/sv_net_data_types.sv
 tests/fixtures/compliance/sv_nonblocking_struct_members.sv
@@ -2068,6 +2072,7 @@ tests/fixtures/compliance/vhdl_environment_tee_and_flush.vhd
 tests/fixtures/compliance/vhdl_formal_element_constraints.vhd
 tests/fixtures/compliance/vhdl_formal_subelements.vhd
 tests/fixtures/compliance/vhdl_generate_configuration.vhd
+tests/fixtures/compliance/vhdl_guarded_and_real_ranges.vhd
 tests/fixtures/compliance/vhdl_individual_association.vhd
 tests/fixtures/compliance/vhdl_matching_units_and_bindings.vhd
 tests/fixtures/compliance/vhdl_names_and_orderings.vhd

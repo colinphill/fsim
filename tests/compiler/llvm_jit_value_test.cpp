@@ -3410,8 +3410,10 @@ void test_conditional_select_at_level(
        std::array{
            std::pair{Logic4::zero, std::string_view{"100Z"}},
            std::pair{Logic4::one, std::string_view{"101Z"}},
-           std::pair{Logic4::x, std::string_view{"10XZ"}},
-           std::pair{Logic4::z, std::string_view{"10XZ"}}}) {
+           // Unequal bits and z/z pairs merge to x (IEEE 1800-2017
+           // Table 11-20).
+           std::pair{Logic4::x, std::string_view{"10XX"}},
+           std::pair{Logic4::z, std::string_view{"10XX"}}}) {
     TestRuntime runtime;
     runtime.signals[0] = encode(condition);
     runtime.signals[1] = {when_true.aval, when_true.bval};

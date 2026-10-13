@@ -814,6 +814,11 @@ struct Declaration {
     std::optional<CallableProfile> callable;
     std::vector<DeclarationId> children;
     std::vector<StatementId> statements;
+    // An unpacked array value parameter, kept as a constant container
+    // variable, that a parameter association may override (6.20.2).
+    bool array_parameter { };
+    // An unpacked array local parameter, kept the same way.
+    bool array_local_parameter { };
 };
 
 struct Import {

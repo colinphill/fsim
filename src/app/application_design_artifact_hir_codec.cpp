@@ -216,6 +216,7 @@ namespace codec_detail {
                                 "static_reference", "interface_type",
                                 "modport", "lifetime", "nested_scope",
                                 "callable", "children", "statements",
+                                "array_parameter", "array_local_parameter",
                             };
                             const auto field_name
                                 = *invalid_field
