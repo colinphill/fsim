@@ -1814,6 +1814,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
     if (is_hir_vhdl_access_assignment(statement_id)) {
         return lower_hir_vhdl_access_assignment(statement_id);
     }
+    if (is_hir_vhdl_access_deallocation(statement_id)) {
+        return lower_hir_vhdl_access_deallocation(statement_id);
+    }
     if (is_hir_vhdl_environment_call_path_assignment(statement_id)) {
         return lower_hir_vhdl_environment_call_path_assignment(
             statement_id);
@@ -2675,6 +2678,564 @@ bool Lowerer::lower_hir_statement_unsuspended(
             *target);
         if (!target_expression) {
             return assignment_rejected(__LINE__);
+        }
+        if (statement->vhdl != nullptr
+            && target_expression->vhdl != nullptr
+            && target_expression->vhdl->kind
+                == semantic::vhdl::ExpressionKind::aggregate) {
+            const auto& input = *statement->vhdl;
+            if (!hir_vhdl_aggregate_is_writable(*target)) {
+                return assignment_rejected(__LINE__);
+            }
+            const auto target_is_static = [&](const auto& self,
+                                              const semantic::ExpressionId id)
+                -> bool {
+                const auto expression
+                    = specialized_hir_unit_->find_expression(id);
+                if (!expression || expression->vhdl == nullptr) {
+                    return false;
+                }
+                const auto& selected = *expression->vhdl;
+                if (selected.kind
+                    == semantic::vhdl::ExpressionKind::aggregate) {
+                    return std::ranges::all_of(selected.associations,
+                        [&](const auto& association) {
+                            return self(self, association.value);
+                        });
+                }
+                if (selected.kind == semantic::vhdl::ExpressionKind::name) {
+                    return true;
+                }
+                if (selected.kind == semantic::vhdl::ExpressionKind::slice
+                    && selected.operands.size() == 3U) {
+                    return hir_constant_integer(selected.operands[1]).has_value()
+                        && hir_constant_integer(selected.operands[2]).has_value()
+                        && self(self, selected.operands.front());
+                }
+                if (selected.kind == semantic::vhdl::ExpressionKind::index
+                    && selected.operands.size() >= 2U) {
+                    // The aggregate-target legality check is syntactic: a
+                    // locally static index remains static even when the
+                    // packed array selector cannot be materialized here.
+                    const auto static_indices = std::ranges::all_of(
+                        std::span { selected.operands }.subspan(1U),
+                        [&](const auto index) {
+                            return hir_constant_integer(index).has_value();
+                        });
+                    return static_indices
+                        && self(self, selected.operands.front());
+                }
+                if (selected.kind == semantic::vhdl::ExpressionKind::call) {
+                    const auto array = hir_vhdl_array_selection(id);
+                    if (array && array->dynamic_indices.empty()) {
+                        return true;
+                    }
+                    // A direct indexed name is represented as Call with the
+                    // base name in text and only its selectors in operands.
+                    // The writable-target check above already rejects
+                    // function calls and confirms this resolves to an object.
+                    const auto positional_arguments
+                        = std::ranges::all_of(selected.argument_names,
+                            [](const std::string& name) {
+                                return name.empty();
+                            });
+                    const auto static_indices = !selected.operands.empty()
+                        && std::ranges::all_of(selected.operands,
+                            [&](const auto index) {
+                                return hir_constant_integer(index).has_value();
+                            });
+                    return positional_arguments && static_indices
+                        && hir_target_declaration(id).has_value();
+                }
+                return false;
+            };
+            if (!target_is_static(target_is_static, *target)) {
+                return assignment_rejected(__LINE__);
+            }
+            const auto target_shape_matches = [&](const auto& self,
+                                                  const semantic::ExpressionId id,
+                                                  const semantic::vhdl::SubtypeIndication& subtype,
+                                                  const std::optional<std::size_t> contextual_width)
+                -> bool {
+                const auto expression
+                    = specialized_hir_unit_->find_expression(id);
+                if (!expression || expression->vhdl == nullptr) {
+                    return false;
+                }
+                const auto& aggregate = *expression->vhdl;
+                if (aggregate.kind
+                    != semantic::vhdl::ExpressionKind::aggregate) {
+                    return true;
+                }
+                const auto effective = hir_effective_vhdl_subtype(subtype);
+                if (!effective) {
+                    return false;
+                }
+                const auto subtype_width = [](const auto& selected)
+                    -> std::optional<std::size_t> {
+                    auto width = selected.executable_width;
+                    if ((!width || *width == 0U)
+                        && selected.domain
+                            == semantic::vhdl::ValueDomain::integer
+                        && selected.integer_storage_width != 0U) {
+                        width = selected.integer_storage_width;
+                    }
+                    if (!width || *width == 0U
+                        || *width > std::numeric_limits<std::size_t>::max()) {
+                        return std::nullopt;
+                    }
+                    return static_cast<std::size_t>(*width);
+                };
+                const auto builtin_array_element = [this](std::string_view name)
+                    -> std::optional<semantic::vhdl::SubtypeIndication> {
+                    constexpr auto builtin_prefix
+                        = std::string_view { "@builtin:" };
+                    if (name.starts_with(builtin_prefix)) {
+                        name.remove_prefix(builtin_prefix.size());
+                    }
+                    if (const auto separator = name.find_last_of(".:");
+                        separator != std::string_view::npos) {
+                        name.remove_prefix(separator + 1U);
+                    }
+                    semantic::vhdl::SubtypeIndication element;
+                    const auto set = [&](const std::string_view scalar,
+                                         const semantic::vhdl::ValueDomain domain,
+                                         const std::uint64_t width) {
+                        element.type_mark.spelling = std::string { scalar };
+                        element.domain = domain;
+                        element.executable_width = width;
+                    };
+                    if (equal_ignoring_ascii_case(name, "bit_vector")) {
+                        set("bit", semantic::vhdl::ValueDomain::bit2, 1U);
+                    } else if (equal_ignoring_ascii_case(name, "string")) {
+                        set("character", semantic::vhdl::ValueDomain::bit2, 8U);
+                    } else if (equal_ignoring_ascii_case(name, "boolean_vector")) {
+                        set("boolean", semantic::vhdl::ValueDomain::boolean, 1U);
+                    } else if (equal_ignoring_ascii_case(name, "integer_vector")) {
+                        const auto width = vhdl_standard_
+                                == frontend::VhdlStandard::Vhdl2019
+                            ? 64U : 32U;
+                        set("integer", semantic::vhdl::ValueDomain::integer, width);
+                        element.integer_storage_width
+                            = static_cast<std::uint8_t>(width);
+                    } else if (equal_ignoring_ascii_case(name, "time_vector")) {
+                        set("time", semantic::vhdl::ValueDomain::integer, 64U);
+                        element.integer_storage_width = 64U;
+                    } else if (equal_ignoring_ascii_case(name, "real_vector")) {
+                        set("real", semantic::vhdl::ValueDomain::bit2, 64U);
+                    } else if (equal_ignoring_ascii_case(name, "std_logic_vector")
+                        || equal_ignoring_ascii_case(name, "signed")
+                        || equal_ignoring_ascii_case(name, "unsigned")
+                        || equal_ignoring_ascii_case(name, "ufixed")
+                        || equal_ignoring_ascii_case(name, "sfixed")
+                        || equal_ignoring_ascii_case(name, "unresolved_ufixed")
+                        || equal_ignoring_ascii_case(name, "unresolved_sfixed")
+                        || equal_ignoring_ascii_case(name, "float")
+                        || equal_ignoring_ascii_case(name, "unresolved_float")
+                        || equal_ignoring_ascii_case(name, "u_float")) {
+                        set("std_logic", semantic::vhdl::ValueDomain::logic9, 1U);
+                    } else if (equal_ignoring_ascii_case(name, "std_ulogic_vector")) {
+                        set("std_ulogic", semantic::vhdl::ValueDomain::logic9, 1U);
+                    } else {
+                        return std::nullopt;
+                    }
+                    return element;
+                };
+                auto type_id = effective->type_mark.target;
+                auto array_spelling = std::string_view {
+                    effective->type_mark.spelling
+                };
+                std::unordered_set<std::uint32_t> visited;
+                const semantic::vhdl::TypeDefinition* definition { };
+                while (type_id.valid()
+                    && visited.insert(type_id.value()).second) {
+                    const auto type
+                        = specialized_hir_unit_->find_type(type_id);
+                    if (!type || type->vhdl == nullptr) {
+                        break;
+                    }
+                    if (type->vhdl->form
+                            != semantic::vhdl::TypeForm::subtype
+                        && type->vhdl->form
+                            != semantic::vhdl::TypeForm::alias) {
+                        definition = type->vhdl;
+                        break;
+                    }
+                    array_spelling = type->vhdl->base.type_mark.spelling;
+                    type_id = type->vhdl->base.type_mark.target;
+                }
+                const auto builtin_element = definition == nullptr
+                    ? builtin_array_element(array_spelling)
+                    : std::nullopt;
+                if (definition == nullptr && !builtin_element) {
+                    return false;
+                }
+                if (definition != nullptr
+                    && definition->form
+                    == semantic::vhdl::TypeForm::record) {
+                    const auto& elements = definition->record_elements;
+                    std::vector<bool> assigned(elements.size());
+                    std::size_t positional { };
+                    for (const auto& association : aggregate.associations) {
+                        std::optional<std::size_t> element_index;
+                        if (association.choices.empty()) {
+                            while (positional < assigned.size()
+                                && assigned[positional]) {
+                                ++positional;
+                            }
+                            if (positional < assigned.size()) {
+                                element_index = positional++;
+                            }
+                        } else if (association.choices.size() == 1U) {
+                            const auto choice
+                                = specialized_hir_unit_->find_expression(
+                                      association.choices.front());
+                            if (choice && choice->vhdl != nullptr
+                                && choice->vhdl->kind
+                                    == semantic::vhdl::ExpressionKind::name) {
+                                const auto found = std::ranges::find_if(
+                                    elements, [&](const auto& element) {
+                                        return equal_ignoring_ascii_case(
+                                            element.name, choice->vhdl->text);
+                                    });
+                                if (found != elements.end()) {
+                                    element_index = static_cast<std::size_t>(
+                                        std::distance(elements.begin(), found));
+                                }
+                            }
+                        }
+                        if (!element_index
+                            || *element_index >= elements.size()
+                            || assigned[*element_index]) {
+                            return false;
+                        }
+                        assigned[*element_index] = true;
+                        const auto element_subtype
+                            = semantic::vhdl::constrained_element_subtype(
+                                *effective, elements[*element_index].name,
+                                elements[*element_index].subtype);
+                        if (!self(self, association.value, element_subtype,
+                                subtype_width(element_subtype))) {
+                            return false;
+                        }
+                    }
+                    return std::ranges::all_of(assigned,
+                        [](const bool value) { return value; });
+                }
+                if ((definition != nullptr
+                        && definition->form
+                            != semantic::vhdl::TypeForm::array)
+                    || (definition == nullptr && !builtin_element)) {
+                    return false;
+                }
+                auto dimensions = effective->constraints;
+                if (dimensions.empty() && definition != nullptr) {
+                    for (const auto& dimension
+                         : definition->array_dimensions) {
+                        if (!dimension.constraint) {
+                            break;
+                        }
+                        dimensions.push_back(*dimension.constraint);
+                    }
+                }
+                const bool all_positional = std::ranges::all_of(
+                    aggregate.associations,
+                    [](const auto& association) {
+                        return association.choices.empty();
+                    });
+                std::optional<semantic::vhdl::RangeConstraint> range;
+                if (!dimensions.empty()) {
+                    range = dimensions.front();
+                    if (!range->left && range->left_expression) {
+                        range->left = hir_constant_integer(
+                            *range->left_expression);
+                    }
+                    if (!range->right && range->right_expression) {
+                        range->right = hir_constant_integer(
+                            *range->right_expression);
+                    }
+                }
+                if (range && range->null) {
+                    return false;
+                }
+                const auto bounded = range && range->left && range->right;
+                std::optional<std::uint64_t> count;
+                if (bounded) {
+                    const auto distance = index_distance(
+                        *range->left, *range->right);
+                    if (distance
+                        == std::numeric_limits<std::uint64_t>::max()) {
+                        return false;
+                    }
+                    count = distance + 1U;
+                } else if (all_positional
+                    && !aggregate.associations.empty()
+                    && (builtin_element
+                        || (definition != nullptr
+                            && definition->array_dimensions.size() == 1U))) {
+                    count = aggregate.associations.size();
+                } else {
+                    return false;
+                }
+                if (!count || *count == 0U
+                    || *count > std::numeric_limits<std::size_t>::max()
+                    || aggregate.associations.size() != *count) {
+                    return false;
+                }
+                auto packed_width = contextual_width;
+                if (!packed_width) {
+                    packed_width = hir_vhdl_expression_runtime_width(
+                        id, hir_process_scope_);
+                }
+                if (!packed_width) {
+                    packed_width = subtype_width(*effective);
+                }
+                if (!packed_width || *packed_width == 0U
+                    || *packed_width % *count != 0U) {
+                    return false;
+                }
+                const auto element_width = static_cast<std::size_t>(
+                    *packed_width / *count);
+                std::optional<semantic::vhdl::SubtypeIndication> element;
+                if (dimensions.size() > 1U) {
+                    auto nested = *effective;
+                    nested.constraints.assign(
+                        std::next(dimensions.begin()), dimensions.end());
+                    nested.executable_width = element_width;
+                    element = hir_effective_vhdl_subtype(nested);
+                } else if (definition != nullptr
+                    && definition->element_subtype) {
+                    element = hir_effective_vhdl_subtype(
+                        semantic::vhdl::constrained_element_subtype(
+                            *effective, "", *definition->element_subtype));
+                } else if (builtin_element) {
+                    element = hir_effective_vhdl_subtype(*builtin_element);
+                }
+                if (!element) {
+                    return false;
+                }
+                if (const auto declared_element_width
+                    = subtype_width(*element);
+                    declared_element_width
+                    && *declared_element_width != element_width) {
+                    return false;
+                }
+                std::vector<bool> assigned(static_cast<std::size_t>(*count));
+                std::size_t aggregate_position { };
+                const auto low = bounded
+                    ? std::min(*range->left, *range->right)
+                    : std::int64_t { };
+                const auto high = bounded
+                    ? std::max(*range->left, *range->right)
+                    : std::int64_t { };
+                for (const auto& association : aggregate.associations) {
+                    auto index = bounded && association.choices.size() == 1U
+                        ? hir_constant_integer(association.choices.front())
+                        : std::nullopt;
+                    if (!bounded && association.choices.empty()) {
+                        if (aggregate_position >= *count
+                            || aggregate_position > static_cast<std::size_t>(
+                                std::numeric_limits<std::int64_t>::max())) {
+                            return false;
+                        }
+                        index = static_cast<std::int64_t>(
+                            aggregate_position++);
+                    } else if (association.choices.empty()) {
+                        if (aggregate_position >= *count
+                            || aggregate_position > static_cast<std::size_t>(
+                                std::numeric_limits<std::int64_t>::max())) {
+                            return false;
+                        }
+                        const auto position_delta
+                            = static_cast<std::int64_t>(aggregate_position++);
+                        if (range->descending) {
+                            if (*range->left
+                                < std::numeric_limits<std::int64_t>::min()
+                                    + position_delta) {
+                                return false;
+                            }
+                            index = *range->left - position_delta;
+                        } else {
+                            if (*range->left
+                                > std::numeric_limits<std::int64_t>::max()
+                                    - position_delta) {
+                                return false;
+                            }
+                            index = *range->left + position_delta;
+                        }
+                    }
+                    if (!index || (bounded && (*index < low || *index > high))) {
+                        return false;
+                    }
+                    const auto slot = bounded
+                        ? index_distance(*index, *range->right)
+                        : static_cast<std::uint64_t>(*index);
+                    if (slot >= assigned.size()
+                        || assigned[static_cast<std::size_t>(slot)]
+                        || !self(self, association.value, *element,
+                            element_width)) {
+                        return false;
+                    }
+                    assigned[static_cast<std::size_t>(slot)] = true;
+                }
+                return std::ranges::all_of(assigned,
+                    [](const bool value) { return value; });
+            };
+            if (signal_assignment
+                && (input.waveform.size() != 1U
+                    || input.waveform.front().disconnect)) {
+                // A tuple target with several waveform elements needs one
+                // projected waveform per target, and a null waveform needs
+                // guarded-driver disconnection per target. Keep those paths
+                // explicit until their target snapshots are represented.
+                return assignment_rejected(__LINE__);
+            }
+            std::vector<semantic::ExpressionId> values;
+            if (signal_assignment) {
+                values.push_back(input.waveform.front().value);
+            } else if (value) {
+                values.push_back(*value);
+            } else {
+                return assignment_rejected(__LINE__);
+            }
+            std::vector<RegisterId> lowered_values;
+            std::vector<semantic::vhdl::SubtypeIndication> source_subtypes;
+            lowered_values.reserve(values.size());
+            source_subtypes.reserve(values.size());
+            for (const auto expression_id : values) {
+                const auto subtype = hir_vhdl_expression_subtype(expression_id);
+                const auto effective = subtype
+                    ? hir_effective_vhdl_subtype(*subtype)
+                    : std::nullopt;
+                if (!effective) {
+                    return assignment_rejected(__LINE__);
+                }
+                auto width = hir_vhdl_expression_runtime_width(
+                    expression_id, hir_process_scope_);
+                if (!width && effective->executable_width
+                    && *effective->executable_width != 0U
+                    && *effective->executable_width
+                        <= std::numeric_limits<std::size_t>::max()) {
+                    width = static_cast<std::size_t>(
+                        *effective->executable_width);
+                }
+                if (!width
+                    && effective->domain
+                        == semantic::vhdl::ValueDomain::integer
+                    && effective->integer_storage_width != 0U) {
+                    width = effective->integer_storage_width;
+                }
+                if (!width || *width == 0U
+                    || *width > std::numeric_limits<std::uint32_t>::max()) {
+                    return assignment_rejected(__LINE__);
+                }
+                if (!target_shape_matches(
+                        target_shape_matches, *target, *effective, width)) {
+                    return assignment_rejected(__LINE__);
+                }
+                const auto source_expression
+                    = specialized_hir_unit_->find_expression(expression_id);
+                auto lowered = source_expression
+                        && source_expression->vhdl != nullptr
+                        && source_expression->vhdl->kind
+                            == semantic::vhdl::ExpressionKind::aggregate
+                    ? lower_hir_vhdl_aggregate(
+                          expression_id, *width, &*effective)
+                    : lower_hir_expression(expression_id, *width);
+                if (!lowered || register_width(*lowered) != *width) {
+                    return assignment_rejected(__LINE__);
+                }
+                lowered_values.push_back(*lowered);
+                source_subtypes.push_back(*effective);
+            }
+
+            if (!signal_assignment) {
+                // Aggregate variable assignments read the complete right-hand
+                // value before any target element is updated.  The lowered
+                // value can alias a target local, so preserve it before the
+                // copy-out loop starts writing individual associations.
+                for (auto& lowered : lowered_values) {
+                    const auto snapshot = allocate_register(
+                        register_width(lowered), register_domain(lowered));
+                    process_.operations.emplace_back(CopyRegister {
+                        snapshot, lowered });
+                    lowered = snapshot;
+                }
+            }
+
+            std::optional<runtime::SimulationTick> delay;
+            std::optional<runtime::SimulationTick> rejection;
+            const auto delay_mode = input.delay_mechanism
+                    == semantic::vhdl::DelayMechanism::transport
+                ? ProjectedDelayMode::transport
+                : ProjectedDelayMode::inertial;
+            if (signal_assignment) {
+                const auto& waveform = input.waveform.front();
+                delay = waveform.delay
+                    ? delay_magnitude(waveform.delay->primary)
+                    : input.delay
+                    ? delay_magnitude(input.delay->primary)
+                    : std::optional<runtime::SimulationTick> { 0U };
+                rejection = input.rejection_limit
+                    ? delay_magnitude(input.rejection_limit->primary)
+                    : std::optional<runtime::SimulationTick> {
+                          delay_mode == ProjectedDelayMode::transport
+                              ? 0U
+                              : delay.value_or(0U)
+                      };
+                if (!delay || !rejection || *rejection > *delay) {
+                    return assignment_rejected(__LINE__);
+                }
+            }
+
+            for (std::size_t index { }; index < lowered_values.size(); ++index) {
+                const auto operation_start = process_.operations.size();
+                if (!lower_hir_vhdl_aggregate_copy_out(
+                        *target, lowered_values[index],
+                        source_subtypes[index])) {
+                    return assignment_rejected(__LINE__);
+                }
+                if (!signal_assignment) {
+                    continue;
+                }
+                bool emitted_write { };
+                for (std::size_t operation = operation_start;
+                    operation < process_.operations.size(); ++operation) {
+                    auto& current = process_.operations[operation];
+                    if (auto* blocking_write
+                        = runtime::simir::operation_get_if<WriteBlocking>(
+                            &current)) {
+                        current = WriteProjected {
+                            blocking_write->signal, blocking_write->source,
+                            *delay, *rejection, delay_mode };
+                        emitted_write = true;
+                    } else if (auto* slice_write
+                        = runtime::simir::operation_get_if<WriteBlockingSlice>(
+                            &current)) {
+                        current = WriteProjectedSlice {
+                            slice_write->signal, slice_write->source,
+                            slice_write->offset, *delay, *rejection,
+                            delay_mode };
+                        emitted_write = true;
+                    } else if (auto* dynamic_slice_write
+                        = runtime::simir::operation_get_if<
+                            WriteBlockingDynamicSlice>(&current)) {
+                        current = WriteProjectedDynamicSlice {
+                            dynamic_slice_write->signal,
+                            dynamic_slice_write->source,
+                            dynamic_slice_write->selection, *delay,
+                            *rejection, delay_mode };
+                        emitted_write = true;
+                    } else if (runtime::simir::operation_holds<
+                                   WriteBlockingDynamicPartSlice>(current)) {
+                        return assignment_rejected(__LINE__);
+                    }
+                }
+                if (!emitted_write) {
+                    return assignment_rejected(__LINE__);
+                }
+            }
+            return true;
         }
         // A member of a packed structure class property (`c.p.a = v`).
         if (const auto member = hir_class_property_member(*target)) {
@@ -16368,6 +16929,11 @@ bool Lowerer::hir_update_reevaluates_target(
             return false;
         }
         const auto& source = *expression->systemverilog;
+        if (semantic::sv::is_expression_size_cast(source)) {
+            // The size is elaboration-time constant; runtime purity depends
+            // only on the value expression.
+            return self(self, source.operands.back(), depth + 1U);
+        }
         switch (source.kind) {
         case Kind::name:
         case Kind::integer_literal:

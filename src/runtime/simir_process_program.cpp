@@ -2,6 +2,7 @@
 #include "simir_internal.hpp"
 
 #include <algorithm>
+#include <limits>
 #include <ranges>
 #include <utility>
 
@@ -819,7 +820,18 @@ bool InterpreterProgramAccess::vhdl_resolver_program(
     const Interpreter& interpreter, const ProcessId process) noexcept
 {
     return std::ranges::any_of(interpreter.impl_->vhdl_resolvers,
-        [&](const auto& entry) { return entry.second.process == process; });
+        [&](const auto& entry) {
+            const auto& resolver = entry.second;
+            if (resolver.process == process) {
+                return true;
+            }
+            return std::ranges::any_of(
+                resolver.variants, [&](const VhdlResolverVariant& variant) {
+                    return variant.process
+                            != std::numeric_limits<ProcessId>::max()
+                        && variant.process == process;
+                });
+        });
 }
 
 std::size_t InterpreterProgramAccess::operation_count(

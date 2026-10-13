@@ -12,10 +12,54 @@
 namespace fsim::runtime::simir {
 namespace {
 
+    constexpr std::string_view vhdl_textio_read_marker
+        = "\x1f" "fsim-vhdl-textio-read";
+    constexpr std::string_view vhdl_textio_read_2008_marker
+        = "\x1f" "fsim-vhdl-textio-read-2008";
+    constexpr std::string_view vhdl_textio_sread_marker
+        = "\x1f" "fsim-vhdl-textio-sread";
+
+    [[nodiscard]] bool vhdl_textio_read(
+        const FileScan& operation) noexcept
+    {
+        return operation.string_source && operation.consume_string_source
+            && operation.conversions.size() == 1U
+            && (operation.conversions.front().prefix
+                    == vhdl_textio_read_marker
+                || operation.conversions.front().prefix
+                    == vhdl_textio_read_2008_marker
+                || operation.conversions.front().prefix
+                    == vhdl_textio_sread_marker);
+    }
+
+    [[nodiscard]] bool vhdl_textio_read_2008(
+        const FileScan& operation) noexcept
+    {
+        return operation.string_source && operation.consume_string_source
+            && operation.conversions.size() == 1U
+            && operation.conversions.front().prefix
+                == vhdl_textio_read_2008_marker;
+    }
+
+    [[nodiscard]] bool vhdl_textio_sread(
+        const FileScan& operation) noexcept
+    {
+        return operation.string_source && operation.consume_string_source
+            && operation.conversions.size() == 1U
+            && operation.conversions.front().prefix
+                == vhdl_textio_sread_marker;
+    }
+
     [[nodiscard]] bool space(const std::int32_t character) noexcept
     {
         return character >= 0
             && std::isspace(static_cast<unsigned char>(character)) != 0;
+    }
+
+    [[nodiscard]] bool vhdl_textio_space(
+        const std::int32_t character) noexcept
+    {
+        return character == ' ' || character == '\t' || character == 0xa0;
     }
 
     class Scanner {
@@ -43,10 +87,11 @@ namespace {
                     --consumed_;
             }
         }
-        [[nodiscard]] bool skip_space()
+        [[nodiscard]] bool skip_space(const bool vhdl_textio = false)
         {
             auto character = read();
-            while (space(character))
+            while (vhdl_textio ? vhdl_textio_space(character)
+                               : space(character))
                 character = read();
             unread(character);
             return character >= 0;
@@ -337,7 +382,8 @@ namespace {
     [[nodiscard]] bool numeric_character(
         const std::int32_t character,
         const InputScanFormat format,
-        const bool first) noexcept
+        const bool first,
+        const bool vhdl_textio) noexcept
     {
         if (character < 0)
             return false;
@@ -352,6 +398,12 @@ namespace {
         }
         if (first && (character == '+' || character == '-'))
             return true;
+        if (vhdl_textio
+            && (format == InputScanFormat::decimal
+                || format == InputScanFormat::unsigned_decimal)) {
+            return (character >= '0' && character <= '9')
+                || character == '_';
+        }
         if (character == '_' || character == '?' || character == 'x'
             || character == 'X' || character == 'z' || character == 'Z')
             return true;
@@ -367,8 +419,76 @@ namespace {
                 || (character >= 'A' && character <= 'F'));
     }
 
+    [[nodiscard]] bool valid_vhdl_numeric_separators(
+        const std::string_view text) noexcept
+    {
+        for (std::size_t index = 0U; index < text.size(); ++index) {
+            if (text[index] == '_'
+                && (index == 0U || index + 1U == text.size()
+                    || text[index - 1U] < '0' || text[index - 1U] > '9'
+                    || text[index + 1U] < '0' || text[index + 1U] > '9')) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool valid_vhdl_real_literal(
+        const std::string_view text) noexcept
+    {
+        std::size_t index { };
+        if (!text.empty() && (text.front() == '+' || text.front() == '-')) {
+            ++index;
+        }
+        const auto consume_integer = [&]() {
+            if (index >= text.size()
+                || text[index] < '0' || text[index] > '9') {
+                return false;
+            }
+            ++index;
+            while (index < text.size()) {
+                if (text[index] >= '0' && text[index] <= '9') {
+                    ++index;
+                    continue;
+                }
+                if (text[index] != '_'
+                    || index + 1U >= text.size()
+                    || text[index + 1U] < '0'
+                    || text[index + 1U] > '9') {
+                    break;
+                }
+                index += 2U;
+            }
+            return true;
+        };
+        if (!consume_integer() || index >= text.size()
+            || text[index] != '.') {
+            return false;
+        }
+        ++index;
+        if (!consume_integer()) {
+            return false;
+        }
+        if (index < text.size()
+            && (text[index] == 'e' || text[index] == 'E')) {
+            ++index;
+            if (index < text.size()
+                && (text[index] == '+' || text[index] == '-')) {
+                ++index;
+            }
+            if (!consume_integer()) {
+                return false;
+            }
+        }
+        return index == text.size();
+    }
+
     [[nodiscard]] std::tuple<std::string, bool, bool> read_conversion_text(
-        Scanner& scanner, const InputScanConversion& conversion)
+        Scanner& scanner,
+        const InputScanConversion& conversion,
+        const bool vhdl_textio,
+        const bool vhdl_textio_2008,
+        const bool vhdl_textio_sread)
     {
         std::string text;
         bool eof = false;
@@ -387,8 +507,116 @@ namespace {
         const auto limit = conversion.maximum_characters == 0
             ? default_limit
             : conversion.maximum_characters;
-        if (conversion.format != InputScanFormat::character && !unformatted) {
-            (void)scanner.skip_space();
+        if (vhdl_textio_sread
+            && conversion.format == InputScanFormat::string) {
+            (void)scanner.skip_space(true);
+            while (text.size() < conversion.maximum_characters) {
+                const auto character = scanner.read();
+                if (character < 0) {
+                    eof = true;
+                    break;
+                }
+                if (vhdl_textio_space(character)) {
+                    scanner.unread(character);
+                    break;
+                }
+                text.push_back(static_cast<char>(character));
+            }
+            return { std::move(text), true, eof };
+        }
+        if (vhdl_textio
+            && conversion.format == InputScanFormat::string) {
+            while (text.size() < limit) {
+                const auto character = scanner.read();
+                if (character < 0) {
+                    eof = true;
+                    break;
+                }
+                text.push_back(static_cast<char>(character));
+            }
+            const bool complete = text.size() == limit;
+            return { std::move(text), complete, eof };
+        }
+        if (vhdl_textio
+            && conversion.format == InputScanFormat::binary) {
+            (void)scanner.skip_space(true);
+            std::size_t bit_count { };
+            while (bit_count < conversion.target.width
+                && text.size() < maximum_string_bytes) {
+                const auto character = scanner.read();
+                if (character < 0) {
+                    eof = true;
+                    break;
+                }
+                if (character == '_' && vhdl_textio_2008) {
+                    if (bit_count == 0U
+                        || text.size() + 1U >= maximum_string_bytes) {
+                        scanner.unread(character);
+                        break;
+                    }
+                    const auto next = scanner.read();
+                    if (next != '0' && next != '1') {
+                        scanner.unread(next);
+                        scanner.unread(character);
+                        break;
+                    }
+                    text.push_back('_');
+                    text.push_back(static_cast<char>(next));
+                    ++bit_count;
+                    continue;
+                }
+                if (character != '0' && character != '1') {
+                    scanner.unread(character);
+                    break;
+                }
+                text.push_back(static_cast<char>(character));
+                ++bit_count;
+            }
+            const bool complete = bit_count == conversion.target.width;
+            return { std::move(text), complete, eof };
+        }
+        if (vhdl_textio
+            && conversion.format == InputScanFormat::boolean_value) {
+            (void)scanner.skip_space(true);
+            auto character = scanner.read();
+            if (character < 0) {
+                return { std::move(text), false, true };
+            }
+            const auto first = static_cast<char>(std::tolower(
+                static_cast<unsigned char>(character)));
+            if (first != 't' && first != 'f') {
+                scanner.unread(character);
+                return { std::move(text), false, false };
+            }
+            text.push_back(static_cast<char>(character));
+            for (;;) {
+                character = scanner.read();
+                if (character < 0) {
+                    eof = true;
+                    break;
+                }
+                const bool identifier_character
+                    = (character >= 'a' && character <= 'z')
+                    || (character >= 'A' && character <= 'Z')
+                    || (character >= '0' && character <= '9')
+                    || character == '_';
+                if (!identifier_character) {
+                    scanner.unread(character);
+                    break;
+                }
+                text.push_back(static_cast<char>(character));
+            }
+            std::ranges::transform(text, text.begin(), [](const char value) {
+                return static_cast<char>(std::tolower(
+                    static_cast<unsigned char>(value)));
+            });
+            const bool valid = text == "true" || text == "false";
+            return { std::move(text), valid, eof };
+        }
+        if (conversion.format != InputScanFormat::character && !unformatted
+            && !(vhdl_textio
+                && conversion.format == InputScanFormat::string)) {
+            (void)scanner.skip_space(vhdl_textio);
         }
         while (text.size() < limit) {
             const auto character = scanner.read();
@@ -396,11 +624,34 @@ namespace {
                 eof = true;
                 break;
             }
+            const bool numeric_vhdl_textio = vhdl_textio
+                && (conversion.format == InputScanFormat::decimal
+                    || conversion.format
+                        == InputScanFormat::unsigned_decimal
+                    || conversion.format == InputScanFormat::real);
+            if (numeric_vhdl_textio && character == '_') {
+                const auto previous_is_digit = !text.empty()
+                    && text.back() >= '0' && text.back() <= '9';
+                if (!previous_is_digit || text.size() + 1U >= limit) {
+                    scanner.unread(character);
+                    break;
+                }
+                const auto next = scanner.read();
+                if (next < '0' || next > '9') {
+                    scanner.unread(next);
+                    scanner.unread(character);
+                    break;
+                }
+                text.push_back('_');
+                text.push_back(static_cast<char>(next));
+                continue;
+            }
             const bool accepted = unformatted
                 || conversion.format == InputScanFormat::character
                 || (conversion.format == InputScanFormat::string
                         ? !space(character)
-                        : numeric_character(character, conversion.format, text.empty()));
+                        : numeric_character(character, conversion.format,
+                              text.empty(), vhdl_textio));
             if (!accepted) {
                 scanner.unread(character);
                 break;
@@ -438,19 +689,26 @@ InputScanResult scan_formatted_input(
     const std::function<void(std::int32_t)>& unread)
 {
     Scanner scanner { read, unread };
+    const bool vhdl_textio_line = vhdl_textio_read(operation);
+    const bool vhdl_textio_2008 = vhdl_textio_read_2008(operation);
+    const bool is_vhdl_textio_sread = vhdl_textio_sread(operation);
     InputScanResult result;
     result.values.resize(operation.conversions.size());
     for (std::size_t index = 0; index < operation.conversions.size(); ++index) {
         const auto& conversion = operation.conversions[index];
-        const auto prefix = scanner.match(conversion.prefix);
+        const auto prefix = vhdl_textio_line
+            ? Scanner::Match::matched
+            : scanner.match(conversion.prefix);
         if (prefix != Scanner::Match::matched) {
             if (prefix == Scanner::Match::eof && result.assignments == 0)
                 result.assignments = -1;
             result.consumed = scanner.consumed();
             return result;
         }
-        auto [text, complete, eof] = read_conversion_text(scanner, conversion);
-        if (text.empty() || !complete) {
+        auto [text, complete, eof] = read_conversion_text(
+            scanner, conversion, vhdl_textio_line, vhdl_textio_2008,
+            is_vhdl_textio_sread);
+        if ((!is_vhdl_textio_sread && text.empty()) || !complete) {
             if (eof && result.assignments == 0)
                 result.assignments = -1;
             result.consumed = scanner.consumed();
@@ -459,6 +717,7 @@ InputScanResult scan_formatted_input(
         if (conversion.suppress)
             continue;
         std::optional<InputScanValue> value;
+        const auto sread_length = text.size();
         const bool unformatted = conversion.format
                 == InputScanFormat::unformatted2
             || conversion.format == InputScanFormat::unformatted4;
@@ -471,18 +730,39 @@ InputScanResult scan_formatted_input(
             const bool string_target = conversion.target.kind
                     == InputScanTargetKind::string_register
                 || conversion.target.kind == InputScanTargetKind::string_object;
+            if (is_vhdl_textio_sread && string_target
+                && text.size() < conversion.maximum_characters) {
+                // Elements after STRLEN are unspecified by TextIO SREAD;
+                // spaces keep the fixed-length STRING representation intact.
+                text.resize(conversion.maximum_characters, ' ');
+            }
             value = string_target
                 ? InputScanValue { PackedLogic4 { 1, Logic4::zero }, std::move(text), true }
                 : packed_text(text, conversion.target);
         } else {
-            value = packed_digits(std::move(text), conversion.format, conversion.target);
+            const bool valid_textio_number
+                = !vhdl_textio_line
+                || (conversion.format == InputScanFormat::real
+                        ? valid_vhdl_real_literal(text)
+                        : ((conversion.format != InputScanFormat::decimal
+                                && conversion.format
+                                    != InputScanFormat::unsigned_decimal)
+                            || valid_vhdl_numeric_separators(text)));
+            value = valid_textio_number
+                ? packed_digits(std::move(text), conversion.format,
+                      conversion.target)
+                : std::nullopt;
         }
         if (!value) {
             result.consumed = scanner.consumed();
             return result;
         }
         result.values[index] = std::move(value);
-        ++result.assignments;
+        if (is_vhdl_textio_sread) {
+            result.assignments = static_cast<std::int32_t>(sread_length);
+        } else {
+            ++result.assignments;
+        }
     }
     (void)scanner.match(operation.trailing_text);
     result.consumed = scanner.consumed();

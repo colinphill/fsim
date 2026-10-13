@@ -1110,6 +1110,13 @@ std::uint32_t LlvmProcessExecutor::container_write_packed(
         }
         const bool linear_index = (flags & 1U) != 0;
         const bool signed_index = (flags & 2U) != 0;
+        if (!target.type.fixed
+            && (index_bval != 0
+                || (signed_index
+                    && static_cast<std::int32_t>(
+                           static_cast<std::uint32_t>(index_aval)) < 0))) {
+            return 0;
+        }
         if (index_bval != 0) {
             throw runtime::simir::InterpreterError {
                 process, instruction,
@@ -1145,7 +1152,24 @@ std::uint32_t LlvmProcessExecutor::container_write_packed(
             }
             selected = static_cast<std::size_t>(index_aval);
         }
-        if (selected >= target.elements.size()) {
+        if (!target.type.fixed
+            && (selected > target.elements.size()
+                || (selected == target.elements.size()
+                    && (!target.type.queue
+                        || (target.type.maximum_elements
+                            && selected >= *target.type.maximum_elements))))) {
+            return 0;
+        }
+        const bool append = !target.type.fixed
+            && selected == target.elements.size();
+        if (append
+            && selected >= runtime::simir::maximum_container_elements(target.type)) {
+            throw runtime::simir::InterpreterError {
+                process, instruction,
+                "queue exceeds the per-container owning-storage budget"
+            };
+        }
+        if (!append && selected >= target.elements.size()) {
             throw runtime::simir::InterpreterError {
                 process, instruction,
                 "container index is out of range"
@@ -1165,8 +1189,13 @@ std::uint32_t LlvmProcessExecutor::container_write_packed(
                 "container element write type mismatch"
             };
         }
-        target.elements[selected] = PackedLogic4::from_word_planes(
+        auto value = PackedLogic4::from_word_planes(
             target.type.element_width, aval, bval);
+        if (append) {
+            target.elements.push_back(std::move(value));
+        } else {
+            target.elements[selected] = std::move(value);
+        }
         return 0;
     } catch (...) {
         capture_file_failure(state, process, instruction);

@@ -1129,7 +1129,11 @@ bool Lowerer::initialize_hir_declarations(
             }
             if (initializer && !retained_static) {
                 const auto initial = lower_hir_string_expression(
-                    *initializer);
+                    *initializer,
+                    declaration->vhdl != nullptr
+                            && declaration->vhdl->subtype
+                        ? &*declaration->vhdl->subtype
+                        : nullptr);
                 if (!initial) {
                     return false;
                 }
@@ -1413,6 +1417,16 @@ bool Lowerer::initialize_hir_declarations(
             && binding->width != 0U) {
             const auto initializer_expression
                 = specialized_hir_unit_->find_expression(*initializer);
+            const auto vhdl_access_allocator
+                = declaration->vhdl != nullptr
+                && declaration->vhdl->subtype
+                && initializer_expression
+                && initializer_expression->vhdl != nullptr
+                && initializer_expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::call
+                && (initializer_expression->vhdl->text == "@vhdl-new"
+                    || initializer_expression->vhdl->text
+                        == "@vhdl-new-qualified");
             const auto vhdl_aggregate
                 = declaration->vhdl != nullptr
                 && declaration->vhdl->subtype
@@ -1443,6 +1457,10 @@ bool Lowerer::initialize_hir_declarations(
                       vhdl_initializer_subtype
                           ? &*vhdl_initializer_subtype
                           : &*declaration->vhdl->subtype)
+                : vhdl_access_allocator
+                ? lower_hir_vhdl_access_expression(
+                      *initializer, binding->width,
+                      &*declaration->vhdl->subtype)
                 : lower_hir_expression(*initializer, binding->width);
             if (!initial) {
                 if (declaration->vhdl != nullptr) {

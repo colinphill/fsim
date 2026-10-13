@@ -669,6 +669,10 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
     output.labels = input.labels;
     output.component = name(input.component_name, input.span, scope);
     output.binding = binding(input.binding, scope, parent);
+    if (input.block_configuration) {
+        output.block_configuration = block_configuration(
+            *input.block_configuration, scope, parent);
+    }
     output.source = source(input.span);
     return output;
 }

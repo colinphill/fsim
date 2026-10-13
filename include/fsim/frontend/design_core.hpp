@@ -139,6 +139,35 @@ struct Expression {
     }
 };
 
+/// The frontend represents a SystemVerilog expression-sized cast with its
+/// constant size expression first and the value being cast second.
+[[nodiscard]] inline const Expression* systemverilog_cast_value_operand(
+    const Expression& expression) noexcept
+{
+    if (expression.kind != ExpressionKind::Call) {
+        return nullptr;
+    }
+    if (expression.text == "@sv-size-cast:expression"
+        && expression.operands.size() == 2U) {
+        return &expression.operands[1U];
+    }
+    if (expression.text.rfind("@sv-cast:", 0U) == 0U
+        && expression.operands.size() == 1U) {
+        return &expression.operands.front();
+    }
+    return nullptr;
+}
+
+[[nodiscard]] inline const Expression* systemverilog_cast_size_operand(
+    const Expression& expression) noexcept
+{
+    return expression.kind == ExpressionKind::Call
+            && expression.text == "@sv-size-cast:expression"
+            && expression.operands.size() == 2U
+        ? &expression.operands.front()
+        : nullptr;
+}
+
 struct DelayAlternative {
     std::uint64_t magnitude { };
     std::uint64_t divisor { 1 };
@@ -1137,7 +1166,20 @@ struct VhdlBindingIndication {
     SourceSpan span;
 };
 
-/// A component instantiation-list plus its selected entity aspect.
+/// The bounded block configuration admitted by the v1 configuration slice.
+struct VhdlComponentConfiguration;
+
+struct VhdlBlockConfiguration {
+    std::string block_name;
+    // An explicitly selected one-dimensional generate occurrence.
+    std::optional<Expression> generate_index;
+    std::vector<VhdlComponentConfiguration> component_configurations;
+    std::vector<VhdlBlockConfiguration> block_configurations;
+    SourceSpan span;
+};
+
+/// A component instantiation-list, its binding indication, and an optional
+/// configuration of the selected architecture body.
 struct VhdlComponentConfiguration {
     VhdlInstantiationSelectionKind selection {
         VhdlInstantiationSelectionKind::Labels
@@ -1145,16 +1187,7 @@ struct VhdlComponentConfiguration {
     std::vector<std::string> labels;
     std::string component_name;
     VhdlBindingIndication binding;
-    SourceSpan span;
-};
-
-/// The bounded block configuration admitted by the v1 configuration slice.
-struct VhdlBlockConfiguration {
-    std::string block_name;
-    // An explicitly selected one-dimensional generate occurrence.
-    std::optional<Expression> generate_index;
-    std::vector<VhdlComponentConfiguration> component_configurations;
-    std::vector<VhdlBlockConfiguration> block_configurations;
+    std::optional<VhdlBlockConfiguration> block_configuration;
     SourceSpan span;
 };
 

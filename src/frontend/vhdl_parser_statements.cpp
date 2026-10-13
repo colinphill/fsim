@@ -992,38 +992,99 @@ std::optional<Statement> VhdlParser::parse_assignment(bool concurrent) {
                        parsing_concurrent_assignment_ };
   parsing_concurrent_assignment_ = concurrent;
   const auto start_position = position();
-  // An aggregate of names as an assignment target, `(a, b) := v;`
+  const auto assignment_start = current();
+  // An aggregate assignment target, `(a, b) := v;` or `(a, b) <= v;`
   // (IEEE 1076-2008 10.5.2.1, 10.6.2.1, 11.6).
   std::vector<Expression> aggregate_targets;
+  Expression aggregate_target;
   if (at(TokenKind::LeftParen)) {
-    std::size_t lookahead = 1U;
-    std::size_t names = 0U;
-    while (at(TokenKind::Identifier, lookahead)) {
-      ++names;
-      ++lookahead;
-      if (!at(TokenKind::Comma, lookahead)) {
-        break;
+    const auto after_target = skip_vhdl_parentheses(0U);
+    if (after_target && !at(TokenKind::RightParen, 1U)
+        && (at(TokenKind::LessEqual, *after_target)
+            || at(TokenKind::ColonEqual, *after_target))) {
+      const auto open = advance();
+      aggregate_target.kind = ExpressionKind::Aggregate;
+      aggregate_target.span = open.span;
+      const auto named_association_ahead = [&]() {
+        std::size_t lookahead { };
+        std::size_t depth { };
+        for (;;) {
+          if (at(TokenKind::EndOfFile, lookahead)) {
+            return false;
+          }
+          if (at(TokenKind::LeftParen, lookahead)) {
+            ++depth;
+          } else if (at(TokenKind::RightParen, lookahead)) {
+            if (depth == 0U) {
+              return false;
+            }
+            --depth;
+          } else if (depth == 0U
+              && at(TokenKind::Arrow, lookahead)) {
+            return true;
+          } else if (depth == 0U
+              && (at(TokenKind::Comma, lookahead)
+                  || at(TokenKind::Pipe, lookahead))) {
+            return false;
+          }
+          ++lookahead;
+        }
+      };
+      bool saw_named_association { };
+      if (!at(TokenKind::RightParen)) {
+        do {
+          std::vector<Expression> choices;
+          std::string choice_spelling;
+          if (named_association_ahead()) {
+            saw_named_association = true;
+            do {
+              auto choice = parse_expression();
+              if (match_keyword("to", true)
+                  || match_keyword("downto", true)) {
+                const auto direction = previous();
+                auto right = parse_expression();
+                choice = Expression { ExpressionKind::Binary,
+                    detail::ascii_lower(direction.text),
+                    { std::move(choice), std::move(right) },
+                    span_from(direction, previous()) };
+              }
+              choices.push_back(std::move(choice));
+            } while (match(TokenKind::Pipe));
+            expect(TokenKind::Arrow,
+                "'=>' after aggregate target choice",
+                "FSIM-VHDL-PARSE-029");
+            if (choices.size() == 1U
+                && choices.front().kind == ExpressionKind::Identifier) {
+              choice_spelling = vhdl_name(choices.front().text);
+            } else {
+              choice_spelling = "@array";
+            }
+          } else if (saw_named_association) {
+            error(current(), "FSIM-VHDL-SEM-038",
+                "a positional aggregate target association cannot follow "
+                "a named association");
+          }
+          auto element_target = parse_lvalue();
+          aggregate_targets.push_back(element_target);
+          aggregate_target.aggregate_choices.push_back(
+              std::move(choice_spelling));
+          aggregate_target.aggregate_choice_expressions.push_back(
+              std::move(choices));
+          aggregate_target.operands.push_back(std::move(element_target));
+        } while (match(TokenKind::Comma));
       }
-      ++lookahead;
-    }
-    if (names >= 2U && at(TokenKind::RightParen, lookahead)
-        && (at(TokenKind::LessEqual, lookahead + 1U)
-            || at(TokenKind::ColonEqual, lookahead + 1U))) {
-      advance();
-      do {
-        aggregate_targets.push_back(parse_lvalue());
-      } while (match(TokenKind::Comma));
       expect(TokenKind::RightParen, "')' after aggregate target",
           "FSIM-VHDL-PARSE-029");
+      aggregate_target.span = span_from(open, previous());
     }
   }
   if (aggregate_targets.empty() && !at(TokenKind::Identifier)) {
     return std::nullopt;
   }
-  const auto start = aggregate_targets.empty() ? current() : previous();
+  const auto start = assignment_start;
   Expression target = aggregate_targets.empty()
       ? parse_lvalue()
-      : aggregate_targets.front();
+      : std::move(aggregate_target);
   AssignmentKind kind = AssignmentKind::VhdlSignal;
   if (match(TokenKind::LessEqual)) {
     kind = concurrent ? AssignmentKind::Continuous
@@ -1133,29 +1194,33 @@ std::optional<Statement> VhdlParser::parse_assignment(bool concurrent) {
   if (!aggregate_targets.empty()) {
     // An aggregate target may not name the same object more than once
     // (IEEE 1076-2008 10.5.2.1, 10.6.2.1).
+    const auto same_target = [&](const auto& self,
+                                 const Expression& left,
+                                 const Expression& right) -> bool {
+      return left.kind == right.kind && left.text == right.text
+          && left.operands.size() == right.operands.size()
+          && std::ranges::equal(left.operands, right.operands,
+              [&](const Expression& left_operand,
+                  const Expression& right_operand) {
+                return self(self, left_operand, right_operand);
+              });
+    };
     for (std::size_t first { }; first < aggregate_targets.size(); ++first) {
       for (auto second = first + 1U; second < aggregate_targets.size();
            ++second) {
         const auto& left = aggregate_targets[first];
         const auto& right = aggregate_targets[second];
-        if (left.kind == ExpressionKind::Identifier
-            && right.kind == ExpressionKind::Identifier
-            && detail::ascii_lower(left.text)
-                == detail::ascii_lower(right.text)) {
+        if (same_target(same_target, left, right)) {
           error(start, "FSIM-VHDL-SEM-120",
-              "an aggregate assignment target names '" + right.text
-                  + "' more than once");
+              "an aggregate assignment target names the same object more "
+              "than once");
           return statement;
         }
       }
     }
-    if (auto split = split_vhdl_aggregate_assignment(
-            statement, aggregate_targets)) {
-      return split;
-    }
-    error(start, "FSIM-VHDL-UNSUPPORTED-008",
-        "an aggregate assignment target requires a qualified aggregate or string, or an "
-        "array-object value");
+    // Keep the target aggregate intact. Expanding this into one assignment
+    // per association would evaluate a function-call RHS once per element
+    // and lose record source ordering; the lowerer fans out one packed RHS.
   }
   return statement;
 }
@@ -1600,6 +1665,18 @@ Expression VhdlParser::parse_lvalue() {
   const auto name = expect_identifier("assignment target");
   Expression expression{ExpressionKind::Identifier, vhdl_name(name.text),
                         {}, name.span};
+  // An indexed or selected name rooted at an access object implicitly
+  // dereferences it (IEEE 1076-2008 8.3), matching parse_primary(). Keep an
+  // explicit `.all` suffix on the existing path below.
+  if (vhdl_access_object_names_.contains(expression.text)
+      && (at(TokenKind::LeftParen)
+          || (at(TokenKind::Dot) && at(TokenKind::Identifier, 1)
+              && vhdl_name(current(1).text) != "all"))) {
+    expression = Expression{ExpressionKind::Call,
+                            "@vhdl-dereference",
+                            {std::move(expression)},
+                            name.span};
+  }
   while (match(TokenKind::Dot)) {
     const auto member =
         expect_identifier("selected record element");

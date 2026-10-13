@@ -46,6 +46,13 @@ struct HirSystemVerilogConstant {
 [[nodiscard]] std::optional<HirSystemVerilogConstant>
 decode_hir_systemverilog_constant(std::string_view identity);
 
+/// Return whether an expression uses only SystemVerilog constant-expression
+/// forms. This is separate from evaluation: a variable with a constant
+/// initializer is still not a constant expression.
+[[nodiscard]] bool hir_systemverilog_constant_expression(
+    const semantic::SpecializedHirUnit& specialization,
+    semantic::ExpressionId expression);
+
 /// Decode the deterministic scalar identity used by specialization keys.
 [[nodiscard]] std::optional<frontend::SystemVerilogScalarConstant>
 decode_hir_systemverilog_scalar_constant(std::string_view identity);

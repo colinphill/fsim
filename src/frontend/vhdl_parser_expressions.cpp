@@ -1080,18 +1080,36 @@ Expression VhdlParser::parse_primary()
         if (saw_dereference) {
             for (;;) {
                 if (match(TokenKind::LeftParen)) {
-                    // One index per dimension (IEEE 1076-2008 8.4).
-                    std::vector<Expression> operands;
-                    operands.push_back(std::move(selected));
-                    do {
-                        operands.push_back(parse_expression());
-                    } while (match(TokenKind::Comma));
-                    expect(TokenKind::RightParen, "')' after dereferenced index",
-                        "FSIM-VHDL-PARSE-251");
-                    selected = Expression { ExpressionKind::Index,
-                        "index",
-                        std::move(operands),
-                        cover(name.span, previous().span) };
+                    // The indexed-name suffix can be either an index group
+                    // or a slice (IEEE 1076-2008 8.4).
+                    auto first = parse_expression();
+                    if (match_keyword("downto", true)
+                        || match_keyword("to", true)) {
+                        const auto direction = previous();
+                        auto last = parse_expression();
+                        expect(TokenKind::RightParen,
+                            "')' after dereferenced slice",
+                            "FSIM-VHDL-PARSE-251");
+                        selected = Expression { ExpressionKind::Slice,
+                            detail::ascii_lower(direction.text),
+                            { std::move(selected), std::move(first),
+                                std::move(last) },
+                            cover(name.span, previous().span) };
+                    } else {
+                        std::vector<Expression> operands;
+                        operands.push_back(std::move(selected));
+                        operands.push_back(std::move(first));
+                        while (match(TokenKind::Comma)) {
+                            operands.push_back(parse_expression());
+                        }
+                        expect(TokenKind::RightParen,
+                            "')' after dereferenced index",
+                            "FSIM-VHDL-PARSE-251");
+                        selected = Expression { ExpressionKind::Index,
+                            "index",
+                            std::move(operands),
+                            cover(name.span, previous().span) };
+                    }
                     continue;
                 }
                 if (!match(TokenKind::Dot)) {

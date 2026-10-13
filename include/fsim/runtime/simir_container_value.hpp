@@ -133,8 +133,13 @@ void select_container_value(
     const ContainerValue& when_true,
     const ContainerValue& when_false);
 
-/// Compare exactly compatible bounded containers with SystemVerilog logical
-/// or case-equality semantics.
+/// Fixed array bounds may differ when every dimension has the same extent.
+/// Other element and container profile requirements remain unchanged.
+[[nodiscard]] bool container_equality_compatible(
+    const ContainerType& lhs, const ContainerType& rhs);
+
+/// Compare compatible bounded containers with SystemVerilog logical or
+/// case-equality semantics.
 [[nodiscard]] PackedLogic4 compare_container_values(
     const ContainerValue& lhs,
     const ContainerValue& rhs,

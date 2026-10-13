@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Focused tests for VESTs writer/reader chain planning in lrm_corpus.py."""
+"""Focused tests for corpus source scanning and VESTs writer/reader planning."""
 
 from __future__ import annotations
 
@@ -14,12 +14,30 @@ from scripts import lrm_corpus
 
 
 def write_source(path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     entity = f"{path.stem}ent"
     path.write_text(
         f"entity {entity} is\nend entity;\n"
         f"architecture test_arch of {entity} is\nbegin\nend architecture;\n",
         encoding="utf-8",
     )
+
+
+class SystemVerilogRootScanningTests(unittest.TestCase):
+    def test_quotes_inside_escaped_macro_names(self) -> None:
+        source = r'''`define \name"with"quotes  "macro value"
+module top;
+  initial $display("module phantom; // /*");
+endmodule
+'''
+        self.assertEqual(lrm_corpus.sv_root_modules([source]), ["top"])
+
+    def test_escaped_module_names_and_comments(self) -> None:
+        source = r'''/* module phantom; */
+module \top"name ;
+endmodule
+'''
+        self.assertEqual(lrm_corpus.sv_root_modules([source]), [r'\top"name'])
 
 
 class VestsFileRoundtripTests(unittest.TestCase):
@@ -55,12 +73,24 @@ class VestsFileRoundtripTests(unittest.TestCase):
         (analyzer_failure / "non_compliant.exp").write_text(
             "run_non_compliant_test tc300.vhd\n", encoding="utf-8"
         )
+
+        clifton = self.root / (
+            "sources/ghdl/testsuite/vests/vhdl-93/clifton-labs/compliant"
+        )
+        writer = "functional/textio/write/character_array_write.vhd"
+        reader = "functional/textio/read/character_array_read.vhdl"
+        write_source(clifton / writer)
+        write_source(clifton / reader)
+        (clifton / "compliant1.exp").write_text(
+            f"run_compliant_test {writer}\nrun_compliant_test {reader}\n",
+            encoding="utf-8",
+        )
         self.cases = lrm_corpus.vests_cases(self.root)
         self.by_id = {case.id: case for case in self.cases}
 
     def test_file_roundtrip_pairs_share_unique_chains(self) -> None:
         pairs = lrm_corpus.VESTS_BILLOWITCH_FILE_ROUNDTRIPS
-        self.assertEqual(len(pairs), 14)
+        self.assertEqual(len(pairs), 20)
         chains = set()
         for writer, reader, filename in pairs:
             producer = self.by_id[f"billowitch/compliant/{writer}"]
@@ -77,17 +107,78 @@ class VestsFileRoundtripTests(unittest.TestCase):
         self.assertEqual(len(chains), len(pairs))
 
     def test_filtering_reader_selects_its_producer(self) -> None:
+        for writer, reader, _filename in lrm_corpus.VESTS_BILLOWITCH_FILE_ROUNDTRIPS:
+            with self.subTest(reader=reader):
+                selected = lrm_corpus.select_cases(SimpleNamespace(
+                    suite=["vests"],
+                    root=self.root,
+                    filter=(
+                        rf"vests/billowitch/compliant/{reader.replace('.', '[.]')}$"
+                    ),
+                    rerun_from=None,
+                    rerun_code=None,
+                ))
+                self.assertEqual(
+                    [case.id for case in selected],
+                    [f"billowitch/compliant/{writer}",
+                     f"billowitch/compliant/{reader}"],
+                )
+
+    def test_clifton_character_array_reader_selects_its_writer(self) -> None:
+        writer = "clifton-labs/compliant/functional/textio/write/character_array_write.vhd"
+        reader = "clifton-labs/compliant/functional/textio/read/character_array_read.vhdl"
+        producer = self.by_id[writer]
+        consumer = self.by_id[reader]
+        self.assertEqual(producer.chain, consumer.chain)
+        self.assertTrue(producer.chain.startswith(
+            lrm_corpus.VESTS_CLIFTON_FILE_CHAIN_PREFIX
+        ))
+        self.assertIn(producer.chain, lrm_corpus.VESTS_FILE_CHAIN_OUTPUTS)
+
         selected = lrm_corpus.select_cases(SimpleNamespace(
             suite=["vests"],
             root=self.root,
-            filter=r"vests/billowitch/compliant/tc627\.vhd$",
+            filter=r"character_array_read\.vhdl$",
             rerun_from=None,
             rerun_code=None,
         ))
-        self.assertEqual(
-            [case.id for case in selected],
-            ["billowitch/compliant/tc624.vhd", "billowitch/compliant/tc627.vhd"],
-        )
+        self.assertEqual([case.id for case in selected], [writer, reader])
+
+    def test_clifton_reader_uses_fresh_writer_output(self) -> None:
+        writer = self.by_id[
+            "clifton-labs/compliant/functional/textio/write/character_array_write.vhd"
+        ]
+        reader = self.by_id[
+            "clifton-labs/compliant/functional/textio/read/character_array_read.vhdl"
+        ]
+        workdir = self.root / "clifton-work"
+        workdir.mkdir()
+        output = workdir / "character_array.file"
+        output.write_bytes(b"stale file from an earlier invocation")
+        current_source = {"name": ""}
+        writer_started_with_output = []
+        observed = []
+
+        def fake_run_command(_fsim, command, command_workdir, _env, _timeout, _engine):
+            if command.stage == "compile":
+                current_source["name"] = command.args[-1]
+            elif command.stage == "simulate":
+                file_path = command_workdir / "character_array.file"
+                if current_source["name"] == "character_array_write.vhd":
+                    writer_started_with_output.append(file_path.exists())
+                    file_path.write_bytes(b"current character array output")
+                elif current_source["name"] == "character_array_read.vhdl":
+                    observed.append(file_path.read_bytes())
+            return lrm_corpus.StepResult(command.stage, 0, 0.0, False, "")
+
+        with patch.object(lrm_corpus, "run_command", side_effect=fake_run_command):
+            records = lrm_corpus.run_chain(
+                [writer, reader], Path("unused-fsim"), workdir, "interpreter", 1.0, True
+            )
+
+        self.assertEqual([record["status"] for record in records], ["pass", "pass"])
+        self.assertEqual(writer_started_with_output, [False])
+        self.assertEqual(observed, [b"current character array output"])
 
     def test_reader_keeps_current_chain_output_over_static_seed(self) -> None:
         writer = self.by_id["billowitch/compliant/tc624.vhd"]
@@ -161,6 +252,154 @@ class VestsFileRoundtripTests(unittest.TestCase):
         self.assertIn("out of scope", case.skip)
         self.assertIn("REAL bounds are host-dependent", case.skip)
         self.assertIn("IEEE 1076-1993 3.1.4/3.1.4.1", case.skip)
+
+
+class VunitParentStatusTests(unittest.TestCase):
+    def evaluate(self, transcript: str, *, tests=("alpha",), returncode=0):
+        from pathlib import Path
+
+        case = SimpleNamespace(
+            expect="pass",
+            checker="vunit",
+            checker_data={"tests": list(tests)},
+        )
+        step = lrm_corpus.StepResult("simulate", returncode, 0.01, False, transcript)
+        status, detail = lrm_corpus.check_outcome(case, [step], Path("."))
+        children = lrm_corpus.vunit_subresults(case, [step])
+        return status, detail, children
+
+    def test_failed_check_fails_parent_and_preserves_child(self):
+        status, detail, children = self.evaluate(
+            "VUNIT-SHIM: start alpha\n"
+            "VUNIT-SHIM: fail: check_equal got 1 expected 0\n"
+            "VUNIT-SHIM: done failures=1\n"
+        )
+        self.assertEqual(status, "fail")
+        self.assertIn("alpha", detail)
+        self.assertEqual(children[0]["status"], "fail")
+        self.assertIn("check_equal", children[0]["detail"])
+
+    def test_missing_cleanup_fails_parent(self):
+        status, _detail, children = self.evaluate("VUNIT-SHIM: start alpha\n")
+        self.assertEqual(status, "fail")
+        self.assertIn("cleanup", children[0]["detail"])
+
+    def test_missing_expected_test_fails_parent(self):
+        status, _detail, children = self.evaluate(
+            "VUNIT-SHIM: start alpha\nVUNIT-SHIM: done failures=0\n",
+            tests=("alpha", "beta"),
+        )
+        self.assertEqual(status, "fail")
+        beta = next(child for child in children if child["test"] == "beta")
+        self.assertEqual(beta["status"], "fail")
+        self.assertEqual(beta["detail"], "test case never ran")
+
+    def test_clean_all_pass_transcript_passes(self):
+        status, detail, children = self.evaluate(
+            "VUNIT-SHIM: start alpha\n"
+            "VUNIT-SHIM: start beta\n"
+            "VUNIT-SHIM: done failures=0\n",
+            tests=("alpha", "beta"),
+        )
+        self.assertEqual((status, detail), ("pass", ""))
+        self.assertEqual([child["status"] for child in children], ["pass", "pass"])
+
+    def test_hdl_error_fails_active_child_and_parent(self):
+        status, detail, children = self.evaluate(
+            "VUNIT-SHIM: start alpha\n"
+            "error[FSIM-HDL-REPORT]: assertion failed\n"
+            "VUNIT-SHIM: done failures=0\n"
+        )
+        self.assertEqual(status, "fail")
+        self.assertIn("FSIM-HDL-REPORT", detail)
+        self.assertEqual(children[0]["test"], "alpha")
+        self.assertEqual(children[0]["status"], "fail")
+
+    def test_global_failure_before_named_test_fails_parent(self):
+        status, _detail, children = self.evaluate(
+            "VUNIT-SHIM: fail: global setup failed\n"
+            "VUNIT-SHIM: start alpha\n"
+            "VUNIT-SHIM: done failures=1\n"
+        )
+        self.assertEqual(status, "fail")
+        self.assertEqual(children[0]["status"], "pass")
+        self.assertEqual(children[-1]["test"], "<default>")
+        self.assertEqual(children[-1]["status"], "fail")
+
+    def test_nonzero_cleanup_failure_count_fails_parent(self):
+        status, detail, children = self.evaluate(
+            "VUNIT-SHIM: start alpha\nVUNIT-SHIM: done failures=1\n"
+        )
+        self.assertEqual(status, "fail")
+        self.assertIn("reported 1 failure", detail)
+        self.assertEqual(children[-1]["test"], "<default>")
+        self.assertEqual(children[-1]["status"], "fail")
+
+    def test_cleanup_failure_count_must_match_failure_markers(self):
+        status, _detail, children = self.evaluate(
+            "VUNIT-SHIM: start alpha\n"
+            "VUNIT-SHIM: fail: check failed\n"
+            "VUNIT-SHIM: done failures=0\n"
+        )
+        self.assertEqual(status, "fail")
+        self.assertTrue(any(child["status"] == "fail" for child in children))
+
+    def test_duplicate_cleanup_marker_fails_parent(self):
+        status, _detail, children = self.evaluate(
+            "VUNIT-SHIM: start alpha\n"
+            "VUNIT-SHIM: done failures=0\n"
+            "VUNIT-SHIM: done failures=0\n"
+        )
+        self.assertEqual(status, "fail")
+        self.assertTrue(any(child["status"] == "fail" for child in children))
+
+    def test_nonzero_simulation_exit_fails_even_if_cleanup_is_clean(self):
+        status, detail, _children = self.evaluate(
+            "VUNIT-SHIM: start alpha\nVUNIT-SHIM: done failures=0\n",
+            returncode=1,
+        )
+        self.assertEqual(status, "fail")
+        self.assertEqual(detail, "simulate failed")
+
+
+    def test_clean_default_test_passes(self):
+        status, detail, children = self.evaluate(
+            "VUNIT-SHIM: done failures=0\n", tests=("<default>",)
+        )
+        self.assertEqual((status, detail), ("pass", ""))
+        self.assertEqual(children, [{"test": "<default>", "status": "pass", "detail": ""}])
+
+    def test_unexpected_start_fails_parent(self):
+        status, _detail, children = self.evaluate(
+            "VUNIT-SHIM: start unexpected\nVUNIT-SHIM: done failures=0\n"
+        )
+        self.assertEqual(status, "fail")
+        self.assertTrue(any(child["status"] == "fail" for child in children))
+
+    def test_duplicate_start_fails_child_and_parent(self):
+        status, _detail, children = self.evaluate(
+            "VUNIT-SHIM: start alpha\n"
+            "VUNIT-SHIM: start alpha\n"
+            "VUNIT-SHIM: done failures=0\n"
+        )
+        self.assertEqual(status, "fail")
+        self.assertEqual(children[0]["status"], "fail")
+
+    def test_failure_after_cleanup_fails_parent(self):
+        status, _detail, children = self.evaluate(
+            "VUNIT-SHIM: start alpha\n"
+            "VUNIT-SHIM: done failures=0\n"
+            "VUNIT-SHIM: fail: late failure\n"
+        )
+        self.assertEqual(status, "fail")
+        self.assertTrue(any(child["status"] == "fail" for child in children))
+
+    def test_cleanup_without_failure_count_fails_parent(self):
+        status, _detail, children = self.evaluate(
+            "VUNIT-SHIM: start alpha\nVUNIT-SHIM: done\n"
+        )
+        self.assertEqual(status, "fail")
+        self.assertTrue(any(child["status"] == "fail" for child in children))
 
 
 if __name__ == "__main__":

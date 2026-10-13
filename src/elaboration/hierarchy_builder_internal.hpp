@@ -144,6 +144,8 @@ private:
             prepared_specialization;
         bool vhdl_types_validated { };
         const semantic::vhdl::Unit* configuration { };
+        const semantic::vhdl::BlockConfiguration*
+            inline_configuration { };
         std::string& configuration_identity;
         std::optional<semantic::SourceSpanId> configuration_source;
         std::string& component_identity;
@@ -162,6 +164,8 @@ private:
         const std::string& child_path;
         const semantic::SpecializedHirUnit& working_specialization;
         const semantic::vhdl::Unit* applied_configuration { };
+        const semantic::vhdl::BlockConfiguration*
+            applied_inline_configuration { };
         const std::optional<semantic::CompiledUnitView>&
             explicitly_bound_child;
         std::optional<std::string> selected_systemc_target;
@@ -178,6 +182,10 @@ private:
         Status status { Status::failed };
         const semantic::vhdl::ComponentConfiguration* selected_rule { };
         const semantic::vhdl::Unit* child_configuration { };
+        const semantic::vhdl::BlockConfiguration*
+            child_inline_configuration { };
+        std::optional<semantic::vhdl::ComponentConfiguration>
+            effective_rule;
         std::string child_configuration_identity;
         std::optional<semantic::SourceSpanId>
             child_configuration_source;
@@ -1626,6 +1634,8 @@ private:
         active_compiled_systemverilog_binds_;
 
     const semantic::vhdl::Unit* active_compiled_vhdl_configuration_ { };
+    const semantic::vhdl::BlockConfiguration*
+        active_compiled_vhdl_inline_configuration_ { };
     std::string active_compiled_vhdl_configuration_identity_;
     std::optional<semantic::SourceSpanId>
         active_compiled_vhdl_configuration_source_;

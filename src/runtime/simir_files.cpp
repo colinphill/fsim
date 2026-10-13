@@ -15,7 +15,35 @@ namespace {
 
     constexpr std::string_view multichannel_write_mode = "\x1f"
                                                          "fsim-multichannel-write";
+    constexpr std::string_view vhdl_textio_read_marker = "\x1f"
+                                                         "fsim-vhdl-textio-read";
+    constexpr std::string_view vhdl_textio_read_2008_marker = "\x1f"
+                                                             "fsim-vhdl-textio-read-2008";
+    constexpr std::string_view vhdl_textio_sread_marker = "\x1f"
+                                                          "fsim-vhdl-textio-sread";
     constexpr FileHandle file_descriptor_flag = UINT32_C(0x80000000);
+
+    [[nodiscard]] bool vhdl_textio_read(
+        const FileScan& operation) noexcept
+    {
+        return operation.string_source && operation.consume_string_source
+            && operation.conversions.size() == 1U
+            && (operation.conversions.front().prefix
+                    == vhdl_textio_read_marker
+                || operation.conversions.front().prefix
+                    == vhdl_textio_read_2008_marker
+                || operation.conversions.front().prefix
+                    == vhdl_textio_sread_marker);
+    }
+
+    [[nodiscard]] bool vhdl_textio_sread(
+        const FileScan& operation) noexcept
+    {
+        return operation.string_source && operation.consume_string_source
+            && operation.conversions.size() == 1U
+            && operation.conversions.front().prefix
+                == vhdl_textio_sread_marker;
+    }
 
     [[nodiscard]] bool below_root(
         const std::filesystem::path& root,
@@ -1099,12 +1127,16 @@ void Interpreter::Impl::execute_file(
 {
     try {
         InputScanResult scanned;
+        std::string* consumed_source { };
+        const bool vhdl_textio_line = vhdl_textio_read(operation);
         if (operation.string_source) {
             auto& source = get_string_register(process, operation.source);
             scanned = scan_formatted_string(
                 operation, source);
-            if (operation.consume_string_source) {
-                source.erase(0, std::min(source.size(), scanned.consumed));
+            consumed_source = &source;
+            if (operation.consume_string_source && !vhdl_textio_line) {
+                source.erase(0,
+                    std::min(source.size(), scanned.consumed));
             }
         } else {
             const auto handle = known_file_handle(process, operation.handle);
@@ -1123,7 +1155,10 @@ void Interpreter::Impl::execute_file(
             [](const InputScanConversion& conversion) {
                 return !conversion.suppress;
             }));
-        const bool complete = scanned.assignments == expected;
+        const bool complete = vhdl_textio_sread(operation)
+            ? scanned.values.size() == 1U
+                && scanned.values.front().has_value()
+            : scanned.assignments == expected;
         if (operation.success) {
             get_register(process, *operation.success) = PackedLogic4::from_aval_bval(1, complete ? 1U : 0U, 0);
         }
@@ -1131,6 +1166,13 @@ void Interpreter::Impl::execute_file(
             throw std::runtime_error {
                 "VHDL file read did not convert the requested element"
             };
+        }
+        // TextIO READ with GOOD leaves LINE unchanged on failure (IEEE
+        // 1076-2019 16.4); consume the scanned prefix only on success.
+        if (operation.consume_string_source && vhdl_textio_line && complete
+            && consumed_source != nullptr) {
+            consumed_source->erase(0,
+                std::min(consumed_source->size(), scanned.consumed));
         }
         for (std::size_t index = 0; index < scanned.values.size(); ++index) {
             if (!scanned.values[index])

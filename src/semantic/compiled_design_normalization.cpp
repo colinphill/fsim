@@ -1416,7 +1416,10 @@ bool materialize_vhdl_block_configuration(
 {
     for (auto& component : configuration.components) {
         if (!materialize_vhdl_binding(
-                expressions, component.binding)) {
+                expressions, component.binding)
+            || (component.block_configuration
+                && !materialize_vhdl_block_configuration(
+                    expressions, *component.block_configuration))) {
             return false;
         }
     }

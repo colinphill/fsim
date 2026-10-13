@@ -493,6 +493,18 @@ HierarchyBuilder::collect_visible_compiled_vhdl_components(
     const std::string_view target_name)
 {
     std::vector<const semantic::vhdl::Declaration*> visible_components;
+    const auto selected_parts = vhdl_configuration_detail::
+        configuration_name_parts(target_name);
+    if (selected_parts.empty()) {
+        return visible_components;
+    }
+    const auto simple_target = selected_parts.back();
+    const auto selected_package = selected_parts.size() >= 2U
+        ? selected_parts[selected_parts.size() - 2U]
+        : std::string_view { };
+    const auto selected_library = selected_parts.size() >= 3U
+        ? selected_parts[selected_parts.size() - 3U]
+        : std::string_view { };
     const auto& scopes = compiled_->semantics.scopes();
     const auto& units = compiled_->semantics.units();
     const auto find_scope = [&](const semantic::ScopeId id) {
@@ -541,6 +553,156 @@ HierarchyBuilder::collect_visible_compiled_vhdl_components(
             && library_equal(owner.library, architecture.library)
             && name_equal(owner.name, architecture.primary_name);
     };
+    const auto effective_library = [&](const std::string_view library,
+                                        const std::string_view owner_library) {
+        return name_equal(library, "work") ? owner_library : library;
+    };
+    const auto selected_package_visible = [&](
+                                                const semantic::vhdl::Unit& package) {
+        if (selected_package.empty()
+            || package.kind != semantic::vhdl::UnitKind::package
+            || !name_equal(package.name, selected_package)) {
+            return false;
+        }
+        if (!selected_library.empty()) {
+            if (!library_equal(
+                    effective_library(
+                        selected_library, architecture.library),
+                    package.library)) {
+                return false;
+            }
+            if (name_equal(selected_library, "work")) {
+                return true;
+            }
+            std::unordered_set<std::uint32_t> visited_contexts;
+            const auto visit = [&](const auto& self,
+                                   const semantic::vhdl::Unit& owner) -> bool {
+                for (const auto& item : owner.context) {
+                    if (item.kind
+                        == semantic::vhdl::ContextKind::library_clause) {
+                        for (const auto& selected : item.selected_names) {
+                            const auto parts = vhdl_configuration_detail::
+                                configuration_name_parts(
+                                    selected.canonical.empty()
+                                        ? std::string_view { selected.spelling }
+                                        : std::string_view { selected.canonical });
+                            if (!parts.empty()
+                                && name_equal(parts.back(), selected_library)) {
+                                return true;
+                            }
+                        }
+                        continue;
+                    }
+                    if (item.kind
+                        != semantic::vhdl::ContextKind::context_reference) {
+                        continue;
+                    }
+                    for (const auto& selected : item.selected_names) {
+                        const auto parts = vhdl_configuration_detail::
+                            configuration_name_parts(
+                                selected.canonical.empty()
+                                    ? std::string_view { selected.spelling }
+                                    : std::string_view { selected.canonical });
+                        if (parts.empty()) {
+                            continue;
+                        }
+                        const auto context_library = parts.size() >= 2U
+                            ? effective_library(
+                                  parts[parts.size() - 2U], owner.library)
+                            : std::string_view { owner.library };
+                        for (const auto& candidate : compiled_->vhdl_units()) {
+                            if (candidate.kind
+                                    != semantic::vhdl::UnitKind::context
+                                || !library_equal(
+                                    candidate.library, context_library)
+                                || !name_equal(
+                                    candidate.name, parts.back())
+                                || !visited_contexts.insert(
+                                    candidate.id.value()).second) {
+                                continue;
+                            }
+                            if (self(self, candidate)) {
+                                return true;
+                            }
+                        }
+                    }
+                }
+                return false;
+            };
+            return visit(visit, architecture);
+        }
+
+        std::unordered_set<std::uint32_t> visited_contexts;
+        const auto visit = [&](const auto& self,
+                               const semantic::vhdl::Unit& owner) -> bool {
+            for (const auto& item : owner.context) {
+                if (item.kind == semantic::vhdl::ContextKind::use_clause) {
+                    for (const auto& selected : item.selected_names) {
+                        const auto parts = vhdl_configuration_detail::
+                            configuration_name_parts(
+                                selected.canonical.empty()
+                                    ? std::string_view { selected.spelling }
+                                    : std::string_view { selected.canonical });
+                        if (parts.empty() || parts.size() > 2U) {
+                            continue;
+                        }
+                        const auto package_library = parts.size() == 2U
+                            ? effective_library(parts.front(), owner.library)
+                            : std::string_view { owner.library };
+                        const auto package_name = parts.back();
+                        if (library_equal(package_library, package.library)
+                            && name_equal(package_name, package.name)) {
+                            return true;
+                        }
+                    }
+                    continue;
+                }
+                if (item.kind
+                    != semantic::vhdl::ContextKind::context_reference) {
+                    continue;
+                }
+                for (const auto& selected : item.selected_names) {
+                    const auto parts = vhdl_configuration_detail::
+                        configuration_name_parts(
+                            selected.canonical.empty()
+                                ? std::string_view { selected.spelling }
+                                : std::string_view { selected.canonical });
+                    if (parts.empty()) {
+                        continue;
+                    }
+                    const auto context_library = parts.size() >= 2U
+                        ? effective_library(
+                              parts[parts.size() - 2U], owner.library)
+                        : std::string_view { owner.library };
+                    for (const auto& candidate : compiled_->vhdl_units()) {
+                        if (candidate.kind
+                                != semantic::vhdl::UnitKind::context
+                            || !library_equal(
+                                candidate.library, context_library)
+                            || !name_equal(candidate.name, parts.back())
+                            || !visited_contexts.insert(
+                                candidate.id.value()).second) {
+                            continue;
+                        }
+                        if (self(self, candidate)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        };
+        return visit(visit, architecture);
+    };
+
+    const auto package_component_visible = [&](const semantic::vhdl::Unit& owner) {
+        if (!selected_package.empty()) {
+            return selected_package_visible(owner);
+        }
+        return semantic::CompiledDesignResolver {
+            *compiled_, architecture.id, &working_specialization }
+            .vhdl_package_member_visible(architecture, owner, simple_target);
+    };
 
     // A component declaration hides homographs in enclosing declarative
     // regions, and a directly visible one hides use-visible package
@@ -548,7 +710,7 @@ HierarchyBuilder::collect_visible_compiled_vhdl_components(
     std::vector<std::size_t> ranks;
     for (const auto& declaration : compiled_->vhdl_hir.declarations()) {
         if (!declaration.component
-            || !name_equal(declaration.name, target_name)) {
+            || !name_equal(declaration.name, simple_target)) {
             continue;
         }
         const auto* scope = find_scope(declaration.scope);
@@ -562,6 +724,16 @@ HierarchyBuilder::collect_visible_compiled_vhdl_components(
         }
         const auto owner_unit = compiled_->find_unit(unit->id);
         const auto* owner = owner_unit ? owner_unit->vhdl : nullptr;
+        if (!selected_package.empty()
+            && (owner == nullptr
+                || owner->kind != semantic::vhdl::UnitKind::package
+                || !name_equal(owner->name, selected_package)
+                || (!selected_library.empty()
+                    && !library_equal(
+                        owner->library,
+                        effective_library(selected_library, architecture.library))))) {
+            continue;
+        }
         const auto distance = owner != nullptr && owner->id == architecture.id
             ? declaration_distance_from_instance(declaration.scope)
             : std::nullopt;
@@ -569,9 +741,7 @@ HierarchyBuilder::collect_visible_compiled_vhdl_components(
             || (owner->id == architecture.id && !distance)
             || (owner->id != architecture.id
                 && !associated_entity(*owner)
-                && !semantic::CompiledDesignResolver {
-                    *compiled_, architecture.id, &working_specialization }
-                    .vhdl_package_member_visible(architecture, *owner, target_name))) {
+                && !package_component_visible(*owner))) {
             continue;
         }
         if (std::ranges::find(visible_components, &declaration)

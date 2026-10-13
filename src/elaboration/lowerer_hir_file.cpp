@@ -8,6 +8,13 @@
 namespace fsim::elaboration {
 namespace {
 
+    constexpr std::string_view vhdl_textio_read_marker
+        = "\x1f" "fsim-vhdl-textio-read";
+    constexpr std::string_view vhdl_textio_read_2008_marker
+        = "\x1f" "fsim-vhdl-textio-read-2008";
+    constexpr std::string_view vhdl_textio_sread_marker
+        = "\x1f" "fsim-vhdl-textio-sread";
+
 [[nodiscard]] bool hir_file_call_name(const std::string_view name) noexcept
 {
     return name == "$fopen" || name == "$fgets" || name == "$fgetc"
@@ -172,6 +179,7 @@ namespace {
     const auto simple = vhdl_simple_name(name);
     return simple == "file_open" || simple == "file_close"
         || simple == "read" || simple == "write" || simple == "swrite"
+        || simple == "sread" || simple == "string_read"
         || simple == "readline" || simple == "writeline"
         || simple == "tee" || simple == "flush";
 }
@@ -1346,7 +1354,8 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                                     "target-mismatched format");
                             } else if ((string_source
                                     && !hir_expression_is_string(
-                                        call.operands[0], call.scope))
+                                        call.operands[0], call.scope)
+                                    && !integral_expression(call.operands[0]))
                                 || (!string_source
                                     && !file_handle(call.operands[0]))) {
                                 fail("FSIM-ELAB-SVFILE-011",
@@ -2260,10 +2269,44 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
         FileScan operation;
         operation.string_source = string_source;
         if (string_source) {
-            const auto source = lower_hir_string_expression(call.operands[0]);
+            auto source = lower_hir_string_expression(call.operands[0]);
+            // Verilog packed strings are integral vectors whose rightmost
+            // character occupies the least-significant byte (IEEE 1800-2017
+            // 21.3.4.3). Convert once before any scan destination is written.
+            if (!source) {
+                const auto operand = call.operands[0];
+                const auto width = hir_expression_width(
+                    operand, hir_process_scope_);
+                const auto domain = hir_expression_domain(
+                    operand, hir_process_scope_);
+                const auto kind = hir_systemverilog_scalar_kind(operand);
+                if (width && *width != 0U && domain
+                    && !frontend::is_real_scalar_kind(kind)
+                    && kind != frontend::SystemVerilogScalarKind::Chandle
+                    && (*domain == frontend::ValueDomain::Bit2
+                        || *domain == frontend::ValueDomain::Logic4
+                        || *domain == frontend::ValueDomain::Integer)) {
+                    if (const auto packed = lower_hir_expression(operand, *width)) {
+                        source = allocate_string_register();
+                        process_.operations.emplace_back(
+                            LoadStringConstant { *source, std::string { } });
+                        StringMethod format_packed;
+                        format_packed.operation = StringMethodOperator::format_packed;
+                        format_packed.source = *source;
+                        format_packed.first = *packed;
+                        format_packed.second = allocate_register(
+                            32U, frontend::ValueDomain::Bit2);
+                        process_.operations.emplace_back(LoadConstant {
+                            format_packed.second, unsigned_value(*width, 32U) });
+                        format_packed.format = OutputFormat::string;
+                        format_packed.suppress_leading_zero = true;
+                        process_.operations.emplace_back(format_packed);
+                    }
+                }
+            }
             if (!source) {
                 return fail("FSIM-ELAB-SVFILE-011",
-                    "$sscanf source must be a byte-string expression");
+                    "$sscanf source must be a string or packed integral expression");
             }
             operation.source = *source;
         } else {
@@ -2510,12 +2553,18 @@ bool Lowerer::lower_hir_vhdl_file_statement(
     }
     // VHDL-2008 SWRITE(L, VALUE) is WRITE of a STRING (16.4).
     const auto name = called == "swrite" ? std::string_view { "write" }
-                                         : called;
+        : called == "string_read" ? std::string_view { "sread" }
+                                   : called;
     const auto span = hir_source_span(call.source);
     const auto fail = [&](std::string code, std::string message) {
         report(std::move(code), std::move(message), span);
         return true;
     };
+    if (name == "sread"
+        && vhdl_standard_ < frontend::VhdlStandard::Vhdl2008) {
+        return fail("FSIM-ELAB-VHSTD-001",
+            "TextIO SREAD and STRING_READ require VHDL-2008");
+    }
     const auto actual = [&](const std::string_view formal,
                             const std::size_t position)
         -> std::optional<semantic::ExpressionId> {
@@ -2647,8 +2696,22 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         integer,
         boolean,
         bit,
+        bit_vector,
+        character,
+        real,
+        string,
     };
     const auto textio_scalar_class = [&](const semantic::ExpressionId value) {
+        if (hir_expression_is_string(value, hir_process_scope_)) {
+            return TextioScalarClass::string;
+        }
+        if (hir_vhdl_character_expression(value)) {
+            return TextioScalarClass::character;
+        }
+        if (hir_systemverilog_scalar_kind(value)
+            == frontend::SystemVerilogScalarKind::Real) {
+            return TextioScalarClass::real;
+        }
         const auto expression = specialized_hir_unit_->find_expression(
             value);
         if (expression && expression->vhdl != nullptr) {
@@ -2669,6 +2732,9 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         }
         const auto subtype_name = vhdl_simple_name(
             subtype->type_mark.spelling);
+        if (subtype_name == "character") {
+            return TextioScalarClass::character;
+        }
         if (subtype_name == "integer" || subtype_name == "natural"
             || subtype_name == "positive") {
             return TextioScalarClass::integer;
@@ -2687,6 +2753,13 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             if (!type || type->vhdl == nullptr) {
                 break;
             }
+            const auto type_name = vhdl_simple_name(type->vhdl->name);
+            if (type_name == "character") {
+                return TextioScalarClass::character;
+            }
+            if (type_name == "bit_vector") {
+                return TextioScalarClass::bit_vector;
+            }
             if (type->vhdl->form
                 == semantic::vhdl::TypeForm::enumeration) {
                 return TextioScalarClass::unsupported;
@@ -2696,7 +2769,21 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                     != semantic::vhdl::TypeForm::alias) {
                 break;
             }
+            const auto base_name = vhdl_simple_name(
+                type->vhdl->base.type_mark.spelling);
+            if (base_name == "character") {
+                return TextioScalarClass::character;
+            }
+            if (base_name == "bit_vector") {
+                return TextioScalarClass::bit_vector;
+            }
             type_id = type->vhdl->base.type_mark.target;
+        }
+        if (subtype->domain == semantic::vhdl::ValueDomain::bit2
+            && subtype->executable_width
+            && *subtype->executable_width > 1U
+            && subtype_name == "bit_vector") {
+            return TextioScalarClass::bit_vector;
         }
         return subtype->domain == semantic::vhdl::ValueDomain::integer
             ? TextioScalarClass::integer
@@ -2887,6 +2974,46 @@ bool Lowerer::lower_hir_vhdl_file_statement(
     const auto first = actual("l", 0U);
     const auto line = first ? string_binding(*first) : std::nullopt;
     if (line && line->local) {
+        if (name == "sread") {
+            const auto value = actual("value", 1U);
+            const auto length = actual("strlen", 2U);
+            if (call.procedure_arguments.size() != 3U || !value || !length) {
+                return fail("FSIM-ELAB-VHTEXTIO-003",
+                    "TextIO SREAD requires line, string value, and "
+                    "character-count actuals");
+            }
+            const auto target = string_binding(*value);
+            const auto width = hir_expression_width(
+                *value, hir_process_scope_);
+            const auto length_binding = runtime_binding(*length);
+            if (textio_scalar_class(*value) != TextioScalarClass::string
+                || !target || !target->local || !width || *width % 8U != 0U
+                || *width / 8U
+                    > static_cast<std::uint64_t>(
+                        std::numeric_limits<std::int32_t>::max())
+                || !length_binding || !length_binding->local
+                || length_binding->domain != frontend::ValueDomain::Integer
+                || length_binding->width != 32U
+                || textio_scalar_class(*length) != TextioScalarClass::integer) {
+                return fail("FSIM-ELAB-VHTEXTIO-004",
+                    "TextIO SREAD requires a bounded writable STRING and "
+                    "a writable NATURAL-compatible integer count");
+            }
+            InputScanConversion conversion;
+            conversion.prefix = vhdl_textio_sread_marker;
+            conversion.format = InputScanFormat::string;
+            conversion.maximum_characters
+                = static_cast<std::uint32_t>(*width / 8U);
+            conversion.target = {
+                InputScanTargetKind::string_register,
+                *target->local, 1U, true,
+            };
+            process_.operations.emplace_back(FileScan {
+                *length_binding->local, 0U, *line->local, true,
+                { std::move(conversion) }, { }, false,
+                std::nullopt, true });
+            return true;
+        }
         const auto value = actual("value", 1U);
         if (!value) {
             return fail("FSIM-ELAB-VHTEXTIO-003",
@@ -2899,31 +3026,64 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                     "TextIO read accepts line, value, and optional good "
                     "actuals");
             }
-            const auto target = runtime_binding(*value);
-            if (!target || !target->local || target->width == 0U
-                || target->width
-                    > std::numeric_limits<std::uint32_t>::max()) {
-                return fail("FSIM-ELAB-VHTEXTIO-004",
-                    "TextIO read value must be a writable bounded scalar");
-            }
             InputScanConversion conversion;
-            conversion.target = {
-                InputScanTargetKind::packed_register,
-                *target->local,
-                static_cast<std::uint32_t>(target->width),
-                true,
-            };
+            conversion.prefix = vhdl_standard_
+                    >= frontend::VhdlStandard::Vhdl2008
+                ? vhdl_textio_read_2008_marker
+                : vhdl_textio_read_marker;
             const auto value_class = textio_scalar_class(*value);
-            if (value_class == TextioScalarClass::integer) {
-                conversion.format = InputScanFormat::decimal;
-            } else if (value_class == TextioScalarClass::boolean) {
-                conversion.format = InputScanFormat::boolean_value;
-            } else if (value_class == TextioScalarClass::bit) {
-                conversion.format = InputScanFormat::binary;
+            if (value_class == TextioScalarClass::string) {
+                const auto target = string_binding(*value);
+                const auto width = hir_expression_width(
+                    *value, hir_process_scope_);
+                if (!target || !target->local || !width || *width == 0U
+                    || *width % 8U != 0U
+                    || *width / 8U
+                        > std::numeric_limits<std::uint32_t>::max()) {
+                    return fail("FSIM-ELAB-VHTEXTIO-004",
+                        "TextIO string read requires a writable STRING "
+                        "with a bounded length");
+                }
+                conversion.target = {
+                    InputScanTargetKind::string_register,
+                    *target->local, 1U, true,
+                };
+                conversion.format = InputScanFormat::string;
+                conversion.maximum_characters
+                    = static_cast<std::uint32_t>(*width / 8U);
             } else {
-                return fail("FSIM-ELAB-VHTEXTIO-005",
-                    "bounded TextIO read supports integer, boolean, "
-                    "and bit values");
+                const auto target = runtime_binding(*value);
+                if (!target || !target->local || target->width == 0U
+                    || target->width
+                        > std::numeric_limits<std::uint32_t>::max()) {
+                    return fail("FSIM-ELAB-VHTEXTIO-004",
+                        "TextIO read value must be a writable bounded "
+                        "object");
+                }
+                conversion.target = {
+                    InputScanTargetKind::packed_register,
+                    *target->local,
+                    static_cast<std::uint32_t>(target->width),
+                    true,
+                };
+                if (value_class == TextioScalarClass::integer) {
+                    conversion.format = InputScanFormat::decimal;
+                } else if (value_class == TextioScalarClass::boolean) {
+                    conversion.format = InputScanFormat::boolean_value;
+                } else if (value_class == TextioScalarClass::bit
+                    || value_class == TextioScalarClass::bit_vector) {
+                    conversion.format = InputScanFormat::binary;
+                } else if (value_class == TextioScalarClass::character) {
+                    conversion.format = InputScanFormat::character;
+                } else if (value_class == TextioScalarClass::real) {
+                    conversion.format = InputScanFormat::real;
+                    conversion.target.scalar_kind
+                        = frontend::SystemVerilogScalarKind::Real;
+                } else {
+                    return fail("FSIM-ELAB-VHTEXTIO-005",
+                        "TextIO read supports INTEGER, BOOLEAN, BIT, "
+                        "BIT_VECTOR, CHARACTER, REAL, and STRING values");
+                }
             }
             std::optional<RegisterId> success;
             if (const auto good = actual("good", 2U)) {

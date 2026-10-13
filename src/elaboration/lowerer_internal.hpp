@@ -442,6 +442,7 @@ private:
         bool signed_value { };
         std::vector<HirVhdlArrayIndex> dynamic_indices;
         std::optional<semantic::ExpressionId> root_expression;
+        bool access_object_root { };
     };
     [[nodiscard]] std::optional<HirPackedRange>
     hir_vhdl_unconstrained_constant_range(
@@ -452,7 +453,8 @@ private:
         semantic::ScopeId process_scope) const;
     [[nodiscard]] std::optional<std::optional<HirPackedRange>>
     hir_vhdl_callable_formal_range(
-        semantic::DeclarationId declaration) const;
+        semantic::DeclarationId declaration,
+        std::size_t dimension = 0U) const;
     [[nodiscard]] const std::vector<semantic::vhdl::ElementConstraint>*
     hir_vhdl_callable_formal_element_constraints(
         semantic::DeclarationId declaration) const;
@@ -684,6 +686,11 @@ private:
     [[nodiscard]] std::optional<HirSystemVerilogCastProfile>
     hir_systemverilog_cast_profile(
         semantic::ExpressionId expression) const;
+    [[nodiscard]] bool hir_systemverilog_size_cast_operand_is_integral(
+        semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<semantic::sv::TypeReference>
+    hir_systemverilog_cast_type(
+        semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<semantic::ExpressionId>
     hir_systemverilog_packed_pattern_operand(
         semantic::ExpressionId expression,
@@ -879,6 +886,7 @@ private:
         bool signed_value { };
         std::optional<semantic::ExpressionId> index;
         std::size_t element_width { };
+        bool access_object_root { };
     };
     [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
     hir_vhdl_expression_subtype(
@@ -1057,6 +1065,11 @@ private:
         semantic::ExpressionId expression,
         std::size_t expected_width,
         const semantic::vhdl::SubtypeIndication* contextual_subtype = nullptr);
+    [[nodiscard]] std::optional<std::size_t>
+    hir_vhdl_positional_aggregate_width(
+        semantic::ExpressionId aggregate,
+        const semantic::vhdl::SubtypeIndication& contextual_subtype,
+        const semantic::vhdl::TypeDefinition* contextual_definition = nullptr) const;
     // Copies a composite value back through an aggregate of writable names,
     // the actual of individually associated out or inout subelements (IEEE
     // 1076-2008 6.5.7.1).
@@ -1286,10 +1299,21 @@ private:
     [[nodiscard]] HirVhdlAccessHeap* hir_vhdl_access_heap(
         const semantic::vhdl::TypeDefinition& type,
         const frontend::SourceSpan& span);
+    [[nodiscard]] const semantic::vhdl::TypeDefinition*
+    hir_vhdl_access_type_definition(
+        const semantic::vhdl::SubtypeIndication& subtype) const;
     [[nodiscard]] std::optional<RegisterId>
     lower_hir_vhdl_access_expression(
         semantic::ExpressionId expression,
-        std::size_t expected_width);
+        std::size_t expected_width,
+        const semantic::vhdl::SubtypeIndication* expected_access_subtype
+        = nullptr,
+        bool implicit_dereference = false);
+    [[nodiscard]] std::optional<RegisterId>
+    lower_hir_vhdl_access_object(
+        RegisterId handle,
+        const semantic::vhdl::SubtypeIndication& access_subtype,
+        const frontend::SourceSpan& span);
     [[nodiscard]] bool is_hir_vhdl_access_deallocation(
         semantic::StatementId statement) const;
     [[nodiscard]] bool lower_hir_vhdl_access_deallocation(
@@ -1356,7 +1380,9 @@ private:
         semantic::StatementId statement,
         semantic::ScopeId process_scope) const;
     [[nodiscard]] std::optional<StringRegisterId>
-    lower_hir_string_expression(semantic::ExpressionId expression);
+    lower_hir_string_expression(
+        semantic::ExpressionId expression,
+        const semantic::vhdl::SubtypeIndication* contextual_subtype = nullptr);
     [[nodiscard]] std::optional<StringRegisterId>
     lower_hir_string_format_expression(
         semantic::ExpressionId expression);
@@ -2288,10 +2314,10 @@ private:
         std::vector<HirGenericBinding> generic_bindings;
         std::vector<std::pair<semantic::DeclarationId, std::int64_t>>
             static_integer_bindings;
-        // Shape facts only: a present empty value means the caller's packed
-        // range was not proven and must not fall back to type-level bounds.
+        // Per-dimension shape facts: a present empty range means the caller
+        // did not prove that dimension and it must not use type-level bounds.
         std::unordered_map<std::uint32_t,
-            std::optional<HirPackedRange>> vhdl_formal_ranges;
+            std::vector<std::optional<HirPackedRange>>> vhdl_formal_ranges;
         // Element constraints an unconstrained array formal takes from its
         // actual (IEEE 1076-2008 4.2.2.2), keyed like vhdl_formal_ranges.
         std::unordered_map<std::uint32_t,

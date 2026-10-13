@@ -13,6 +13,39 @@ namespace fsim::app::application_detail {
 
 #if defined(FSIM_HAS_LLVM)
 
+namespace {
+
+    constexpr std::string_view vhdl_textio_read_marker
+        = "\x1f" "fsim-vhdl-textio-read";
+    constexpr std::string_view vhdl_textio_read_2008_marker
+        = "\x1f" "fsim-vhdl-textio-read-2008";
+    constexpr std::string_view vhdl_textio_sread_marker
+        = "\x1f" "fsim-vhdl-textio-sread";
+
+    [[nodiscard]] bool vhdl_textio_read(
+        const runtime::simir::FileScan& operation) noexcept
+    {
+        return operation.string_source && operation.consume_string_source
+            && operation.conversions.size() == 1U
+            && (operation.conversions.front().prefix
+                    == vhdl_textio_read_marker
+                || operation.conversions.front().prefix
+                    == vhdl_textio_read_2008_marker
+                || operation.conversions.front().prefix
+                    == vhdl_textio_sread_marker);
+    }
+
+    [[nodiscard]] bool vhdl_textio_sread(
+        const runtime::simir::FileScan& operation) noexcept
+    {
+        return operation.string_source && operation.consume_string_source
+            && operation.conversions.size() == 1U
+            && operation.conversions.front().prefix
+                == vhdl_textio_sread_marker;
+    }
+
+} // namespace
+
 std::uint32_t LlvmProcessExecutor::container_operation(
     void* context,
     const std::uint32_t generated_process,
@@ -186,7 +219,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                        runtime::simir::ContainerWrite>(&operation)) {
             auto& target = state.executor->mutable_container_register_value(
                 write->target, *state.context);
-            if (!write->string_index && fast_packed_type(target)
+            if (target.type.fixed && !write->string_index && fast_packed_type(target)
                 && state.executor->layout_.register_widths.at(write->index)
                     == 32U
                 && state.executor->layout_.register_widths.at(write->source)
@@ -393,11 +426,14 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         }
         if (const auto* scan = fsim::runtime::simir::operation_get_if<runtime::simir::FileScan>(&operation)) {
             runtime::simir::InputScanResult scanned;
+            const bool vhdl_textio_line = vhdl_textio_read(*scan);
+            std::string* consumed_source { };
             if (scan->string_source) {
                 auto& source = state.executor->string_registers_.at(scan->source);
                 scanned = runtime::simir::scan_formatted_string(
                     *scan, source);
-                if (scan->consume_string_source) {
+                consumed_source = &source;
+                if (scan->consume_string_source && !vhdl_textio_line) {
                     source.erase(0, std::min(source.size(), scanned.consumed));
                 }
             } else {
@@ -420,7 +456,10 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     [](const runtime::simir::InputScanConversion& conversion) {
                         return !conversion.suppress;
                     }));
-            const bool complete = scanned.assignments == expected;
+            const bool complete = vhdl_textio_sread(*scan)
+                ? scanned.values.size() == 1U
+                    && scanned.values.front().has_value()
+                : scanned.assignments == expected;
             if (scan->success) {
                 state.executor->write_register(
                     *scan->success,
@@ -431,6 +470,13 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 throw compiler::LlvmJitError {
                     "VHDL file read did not convert the requested element"
                 };
+            }
+            // TextIO READ with GOOD leaves LINE unchanged on failure (IEEE
+            // 1076-2019 16.4); consume the parsed prefix only on success.
+            if (scan->consume_string_source && vhdl_textio_line && complete
+                && consumed_source != nullptr) {
+                consumed_source->erase(0,
+                    std::min(consumed_source->size(), scanned.consumed));
             }
             for (std::size_t index = 0; index < scanned.values.size(); ++index) {
                 if (!scanned.values[index])
@@ -1263,6 +1309,42 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     target.elements.insert(
                         target.elements.begin() + static_cast<std::ptrdiff_t>(at),
                         source);
+                }
+                return 0;
+            }
+            if (!target.type.fixed) {
+                const auto index_value = packed_register_value(
+                    write->index, input0_aval, input0_bval);
+                const auto requested = write->signed_index
+                    ? index_value.known_signed_value()
+                    : [&]() -> std::optional<std::int64_t> {
+                          const auto value = index_value.known_unsigned_value();
+                          if (!value
+                              || *value > static_cast<std::uint64_t>(
+                                     std::numeric_limits<std::int64_t>::max())) {
+                              return std::nullopt;
+                          }
+                          return static_cast<std::int64_t>(*value);
+                      }();
+                const auto element_count = target.elements.size();
+                if (!requested || *requested < 0
+                    || static_cast<std::uint64_t>(*requested) > element_count
+                    || (static_cast<std::uint64_t>(*requested) == element_count
+                        && (!target.type.queue
+                            || (target.type.maximum_elements
+                                && element_count >= *target.type.maximum_elements)))) {
+                    return 0;
+                }
+                if (static_cast<std::uint64_t>(*requested) == element_count) {
+                    if (element_count >= runtime::simir::maximum_container_elements(target.type)) {
+                        throw runtime::simir::InterpreterError {
+                            process, instruction,
+                            "queue exceeds the per-container owning-storage budget"
+                        };
+                    }
+                    target.elements.push_back(source_element());
+                } else {
+                    target.elements[static_cast<std::size_t>(*requested)] = source_element();
                 }
                 return 0;
             }

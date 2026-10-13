@@ -9,6 +9,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace fsim::semantic::sv {
@@ -305,6 +306,46 @@ struct Expression {
     bool folded { };
     GeneratedTextKind generated_text { GeneratedTextKind::none };
 };
+
+/// The expression-sized cast introduced by the frontend stores its constant
+/// size expression first and its value operand second. Keep that source shape
+/// in one place so HIR consumers do not accidentally treat the size as the
+/// value being cast.
+inline constexpr std::string_view expression_size_cast_text
+    = "@sv-size-cast:expression";
+
+[[nodiscard]] inline bool is_expression_size_cast(
+    const Expression& expression) noexcept
+{
+    return expression.kind == ExpressionKind::call
+        && expression.text == expression_size_cast_text
+        && expression.operands.size() == 2U;
+}
+
+[[nodiscard]] inline std::optional<ExpressionId>
+systemverilog_cast_value_operand(const Expression& expression) noexcept
+{
+    if (expression.kind != ExpressionKind::call) {
+        return std::nullopt;
+    }
+    if (is_expression_size_cast(expression)) {
+        return expression.operands[1U];
+    }
+    if (expression.text.starts_with("@sv-cast:")
+        && expression.operands.size() == 1U) {
+        return expression.operands.front();
+    }
+    return std::nullopt;
+}
+
+[[nodiscard]] inline std::optional<ExpressionId>
+systemverilog_cast_size_operand(const Expression& expression) noexcept
+{
+    if (!is_expression_size_cast(expression)) {
+        return std::nullopt;
+    }
+    return expression.operands.front();
+}
 
 struct DelayValue {
     std::uint64_t magnitude { };

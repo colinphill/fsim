@@ -684,6 +684,28 @@ namespace codec_detail {
         }
     }
 
+    // Keep nested component configurations explicit in both codec directions;
+    // this recursive wire shape is covered by the VHDL HIR schema version.
+    template <typename T>
+        requires std::same_as<
+            std::remove_cv_t<T>, semantic::vhdl::BlockConfiguration>
+    auto archive_fields(T& value)
+    {
+        return std::tie(
+            value.block, value.generate_index, value.components,
+            value.blocks, value.source);
+    }
+
+    template <typename T>
+        requires std::same_as<
+            std::remove_cv_t<T>, semantic::vhdl::ComponentConfiguration>
+    auto archive_fields(T& value)
+    {
+        return std::tie(
+            value.selection, value.labels, value.component, value.binding,
+            value.block_configuration, value.source);
+    }
+
     template <typename T>
         requires std::same_as<
             std::remove_cv_t<T>, elaboration::PackedMemberMetadata>

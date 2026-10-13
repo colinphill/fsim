@@ -13,7 +13,7 @@
 namespace fsim::frontend {
 
 inline constexpr std::string_view verilog_preprocessor_cache_version =
-    "fsim-verilog-preprocessor-v9-generated-text-origin";
+    "fsim-verilog-preprocessor-v10-escaped-macro-identity";
 
 struct PreprocessorOptions {
   std::vector<std::filesystem::path> include_directories;

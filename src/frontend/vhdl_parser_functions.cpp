@@ -939,6 +939,14 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
     return function;
   }
 
+  std::vector<std::pair<std::string, bool>> saved_access_formals;
+  for (const auto& argument : function.arguments) {
+    saved_access_formals.emplace_back(
+        argument.name,
+        vhdl_access_object_names_.contains(argument.name));
+    note_vhdl_access_object(argument.name, argument.type);
+  }
+
   expect_keyword(
       "is", true, "FSIM-VHDL-PARSE-158");
   while (!at_end() && !keyword("begin", 0, true)) {
@@ -1165,6 +1173,13 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
     failure.span = name.span;
     function.statements.push_back(std::move(failure));
   }
+  for (const auto& [formal, was_access_object] : saved_access_formals) {
+    if (was_access_object) {
+      vhdl_access_object_names_.insert(formal);
+    } else {
+      vhdl_access_object_names_.erase(formal);
+    }
+  }
   return function;
 }
 
@@ -1201,6 +1216,14 @@ ProcedureDeclaration VhdlParser::parse_vhdl_procedure(
           "a VHDL procedure declaration in this region requires a body");
     }
     return procedure;
+  }
+
+  std::vector<std::pair<std::string, bool>> saved_access_formals;
+  for (const auto& argument : procedure.arguments) {
+    saved_access_formals.emplace_back(
+        argument.name,
+        vhdl_access_object_names_.contains(argument.name));
+    note_vhdl_access_object(argument.name, argument.type);
   }
 
   expect_keyword(
@@ -1404,6 +1427,13 @@ ProcedureDeclaration VhdlParser::parse_vhdl_procedure(
       };
   validate_statements(
       validate_statements, procedure.statements);
+  for (const auto& [formal, was_access_object] : saved_access_formals) {
+    if (was_access_object) {
+      vhdl_access_object_names_.insert(formal);
+    } else {
+      vhdl_access_object_names_.erase(formal);
+    }
+  }
   return procedure;
 }
 

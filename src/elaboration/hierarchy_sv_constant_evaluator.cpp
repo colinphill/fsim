@@ -2702,44 +2702,101 @@ private:
             }
             return result;
         }
-        if (record.text.starts_with("@sv-cast:")
-            && record.operands.size() == 1U) {
-            auto result = evaluate(record.operands.front());
+        const auto cast_value
+            = semantic::sv::systemverilog_cast_value_operand(record);
+        if (cast_value) {
+            auto result = evaluate(*cast_value);
             if (!result) {
                 return std::nullopt;
             }
-            const auto name = std::string_view { record.text }.substr(
-                std::string_view { "@sv-cast:" }.size());
             std::optional<semantic::sv::TypeReference> type;
-            if (const auto width = parse_integer<std::uint32_t>(name)) {
-                // A size cast keeps the expression's signedness (6.24.1).
+            const auto size_operand
+                = semantic::sv::systemverilog_cast_size_operand(record);
+            std::string_view cast_name;
+            if (size_operand) {
+                const auto integral_domain = [](
+                    const frontend::ValueDomain domain) {
+                    return domain == frontend::ValueDomain::Bit2
+                        || domain == frontend::ValueDomain::Logic4
+                        || domain == frontend::ValueDomain::Boolean
+                        || domain == frontend::ValueDomain::Integer;
+                };
+                if (!integral_domain(result->domain)) {
+                    error_ = "SystemVerilog size cast operand must be "
+                             "integral";
+                    return std::nullopt;
+                }
+                if (!hir_systemverilog_constant_expression(
+                        specialization_, *size_operand)) {
+                    error_ = "SystemVerilog size cast width is not a "
+                             "constant expression";
+                    return std::nullopt;
+                }
+                const auto size_value = evaluate(*size_operand);
+                const bool integral_width = size_value
+                    && integral_domain(size_value->domain);
+                const auto width = integral_width
+                    ? nonnegative_count(*size_value, error_)
+                    : std::nullopt;
+                if (!width || *width == 0U
+                    || *width > maximum_constant_width) {
+                    error_ = "SystemVerilog size cast width must be a "
+                             "positive constant integral value";
+                    return std::nullopt;
+                }
                 type.emplace();
                 type->executable_width = *width;
-                type->four_state = true;
+                type->four_state
+                    = result->domain != frontend::ValueDomain::Bit2;
                 type->signed_value = result->signed_value;
-                type->target.spelling = std::string { name };
-            } else if (name == "bit" || name == "logic"
-                || name == "reg") {
-                type.emplace();
-                type->executable_width = 1U;
-                type->four_state = name != "bit";
-                type->target.spelling = std::string { name };
-            } else if (name == "byte" || name == "shortint"
-                || name == "int" || name == "longint"
-                || name == "integer") {
-                type.emplace();
-                type->executable_width = name == "byte" ? 8U
-                    : name == "shortint" ? 16U
-                    : name == "longint" ? 64U : 32U;
-                type->signed_value = true;
-                type->four_state = name == "integer";
-                type->target.spelling = std::string { name };
+                type->target.spelling
+                    = result->domain == frontend::ValueDomain::Integer
+                    ? "int"
+                    : std::to_string(*width);
+                if (*width > 1U && result->unsized
+                    && result->width == 1U) {
+                    result->packed = PackedLogic4 {
+                        static_cast<std::uint32_t>(*width),
+                        result->packed.get(0U) };
+                    result->width = static_cast<std::uint32_t>(*width);
+                }
             } else {
-                type = named_cast_type(record, name);
+                cast_name = std::string_view { record.text }.substr(
+                    std::string_view { "@sv-cast:" }.size());
+                if (const auto width
+                    = parse_integer<std::uint32_t>(cast_name)) {
+                    // A size cast keeps the expression's signedness (6.24.1).
+                    type.emplace();
+                    type->executable_width = *width;
+                    type->four_state = true;
+                    type->signed_value = result->signed_value;
+                    type->target.spelling = std::string { cast_name };
+                } else if (cast_name == "bit" || cast_name == "logic"
+                    || cast_name == "reg") {
+                    type.emplace();
+                    type->executable_width = 1U;
+                    type->four_state = cast_name != "bit";
+                    type->target.spelling = std::string { cast_name };
+                } else if (cast_name == "byte" || cast_name == "shortint"
+                    || cast_name == "int" || cast_name == "longint"
+                    || cast_name == "integer") {
+                    type.emplace();
+                    type->executable_width = cast_name == "byte" ? 8U
+                        : cast_name == "shortint" ? 16U
+                        : cast_name == "longint" ? 64U : 32U;
+                    type->signed_value = true;
+                    type->four_state = cast_name == "integer";
+                    type->target.spelling = std::string { cast_name };
+                } else {
+                    type = named_cast_type(record, cast_name);
+                }
             }
             if (!type) {
-                error_ = "cannot resolve SystemVerilog cast type '"
-                    + std::string { name } + "'";
+                error_ = cast_name.empty()
+                    ? "SystemVerilog size cast width must be a positive "
+                      "constant integral value"
+                    : "cannot resolve SystemVerilog cast type '"
+                          + std::string { cast_name } + "'";
                 return std::nullopt;
             }
             return convert_hir_systemverilog_constant(
@@ -4790,6 +4847,11 @@ private:
         return false;
     }
     const auto& record = *view->systemverilog;
+    if (semantic::sv::is_expression_size_cast(record)) {
+        // The packed constant evaluator validates the operand and applies
+        // the expression-sized cast's target width.
+        return false;
+    }
     if (record.decimal_literal
         || scalar_kind(record.scalar_kind) != ScalarKind::None
         || record.kind == ExpressionKind::class_null
@@ -4831,6 +4893,117 @@ private:
 }
 
 } // namespace
+
+bool hir_systemverilog_constant_expression(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::ExpressionId expression)
+{
+    std::unordered_set<std::uint32_t> active;
+    const auto is_constant = [&](const auto& self,
+                                 const semantic::ExpressionId id,
+                                 const std::size_t depth) -> bool {
+        if (depth
+                > specialization.design().systemverilog_hir.expressions().size()
+            || !active.insert(id.value()).second) {
+            return false;
+        }
+        const auto view = specialization.find_expression(id);
+        bool result { };
+        if (view && view->systemverilog != nullptr) {
+            const auto& source = *view->systemverilog;
+            const auto operands_are_constant = [&] {
+                return std::ranges::all_of(source.operands,
+                    [&](const semantic::ExpressionId operand) {
+                        return self(self, operand, depth + 1U);
+                    });
+            };
+            const auto call_arguments_are_constant = [&] {
+                return std::ranges::all_of(source.call_arguments,
+                    [&](const semantic::sv::CallAssociation& argument) {
+                        return argument.actual
+                            && self(self, *argument.actual, depth + 1U);
+                    });
+            };
+            switch (source.kind) {
+            case ExpressionKind::integer_literal:
+                result = !source.decimal_literal
+                    || source.decimal_literal->kind
+                        != semantic::sv::DecimalLiteralKind::real;
+                break;
+            case ExpressionKind::boolean_literal:
+            case ExpressionKind::logic_literal:
+                result = true;
+                break;
+            case ExpressionKind::name:
+                result = source.referenced_name
+                    && source.referenced_name->selected
+                    && systemverilog_constant_declaration(
+                        specialization,
+                        *source.referenced_name->selected);
+                break;
+            case ExpressionKind::unary:
+            case ExpressionKind::binary:
+            case ExpressionKind::index:
+            case ExpressionKind::slice:
+            case ExpressionKind::concatenation:
+            case ExpressionKind::replication:
+                result = !source.operands.empty()
+                    && operands_are_constant();
+                break;
+            case ExpressionKind::call: {
+                const auto call_arguments_are_valid
+                    = operands_are_constant()
+                    && call_arguments_are_constant();
+                const bool sized_type_cast
+                    = source.text.starts_with("@sv-cast:")
+                    && source.operands.size() == 1U;
+                const bool expression_size_cast
+                    = semantic::sv::is_expression_size_cast(source);
+                const bool conditional
+                    = source.text == "?:"
+                    && source.operands.size() == 3U;
+                const bool constant_query
+                    = source.text == "$bits"
+                    || source.text == "$left"
+                    || source.text == "$right"
+                    || source.text == "$low"
+                    || source.text == "$high"
+                    || source.text == "$size"
+                    || source.text == "$increment"
+                    || source.text == "$dimensions"
+                    || source.text == "$unpacked_dimensions";
+                const bool constant_function
+                    = source.referenced_name
+                    && source.referenced_name->selected
+                    && [&] {
+                           const auto declaration
+                               = specialization.find_declaration(
+                                   *source.referenced_name->selected);
+                           return declaration
+                               && declaration->systemverilog != nullptr
+                               && declaration->systemverilog->callable
+                               && declaration->systemverilog->callable
+                                      ->function;
+                       }();
+                result = constant_query
+                    || ((sized_type_cast || expression_size_cast
+                            || conditional || source.text == "$clog2"
+                            || source.text == "$isunknown"
+                            || source.text == "$isunbounded"
+                            || source.text == "inside"
+                            || constant_function)
+                        && call_arguments_are_valid);
+                break;
+            }
+            default:
+                break;
+            }
+        }
+        active.erase(id.value());
+        return result;
+    };
+    return is_constant(is_constant, expression, 0U);
+}
 
 bool HirSystemVerilogConstant::known() const noexcept
 {

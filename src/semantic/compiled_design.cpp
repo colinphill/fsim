@@ -803,15 +803,31 @@ void CompiledDesign::refresh_lookup_indexes()
                     if (parts.size() != 2U && parts.size() != 3U) {
                         continue;
                     }
-                    const bool qualified = parts.size() == 3U;
-                    const auto specified_library = qualified
+                    const bool library_prefix = parts.size() == 3U
+                        || (parts.size() == 2U
+                            && (same_vhdl_identifier(parts.front(), "work")
+                                || same_vhdl_identifier(
+                                    parts.front(), "std")
+                                || std::ranges::any_of(unit.context,
+                                    [&](const vhdl::ContextItem& context) {
+                                        return context.kind
+                                                == vhdl::ContextKind::library_clause
+                                            && std::ranges::any_of(
+                                                context.selected_names,
+                                                [&](const vhdl::Name& selected_name) {
+                                                    return same_vhdl_identifier(
+                                                        vhdl_spelling(selected_name),
+                                                        parts.front());
+                                                });
+                                    })));
+                    const auto specified_library = library_prefix
                         ? std::string_view { parts.front() }
                         : normalized_library(unit.library);
                     const auto library = same_vhdl_identifier(
                             specified_library, "work")
                         ? normalized_library(unit.library)
                         : specified_library;
-                    const auto package = qualified
+                    const auto package = library_prefix
                         ? std::string_view { parts[1] }
                         : std::string_view { parts.front() };
                     if (!same_vhdl_identifier(

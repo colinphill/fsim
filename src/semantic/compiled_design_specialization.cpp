@@ -1236,6 +1236,18 @@ std::optional<std::uint64_t> systemverilog_expression_width(
             return finish(systemverilog_explicit_width(actual->identity));
         }
     }
+    if (sv::is_expression_size_cast(record)) {
+        const auto size_operand = sv::systemverilog_cast_size_operand(record);
+        const auto cast_width = size_operand
+            ? unit.evaluate_integral_expression(*size_operand)
+            : std::nullopt;
+        if (!cast_width || *cast_width <= 0
+            || static_cast<std::uint64_t>(*cast_width)
+                > std::numeric_limits<std::size_t>::max()) {
+            return finish(std::nullopt);
+        }
+        return finish(static_cast<std::uint64_t>(*cast_width));
+    }
     if (record.kind == sv::ExpressionKind::call
         && record.text.starts_with("@sv-cast:")) {
         const auto cast_width = parse_unsigned(

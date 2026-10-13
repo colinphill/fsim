@@ -944,6 +944,12 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
     }
     const auto component = expect_identifier("component name");
     instance.unit_name = vhdl_name(component.text);
+    while (match(TokenKind::Dot)) {
+      const auto selected = expect_identifier(
+          "selected component name after package");
+      instance.unit_name += '.';
+      instance.unit_name += vhdl_name(selected.text);
+    }
     instance.vhdl_component_instance = true;
   }
 
@@ -1201,7 +1207,12 @@ void VhdlParser::rewrite_vhdl_formal_conversions(DesignUnit& unit,
       const auto component = std::ranges::find_if(
           unit.vhdl_component_declarations,
           [&](const VhdlComponentDeclaration& declaration) {
-            return declaration.name == instance.unit_name;
+            const auto separator = instance.unit_name.find_last_of('.');
+            const auto simple_name = std::string_view { instance.unit_name }
+                                         .substr(separator == std::string::npos
+                                                     ? 0U
+                                                     : separator + 1U);
+            return declaration.name == simple_name;
           });
       if (component == unit.vhdl_component_declarations.end()) {
         continue;

@@ -1016,19 +1016,23 @@ endmodule
               malformed_attribute_close, "FSIM-SV-PARSE-337"),
       "malformed Verilog attributes have stable bounded diagnostics");
 
-  const auto invalid_verilog_memories = parse_text(
-      "verilog-invalid-memories.v",
+  const auto multidimensional_verilog_memories = parse_text(
+      "verilog-multidimensional-memories.v",
       "module bad; reg [7:0] matrix [0:3][0:1]; "
       "wire [7:0] wire_memory [0:3]; endmodule",
       Language::Verilog2005);
   require(
-      !invalid_verilog_memories.ok()
-          && has_diagnostic(
-              invalid_verilog_memories, "FSIM-VERILOG-SEM-012")
-          && !has_diagnostic(
-              invalid_verilog_memories, "FSIM-SV-SEM-079"),
-      "multidimensional Verilog memories diagnose precisely and net "
-      "memories are accepted (IEEE 1364-2005 4.9)");
+      multidimensional_verilog_memories.ok(),
+      "multidimensional Verilog arrays and net arrays are accepted "
+      "(IEEE 1364-2005 4.9)");
+
+  const auto verilog_1995_matrix = parse_verilog(
+      SourceText { "verilog-1995-matrix.v",
+          "module matrix; reg [7:0] values [0:3][0:1]; endmodule" },
+      StandardRevision::Verilog1995);
+  require(!verilog_1995_matrix.ok()
+          && has_diagnostic(verilog_1995_matrix, "FSIM-VERILOG-SEM-012"),
+      "multidimensional arrays remain unavailable in Verilog-1995");
 
   const auto systemverilog_net_array = parse_text(
       "systemverilog-net-array.sv",

@@ -792,15 +792,31 @@ std::vector<CompiledVhdlImport> collect_vhdl_linked_imports(
                     if (parts.size() != 2U && parts.size() != 3U) {
                         continue;
                     }
-                    const auto qualified = parts.size() == 3U;
-                    const auto specified_library = qualified
+                    const auto library_prefix = parts.size() == 3U
+                        || (parts.size() == 2U
+                            && (same_vhdl_identifier(parts.front(), "work")
+                                || same_vhdl_identifier(
+                                    parts.front(), "std")
+                                || std::ranges::any_of(unit->context,
+                                    [&](const vhdl::ContextItem& context) {
+                                        return context.kind
+                                                == vhdl::ContextKind::library_clause
+                                            && std::ranges::any_of(
+                                                context.selected_names,
+                                                [&](const vhdl::Name& selected_name) {
+                                                    return same_vhdl_identifier(
+                                                        vhdl_spelling(selected_name),
+                                                        parts.front());
+                                                });
+                                    })));
+                    const auto specified_library = library_prefix
                         ? std::string_view { parts.front() }
                         : normalized_library(unit->library);
                     const auto library = same_vhdl_identifier(
                             specified_library, "work")
                         ? normalized_library(unit->library)
                         : specified_library;
-                    const auto package = qualified
+                    const auto package = library_prefix
                         ? std::string_view { parts[1] }
                         : std::string_view { parts.front() };
                     if (!same_vhdl_identifier(
@@ -880,6 +896,23 @@ bool standard_package_exports(const vhdl::Unit& package,
 bool builtin_standard_package_exports(const std::string_view library,
     const std::string_view package, const std::string_view member)
 {
+    if (same_vhdl_identifier(library, "std")
+        && same_vhdl_identifier(package, "textio")) {
+        // Keep the fallback in step with the compiler-owned std.textio
+        // package declaration in third_party/ieee-1076-2019/std/textio.vhdl.
+        constexpr auto members = std::to_array<std::string_view>({
+            "line", "line_vector", "text", "side", "right", "left",
+            "width", "justify", "input", "output", "readline", "read",
+            "sread", "string_read", "bread", "binary_read", "oread",
+            "octal_read", "hread", "hex_read", "writeline", "tee",
+            "write", "swrite", "string_write", "bwrite", "binary_write",
+            "owrite", "octal_write", "hwrite", "hex_write",
+        });
+        return std::ranges::any_of(members,
+            [&](const std::string_view candidate) {
+                return same_vhdl_identifier(candidate, member);
+            });
+    }
     if (same_vhdl_identifier(library, "ieee")
         && same_vhdl_identifier(package, "std_logic_1164")) {
         constexpr auto members = std::to_array<std::string_view>({
@@ -3215,6 +3248,146 @@ CompiledDesignResolver::effective_vhdl_subtype(
                     }
                 }
             }
+            const auto unresolved_predefined_character = [&](
+                std::string_view spelling, const ScopeId scope) {
+                constexpr auto builtin_prefix
+                    = std::string_view { "@builtin:" };
+                if (spelling.starts_with(builtin_prefix)) {
+                    spelling.remove_prefix(builtin_prefix.size());
+                }
+                if (spelling.empty()
+                    || !same_vhdl_identifier(
+                        simple_vhdl_name(spelling), "character")) {
+                    return false;
+                }
+
+                vhdl::Name name;
+                name.spelling = spelling;
+                name.canonical = spelling;
+                const auto resolver = CompiledDesignResolver {
+                    *design_, selected_unit_, effective_, active_frames
+                };
+                const auto visible_type = resolver.resolve_vhdl(
+                    name, scope, [](const CompiledDeclarationView& view) {
+                        if (view.vhdl == nullptr) {
+                            return false;
+                        }
+                        const auto form = view.vhdl->form;
+                        return form == vhdl::DeclarationForm::type
+                            || form == vhdl::DeclarationForm::subtype
+                            || form == vhdl::DeclarationForm::generic_type;
+                    });
+                if (visible_type.status
+                    != CompiledResolutionStatus::not_found) {
+                    return false;
+                }
+
+                // STD.STANDARD declarations are implicitly visible. Some
+                // compiled bundles omit their TypeDefinition, so a targetless
+                // CHARACTER can be identified only after scoped lookup rules
+                // have ruled out a visible user declaration with that name.
+                return same_vhdl_identifier(spelling, "character")
+                    || same_vhdl_identifier(
+                        spelling, "standard.character")
+                    || same_vhdl_identifier(
+                        spelling, "std.standard.character");
+            };
+            const auto predefined_character_index = [&](
+                const vhdl::ArrayDimension& dimension) {
+                const auto& index_name = dimension.index_subtype;
+                auto index_scope = definition_scope;
+                std::optional<TypeId> index_type;
+                if (index_name.selected) {
+                    const auto declaration = find_declaration(
+                        *design_, effective_, *index_name.selected);
+                    if (!declaration || declaration->vhdl == nullptr) {
+                        return false;
+                    }
+                    index_scope = declaration->vhdl->scope;
+                    if (declaration->vhdl->declared_type) {
+                        index_type = *declaration->vhdl->declared_type;
+                    } else if (declaration->vhdl->subtype) {
+                        const auto& subtype
+                            = *declaration->vhdl->subtype;
+                        index_type = subtype.type_mark.target.valid()
+                            ? std::optional { subtype.type_mark.target }
+                            : resolve_vhdl_named_type(
+                                  subtype.type_mark.spelling, index_scope);
+                        if (!index_type) {
+                            return unresolved_predefined_character(
+                                subtype.type_mark.spelling, index_scope);
+                        }
+                    }
+                    if (!index_type) {
+                        return false;
+                    }
+                } else {
+                    index_type = resolve_vhdl_named_type(
+                        index_name.spelling, index_scope);
+                    if (!index_type) {
+                        return unresolved_predefined_character(
+                            index_name.spelling, index_scope);
+                    }
+                }
+
+                std::unordered_set<std::uint32_t> visited;
+                while (index_type
+                    && visited.insert(index_type->value()).second) {
+                    const auto type = effective_ != nullptr
+                        ? effective_->find_type(*index_type)
+                        : design_->find_type(*index_type);
+                    if (!type || type->vhdl == nullptr) {
+                        return false;
+                    }
+                    const auto& index_definition = *type->vhdl;
+                    if (index_definition.form
+                        == vhdl::TypeForm::enumeration) {
+                        const auto declaration = find_declaration(
+                            *design_, effective_,
+                            index_definition.declaration);
+                        if (!declaration || declaration->vhdl == nullptr) {
+                            return false;
+                        }
+                        const auto* owner_scope = find_scope(
+                            *design_, declaration->vhdl->scope);
+                        const auto owner = owner_scope != nullptr
+                            ? design_->find_unit(owner_scope->unit)
+                            : std::nullopt;
+                        return same_vhdl_identifier(
+                                   index_definition.name, "character")
+                            && owner && owner->vhdl != nullptr
+                            && owner->vhdl->kind == vhdl::UnitKind::package
+                            && same_vhdl_identifier(
+                                owner->vhdl->library, "std")
+                            && same_vhdl_identifier(
+                                owner->vhdl->name, "standard");
+                    }
+                    if (index_definition.form != vhdl::TypeForm::subtype
+                        && index_definition.form != vhdl::TypeForm::alias
+                        && index_definition.form != vhdl::TypeForm::scalar) {
+                        return false;
+                    }
+                    const auto declaration = find_declaration(
+                        *design_, effective_,
+                        index_definition.declaration);
+                    if (declaration && declaration->vhdl != nullptr) {
+                        index_scope = declaration->vhdl->scope;
+                    }
+                    index_type
+                        = index_definition.base.type_mark.target.valid()
+                        ? std::optional {
+                              index_definition.base.type_mark.target }
+                        : resolve_vhdl_named_type(
+                              index_definition.base.type_mark.spelling,
+                              index_scope);
+                    if (!index_type) {
+                        return unresolved_predefined_character(
+                            index_definition.base.type_mark.spelling,
+                            index_scope);
+                    }
+                }
+                return false;
+            };
             // A bound of a CHARACTER-indexed dimension written as a
             // character literal is its CHARACTER position (`'0' to '9'`).
             const auto dimension_boundary = [&](const std::size_t dimension,
@@ -3224,16 +3397,12 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 -> std::optional<std::int64_t> {
                 // (An earlier fold may have taken '0' as a BIT value.)
                 if (residual && dimension < definition.array_dimensions.size()) {
-                    auto index = std::string_view {
-                        definition.array_dimensions[dimension].index_subtype.spelling };
-                    if (const auto separator = index.find_last_of(".:");
-                        separator != std::string_view::npos) {
-                        index.remove_prefix(separator + 1U);
-                    }
                     const auto expression = effective_ != nullptr
                         ? effective_->find_expression(*residual)
                         : design_->find_expression(*residual);
-                    if (same_vhdl_identifier(index, "character") && expression
+                    if (predefined_character_index(
+                            definition.array_dimensions[dimension])
+                        && expression
                         && expression->vhdl != nullptr
                         && expression->vhdl->kind == vhdl::ExpressionKind::logic_literal
                         && expression->vhdl->text.size() == 3U
@@ -3940,12 +4109,30 @@ CompiledDesignResolver::resolve_vhdl_package_members(
     }
 
     if (parts.size() == 2U || parts.size() == 3U) {
-        const auto qualified = parts.size() == 3U;
-        const auto library = qualified
-            ? effective_vhdl_library(parts.front(), owner->library)
-            : normalized_library(owner->library);
-        append_template(library, qualified ? parts[1] : parts[0],
-            qualified ? parts[2] : parts[1], std::nullopt, nullptr);
+        if (parts.size() == 2U) {
+            append_template(normalized_library(owner->library),
+                parts[0], parts[1], std::nullopt, nullptr);
+            if (candidates.empty()) {
+                visit_vhdl_linked_imports(*design_, lookup_units,
+                    [&](const CompiledVhdlImport& imported) {
+                        if (!same_vhdl_identifier(
+                                imported.package, parts.front())
+                            || !same_vhdl_identifier(
+                                imported.member, parts.front())) {
+                            return false;
+                        }
+                        append_template(imported.library,
+                            imported.package, parts.back(),
+                            std::nullopt, nullptr);
+                        return false;
+                    });
+            }
+        } else {
+            const auto library = effective_vhdl_library(
+                parts.front(), owner->library);
+            append_template(library, parts[1], parts[2],
+                std::nullopt, nullptr);
+        }
         return { status_for(candidates.size()), std::move(candidates) };
     }
 
@@ -4224,15 +4411,25 @@ bool CompiledDesignResolver::vhdl_standard_package_member_visible(
         return builtin_standard_package_exports(
             library, package_name, member);
     };
-    if (parts.size() >= 2U) {
-        const auto qualified = parts.size() == 3U;
-        const auto library = qualified
-            ? effective_vhdl_library(
-                  parts.front(), owner->library)
-            : normalized_library(owner->library);
-        return exported(library,
-            qualified ? parts[1] : parts[0],
-            qualified ? parts[2] : parts[1]);
+    if (parts.size() == 3U) {
+        return exported(
+            effective_vhdl_library(parts.front(), owner->library),
+            parts[1], parts[2]);
+    }
+    if (parts.size() == 2U) {
+        if (exported(normalized_library(owner->library),
+                parts[0], parts[1])) {
+            return true;
+        }
+        return visit_vhdl_linked_imports(*design_, lookup_units,
+            [&](const CompiledVhdlImport& imported) {
+                return same_vhdl_identifier(
+                           imported.package, parts.front())
+                    && same_vhdl_identifier(
+                        imported.member, parts.front())
+                    && exported(imported.library, imported.package,
+                        parts.back());
+            });
     }
     const auto member = parts.front();
     const auto visible_from = [&](const auto& self,

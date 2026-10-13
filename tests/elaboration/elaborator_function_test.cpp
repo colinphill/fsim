@@ -1215,7 +1215,7 @@ endmodule
 )",
         "sv:work.associative_function_return",
         "FSIM-ELAB-SVSLICE-006");
-    reject_fixed_return(
+    accept_function_return(
         "nonstatic_kind_mismatch_function_return.sv",
         R"(
 module nonstatic_kind_mismatch_function_return;
@@ -1227,8 +1227,7 @@ module nonstatic_kind_mismatch_function_return;
   initial dynamic_result = queue_result();
 endmodule
 )",
-        "sv:work.nonstatic_kind_mismatch_function_return",
-        "FSIM-ELAB-SVFUNC-008");
+        "sv:work.nonstatic_kind_mismatch_function_return");
     accept_function_return(
         "queue_bound_mismatch_function_return.sv",
         R"(
@@ -1270,7 +1269,7 @@ endmodule
 )",
         "sv:work.index_profile_mismatch_function_return",
         "FSIM-ELAB-SVFUNC-008");
-    reject_fixed_return(
+    accept_function_return(
         "function_container_argument_mismatch.sv",
         R"(
 module function_container_argument_mismatch;
@@ -1283,9 +1282,22 @@ module function_container_argument_mismatch;
   initial dynamic_target = copy_dynamic(queue_source);
 endmodule
 )",
-        "sv:work.function_container_argument_mismatch",
-        "FSIM-ELAB-SVFUNC-009");
+        "sv:work.function_container_argument_mismatch");
     reject_fixed_return(
+        "function_container_ref_kind_mismatch.sv",
+        R"(
+module function_container_ref_kind_mismatch;
+  byte queue_source[$];
+  function automatic int inspect_dynamic(ref byte value[]);
+    return value.size();
+  endfunction
+  int count;
+  initial count = inspect_dynamic(queue_source);
+endmodule
+)",
+        "sv:work.function_container_ref_kind_mismatch",
+        "FSIM-ELAB-SVFUNC-009");
+    accept_function_return(
         "task_container_argument_mismatch.sv",
         R"(
 module task_container_argument_mismatch;
@@ -1295,8 +1307,7 @@ module task_container_argument_mismatch;
   initial take_dynamic(queue_source);
 endmodule
 )",
-        "sv:work.task_container_argument_mismatch",
-        "FSIM-ELAB-SVTASK-011");
+        "sv:work.task_container_argument_mismatch");
     accept_function_return(
         "recursive_dynamic_function_return.sv",
         R"(

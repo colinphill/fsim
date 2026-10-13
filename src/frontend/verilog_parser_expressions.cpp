@@ -789,7 +789,7 @@ Expression VerilogParser::parse_primary()
             if (!width || *width <= 0) {
                 error(
                     token,
-                    "FSIM-SV-SEM-188",
+                    "FSIM-ELAB-SVCAST-003",
                     "a SystemVerilog casting size must be a positive "
                     "decimal constant");
             } else {
@@ -1604,6 +1604,28 @@ Expression VerilogParser::parse_primary()
         expect(TokenKind::RightParen, "')' after expression",
             "FSIM-SV-PARSE-029");
         expression.span = span_from(open, previous());
+        if (match(TokenKind::Apostrophe)) {
+            const auto apostrophe = previous();
+            (void)require_standard(
+                "a sized casting expression",
+                StandardRevision::SystemVerilog2005,
+                apostrophe,
+                "FSIM-SV-PARSE-347");
+            expect(
+                TokenKind::LeftParen,
+                "'(' after SystemVerilog casting size",
+                "FSIM-SV-PARSE-219");
+            auto operand = parse_expression();
+            expect(
+                TokenKind::RightParen,
+                "')' after SystemVerilog cast expression",
+                "FSIM-SV-PARSE-220");
+            return parse_postfix(Expression {
+                ExpressionKind::Call,
+                "@sv-size-cast:expression",
+                { std::move(expression), std::move(operand) },
+                span_from(open, previous()) });
+        }
         return parse_postfix(std::move(expression));
     }
     if (match(TokenKind::LeftBrace)) {

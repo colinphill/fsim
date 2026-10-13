@@ -1475,7 +1475,7 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VERILOG-SEM-008` | error | A nonblocking named-event trigger (`->>`) was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-009` | error | `$info`, `$warning`, or `$error` was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-010` | error | An increment or decrement expression was used in Verilog-2005 rather than SystemVerilog. |
-| `FSIM-VERILOG-SEM-012` | error | A Verilog-2005 memory declaration has more than one unpacked dimension. |
+| `FSIM-VERILOG-SEM-012` | error | A multidimensional unpacked array requires Verilog-2001 or later. |
 | `FSIM-VERILOG-SEM-013` | error | A declaration appears in a Verilog-2005 procedural `for` initializer rather than in the surrounding named block. |
 | `FSIM-VERILOG-SEM-014` | error | A named-event declaration assignment was used in Verilog-2005 rather than SystemVerilog. |
 | `FSIM-VERILOG-SEM-015` | error | A generate block declares a `parameter` in Verilog-2005, which admits only `localparam` there (IEEE 1364-2005 12.4). |
@@ -2302,6 +2302,7 @@ scheduler.
 | `FSIM-ELAB-VHCONFIG-014` | error | A configuration binding selects an ambiguous configuration declaration. |
 | `FSIM-ELAB-VHCONFIG-015` | error | A nested block/generate scope is configured more than once at the same level. |
 | `FSIM-ELAB-VHCONFIG-016` | error | A compiled configuration has no retained explicit component rule for the selected occurrence. |
+| `FSIM-ELAB-VHCONFIG-017` | error | An incremental component configuration has no valid primary binding, or its generic or port map conflicts with that binding. |
 | `FSIM-ELAB-VHCOMP-001` | error | A component-style instance has no visible bounded component declaration. |
 | `FSIM-ELAB-VHCOMP-002` | error | A component-style instance ambiguously matches multiple equally visible component declarations. |
 | `FSIM-ELAB-VHCOMP-003` | error | Default component binding finds no same-library VHDL entity or architecture. |
@@ -2631,7 +2632,7 @@ scheduler.
 | `FSIM-ELAB-SVCOND-004` | error | A container conditional condition does not produce one bit. |
 | `FSIM-ELAB-SVEQUAL-001` | error | A container operand is used with an unsupported comparison operator or outside SystemVerilog. |
 | `FSIM-ELAB-SVEQUAL-002` | error | Whole-container equality does not have two typed container operands. |
-| `FSIM-ELAB-SVEQUAL-003` | error | Whole-container equality operands do not have an exactly compatible kind and profile. |
+| `FSIM-ELAB-SVEQUAL-003` | error | Whole-container equality operands do not have a compatible kind, element profile, and fixed-array shape. |
 | `FSIM-ELAB-SVMEMBER-001` | error | An `inside` membership expression is lowered outside SystemVerilog. |
 | `FSIM-ELAB-SVMEMBER-002` | error | An `inside` expression does not contain a left operand and at least one member. |
 | `FSIM-ELAB-SVMEMBER-003` | error | The left operand of bounded `inside` membership is not a scalar integral value with statically inferable width. |
@@ -2759,9 +2760,10 @@ scheduler.
 | `FSIM-ELAB-SVCONCAT-002` | error | A real, shortreal or realtime value is an operand of a SystemVerilog concatenation (IEEE 1800-2017 11.4.12). |
 | `FSIM-ELAB-SVCAST-001` | error | Malformed cast HIR does not contain exactly one operand. |
 | `FSIM-ELAB-SVCAST-002` | error | A SystemVerilog cast names a type that is not visible. |
-| `FSIM-ELAB-SVCAST-003` | error | A SystemVerilog cast type has zero width or exceeds the host-addressable executable-width domain. |
+| `FSIM-ELAB-SVCAST-003` | error | A SystemVerilog cast type or size expression does not have a positive, supported, locally constant integral width. |
 | `FSIM-ELAB-SVCAST-004` | error | Reserved non-emitting identity formerly used for four-state-to-two-state cast rejection. |
 | `FSIM-ELAB-SVCAST-005` | error | An assignment pattern relies on static-cast contextual typing before the SystemVerilog-2023 profile. |
+| `FSIM-ELAB-SVCAST-006` | error | A SystemVerilog size cast has a nonintegral value operand. |
 | `FSIM-ELAB-SVASSIGN-001` | error | A SystemVerilog-2023 nonblocking assignment targets an element of a dynamically sized array variable. |
 | `FSIM-ELAB-SVASSIGN-002` | error | An assignment-pattern target is empty, malformed, or contains a keyed association instead of positional lvalues. |
 | `FSIM-ELAB-SVASSIGN-003` | error | A blocking or nonblocking procedural assignment targets a net; its target must be a variable (IEEE 1800-2017 10.4). |

@@ -53,7 +53,7 @@ void ApplicationTestFixture::test_artifact_phase_semantics()
     static_assert(app::kSystemVerilogConstraintHirStateSchema == 8);
     static_assert(app::kSystemVerilogCoverageStateSchema == 7);
     static_assert(app::kSystemVerilogUvmStateSchema == 3);
-    static_assert(app::kVhdlHirStateSchema == 6);
+    static_assert(app::kVhdlHirStateSchema == 7);
     const auto copy_artifact_tree = [](
                                         const std::filesystem::path& source_root,
                                         const std::filesystem::path& destination) {
@@ -1391,17 +1391,19 @@ end architecture;
     assert(!app::deserialize_vhdl_hir_state(
         future_vhdl_hir, "future-vhdl-hir.bin",
         coverage_checkpoint->semantics, future_vhdl_hir_diagnostics));
-    auto schema5_vhdl_hir = *vhdl_hir_bytes;
-    schema5_vhdl_hir[8] = static_cast<char>(app::kVhdlHirStateSchema - 1U);
-    diagnostic::Engine schema5_vhdl_hir_diagnostics;
+    auto previous_vhdl_hir = *vhdl_hir_bytes;
+    previous_vhdl_hir[8] = static_cast<char>(app::kVhdlHirStateSchema - 1U);
+    diagnostic::Engine previous_vhdl_hir_diagnostics;
     assert(!app::deserialize_vhdl_hir_state(
-        schema5_vhdl_hir, "schema5-vhdl-hir.bin",
-        coverage_checkpoint->semantics, schema5_vhdl_hir_diagnostics));
+        previous_vhdl_hir, "previous-vhdl-hir.bin",
+        coverage_checkpoint->semantics, previous_vhdl_hir_diagnostics));
     assert(std::ranges::any_of(
-        schema5_vhdl_hir_diagnostics.diagnostics(), [](const auto& diagnostic) {
+        previous_vhdl_hir_diagnostics.diagnostics(), [](const auto& diagnostic) {
             return diagnostic.code == "FSIM-ART-0013"
-                && diagnostic.message.find("schema 5") != std::string::npos
-                && diagnostic.message.find("schema 6") != std::string::npos
+                && diagnostic.message.find("schema "
+                    + std::to_string(app::kVhdlHirStateSchema - 1U)) != std::string::npos
+                && diagnostic.message.find("schema "
+                    + std::to_string(app::kVhdlHirStateSchema)) != std::string::npos
                 && diagnostic.message.find("regenerate") != std::string::npos;
         }));
     auto v2_vhdl_hir = *vhdl_hir_bytes;

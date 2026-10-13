@@ -1192,11 +1192,130 @@ const auto expect_numeric_sized_cast_rejection =
           }));
     };
 expect_numeric_sized_cast_rejection(
-    "zero_numeric_sized_cast", "0", "FSIM-SV-SEM-188");
+    "zero_numeric_sized_cast", "0", "FSIM-ELAB-SVCAST-003");
 expect_numeric_sized_cast_rejection(
-    "bounded_numeric_sized_cast", "16777217", "FSIM-ELAB-SVCAST-002");
+    "bounded_numeric_sized_cast", "16777217", "FSIM-ELAB-SVCAST-003");
 expect_numeric_sized_cast_rejection(
-    "overflow_numeric_sized_cast", "4294967296", "FSIM-ELAB-SVCAST-002");
+    "overflow_numeric_sized_cast", "4294967296", "FSIM-ELAB-SVCAST-003");
+
+const auto write_expression_sized_cast_source =
+    [&](const std::string_view top_name,
+        const std::string_view cast_size,
+        const std::string_view value,
+        const std::string_view declarations,
+        const std::string_view initial_statements) {
+      const auto source_path = directory
+          / (std::string { top_name } + "-expression-sized-cast.sv");
+      std::ofstream output(source_path);
+      output << "module " << top_name
+             << "(output logic [2:0] value_out);\n"
+                "parameter int TOP_W = 8;\n"
+             << declarations
+             << "initial begin\n  value_out = (" << cast_size << ")'("
+             << value << ");\n"
+             << initial_statements
+             << "end\nendmodule\n";
+      assert(output.good());
+      return source_path;
+    };
+const auto expression_sized_cast_source =
+    write_expression_sized_cast_source(
+        "expression_sized_cast", "TOP_W * 8", "'1",
+        "logic signed [7:0] signed_input;\n"
+        "logic signed [15:0] signed_result;\n"
+        "bit [7:0] two_state_input;\n"
+        "bit [15:0] two_state_result;\n"
+        "logic [7:0] four_state_input;\n"
+        "logic [15:0] four_state_result;\n"
+        "function automatic int constant_size(input int value);\n"
+        "  constant_size = value * 8;\n"
+        "endfunction\n"
+        "logic [63:0] function_sized;\n",
+        "  signed_input = -8'sd2;\n"
+        "  signed_result = (TOP_W * 2)'(signed_input);\n"
+        "  two_state_input = 8'h12;\n"
+        "  two_state_result = (TOP_W * 2)'(two_state_input);\n"
+        "  four_state_input = 8'h0x;\n"
+        "  four_state_result = (TOP_W * 2)'(four_state_input);\n"
+        "  function_sized = (constant_size(TOP_W))'('1);\n"
+        "  if (signed_result !== -16'sd2) $fatal(1, \"signed size cast\");\n"
+        "  if (two_state_result !== 16'h0012)\n"
+        "    $fatal(1, \"two-state size cast\");\n"
+        "  if (four_state_result[0] !== 1'bx)\n"
+        "    $fatal(1, \"four-state size cast\");\n"
+        "  if (function_sized !== 64'hffff_ffff_ffff_ffff)\n"
+        "    $fatal(1, \"constant function size\");\n");
+const auto expression_sized_cast_config = numeric_sized_cast_config(
+    expression_sized_cast_source, "expression_sized_cast");
+fsim::diagnostic::Engine expression_sized_cast_diagnostics;
+auto expression_sized_cast_project = fsim::app::build_project(
+    expression_sized_cast_config, expression_sized_cast_diagnostics);
+if (!expression_sized_cast_project) {
+  fsim::diagnostic::print_text(
+      std::cerr, expression_sized_cast_diagnostics);
+}
+assert(expression_sized_cast_project);
+assert(!expression_sized_cast_diagnostics.has_error());
+const auto expression_sized_cast_output =
+    expression_sized_cast_project->design.find_signal(
+        "expression_sized_cast.value_out");
+assert(expression_sized_cast_output);
+assert(expression_sized_cast_project->design.signals()
+           .at(*expression_sized_cast_output)
+           .width == 3U);
+const auto expression_sized_cast_capture = capture_simulation(
+    std::move(*expression_sized_cast_project),
+    fsim::app::SimulationEngine::interpreter);
+assert(*expression_sized_cast_output
+    < expression_sized_cast_capture.final_values.size());
+assert(expression_sized_cast_capture.final_values.at(
+           *expression_sized_cast_output)
+    == "111");
+
+const auto expect_expression_sized_cast_rejection =
+    [&](const std::string_view top_name,
+        const std::string_view cast_size,
+        const std::string_view value,
+        const std::string_view declarations,
+        const std::string_view diagnostic_code) {
+      const auto source_path = write_expression_sized_cast_source(
+          top_name, cast_size, value, declarations, "");
+      const auto test_config = numeric_sized_cast_config(
+          source_path, top_name);
+      fsim::diagnostic::Engine diagnostics;
+      const auto project = fsim::app::build_project(
+          test_config, diagnostics);
+      assert(!project);
+      assert(std::ranges::any_of(
+          diagnostics.diagnostics(),
+          [&](const auto& diagnostic) {
+            return diagnostic.code == diagnostic_code;
+          }));
+    };
+expect_expression_sized_cast_rejection(
+    "zero_expression_sized_cast", "0", "5'd17", "",
+    "FSIM-ELAB-SVCAST-003");
+expect_expression_sized_cast_rejection(
+    "negative_expression_sized_cast", "-1", "5'd17", "",
+    "FSIM-ELAB-SVCAST-003");
+expect_expression_sized_cast_rejection(
+    "oversized_expression_sized_cast", "16777217", "5'd17", "",
+    "FSIM-ELAB-SVCAST-003");
+expect_expression_sized_cast_rejection(
+    "nonconstant_expression_sized_cast", "runtime_width", "5'd17",
+    "int runtime_width;\n", "FSIM-ELAB-SVCAST-003");
+expect_expression_sized_cast_rejection(
+    "initialized_variable_expression_sized_cast", "runtime_width", "5'd17",
+    "int runtime_width = 8;\n", "FSIM-ELAB-SVCAST-003");
+expect_expression_sized_cast_rejection(
+    "real_operand_expression_sized_cast", "TOP_W * 2", "real_value",
+    "real real_value;\n", "FSIM-ELAB-SVCAST-006");
+expect_expression_sized_cast_rejection(
+    "string_operand_expression_sized_cast", "TOP_W * 2", "string_value",
+    "string string_value;\n", "FSIM-ELAB-SVCAST-006");
+expect_expression_sized_cast_rejection(
+    "aggregate_operand_expression_sized_cast", "TOP_W * 2", "array_value",
+    "int array_value [0:1];\n", "FSIM-ELAB-SVCAST-006");
 
 const auto fixed_net_array_source =
     directory / "fixed_net_array_projection.sv";

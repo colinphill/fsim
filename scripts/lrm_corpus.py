@@ -101,7 +101,8 @@ SV_MODULE_RE = re.compile(
     r"^\s*(?:extern\s+)?(?:module|macromodule|program)\s+(?:automatic\s+|static\s+)?"
     r"([A-Za-z_][A-Za-z0-9_$]*|\\\S+)", re.M)
 SV_COMMENT_RE = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
-SV_STRING_RE = re.compile(r'"(?:\\.|[^"\\])*"')
+SV_SCAN_TRIVIA_RE = re.compile(
+    r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"|\\[^\s]+', re.S)
 
 
 def read_text(path: Path) -> str:
@@ -113,8 +114,16 @@ def read_text(path: Path) -> str:
 
 def sv_root_modules(texts: Iterable[str]) -> list[str]:
     """Return modules that no other scanned module instantiates."""
-    joined = "\n".join(SV_STRING_RE.sub('""', SV_COMMENT_RE.sub(" ", t))
-                       for t in texts)
+    def hide_trivia(match: re.Match[str]) -> str:
+        token = match.group(0)
+        # Quotes and comment delimiters inside an escaped identifier are part
+        # of its name. Preserve it before recognizing surrounding strings.
+        if token.startswith("\\"):
+            return token
+        return "".join("\n" if char == "\n" else " " for char in token)
+
+    joined = "\n".join(SV_SCAN_TRIVIA_RE.sub(hide_trivia, text)
+                       for text in texts)
     declared: list[str] = []
     for name in SV_MODULE_RE.findall(joined):
         if name not in declared:
@@ -423,6 +432,10 @@ ICARUS_NONSTANDARD = {
     "pr2815398a_std": "needs __ICARUS__",
     "pr1771903": "needs Icarus -gallow-real-arg-to-bits",
     "cast_int": "expects infinity and NaN to convert to x",
+    "sv_cast_darray": (
+        "casts a REAL dynamic array to packed bits; REAL is not a bit-stream "
+        "element type (IEEE 1800-2005 4.16, IEEE 1800-2017 6.24.3)"
+    ),
     "concat3": "expects side effects from a zero replication",
     "cfunc_assign_op_mixed": "expects Icarus's compound assignment result",
     "sv_string6": "expects Icarus's hextoa of a negative value",
@@ -440,7 +453,8 @@ ICARUS_NONSTANDARD = {
         "string13", "string14")},
     # Icarus's ``NAME macro-text stringification is not in either standard.
     **{name: "uses Icarus ``NAME macro stringification" for name in (
-        "pr622", "pr639", "pr1741212", "pr1912112", "pr1925360")},
+        "macro_with_args", "pr622", "pr639", "pr1741212", "pr1912112",
+        "pr1925360")},
     "pr1716276": "omits a positional parameter override (`#( , 4)`)",
     **{name: "calls $urandom_range in Verilog-2005 mode" for name in (
         "urand_r", "urand_r2", "urand_r3")},
@@ -867,6 +881,12 @@ VESTS_BILLOWITCH_FILE_ROUNDTRIPS = (
     ("tc708.vhd", "tc709.vhd", "iofile.59"),
     ("tc713w.vhd", "tc713.vhd", "iofile.02"),
     ("tc3190.vhd", "tc3193.vhd", "iofile.08"),
+    ("tc3187.vhd", "tc3191.vhd", "iofile.04"),
+    ("tc3194.vhd", "tc3195.vhd", "iofile.09"),
+    ("tc3198.vhd", "tc3199.vhd", "iofile.12"),
+    ("tc3200.vhd", "tc3201.vhd", "iofile.14"),
+    ("tc3203.vhd", "tc3202.vhd", "iofile.61"),
+    ("tc3205.vhd", "tc3206.vhd", "iofile.64"),
 )
 VESTS_BILLOWITCH_FILE_CHAIN_PREFIX = "vests:billowitch:file:"
 VESTS_BILLOWITCH_FILE_CHAIN_BY_CASE = {
@@ -878,6 +898,31 @@ VESTS_BILLOWITCH_FILE_CHAIN_OUTPUTS = {
     f"vests:{VESTS_BILLOWITCH_FILE_CHAIN_BY_CASE[writer]}": filename
     for writer, _reader, filename in VESTS_BILLOWITCH_FILE_ROUNDTRIPS
 }
+VESTS_CLIFTON_FILE_ROUNDTRIPS = (
+    (
+        "functional/textio/write/character_array_write.vhd",
+        "functional/textio/read/character_array_read.vhdl",
+        "character_array.file",
+    ),
+)
+VESTS_CLIFTON_FILE_CHAIN_PREFIX = "vests:clifton:file:"
+VESTS_CLIFTON_FILE_CHAIN_BY_CASE = {
+    case_name: f"clifton:file:{Path(writer).stem}-{Path(reader).stem}"
+    for writer, reader, _filename in VESTS_CLIFTON_FILE_ROUNDTRIPS
+    for case_name in (writer, reader)
+}
+VESTS_CLIFTON_FILE_CHAIN_OUTPUTS = {
+    f"vests:{VESTS_CLIFTON_FILE_CHAIN_BY_CASE[writer]}": filename
+    for writer, _reader, filename in VESTS_CLIFTON_FILE_ROUNDTRIPS
+}
+VESTS_FILE_CHAIN_OUTPUTS = {
+    **VESTS_BILLOWITCH_FILE_CHAIN_OUTPUTS,
+    **VESTS_CLIFTON_FILE_CHAIN_OUTPUTS,
+}
+VESTS_FILE_CHAIN_PREFIXES = (
+    VESTS_BILLOWITCH_FILE_CHAIN_PREFIX,
+    VESTS_CLIFTON_FILE_CHAIN_PREFIX,
+)
 
 
 def vests_cases(root: Path) -> list[Case]:
@@ -929,6 +974,8 @@ def vests_cases(root: Path) -> list[Case]:
             skip = None
             if directory == "billowitch/compliant":
                 case_chain = VESTS_BILLOWITCH_FILE_CHAIN_BY_CASE.get(relative, chain)
+            elif directory == "clifton-labs/compliant":
+                case_chain = VESTS_CLIFTON_FILE_CHAIN_BY_CASE.get(relative, chain)
             elif (directory == "billowitch/non_compliant/analyzer_failure"
                   and relative == "tc300.vhd"):
                 skip = (
@@ -1374,47 +1421,115 @@ def check_outcome(case: Case, steps: list[StepResult], workdir: Path) -> tuple[s
         # typed file's representation is implementation defined.
         return "pass", ""
     if case.checker == "vunit":
+        failed_test = next((test for test in vunit_subresults(case, steps)
+                            if test["status"] != "pass"), None)
+        if failed_test is not None:
+            return "fail", (f"VUnit test {failed_test['test']} failed: "
+                             f"{failed_test['detail']}")
         return "pass", ""
     if hdl_errors:
         return "fail", hdl_errors[0][-160:]
     return "pass", ""
 
 
-def vunit_subresults(case: Case, steps: list[StepResult], status: str) -> list[dict]:
+def vunit_subresults(case: Case, steps: list[StepResult]) -> list[dict]:
+    """Classify expected VUnit tests and reject incomplete runner transcripts."""
     tests = case.checker_data["tests"]
     sim = next((s for s in steps if s.stage == "simulate"), None)
-    if sim is None or status != "pass":
-        stage = steps[-1].stage
-        return [{"test": t, "status": "fail", "detail": f"{stage} failed"} for t in tests]
-    started, failures, done = set(), collections.defaultdict(list), False
+    if sim is None:
+        stage = steps[-1].stage if steps else "run"
+        detail = f"{stage} failed before simulation"
+        return [{"test": test, "status": "fail", "detail": detail}
+                for test in tests] or [
+                    {"test": "<default>", "status": "fail",
+                     "detail": "no VUnit tests configured"}]
+    if not tests:
+        return [{"test": "<default>", "status": "fail",
+                 "detail": "no VUnit tests configured"}]
+
+    test_names = {test for test in tests if test != "<default>"}
+    start_counts = collections.Counter()
+    failures = collections.defaultdict(list)
+    done_count = 0
+    done_failures = None
+    emitted_failures = 0
+    after_done = False
     current = "<default>"
     for line in sim.output.splitlines():
         match = re.search(r"VUNIT-SHIM: (start|fail|done):? ?(.*)", line)
-        if not match:
-            continue
-        kind, rest = match.groups()
-        if kind == "start":
-            current = rest.strip()
-            started.add(current)
-        elif kind == "fail":
-            # A failure belongs to the most recently started test case.
-            failures[current].append(rest)
-        else:
-            done = True
-    errors = [l for l in sim.output.splitlines() if HDL_ERROR_RE.search(l)]
+        if match:
+            kind, rest = match.groups()
+            if after_done:
+                failures["<default>"].append(
+                    "VUnit marker appeared after test_runner_cleanup")
+            if kind == "start":
+                name = rest.strip()
+                if name not in test_names:
+                    failures["<default>"].append(
+                        f"unexpected VUnit test start: {name}")
+                start_counts[name] += 1
+                if start_counts[name] > 1:
+                    failures[name].append("test case started more than once")
+                current = name
+            elif kind == "fail":
+                emitted_failures += 1
+                # Failures before the first named test remain suite-level.
+                failures[current].append(rest.strip())
+            else:
+                done_count += 1
+                after_done = True
+                if done_count > 1:
+                    failures["<default>"].append(
+                        "test_runner_cleanup emitted more than one done marker")
+                count = re.search(r"\bfailures=(\d+)\b", rest)
+                if count:
+                    done_failures = int(count.group(1))
+                else:
+                    failures["<default>"].append(
+                        "test_runner_cleanup omitted its failure count")
+        elif HDL_ERROR_RE.search(line):
+            # Runtime errors belong to the currently active test, or to the
+            # suite if no expected named test has started yet.
+            failures[current].append(line[-160:])
+            if after_done:
+                failures["<default>"].append(
+                    "HDL error appeared after test_runner_cleanup")
+
+    if done_count != 1:
+        failures["<default>"].append(
+            "simulation ended without exactly one test_runner_cleanup marker")
+    if done_failures is not None and done_failures != emitted_failures:
+        failures["<default>"].append(
+            f"test_runner_cleanup reported {done_failures} failure(s), "
+            f"but {emitted_failures} fail marker(s) were emitted")
+
     results = []
     for test in tests:
-        if test != "<default>" and test not in started:
-            results.append({"test": test, "status": "fail", "detail": "test case never ran"})
-        elif failures.get(test):
-            results.append({"test": test, "status": "fail", "detail": failures[test][0][:200]})
-        elif not done:
+        if test == "<default>":
+            if failures.get(test):
+                results.append({"test": test, "status": "fail",
+                                "detail": failures[test][0][:200]})
+            elif done_count != 1:
+                results.append({"test": test, "status": "fail",
+                                "detail": "invalid test_runner_cleanup transcript"})
+            else:
+                results.append({"test": test, "status": "pass", "detail": ""})
+        elif start_counts[test] == 0:
             results.append({"test": test, "status": "fail",
-                            "detail": "simulation ended before test_runner_cleanup"})
-        elif errors and test == "<default>":
-            results.append({"test": test, "status": "fail", "detail": errors[0][-160:]})
+                            "detail": "test case never ran"})
+        elif failures.get(test):
+            results.append({"test": test, "status": "fail",
+                            "detail": failures[test][0][:200]})
+        elif done_count != 1:
+            results.append({"test": test, "status": "fail",
+                            "detail": "invalid test_runner_cleanup transcript"})
         else:
             results.append({"test": test, "status": "pass", "detail": ""})
+
+    # Preserve suite-level failures when the expected list contains named tests.
+    if failures.get("<default>") and "<default>" not in tests:
+        results.append({"test": "<default>", "status": "fail",
+                        "detail": failures["<default>"][0][:200]})
     return results
 
 
@@ -1469,7 +1584,7 @@ def run_case_once(case: Case, fsim: Path, workdir: Path, engine: str,
         diagnostics=first_diagnostics(failing.output) if status != "pass" else [],
     )
     if case.checker == "vunit":
-        record["tests"] = vunit_subresults(case, steps, status)
+        record["tests"] = vunit_subresults(case, steps)
     if status != "pass":
         tail = [l for l in failing.output.splitlines() if l.strip()][-6:]
         record["tail"] = tail
@@ -1481,9 +1596,9 @@ def run_case_once(case: Case, fsim: Path, workdir: Path, engine: str,
 def run_chain(cases: list[Case], fsim: Path, workdir: Path, engine: str, timeout: float,
               keep: bool) -> list[dict]:
     chain_outputs = {
-        VESTS_BILLOWITCH_FILE_CHAIN_OUTPUTS[case.chain]
+        VESTS_FILE_CHAIN_OUTPUTS[case.chain]
         for case in cases
-        if case.chain in VESTS_BILLOWITCH_FILE_CHAIN_OUTPUTS
+        if case.chain in VESTS_FILE_CHAIN_OUTPUTS
     }
     workdir.mkdir(parents=True, exist_ok=True)
     workdir_root = workdir.resolve()
@@ -1604,7 +1719,8 @@ def select_cases(args) -> list[Case]:
         cases = [c for c in cases if (c.suite, c.id) in wanted]
     file_chains = {
         case.chain for case in cases
-        if case.chain and case.chain.startswith(VESTS_BILLOWITCH_FILE_CHAIN_PREFIX)
+        if case.chain and any(case.chain.startswith(prefix)
+                              for prefix in VESTS_FILE_CHAIN_PREFIXES)
     }
     if file_chains:
         selected_ids = {(case.suite, case.id) for case in cases}

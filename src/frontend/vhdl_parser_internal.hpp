@@ -138,7 +138,6 @@ private:
   void parse_vhdl_binding_port_map(std::vector<PortConnection> &associations,
                                    const Token &start);
 
-  void skip_vhdl_configuration_for_block();
 
   void add_vhdl_generic(DesignUnit &unit, ParameterDeclaration generic,
                         const Token &name);

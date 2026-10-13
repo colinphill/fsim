@@ -718,19 +718,24 @@ struct BindingIndication {
     SourceSpanId source;
 };
 
-struct ComponentConfiguration {
-    InstanceSelection selection { InstanceSelection::labels };
-    std::vector<std::string> labels;
-    Name component;
-    BindingIndication binding;
-    SourceSpanId source;
-};
+struct ComponentConfiguration;
 
 struct BlockConfiguration {
     Name block;
     std::optional<ExpressionId> generate_index;
     std::vector<ComponentConfiguration> components;
     std::vector<BlockConfiguration> blocks;
+    SourceSpanId source;
+};
+
+struct ComponentConfiguration {
+    InstanceSelection selection { InstanceSelection::labels };
+    std::vector<std::string> labels;
+    Name component;
+    BindingIndication binding;
+    // A nested block configuration applies to the entity aspect selected by
+    // this component configuration (IEEE 1076-2008 3.4.3).
+    std::optional<BlockConfiguration> block_configuration;
     SourceSpanId source;
 };
 

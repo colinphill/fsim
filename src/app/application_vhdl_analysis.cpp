@@ -339,6 +339,9 @@ class AnalysisOrderValidator {
   {
       for (const auto& component : block.component_configurations) {
           validate_binding(component.binding, owner);
+          if (component.block_configuration) {
+              validate_block(*component.block_configuration, owner);
+          }
       }
       for (const auto& child : block.block_configurations) {
           validate_block(child, owner);

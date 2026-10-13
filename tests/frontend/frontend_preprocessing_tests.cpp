@@ -51,8 +51,8 @@ void test_systemverilog_preprocessor()
 {
     require(
         verilog_preprocessor_cache_version
-            == "fsim-verilog-preprocessor-v9-generated-text-origin",
-        "the preprocessor cache identity must invalidate untagged generated text");
+            == "fsim-verilog-preprocessor-v10-escaped-macro-identity",
+        "the preprocessor cache identity must invalidate old macro identities");
     const auto directory = make_test_directory("verilog-preprocessor");
     const auto include_directory = directory / "include";
     const auto root = directory / "root.sv";

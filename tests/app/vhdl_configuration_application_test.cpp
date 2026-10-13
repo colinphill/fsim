@@ -213,6 +213,32 @@ void verify_compiled_hir_handoff(
       == "vhdl:work.configuration_marker(fast)");
 
   auto portable = *compiled;
+  const auto roundtrip_configuration = std::ranges::find_if(
+      portable.vhdl_hir.mutable_units(),
+      [](const auto& unit) {
+        return unit.kind == fsim::semantic::vhdl::UnitKind::configuration
+            && unit.name == "runtime_configuration";
+      });
+  assert(roundtrip_configuration
+         != portable.vhdl_hir.mutable_units().end());
+  assert(roundtrip_configuration->configuration);
+  auto& roundtrip_rules
+      = roundtrip_configuration->configuration->components;
+  const auto roundtrip_rule = std::ranges::find_if(
+      roundtrip_rules,
+      [](const auto& rule) {
+        return rule.labels == std::vector<std::string> {
+            "configured_child" };
+      });
+  assert(roundtrip_rule != roundtrip_rules.end());
+  assert(!roundtrip_rule->binding.architecture.empty());
+  fsim::semantic::vhdl::BlockConfiguration nested_roundtrip;
+  nested_roundtrip.block.spelling = roundtrip_rule->binding.architecture;
+  nested_roundtrip.block.canonical = roundtrip_rule->binding.architecture;
+  nested_roundtrip.block.source = roundtrip_rule->binding.source;
+  nested_roundtrip.source = roundtrip_rule->binding.source;
+  roundtrip_rule->block_configuration = std::move(nested_roundtrip);
+  portable.refresh_lookup_indexes();
   const auto source_mappings
       = fsim::app::application_detail::compiled_cache_source_mappings(
           *compiled, config.base_directory, diagnostics);
@@ -228,6 +254,27 @@ void verify_compiled_hir_handoff(
   auto decoded = fsim::app::deserialize_compiled_hir_bundle(
       *bytes, "vhdl-configuration-handoff", diagnostics);
   assert(decoded && !diagnostics.has_error());
+  const auto decoded_configuration = std::ranges::find_if(
+      decoded->vhdl_hir.units(),
+      [](const auto& unit) {
+        return unit.kind == fsim::semantic::vhdl::UnitKind::configuration
+            && unit.name == "runtime_configuration";
+      });
+  assert(decoded_configuration
+         != decoded->vhdl_hir.units().end());
+  assert(decoded_configuration->configuration);
+  const auto decoded_rule = std::ranges::find_if(
+      decoded_configuration->configuration->components,
+      [](const auto& rule) {
+        return rule.labels == std::vector<std::string> {
+            "configured_child" };
+      });
+  assert(decoded_rule
+         != decoded_configuration->configuration->components.end());
+  assert(decoded_rule->block_configuration);
+  assert(decoded_rule->block_configuration->block.spelling
+         == roundtrip_rule->block_configuration->block.spelling);
+  assert(decoded_rule->block_configuration->components.empty());
   std::vector<fsim::library::SourceNameMapping> consumer_mappings;
   consumer_mappings.reserve(source_mappings->size());
   for (const auto& mapping : *source_mappings) {

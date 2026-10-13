@@ -132,23 +132,27 @@ VhdlParser::parse_vhdl_component_configuration(
   auto component =
       expect_identifier(
           "component name in configuration");
+  auto component_name = vhdl_name(component.text);
   // A component declared in a package may be named by a selected name
   // (IEEE 1076-2008 7.3.2.1).
   while (at(TokenKind::Dot) && at(TokenKind::Identifier, 1)) {
     (void)advance();
     component = advance();
+    component_name += '.';
+    component_name += vhdl_name(component.text);
   }
-  result.component_name =
-      vhdl_name(component.text);
-  // A binding indication without an entity aspect (IEEE 1076-2008 7.3.2.1)
-  // keeps the default binding, the entity named like the component (7.3.3),
-  // and supplies its generic or port map.
+  result.component_name = std::move(component_name);
+  // With maps but without `use`, the binding is incremental and relies on a
+  // primary binding in the corresponding configuration specification. With
+  // neither, the component configuration uses the existing/default binding.
+  // In neither case should parsing invent an explicit `work.<component>`
+  // entity aspect (IEEE 1076-2008 7.3.2.1 and 7.3.3).
   if (!keyword("use", 0, true)
       && (keyword("generic", 0, true) || keyword("port", 0, true)
-          || (require_end_for && keyword("end", 0, true)))) {
+          || (require_end_for
+              && (keyword("end", 0, true)
+                  || keyword("for", 0, true))))) {
     VhdlBindingIndication incremental;
-    incremental.kind = VhdlBindingAspectKind::Entity;
-    incremental.entity_name = "work." + result.component_name;
     if (match_keyword("generic", true)) {
       Instance map_holder;
       parse_vhdl_generic_map(map_holder, previous());
@@ -158,7 +162,8 @@ VhdlParser::parse_vhdl_component_configuration(
       parse_vhdl_binding_port_map(incremental.port_map, previous());
     }
     // A component configuration may omit the binding indication entirely.
-    if (!keyword("end", 0, true)
+    if ((!keyword("end", 0, true)
+            && !keyword("for", 0, true))
         || !incremental.generic_map.empty()
         || !incremental.port_map.empty()) {
       expect(TokenKind::Semicolon,
@@ -174,10 +179,11 @@ VhdlParser::parse_vhdl_component_configuration(
     result.binding =
         parse_vhdl_binding_indication(use);
   }
-  // A block configuration of the bound architecture (IEEE 1076-2008 3.4.3)
-  // is not retained; its instances take their default bindings.
+  // Retain the block configuration of the bound architecture (IEEE
+  // 1076-2008 3.4.3); its rules apply below the selected component instance.
   if (require_end_for && keyword("for", 0, true)) {
-    skip_vhdl_configuration_for_block();
+    result.block_configuration =
+        parse_vhdl_block_configuration(advance());
   }
 
   if (require_end_for) {
@@ -192,29 +198,6 @@ VhdlParser::parse_vhdl_component_configuration(
   }
   result.span = span_from(start, previous());
   return result;
-}
-
-void VhdlParser::skip_vhdl_configuration_for_block() {
-  std::size_t depth = 0;
-  while (!at_end()) {
-    if (match_keyword("for", true)) {
-      ++depth;
-      continue;
-    }
-    if (match_keyword("end", true)
-        && match_keyword("for", true)) {
-      (void)match(TokenKind::Semicolon);
-      if (depth == 0) {
-        return;
-      }
-      --depth;
-      if (depth == 0) {
-        return;
-      }
-      continue;
-    }
-    advance();
-  }
 }
 
 VhdlBlockConfiguration

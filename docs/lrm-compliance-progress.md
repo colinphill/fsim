@@ -253,6 +253,93 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 56: array values, casts, VHDL aggregates and bindings
+
+- SystemVerilog dynamic arrays and queues copy values, including empty sources;
+  queue method results retain their element type. Fixed-array equality accepts
+  equivalent element types and extents with different bounds (1800-2017 6.22.2,
+  11.2.2). Loop declarations retain the lifetime required by 12.7.1.
+- Integral sequence bit-stream casts preserve element order and validate sizes
+  (6.24.3). Typedef casts resolve scalar real and string aliases. Parenthesized
+  constant expressions can supply a size cast; runtime widths and nonintegral
+  operands are rejected. Task copy-out conversions use formal signedness.
+  Conditional expressions retain their intrinsic width in narrower contexts.
+- Verilog multidimensional arrays retain each declared dimension (1364 4.9).
+  Escaped macro names keep a consistent identity across preprocessing and cache
+  use; continued comments preserve directive boundaries. Packed-string sscanf
+  sources are evaluated once before outputs are written.
+- VHDL aggregate assignment targets and bounded array elements share shape
+  inference with qualified aggregates and comparisons. CHARACTER index subtypes
+  and aliases preserve ordinal bounds while user enumeration types retain their
+  own positions. Access values support implicit dereference and formal aliases.
+- VHDL constant equality preserves packed array lengths. Unconstrained function
+  and access subtypes do not supply a proven width for mismatch folding.
+  Guarded resolver variants follow the same interpreter route as their base
+  program, preserving the driving-value input when surrounding processes use
+  compiled execution.
+- VHDL component configurations retain selected names, nested scope and default
+  bindings. Binding maps evaluate locally static actuals with the component
+  generic environment; character and packed bit-vector actuals keep their type.
+- TextIO READ overloads, VHDL-2008 SREAD, SIDE and JUSTIFY follow their package
+  visibility and revision rules. Procedure-local files close with their scope.
+  Typed CHARACTER-array files round-trip through fsim's own writer. STRING
+  aggregate locals preserve NUL and space bytes; constrained STRING signals
+  support character indexing.
+- Runner: additional VEST typed-file readers retain their own writer as a
+  prerequisite. Comment and escaped-identifier scanning preserves standard
+  source interpretation. The VHDL HIR schema is now 7; stale artifacts are
+  rejected with the current schema diagnostic.
+
+Excluded this batch: ivtest `sv_cast_darray` casts REAL array elements to packed
+bits, outside the integral bit-stream rules; `macro_with_args` depends on
+Icarus-specific stringification. Neither corpus source was modified.
+
+Investigated and left open: nested-interface type mismatches after size-cast
+lowering, broader composite generic defaults and port compatibility, STRING
+constant indexing and default initialization, TextIO hexadecimal/octal codecs,
+ordered packed constant comparisons, comparison of two dynamically shaped
+unconstrained function results, and mixed-width array aggregate targets.
+
+Validation: full release build at Build32, followed by focused rebuilds through
+Build40; all 84 focused checks pass, including the 36 new positive fixtures in
+both engines and the restored guarded resolver and range constraints witnesses.
+The VHDL-2008-only SREAD analysis fixture rejects earlier revisions. Labelled
+CTest passes 495/506 with exactly the 11 previously recorded failures. Diagnostic
+catalog: 2959; corpus-runner unit tests: 24/24. Source-package inventory: 2750 files.
+
+Qualification uses frozen `wip56u`: the standing failure union (`m56b`),
+fast set (`m56bfs`), and the matching full Ashenden prerequisite supplement.
+The Ashenden run contains 463 records / 446 unique cases, with exactly five
+new passes and no regressions; only those five cases supplement the overlay.
+The unique-case result is **69 new passes and two scope exclusions**, with
+no observed regressions against the corrected baseline.
+
+| Suite | Batch55 passes / in scope | Batch56 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| VESTs | 3418 / 3647 | 3449 / 3647 | 1 |
+| nvc | 704 / 1265 | 718 / 1265 | 217 |
+| VHDL-Compliance | 26 / 72 | 27 / 72 | 0 |
+| ivtest | 2403 / 2666 | 2420 / 2664 | 162 |
+| Verilator | 1367 / 2215 | 1373 / 2216 | 199 |
+| sv-tests | 1418 / 1497 | 1418 / 1497 | 0 |
+
+Qualification exposed a historical VUnit runner classification error: seven
+Batch55 parent records were marked passed despite failed recorded checks.
+The corrected existing overlay has 26/72 VHDL-Compliance passes rather than
+33/72. The original records remain preserved with a hash-backed derived view.
+The runner now propagates child failures, checks completion and cleanup counts,
+and retains failures outside named tests. All 72 VHDL-Compliance cases were
+rerun on the same frozen candidate with this correction: 27 pass, 45 fail,
+with 89/154 recorded child checks passing and no newly failing parent cases.
+These results replace the earlier VHDL-Compliance subset in the final overlay.
+
+The fast set has 291/295 actual passes; its four remaining VUnit failures
+(`tb_aggregate`, `tb_array_scalar`, and matching equality/inequality) were
+already recorded as failed checks in Batch55. They are retained as open gaps,
+not accepted as passes. Verilator `t_func_return_init` now passes and returns
+to the in-scope denominator. These are failure-overlay counts, not a full
+six-suite qualification; the next full checkpoint is Batch57.
+
 ### Batch 55: static callable storage, VHDL binding, indexing and typed files
 
 Fixtures: `sv_static_callable_storage.sv`, `sv_static_interface_storage.sv`,

@@ -24,7 +24,7 @@ inline constexpr std::uint32_t kCompiledHirBundleSchema = 1;
 inline constexpr std::uint32_t kSystemVerilogConstraintHirStateSchema = 8;
 inline constexpr std::uint32_t kSystemVerilogCoverageStateSchema = 7;
 inline constexpr std::uint32_t kSystemVerilogUvmStateSchema = 3;
-inline constexpr std::uint32_t kVhdlHirStateSchema = 6;
+inline constexpr std::uint32_t kVhdlHirStateSchema = 7;
 inline constexpr std::size_t kCompiledHirDecodeBudgetBytes
     = 256U * 1024U * 1024U;
 

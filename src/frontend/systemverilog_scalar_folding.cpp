@@ -245,11 +245,20 @@ std::optional<SystemVerilogScalarConstant> evaluate(
         promote(expression.operands[1].systemverilog_scalar_kind,
                 expression.operands[2].systemverilog_scalar_kind), error);
   }
-  if (expression.kind == ExpressionKind::Call
-      && expression.operands.size() == 1
-      && expression.text.starts_with("@sv-cast:")) {
-    auto operand = evaluate(expression.operands[0], environment, context, error);
+  if (const auto value_operand
+          = systemverilog_cast_value_operand(expression);
+      value_operand != nullptr) {
+    auto operand = evaluate(*value_operand, environment, context, error);
     if (!operand) return std::nullopt;
+    if (systemverilog_cast_size_operand(expression) != nullptr) {
+      if (!operand->integral()) {
+        error = "a SystemVerilog size cast requires an integral operand";
+        return std::nullopt;
+      }
+      // Scalar folding tracks numeric category, not packed width. The HIR
+      // evaluator applies the cast width after checking it as a constant.
+      return operand;
+    }
     const auto name = std::string_view{expression.text}.substr(9);
     const auto target = name == "shortreal" ? SystemVerilogScalarKind::ShortReal
         : name == "real" ? SystemVerilogScalarKind::Real
@@ -555,16 +564,22 @@ bool propagate_systemverilog_scalar_types(
     expression.systemverilog_scalar_kind = promote(
         expression.operands[1].systemverilog_scalar_kind,
         expression.operands[2].systemverilog_scalar_kind);
-  } else if (expression.kind == ExpressionKind::Call
-             && expression.text.starts_with("@sv-cast:")) {
-    const auto name = std::string_view{expression.text}.substr(9);
-    expression.systemverilog_scalar_kind = name == "shortreal"
-        ? SystemVerilogScalarKind::ShortReal
-        : name == "real" ? SystemVerilogScalarKind::Real
-        : name == "realtime" ? SystemVerilogScalarKind::Realtime
-        : name == "time" ? SystemVerilogScalarKind::Time
-        : name == "chandle" ? SystemVerilogScalarKind::Chandle
-        : SystemVerilogScalarKind::None;
+  } else if (const auto value_operand
+                 = systemverilog_cast_value_operand(expression);
+             value_operand != nullptr) {
+    if (systemverilog_cast_size_operand(expression) != nullptr) {
+      expression.systemverilog_scalar_kind
+          = value_operand->systemverilog_scalar_kind;
+    } else {
+      const auto name = std::string_view{expression.text}.substr(9);
+      expression.systemverilog_scalar_kind = name == "shortreal"
+          ? SystemVerilogScalarKind::ShortReal
+          : name == "real" ? SystemVerilogScalarKind::Real
+          : name == "realtime" ? SystemVerilogScalarKind::Realtime
+          : name == "time" ? SystemVerilogScalarKind::Time
+          : name == "chandle" ? SystemVerilogScalarKind::Chandle
+          : SystemVerilogScalarKind::None;
+    }
   }
   return true;
 }

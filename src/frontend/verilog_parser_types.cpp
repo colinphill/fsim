@@ -1379,12 +1379,12 @@ bool VerilogParser::parse_optional_container_dimension(Type& type)
         return at(TokenKind::Identifier, 1)
             && at(TokenKind::RightBracket, 2);
     };
-    if (language_ == Language::Verilog2005
-        && at(TokenKind::LeftBracket)) {
-        error(
-            current(),
-            "FSIM-VERILOG-SEM-012",
-            "Verilog-2005 memories support exactly one unpacked dimension");
+    if (at(TokenKind::LeftBracket)) {
+        // Multidimensional unpacked arrays are part of Verilog-2001;
+        // only the 1995 revision restricts memories to one dimension.
+        (void)require_standard("multidimensional unpacked array",
+            StandardRevision::Verilog2001, current(),
+            "FSIM-VERILOG-SEM-012");
     }
     if (at(TokenKind::LeftBracket)
         && (container.kind

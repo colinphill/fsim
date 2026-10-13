@@ -1941,8 +1941,8 @@ void add_vhdl_entity_instance_references(
 }
 
 void add_vhdl_use_reference(std::vector<CompiledReference>& references,
-    const UnitId owner, const std::string_view owner_library,
-    const vhdl::Name& name, const SourceSpanId source)
+    const vhdl::Unit& owner, const vhdl::Name& name,
+    const SourceSpanId source)
 {
     const auto spelling = name.canonical.empty()
         ? std::string_view { name.spelling }
@@ -1951,18 +1951,50 @@ void add_vhdl_use_reference(std::vector<CompiledReference>& references,
     if (parts.size() < 2U) {
         return;
     }
-    const auto qualified = parts.size() >= 3U;
-    const auto specified_library = qualified
-        ? std::string_view { parts[0] }
-        : normalized_library(owner_library);
-    const auto library = same_vhdl_identifier(specified_library, "work")
-        ? normalized_library(owner_library)
-        : specified_library;
+    const auto library_prefix = parts.size() >= 3U
+        || (parts.size() == 2U
+            && (same_vhdl_identifier(parts[0], "work")
+                || same_vhdl_identifier(parts[0], "std")
+                || std::ranges::any_of(owner.context,
+                    [&](const vhdl::ContextItem& context) {
+                        return context.kind
+                                == vhdl::ContextKind::library_clause
+                            && std::ranges::any_of(
+                                context.selected_names,
+                                [&](const vhdl::Name& selected) {
+                                    const auto library
+                                        = selected.canonical.empty()
+                                        ? std::string_view {
+                                              selected.spelling
+                                          }
+                                        : std::string_view {
+                                              selected.canonical
+                                          };
+                                    return same_vhdl_identifier(
+                                        library, parts[0]);
+                                });
+                    })));
+    if (library_prefix && parts.size() == 2U
+        && same_vhdl_identifier(parts[1], "all")) {
+        // `use lib.all` makes library contents visible and does not identify
+        // one package unit for the compiled dependency graph.
+        return;
+    }
+    const auto owner_library = owner.library.empty()
+        ? std::string_view { "work" }
+        : std::string_view { owner.library };
+    const std::string library = library_prefix
+            && !same_vhdl_identifier(parts[0], "work")
+        ? std::string { parts[0] }
+        : std::string { normalized_library(owner_library) };
+    const auto package_name = library_prefix
+        ? parts[1]
+        : parts[0];
     references.push_back(CompiledReference {
         CompiledReferenceKind::package,
-        owner,
+        owner.id,
         lower_ascii(library),
-        lower_ascii(qualified ? parts[1] : parts[0]),
+        lower_ascii(package_name),
         {},
         source,
         std::nullopt,
@@ -2091,6 +2123,11 @@ void add_vhdl_binding_references(
     }
 }
 
+void add_vhdl_block_references(
+    std::vector<CompiledReference>& references, const UnitId owner,
+    const std::string_view owner_library,
+    const vhdl::BlockConfiguration& block);
+
 void add_vhdl_component_references(
     std::vector<CompiledReference>& references, const UnitId owner,
     const std::string_view owner_library,
@@ -2099,6 +2136,11 @@ void add_vhdl_component_references(
     for (const auto& component : components) {
         add_vhdl_binding_references(
             references, owner, owner_library, component.binding);
+        if (component.block_configuration) {
+            add_vhdl_block_references(
+                references, owner, owner_library,
+                *component.block_configuration);
+        }
     }
 }
 
@@ -2451,8 +2493,8 @@ void refresh_compiled_design_metadata(CompiledDesign& design)
         for (const auto& context : unit.context) {
             for (const auto& selected : context.selected_names) {
                 if (context.kind == vhdl::ContextKind::use_clause) {
-                    add_vhdl_use_reference(references, unit.id,
-                        unit.library, selected, context.source);
+                    add_vhdl_use_reference(references, unit, selected,
+                        context.source);
                 } else if (context.kind
                     == vhdl::ContextKind::context_reference) {
                     add_vhdl_context_reference(references, unit.id,

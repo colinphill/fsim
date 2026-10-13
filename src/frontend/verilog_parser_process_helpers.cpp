@@ -468,6 +468,7 @@ Statement VerilogParser::parse_procedural_for_statement_body(
                 extra_declarations.push_back(VariableDeclaration {
                     name.text, std::move(type), std::nullopt,
                     span_from(name, previous()) });
+                extra_declarations.back().systemverilog_automatic = true;
             }
         }
     }
@@ -989,7 +990,8 @@ Statement VerilogParser::parse_procedural_foreach_statement(
             }
         };
         if (dimension == 0U && associative_index) {
-            emit("begin " + associative_spelling + " " + name + "; if (");
+            emit("begin automatic " + associative_spelling + " " + name
+                + "; if (");
             element();
             emit(".first(" + name + ")) do begin");
             names.push_back(name);

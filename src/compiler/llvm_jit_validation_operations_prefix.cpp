@@ -774,8 +774,9 @@ void validate_prefix_operation(
                     constrain_width(operation.destination, 1U, index);
                     if (operation.lhs < container_register_types.size()
                         && operation.rhs < container_register_types.size()
-                        && container_register_types[operation.lhs]
-                            != container_register_types[operation.rhs]) {
+                        && !container_equality_compatible(
+                            container_register_types[operation.lhs],
+                            container_register_types[operation.rhs])) {
                         reject(process, index, "CompareContainers profiles differ");
                     }
                 } else if constexpr (std::is_same_v<OperationType, ReadContainerObject>) {

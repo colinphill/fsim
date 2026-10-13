@@ -322,10 +322,16 @@ namespace {
                 const auto library = owner_library(design, instance.scope);
                 auto target = parse_target(instance.target.canonical.empty()
                         ? instance.target.spelling : instance.target.canonical);
-                if (equal_name(target.library, "work", "vhdl")) {
+                if (instance.component) {
+                    // A selected component name may be package.member, not
+                    // library.entity. Its default-bound entity is searched
+                    // from the owning architecture's library.
+                    target.language = "vhdl";
                     target.library = library;
-                }
-                if (!instance.component) {
+                } else {
+                    if (equal_name(target.library, "work", "vhdl")) {
+                        target.library = library;
+                    }
                     target.language = "vhdl";
                 }
                 select_target(target, library, instance.configuration ? "configuration"

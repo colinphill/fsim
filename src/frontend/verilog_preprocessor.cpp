@@ -27,6 +27,16 @@ namespace {
 
     using namespace preprocessor_detail;
 
+    // The escape and its whitespace terminator are not part of an identifier
+    // (IEEE 1800-2017 5.6.1); macro names use the same identity rules (22.5.1).
+    std::string macro_identifier(std::string_view spelling)
+    {
+        if (spelling.starts_with('\\')) {
+            spelling.remove_prefix(1);
+        }
+        return std::string { spelling };
+    }
+
     class VerilogPreprocessor {
     public:
         VerilogPreprocessor(
@@ -470,9 +480,45 @@ namespace {
             }
         }
 
-        [[nodiscard]] static std::size_t line_end(
+        // Comments disappear during lexing, including any continued physical
+        // lines inside them. Consult the captured source to decide where the
+        // directive's logical line ends (IEEE 1800-2017 22.5.1).
+        [[nodiscard]] bool continued_line_gap(
+            const Token& previous_token, const Token& next_token) const
+        {
+            if (previous_token.span.source_name != next_token.span.source_name) {
+                return false;
+            }
+            const auto source = source_snapshots_.find(
+                previous_token.span.source_name);
+            const auto begin = previous_token.span.begin.offset;
+            const auto end = next_token.span.begin.offset;
+            if (source == source_snapshots_.end() || begin >= end
+                || end > source->second.size()) {
+                return false;
+            }
+            const auto gap = std::string_view { source->second }.substr(
+                begin, end - begin);
+            bool found_newline { };
+            for (std::size_t at { }; at < gap.size(); ++at) {
+                if (gap[at] != '\n' && gap[at] != '\r') {
+                    continue;
+                }
+                if (at == 0U || gap[at - 1U] != '\\') {
+                    return false;
+                }
+                found_newline = true;
+                if (gap[at] == '\r' && at + 1U < gap.size()
+                    && gap[at + 1U] == '\n') {
+                    ++at;
+                }
+            }
+            return found_newline;
+        }
+
+        [[nodiscard]] std::size_t line_end(
             const std::vector<Token>& tokens,
-            const std::size_t begin)
+            const std::size_t begin) const
         {
             if (begin >= tokens.size()
                 || tokens[begin].kind == TokenKind::EndOfFile) {
@@ -483,9 +529,8 @@ namespace {
             while (end < tokens.size()
                 && tokens[end].kind != TokenKind::EndOfFile) {
                 if (tokens[end].span.begin.line != line) {
-                    if (tokens[end].span.begin.line != line + 1
-                        || end == begin
-                        || !is_line_continuation(tokens[end - 1])) {
+                    if (end == begin
+                        || !continued_line_gap(tokens[end - 1], tokens[end])) {
                         break;
                     }
                     line = tokens[end].span.begin.line;
@@ -961,7 +1006,7 @@ namespace {
                         + " macro identifier",
                     tokens[begin + 1].span);
             }
-            return tokens[begin].text;
+            return macro_identifier(tokens[begin].text);
         }
 
         [[nodiscard]] std::optional<bool> directive_condition(
@@ -1008,7 +1053,8 @@ namespace {
                     return std::nullopt;
                 }
                 if (tokens[position].kind == TokenKind::Identifier) {
-                    return macros_.contains(tokens[position++].text);
+                    return macros_.contains(
+                        macro_identifier(tokens[position++].text));
                 }
                 if (tokens[position].kind == TokenKind::Bang) {
                     ++position;
@@ -1127,7 +1173,9 @@ namespace {
                     directive.span);
                 return;
             }
-            const auto& name = tokens[begin];
+            auto name = tokens[begin];
+            const bool escaped_name = name.text.starts_with('\\');
+            name.text = macro_identifier(name.text);
             // Compiler directive names are predefined macro names and
             // cannot be redefined (IEEE 1800-2017 22.5.1).
             if (is_directive(name.text)) {
@@ -1144,7 +1192,7 @@ namespace {
                 && tokens[replacement_begin].kind == TokenKind::LeftParen
                 && name.span.source_name
                     == tokens[replacement_begin].span.source_name
-                && name.span.end.offset
+                && name.span.end.offset + (escaped_name ? 1U : 0U)
                     == tokens[replacement_begin].span.begin.offset) {
                 parameters.emplace();
                 ++replacement_begin;
@@ -1636,7 +1684,7 @@ namespace {
                         name += piece(macro.replacement[end + 2]);
                         end += 3;
                     }
-                    return { macros_.contains(name), end };
+                    return { macros_.contains(macro_identifier(name)), end };
                 }
                 if (macro.replacement[begin].kind != TokenKind::LeftParen) {
                     return { std::nullopt, begin };
@@ -1936,7 +1984,8 @@ namespace {
                     inherited_stack);
                 return { };
             }
-            const auto name_token = tokens[index++];
+            auto name_token = tokens[index++];
+            name_token.text = macro_identifier(name_token.text);
             const auto invocation_span = cover(tick.span, name_token.span);
 
             if (const auto value

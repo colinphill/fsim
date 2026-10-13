@@ -1276,6 +1276,9 @@ namespace {
                 if (declares_loop_variable) {
                     frontend::VariableDeclaration loop_variable;
                     loop_variable.name = input.loop_variable;
+                    // A declaration in the for initializer has automatic
+                    // lifetime even inside a static callable (12.7.1).
+                    loop_variable.systemverilog_automatic = true;
                     loop_variable.type = input.loop_variable_type
                         ? *input.loop_variable_type
                         : frontend::Type {

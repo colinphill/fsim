@@ -954,7 +954,11 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
     for (std::size_t index { }; index < count; ++index) {
         std::vector<RegisterId> parts;
         std::optional<RegisterId> converted;
-        bool first = index == 0U;
+        // A character-array file element is serialized as contiguous bytes.
+        // Its first character has no separator even when it follows a prior
+        // character in the same unconstrained array value. Other composite
+        // elements retain the separator between their scalar parts.
+        bool first = index == 0U || string_element;
         for (const auto& leaf : leaves) {
             auto single = leaf;
             if (single.kind == Kind::characters) {

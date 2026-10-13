@@ -1211,9 +1211,68 @@ begin
 end architecture;
 )",
         "vhdl:work.missing_component_target(rtl)");
-    assert(!missing_target.ok());
+    assert(missing_target.ok());
+    assert(std::ranges::none_of(
+        missing_target.design->specializations(),
+        [](const auto& specialization) {
+          return specialization.instance
+              == "missing_component_target.child";
+        }));
+
+    const auto package_name_does_not_import_member =
+        elaborate_vhdl_component_text(
+            "package_name_does_not_import_member.vhd",
+            R"(
+package package_name_only_visibility_pkg is
+  component package_name_only_leaf is
+  end component;
+end package;
+entity package_name_only_leaf is
+end entity;
+architecture rtl of package_name_only_leaf is
+begin
+end architecture;
+entity package_name_only_top is
+end entity;
+use work.package_name_only_visibility_pkg;
+architecture rtl of package_name_only_top is
+begin
+  accidental : package_name_only_leaf port map ();
+end architecture;
+)",
+            "vhdl:work.package_name_only_top(rtl)");
+    assert(!package_name_does_not_import_member.ok());
     assert(has_diagnostic(
-        missing_target, "FSIM-ELAB-VHCOMP-003"));
+        package_name_does_not_import_member,
+        "FSIM-ELAB-VHCOMP-001"));
+
+    const auto all_does_not_expose_selected_prefix =
+        elaborate_vhdl_component_text(
+            "all_does_not_expose_selected_prefix.vhd",
+            R"(
+package package_all_prefix_visibility_pkg is
+  component package_all_prefix_leaf is
+  end component;
+end package;
+entity package_all_prefix_leaf is
+end entity;
+architecture rtl of package_all_prefix_leaf is
+begin
+end architecture;
+entity package_all_prefix_top is
+end entity;
+use work.package_all_prefix_visibility_pkg.all;
+architecture rtl of package_all_prefix_top is
+begin
+  selected : component package_all_prefix_visibility_pkg.package_all_prefix_leaf
+    port map ();
+end architecture;
+)",
+            "vhdl:work.package_all_prefix_top(rtl)");
+    assert(!all_does_not_expose_selected_prefix.ok());
+    assert(has_diagnostic(
+        all_does_not_expose_selected_prefix,
+        "FSIM-ELAB-VHCOMP-001"));
 
     const auto most_recent_architecture = elaborate_vhdl_component_text(
         "most_recent_component_architecture.vhd",

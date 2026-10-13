@@ -469,6 +469,10 @@ std::string run_index_failure(
             ContainerRead {
                 1U, 0U, 0U, signed_index, linear_index, false });
     }
+    if (write) {
+        process.operations.emplace_back(WriteContainerObject {
+            object, 0U, std::nullopt });
+    }
     process.operations.emplace_back(Halt { });
 
     std::unique_ptr<compiler::LlvmJit> jit;
@@ -493,7 +497,11 @@ std::string run_index_failure(
                 std::span<const ResolutionKind> { }));
     }
     try {
-        (void)interpreter.run();
+        const auto run = interpreter.run();
+        assert(run.status == RunStatus::completed);
+        if (write) {
+            assert(interpreter.container_object_value(object) == container_value);
+        }
     } catch (const InterpreterError& error) {
         return error.what();
     }
@@ -788,10 +796,11 @@ int main()
             level, dynamic_type, dynamic_value, unsigned_overflow,
             false, false, false,
             "container index must be a known integral value");
-        expect_failure(
-            level, dynamic_type, dynamic_value, signed_overflow,
-            true, true, false,
-            "container index must be a known integral value");
+        // IEEE 1800-2017 7.4.6: an invalid dynamic-array write is ignored.
+        for (const bool compiled : { false, true }) {
+            assert(run_index_failure(level, compiled, dynamic_type,
+                       dynamic_value, signed_overflow, true, true).empty());
+        }
         expect_failure(
             level, dynamic_type, dynamic_value, signed_negative,
             true, false, false, "container index cannot be negative");

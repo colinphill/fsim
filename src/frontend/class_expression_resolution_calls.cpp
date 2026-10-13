@@ -191,6 +191,19 @@ void Resolver::retain_task_profile(
         SystemVerilogScalarKind::None;
     return Type{};
   }
+  if (expression.text == "@sv-size-cast:expression"
+      && expression.operands.size() == 2U) {
+    resolve_expression(expression.operands.front(), scope);
+    const auto operand = resolve_expression(
+        expression.operands.back(), scope);
+    if (chandle(operand)) {
+      diagnose(
+          diagnostics_, "FSIM-SV-SEM-174",
+          "chandle cannot be cast to a numeric or aggregate type",
+          expression.span);
+    }
+    return std::nullopt;
+  }
   if (expression.text.starts_with("@sv-cast:")
       && expression.operands.size() == 1U) {
     const auto operand = resolve_expression(

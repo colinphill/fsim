@@ -2665,6 +2665,50 @@ void select_container_value(
     }
 }
 
+bool container_equality_compatible(
+    const ContainerType& lhs, const ContainerType& rhs)
+{
+    if (lhs == rhs) {
+        return true;
+    }
+    auto normalized = rhs;
+    const auto extent = [](const ContainerDimension& range) {
+        const auto left = static_cast<std::int64_t>(range.first);
+        const auto right = static_cast<std::int64_t>(range.second);
+        return left >= right ? left - right + 1 : right - left + 1;
+    };
+    const auto align_bounds = [&](const auto& self,
+                                  const ContainerType& left,
+                                  ContainerType& right) -> bool {
+        if (left.fixed && right.fixed) {
+            if (left.dimensions.size() != right.dimensions.size()
+                || extent({ left.index_left, left.index_right })
+                    != extent({ right.index_left, right.index_right })) {
+                return false;
+            }
+            for (std::size_t index = 0; index < left.dimensions.size(); ++index) {
+                if (extent(left.dimensions[index])
+                    != extent(right.dimensions[index])) {
+                    return false;
+                }
+            }
+            right.index_left = left.index_left;
+            right.index_right = left.index_right;
+            right.dimensions = left.dimensions;
+        }
+        if (left.element_types.size() != right.element_types.size()) {
+            return false;
+        }
+        for (std::size_t index = 0; index < left.element_types.size(); ++index) {
+            if (!self(self, left.element_types[index], right.element_types[index])) {
+                return false;
+            }
+        }
+        return true;
+    };
+    return align_bounds(align_bounds, lhs, normalized) && lhs == normalized;
+}
+
 PackedLogic4 compare_container_values(
     const ContainerValue& lhs,
     const ContainerValue& rhs,
@@ -2672,7 +2716,7 @@ PackedLogic4 compare_container_values(
 {
     validate_container_value(lhs);
     validate_container_value(rhs);
-    if (lhs.type != rhs.type) {
+    if (!container_equality_compatible(lhs.type, rhs.type)) {
         throw std::invalid_argument {
             "container equality profiles differ"
         };
@@ -3112,16 +3156,40 @@ void Interpreter::Impl::execute_container(
         ++process.pc;
         return;
     }
-    const auto index = known_index(
-        process.id, process.pc,
-        get_register(process, operation.index),
-        operation.signed_index, "container index");
-    if (index >= target.elements.size()) {
-        container_error(
-            process.id, process.pc,
-            "container index is out of range");
+    // Local sequence registers follow the same indexed-write rules as
+    // container objects: invalid writes do nothing, and writing the next
+    // queue index appends one element (IEEE 1800-2017 7.4.6, 7.10.1).
+    const auto& index_value = get_register(process, operation.index);
+    const auto requested = operation.signed_index
+        ? index_value.known_signed_value()
+        : [&]() -> std::optional<std::int64_t> {
+              const auto value = index_value.known_unsigned_value();
+              if (!value
+                  || *value > static_cast<std::uint64_t>(
+                         std::numeric_limits<std::int64_t>::max())) {
+                  return std::nullopt;
+              }
+              return static_cast<std::int64_t>(*value);
+          }();
+    const auto size = target.elements.size();
+    if (!requested || *requested < 0
+        || static_cast<std::uint64_t>(*requested) > size
+        || (static_cast<std::uint64_t>(*requested) == size
+            && (!target.type.queue
+                || (target.type.maximum_elements
+                    && size >= *target.type.maximum_elements)))) {
+        ++process.pc;
+        return;
     }
-    target.elements[index] = source;
+    if (static_cast<std::uint64_t>(*requested) == size) {
+        if (size >= maximum_container_elements(target.type)) {
+            container_error(process.id, process.pc,
+                "queue exceeds the per-container owning-storage budget");
+        }
+        target.elements.push_back(source);
+    } else {
+        target.elements[static_cast<std::size_t>(*requested)] = source;
+    }
     ++process.pc;
 }
 
