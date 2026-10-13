@@ -117,6 +117,14 @@ Capture execute(
         }
       });
   capture.run = simulation.run();
+  for (const auto name : { "retained.state", "retained_task.state" }) {
+    const auto signal = simulation.find_signal(
+        std::string { "callable_closure." } + name);
+    assert(signal);
+    capture.locals.emplace_back(name);
+    capture.local_values.push_back(
+        std::string { name } + "=" + simulation.read_signal(*signal).to_msb_string());
+  }
   vcd.flush();
   capture.vcd = vcd_text.str();
   for (std::size_t index = 0; index < signals.size(); ++index) {

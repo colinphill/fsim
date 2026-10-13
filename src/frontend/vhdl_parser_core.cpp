@@ -495,6 +495,10 @@ DesignUnit VhdlParser::parse_package(const Token& start, const bool body)
     } else {
         parse_vhdl_end("package");
     }
+    for (auto& item : deferred_context_items_) {
+        unit.vhdl_context.push_back(std::move(item));
+    }
+    deferred_context_items_.clear();
     unit.span = span_from(start, previous());
     return unit;
 }
@@ -974,9 +978,33 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit)
             error(current(), "FSIM-VHDL-PARSE-005", "expected VHDL port mode");
         }
 
+        std::string resolution_function;
+        if (!mode_view && at(TokenKind::Identifier)
+            && !keyword("type", 0, true)) {
+            std::size_t lookahead = 1;
+            while (at(TokenKind::Dot, lookahead) &&
+                   at(TokenKind::Identifier, lookahead + 1)) {
+                lookahead += 2;
+            }
+            if (at(TokenKind::Identifier, lookahead) &&
+                !keyword("range", lookahead, true) &&
+                !keyword("bus", lookahead, true) &&
+                !keyword("register", lookahead, true)) {
+                resolution_function =
+                    parse_vhdl_selected_name("resolution function name");
+            }
+        }
         if (!mode_view) {
             type = parse_vhdl_type(true, true);
+            if (!resolution_function.empty()) {
+                type.vhdl_resolution_function = std::move(resolution_function);
+            }
         }
+        // Interface signal declarations accept the guarded signal kind after
+        // the subtype indication (IEEE 1076-2008 6.5.2, 6.4.2.3). Preserve
+        // the existing representation so bus semantics reach HIR lowering.
+        const std::uint8_t guarded_kind =
+            match_keyword("bus", true) ? 1U : 0U;
         std::optional<Expression> default_value;
         if (match(TokenKind::ColonEqual)) {
             // Ports of every mode may have a default; for out, inout and
@@ -1011,6 +1039,7 @@ void VhdlParser::parse_vhdl_ports(DesignUnit& unit)
                     default_value,
                     mode_view });
                 unit.ports.back().vhdl_linkage = linkage;
+                unit.ports.back().vhdl_guarded_kind = guarded_kind;
             }
         }
 

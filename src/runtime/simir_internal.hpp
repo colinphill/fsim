@@ -1871,6 +1871,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
         bool closed { };
         bool readable { };
         bool writable { };
+        bool vhdl { };
     };
 
     explicit Impl(
@@ -4263,11 +4264,13 @@ struct Interpreter::Impl : SchedulerBatchTask {
     [[nodiscard]] FileHandle open_file(
         ProcessId process,
         std::string_view path,
-        std::string_view mode);
+        std::string_view mode,
+        bool vhdl = false);
     [[nodiscard]] FileHandle open_file_unchecked(
         ProcessId process,
         std::string_view path,
-        std::string_view mode);
+        std::string_view mode,
+        bool vhdl);
     // An open file for a SystemVerilog descriptor, or nullptr when the
     // descriptor names no open file.
     [[nodiscard]] FileState* open_systemverilog_file(FileHandle handle);

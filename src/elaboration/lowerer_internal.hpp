@@ -441,6 +441,7 @@ private:
         frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
         bool signed_value { };
         std::vector<HirVhdlArrayIndex> dynamic_indices;
+        std::optional<semantic::ExpressionId> root_expression;
     };
     [[nodiscard]] std::optional<HirPackedRange>
     hir_vhdl_unconstrained_constant_range(
@@ -1699,6 +1700,8 @@ private:
         semantic::DeclarationId declaration,
         semantic::ScopeId process_scope,
         bool require_storage) const;
+    [[nodiscard]] std::optional<HirStringBinding> hir_hierarchical_string_binding(
+        semantic::ExpressionId expression) const;
     // Continuous SV concatenation copyout accepts static packed signal leaves
     // and stages them in source order; other callers retain blocking copyout.
     enum class HirPackedCopyOutMode : std::uint8_t {
@@ -2329,6 +2332,18 @@ private:
         std::size_t driver_count, std::size_t element_width);
     std::optional<std::pair<RegisterId, RegisterId>> hir_vhdl_resolver_registers_;
     std::vector<HirCallableFrame> hir_callable_frames_;
+    struct HirStaticStorage {
+        std::optional<SignalId> signal;
+        std::optional<StringObjectId> string;
+        std::optional<ContainerObjectId> container;
+    };
+    [[nodiscard]] std::optional<HirStaticStorage> hir_static_storage(
+        semantic::DeclarationId declaration,
+        const HirCallableFrame* frame = nullptr) const;
+    [[nodiscard]] std::optional<SignalId> hir_static_variable_signal(
+        semantic::DeclarationId declaration,
+        const HirCallableFrame* frame = nullptr) const;
+    void transfer_hir_static_formals(const HirCallableFrame& frame, bool copy_in);
     // A callable of another module instance (`u.f()`) reads that
     // instance's parameter values.
     void bind_hir_instance_parameters(HirCallableFrame& frame) const;

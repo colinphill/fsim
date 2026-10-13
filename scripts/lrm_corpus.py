@@ -79,7 +79,8 @@ class Case:
     copies: list[tuple[str, str]] = dataclasses.field(default_factory=list)
     writes: list[tuple[str, str]] = dataclasses.field(default_factory=list)
     env: dict = dataclasses.field(default_factory=dict)
-    # Cases sharing a chain run in order in one workspace (VESTs Ashenden).
+    # Cases sharing a chain run in order in one workspace (VESTs Ashenden and
+    # selected Billowitch file round trips).
     chain: str | None = None
     skip: str | None = None
     # Why a failure of this case is outside the IEEE LRMs (another
@@ -455,6 +456,11 @@ VERILATOR_C_TASKS = re.compile(r"\$c(pure|\d+)?\s*\(")
 # Verilator cases that rely on behaviour Verilator itself calls
 # non-standard or that other simulators reject.
 VERILATOR_NONSTANDARD = {
+    # factorial1 recursively invokes a static task, so its input x is
+    # shared by every activation and is 1 when recursion unwinds. The
+    # fixture instead expects the factorial from automatic arguments.
+    "t_static_task_args": "expects automatic argument storage in recursive "
+        "static tasks (IEEE 1800-2017 13.3.2)",
     "t_enum_type_methods": "prints an enumeration with %s as its name "
         "(non-standard)",
     "t_package_export": "reads names a package imports but does not export "
@@ -843,6 +849,37 @@ def parse_exp(path: Path):
         yield command, positional, options
 
 
+# Billowitch's VESTs suite runs these file writers before their corresponding
+# readers in one workspace. Keep each pair together so readers consume the
+# file produced by this implementation, not a serialized fixture from GHDL.
+VESTS_BILLOWITCH_FILE_ROUNDTRIPS = (
+    ("tc624.vhd", "tc627.vhd", "iofile.36"),
+    ("tc632.vhd", "tc633.vhd", "iofile.38"),
+    ("tc635.vhd", "tc636.vhd", "iofile.39"),
+    ("tc634.vhd", "tc639.vhd", "iofile.43"),
+    ("tc642.vhd", "tc644.vhd", "iofile.44"),
+    ("tc648.vhd", "tc651.vhd", "iofile.01"),
+    ("tc664.vhd", "tc665.vhd", "iofile.11"),
+    ("tc666.vhd", "tc667.vhd", "iofile.13"),
+    ("tc668.vhd", "tc669.vhd", "iofile.15"),
+    ("tc671.vhd", "tc673.vhd", "iofile.51"),
+    ("tc690.vhd", "tc691.vhd", "iofile.53"),
+    ("tc708.vhd", "tc709.vhd", "iofile.59"),
+    ("tc713w.vhd", "tc713.vhd", "iofile.02"),
+    ("tc3190.vhd", "tc3193.vhd", "iofile.08"),
+)
+VESTS_BILLOWITCH_FILE_CHAIN_PREFIX = "vests:billowitch:file:"
+VESTS_BILLOWITCH_FILE_CHAIN_BY_CASE = {
+    case_name: f"billowitch:file:{Path(writer).stem}-{Path(reader).stem}"
+    for writer, reader, _filename in VESTS_BILLOWITCH_FILE_ROUNDTRIPS
+    for case_name in (writer, reader)
+}
+VESTS_BILLOWITCH_FILE_CHAIN_OUTPUTS = {
+    f"vests:{VESTS_BILLOWITCH_FILE_CHAIN_BY_CASE[writer]}": filename
+    for writer, _reader, filename in VESTS_BILLOWITCH_FILE_ROUNDTRIPS
+}
+
+
 def vests_cases(root: Path) -> list[Case]:
     base = root / "sources" / "ghdl" / "testsuite" / "vests" / "vhdl-93"
     cases: list[Case] = []
@@ -888,6 +925,18 @@ def vests_cases(root: Path) -> list[Case]:
             commands = [Command("compile", compile_args)]
             text = read_text(source)
             checker_data: dict = {"outputs": []}
+            case_chain = chain
+            skip = None
+            if directory == "billowitch/compliant":
+                case_chain = VESTS_BILLOWITCH_FILE_CHAIN_BY_CASE.get(relative, chain)
+            elif (directory == "billowitch/non_compliant/analyzer_failure"
+                  and relative == "tc300.vhd"):
+                skip = (
+                    "out of scope: expects compile-time detection of REAL range "
+                    "overflow; REAL bounds are host-dependent and implementations "
+                    "need not detect predefined floating-point overflow "
+                    "(IEEE 1076-1993 3.1.4/3.1.4.1)"
+                )
             if mode in ("run", "run_err"):
                 entity = options.get("ENTITY", [None])[0]
                 if entity is None:
@@ -936,7 +985,8 @@ def vests_cases(root: Path) -> list[Case]:
                 checker="vhdl_clean",
                 checker_data=checker_data,
                 copies=copies,
-                chain=f"vests:{chain}" if chain else None,
+                chain=f"vests:{case_chain}" if case_chain else None,
+                skip=skip,
             ))
     return cases
 
@@ -1369,8 +1419,9 @@ def vunit_subresults(case: Case, steps: list[StepResult], status: str) -> list[d
 
 
 def run_case(case: Case, fsim: Path, workdir: Path, engine: str, default_timeout: float,
-             keep: bool) -> dict:
-    record = run_case_once(case, fsim, workdir, engine, default_timeout, keep)
+             keep: bool, chain_outputs: set[str] | None = None) -> dict:
+    record = run_case_once(case, fsim, workdir, engine, default_timeout, keep,
+                           chain_outputs)
     if case.out_of_scope and record.get("status") not in ("pass", "skip"):
         record["detail"] = f"{case.out_of_scope} ({record.get('detail', '')})"
         record["status"] = "skip"
@@ -1378,13 +1429,16 @@ def run_case(case: Case, fsim: Path, workdir: Path, engine: str, default_timeout
 
 
 def run_case_once(case: Case, fsim: Path, workdir: Path, engine: str,
-                  default_timeout: float, keep: bool) -> dict:
+                  default_timeout: float, keep: bool,
+                  chain_outputs: set[str] | None = None) -> dict:
     record = {"suite": case.suite, "id": case.id, "group": case.group, "expect": case.expect}
     if case.skip:
         record.update(status="skip", detail=case.skip)
         return record
     workdir.mkdir(parents=True, exist_ok=True)
     for source, destination in case.copies:
+        if chain_outputs and destination in chain_outputs:
+            continue
         target = workdir / destination
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -1426,7 +1480,23 @@ def run_case_once(case: Case, fsim: Path, workdir: Path, engine: str,
 
 def run_chain(cases: list[Case], fsim: Path, workdir: Path, engine: str, timeout: float,
               keep: bool) -> list[dict]:
-    return [run_case(case, fsim, workdir, engine, timeout, keep) for case in cases]
+    chain_outputs = {
+        VESTS_BILLOWITCH_FILE_CHAIN_OUTPUTS[case.chain]
+        for case in cases
+        if case.chain in VESTS_BILLOWITCH_FILE_CHAIN_OUTPUTS
+    }
+    workdir.mkdir(parents=True, exist_ok=True)
+    workdir_root = workdir.resolve()
+    for filename in chain_outputs:
+        target = workdir / filename
+        try:
+            target.resolve().relative_to(workdir_root)
+        except (OSError, ValueError):
+            continue
+        if target.is_file() or target.is_symlink():
+            target.unlink()
+    return [run_case(case, fsim, workdir, engine, timeout, keep, chain_outputs)
+            for case in cases]
 
 
 # ---------------------------------------------------------------------------
@@ -1512,9 +1582,10 @@ def natural_key(text: str):
 
 def select_cases(args) -> list[Case]:
     suites = args.suite or list(SUITES)
-    cases: list[Case] = []
+    all_cases: list[Case] = []
     for suite in suites:
-        cases += ADAPTERS[suite](args.root)
+        all_cases += ADAPTERS[suite](args.root)
+    cases = all_cases
     if args.filter:
         pattern = re.compile(args.filter)
         cases = [c for c in cases if pattern.search(f"{c.suite}/{c.id}")]
@@ -1531,6 +1602,16 @@ def select_cases(args) -> list[Case]:
                 continue
             wanted.add((record["suite"], record["id"]))
         cases = [c for c in cases if (c.suite, c.id) in wanted]
+    file_chains = {
+        case.chain for case in cases
+        if case.chain and case.chain.startswith(VESTS_BILLOWITCH_FILE_CHAIN_PREFIX)
+    }
+    if file_chains:
+        selected_ids = {(case.suite, case.id) for case in cases}
+        cases = [
+            case for case in all_cases
+            if (case.suite, case.id) in selected_ids or case.chain in file_chains
+        ]
     return cases
 
 

@@ -259,23 +259,23 @@ module tb(output logic observed);
   logic q;
   logic call_result;
   initial begin : control
-    logic state = 1'b0;
+    automatic logic state = 1'b0;
     begin : inner
-      logic state = 1'b1;
+      automatic logic state = 1'b1;
       q = state;
     end : inner
     q = state;
     call_result = $isunknown(q);
     #2 begin : timed
-      logic later = 1'b1;
+      automatic logic later = 1'b1;
       q = later;
     end : timed
     if (q) begin : selected
-      logic chosen = 1'b1;
+      automatic logic chosen = 1'b1;
       q = chosen;
     end : selected
     else begin : unselected
-      logic never_entered = 1'b0;
+      automatic logic never_entered = 1'b0;
       q = never_entered;
     end : unselected
     #1 $finish;

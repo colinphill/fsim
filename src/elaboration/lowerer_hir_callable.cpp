@@ -1334,7 +1334,11 @@ Lowerer::lower_hir_static_container_value(
             };
         }
     }
-    if (!selection_syntax) {
+    const bool callable_syntax = expression
+        && expression->systemverilog != nullptr
+        && expression->systemverilog->kind
+            == semantic::sv::ExpressionKind::call;
+    if (!selection_syntax && !callable_syntax) {
         if (const auto binding = hir_container_object_binding(
                 expression_id)) {
             if (binding->type == nullptr) {
@@ -1561,6 +1565,32 @@ Lowerer::lower_hir_static_container_actual(
         && expression->systemverilog != nullptr
         && expression->systemverilog->kind
             == semantic::sv::ExpressionKind::assignment_pattern) {
+        if (formal_type.queue && !formal_type.fixed
+            && !formal_type.associative
+            && formal_type.maximum_elements) {
+            // Build the positional pattern as an unbounded queue first.
+            // Appending it into the declared bounded result applies the
+            // queue's keep-first-elements rule (IEEE 1800-2017 7.10.5).
+            auto pattern_type = formal_type;
+            pattern_type.maximum_elements.reset();
+            const auto source = lower_hir_container_assignment_pattern(
+                expression_id,
+                HirContainerObjectBinding {
+                    contextual_declaration,
+                    { },
+                    { },
+                    std::nullopt,
+                    &pattern_type,
+                    false,
+                });
+            if (!source) {
+                return std::nullopt;
+            }
+            const auto value = allocate_container_register(formal_type);
+            process_.operations.emplace_back(AppendContainer {
+                value, true, *source, std::nullopt, std::nullopt });
+            return value;
+        }
         return lower_hir_container_assignment_pattern(
             expression_id,
             HirContainerObjectBinding {
@@ -1596,6 +1626,22 @@ Lowerer::lower_hir_static_container_actual(
         process_.operations.emplace_back(CopyContainerRegister {
             value, source->value });
         return value;
+    }
+    if (source->type.queue && formal_type.queue
+        && !source->type.fixed && !formal_type.fixed
+        && !source->type.associative && !formal_type.associative) {
+        auto source_profile = source->type;
+        auto formal_profile = formal_type;
+        source_profile.maximum_elements.reset();
+        formal_profile.maximum_elements.reset();
+        if (source_profile == formal_profile) {
+            // Copy through the queue append operation so the destination
+            // bound is applied without weakening register type checks.
+            const auto value = allocate_container_register(formal_type);
+            process_.operations.emplace_back(AppendContainer {
+                value, true, source->value, std::nullopt, std::nullopt });
+            return value;
+        }
     }
     if (!source->type.fixed && !formal_type.fixed) {
         return std::nullopt;
@@ -3692,6 +3738,60 @@ std::optional<RegisterId> Lowerer::lower_hir_class_method_call(
     return destination;
 }
 
+void Lowerer::transfer_hir_static_formals(
+    const HirCallableFrame& frame, const bool copy_in)
+{
+    if (!copy_in && frame.function) {
+        if (const auto result = hir_static_storage(frame.declaration, &frame)) {
+            if (frame.type.string && result->string) {
+                process_.operations.emplace_back(ReadStringObject {
+                    frame.string_result, *result->string });
+            } else if (frame.container_result && result->container) {
+                process_.operations.emplace_back(ReadContainerObject {
+                    *frame.container_result, *result->container });
+            } else if (result->signal) {
+                process_.operations.emplace_back(ReadSignal {
+                    frame.result, *result->signal });
+            }
+        }
+    }
+    for (std::size_t index { }; index < frame.formals.size(); ++index) {
+        if (!(copy_in ? callable_copy_in(frame.directions[index])
+                     : class_method_copy_out(frame.directions[index]))) {
+            continue;
+        }
+        const auto storage = hir_static_storage(frame.formals[index], &frame);
+        if (!storage) {
+            continue;
+        }
+        if (frame.argument_is_string[index] && storage->string) {
+            if (copy_in) {
+                process_.operations.emplace_back(WriteStringObject {
+                    *storage->string, frame.string_arguments[index] });
+            } else {
+                process_.operations.emplace_back(ReadStringObject {
+                    frame.string_arguments[index], *storage->string });
+            }
+        } else if (frame.argument_is_container[index] && storage->container) {
+            if (copy_in) {
+                process_.operations.emplace_back(WriteContainerObject {
+                    *storage->container, frame.container_arguments[index], std::nullopt });
+            } else {
+                process_.operations.emplace_back(ReadContainerObject {
+                    frame.container_arguments[index], *storage->container });
+            }
+        } else if (storage->signal) {
+            if (copy_in) {
+                process_.operations.emplace_back(WriteBlocking {
+                    *storage->signal, frame.arguments[index] });
+            } else {
+                process_.operations.emplace_back(ReadSignal {
+                    frame.arguments[index], *storage->signal });
+            }
+        }
+    }
+}
+
 bool Lowerer::allocate_hir_static_callable_declarations(
     const std::size_t frame_index)
 {
@@ -3785,9 +3885,13 @@ bool Lowerer::allocate_hir_static_callable_declarations(
             if (!declaration || declaration->systemverilog == nullptr
                 || declaration->systemverilog->form
                     != semantic::sv::DeclarationForm::variable
+                || declaration->systemverilog->lifetime
+                    == semantic::sv::Lifetime::automatic
                 || (automatic_frame
                     && declaration->systemverilog->lifetime
                         != semantic::sv::Lifetime::static_lifetime)
+                || hir_static_storage(
+                    declaration_id, &hir_callable_frames_[frame_index])
                 || !allocated.insert(declaration_id.value()).second) {
                 continue;
             }
@@ -4437,7 +4541,6 @@ Lowerer::lower_hir_class_callable_invocation(
                 const auto binding = hir_runtime_binding(
                     formal, scope, false);
                 if (!binding
-                    || binding->kind != HirRuntimeBindingKind::local
                     || !callable_scalar_domain(binding->domain)) {
                     return std::nullopt;
                 }
@@ -4627,6 +4730,7 @@ Lowerer::lower_hir_class_callable_invocation(
     }
     // The callee sees, and may change, this object's container properties.
     flush_hir_class_container_caches();
+    transfer_hir_static_formals(frame, true);
     const auto call_site = static_cast<InstructionIndex>(
         process_.operations.size());
     process_.operations.emplace_back(Call {
@@ -4634,6 +4738,7 @@ Lowerer::lower_hir_class_callable_invocation(
         static_cast<InstructionIndex>(call_site + 1U),
         { },
     });
+    transfer_hir_static_formals(frame, false);
     if (!frame.target) {
         frame.call_sites.push_back(call_site);
     }
@@ -6888,7 +6993,6 @@ bool Lowerer::can_lower_hir_function_call(
         const auto binding = hir_callable_formal_binding(
             formals[index], *scope, (*actuals)[index], process_scope);
         if (!binding
-            || binding->kind != HirRuntimeBindingKind::local
             || !callable_scalar_domain(binding->domain)) {
             return false;
         }
@@ -7111,7 +7215,7 @@ Lowerer::lower_hir_function_call_value(
             return std::nullopt;
         }
     }
-    auto interface_callable = !callable && expression
+    auto interface_callable = expression
             && expression->systemverilog != nullptr
         ? hir_interface_function_profile(
               expression_id, hir_process_scope_)
@@ -7125,19 +7229,31 @@ Lowerer::lower_hir_function_call_value(
         // handle against each instance of the interface type.
         const auto dispatch
             = hir_virtual_interface_instances(interface_callable->receiver);
+        if (hierarchical_reference_retry_ && hierarchical_reference_missed_) {
+            // Child storage is not available in the first hierarchy pass.
+            // Defer this call instead of using a receiver-independent frame.
+            return std::nullopt;
+        }
         const auto type = dispatch
             ? hir_callable_type(interface_callable->declaration)
             : std::nullopt;
-        if (dispatch && type && !type->string && !type->container
-            && type->width != 0U) {
+        if (dispatch && type && !type->string
+            && (type->container || type->width != 0U)) {
             const auto handle
                 = lower_hir_virtual_interface_handle(dispatch->first);
             if (!handle) {
                 return std::nullopt;
             }
-            const auto result = allocate_register(type->width, type->domain);
-            process_.operations.emplace_back(LoadConstant {
-                result, callable_default_value(type->width, type->domain) });
+            const auto result = type->container
+                ? std::optional<RegisterId> { }
+                : std::optional { allocate_register(type->width, type->domain) };
+            const auto container_result = type->container
+                ? std::optional { allocate_container_register(*type->container) }
+                : std::optional<ContainerRegisterId> { };
+            if (result) {
+                process_.operations.emplace_back(LoadConstant {
+                    *result, callable_default_value(type->width, type->domain) });
+            }
             std::vector<InstructionIndex> exits;
             for (const auto& [identity, path] : dispatch->second) {
                 const auto constant = allocate_register(
@@ -7159,16 +7275,22 @@ Lowerer::lower_hir_function_call_value(
                 const auto value = lower_hir_function_call_value(
                     expression_id, expected_width);
                 hir_interface_receiver_override_.reset();
-                if (!value || !value->packed) {
+                if (!value || (result && !value->packed)
+                    || (container_result && !value->container)) {
                     return std::nullopt;
                 }
-                auto packed = *value->packed;
-                if (register_width(packed) != type->width) {
-                    packed = resize_register(
-                        packed, type->width, type->signed_value);
+                if (container_result) {
+                    process_.operations.emplace_back(CopyContainerRegister {
+                        *container_result, value->container->value });
+                } else {
+                    auto packed = *value->packed;
+                    if (register_width(packed) != type->width) {
+                        packed = resize_register(
+                            packed, type->width, type->signed_value);
+                    }
+                    process_.operations.emplace_back(CopyRegister {
+                        *result, packed });
                 }
-                process_.operations.emplace_back(CopyRegister {
-                    result, packed });
                 exits.push_back(static_cast<InstructionIndex>(
                     process_.operations.size()));
                 process_.operations.emplace_back(Jump { });
@@ -7183,7 +7305,11 @@ Lowerer::lower_hir_function_call_value(
                 process_.operations[exit] = Jump {
                     static_cast<InstructionIndex>(process_.operations.size()) };
             }
-            return HirFunctionCallValue { result, std::nullopt };
+            return HirFunctionCallValue { result,
+                container_result
+                    ? std::optional { HirStaticContainerValue {
+                          *container_result, *type->container } }
+                    : std::nullopt };
         }
     }
     const auto resolution = expression && expression->vhdl != nullptr
@@ -7813,8 +7939,7 @@ Lowerer::lower_hir_function_call_value(
                 const auto binding = hir_callable_formal_binding(
                     formal, *scope, (*actuals)[index],
                     hir_process_scope_);
-                if (!binding
-                    || binding->kind != HirRuntimeBindingKind::local) {
+                if (!binding) {
                     return std::nullopt;
                 }
                 frame.arguments.push_back(allocate_register(
@@ -7948,10 +8073,12 @@ Lowerer::lower_hir_function_call_value(
         if (!frame.container_result || !frame.container_result_default) {
             return std::nullopt;
         }
-        process_.operations.emplace_back(CopyContainerRegister {
-            *frame.container_result,
-            *frame.container_result_default,
-        });
+        if (frame.type.automatic) {
+            process_.operations.emplace_back(CopyContainerRegister {
+                *frame.container_result,
+                *frame.container_result_default,
+            });
+        }
     } else {
         process_.operations.emplace_back(LoadConstant {
             frame.result,
@@ -8006,6 +8133,7 @@ Lowerer::lower_hir_function_call_value(
             });
         }
     }
+    transfer_hir_static_formals(frame, true);
     const auto call_site = static_cast<InstructionIndex>(
         process_.operations.size());
     process_.operations.emplace_back(Call {
@@ -8013,6 +8141,7 @@ Lowerer::lower_hir_function_call_value(
         static_cast<InstructionIndex>(call_site + 1U),
         { },
     });
+    transfer_hir_static_formals(frame, false);
     if (!frame.target) {
         frame.call_sites.push_back(call_site);
     }
@@ -8452,11 +8581,75 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
     const auto expression = specialized_hir_unit_->find_expression(
         expression_id);
     const auto callable = hir_referenced_declaration(expression_id);
+    auto interface_callable = expression
+            && expression->systemverilog != nullptr
+        ? hir_interface_function_profile(expression_id, hir_process_scope_)
+        : std::nullopt;
+    if (interface_callable && hir_interface_receiver_override_) {
+        interface_callable->receiver = *std::exchange(
+            hir_interface_receiver_override_, std::nullopt);
+    } else if (interface_callable) {
+        const auto dispatch
+            = hir_virtual_interface_instances(interface_callable->receiver);
+        if (hierarchical_reference_retry_ && hierarchical_reference_missed_) {
+            // Child storage is not available in the first hierarchy pass.
+            // Defer this call instead of using a receiver-independent frame.
+            return std::nullopt;
+        }
+        if (dispatch) {
+            const auto handle
+                = lower_hir_virtual_interface_handle(dispatch->first);
+            if (!handle) {
+                return std::nullopt;
+            }
+            const auto result = allocate_string_register();
+            process_.operations.emplace_back(LoadStringConstant { result, { } });
+            std::vector<InstructionIndex> exits;
+            for (const auto& [identity, path] : dispatch->second) {
+                const auto constant = allocate_register(
+                    64U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(LoadConstant {
+                    constant, unsigned_value(identity, 64U) });
+                const auto selected = allocate_register(
+                    1U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(Binary {
+                    BinaryOperator::case_equal, selected, *handle,
+                    constant });
+                const auto branch = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations.emplace_back(Branch {
+                    selected, branch + 1U, 0U,
+                    UnknownBranchPolicy::when_false });
+                hir_interface_receiver_override_ = "@instance:" + path;
+                const auto value = lower_hir_string_function_call(expression_id);
+                hir_interface_receiver_override_.reset();
+                if (!value) {
+                    return std::nullopt;
+                }
+                process_.operations.emplace_back(CopyStringRegister {
+                    result, *value });
+                exits.push_back(static_cast<InstructionIndex>(
+                    process_.operations.size()));
+                process_.operations.emplace_back(Jump { });
+                process_.operations[branch] = Branch {
+                    selected, branch + 1U,
+                    static_cast<InstructionIndex>(process_.operations.size()),
+                    UnknownBranchPolicy::when_false };
+            }
+            for (const auto exit : exits) {
+                process_.operations[exit] = Jump {
+                    static_cast<InstructionIndex>(process_.operations.size()) };
+            }
+            return result;
+        }
+    }
     const auto resolution = expression && expression->vhdl != nullptr
         ? resolve_hir_vhdl_function_call(
               expression_id, hir_process_scope_, 0U)
         : callable ? hir_callable_resolution(*callable)
-                   : std::nullopt;
+        : interface_callable
+        ? hir_callable_resolution(interface_callable->declaration)
+        : std::nullopt;
     if (!resolution) {
         return std::nullopt;
     }
@@ -8496,7 +8689,8 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
 
     const auto callable_key = std::uint64_t { 1 } << 63U
         | (static_cast<std::uint64_t>(resolution->key.value()) << 32U);
-    const auto callable_key_text = std::to_string(callable_key);
+    const auto callable_key_text = std::to_string(callable_key)
+        + (interface_callable ? "|receiver:" + interface_callable->receiver : "");
     const auto found = hir_callable_indices_.find(callable_key_text);
     const auto frame_index = found != hir_callable_indices_.end()
         ? found->second
@@ -8509,6 +8703,10 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
         frame.type = *type;
         frame.formals = formals;
         frame.generic_bindings = resolution->generic_bindings;
+        if (interface_callable) {
+            frame.interface_receiver = interface_callable->receiver;
+            bind_hir_instance_parameters(frame);
+        }
         const auto debug_declaration
             = specialized_hir_unit_->find_declaration(resolution->key);
         frame.debug_name = debug_declaration
@@ -8581,8 +8779,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
                 const auto binding = hir_callable_formal_binding(
                     formal, *scope, (*actuals)[index],
                     hir_process_scope_);
-                if (!binding
-                    || binding->kind != HirRuntimeBindingKind::local) {
+                if (!binding) {
                     return std::nullopt;
                 }
                 frame.arguments.push_back(allocate_register(
@@ -8736,6 +8933,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
             });
         }
     }
+    transfer_hir_static_formals(frame, true);
     const auto call_site = static_cast<InstructionIndex>(
         process_.operations.size());
     process_.operations.emplace_back(Call {
@@ -8743,6 +8941,7 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
         static_cast<InstructionIndex>(call_site + 1U),
         { },
     });
+    transfer_hir_static_formals(frame, false);
     if (!frame.target) {
         frame.call_sites.push_back(call_site);
     }
@@ -9653,8 +9852,15 @@ bool Lowerer::lower_hir_callable_return(
         if (!result || !lowered) {
             return false;
         }
-        process_.operations.emplace_back(CopyContainerRegister {
-            *result, *lowered });
+        const auto& frame = hir_callable_frames_[index];
+        const auto storage = hir_static_storage(frame.declaration, &frame);
+        if (storage && storage->container) {
+            process_.operations.emplace_back(WriteContainerObject {
+                *storage->container, *lowered, std::nullopt });
+        } else {
+            process_.operations.emplace_back(CopyContainerRegister {
+                *result, *lowered });
+        }
         hir_callable_frames_[index].return_jumps.push_back(
             static_cast<InstructionIndex>(process_.operations.size()));
         process_.operations.emplace_back(Jump { });
@@ -9665,8 +9871,15 @@ bool Lowerer::lower_hir_callable_return(
         if (!lowered) {
             return false;
         }
-        process_.operations.emplace_back(CopyStringRegister {
-            hir_callable_frames_[index].string_result, *lowered });
+        const auto& frame = hir_callable_frames_[index];
+        const auto storage = hir_static_storage(frame.declaration, &frame);
+        if (storage && storage->string) {
+            process_.operations.emplace_back(WriteStringObject {
+                *storage->string, *lowered });
+        } else {
+            process_.operations.emplace_back(CopyStringRegister {
+                frame.string_result, *lowered });
+        }
         hir_callable_frames_[index].return_jumps.push_back(
             static_cast<InstructionIndex>(process_.operations.size()));
         process_.operations.emplace_back(Jump { });
@@ -9738,8 +9951,12 @@ bool Lowerer::lower_hir_callable_return(
         lowered = resize_register(
             *lowered, type.width, type.signed_value);
     }
-    process_.operations.emplace_back(CopyRegister {
-        hir_callable_frames_[index].result, *lowered });
+    const auto& frame = hir_callable_frames_[index];
+    if (const auto storage = hir_static_variable_signal(frame.declaration, &frame)) {
+        process_.operations.emplace_back(WriteBlocking { *storage, *lowered });
+    } else {
+        process_.operations.emplace_back(CopyRegister { frame.result, *lowered });
+    }
     hir_callable_frames_[index].return_jumps.push_back(
         static_cast<InstructionIndex>(process_.operations.size()));
     process_.operations.emplace_back(Jump { });
@@ -9857,10 +10074,16 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
             declaration_id, *initial_frame.type.container);
         const auto& source = *declaration->systemverilog;
         const auto span = hir_source_span(source.source);
+        auto debug_name = initial_frame.debug_name.empty()
+            ? source.name
+            : initial_frame.debug_name + "." + source.name;
+        if (!debug_local_names_.emplace(debug_name).second) {
+            debug_name += "@hir-callable-"
+                + std::to_string(initial_frame.invocation_identity);
+            debug_local_names_.emplace(debug_name);
+        }
         process_.debug_container_locals.push_back(DebugContainerLocal {
-            initial_frame.debug_name.empty()
-                ? source.name
-                : initial_frame.debug_name + "." + source.name,
+            std::move(debug_name),
             *initial_frame.container_result,
             *initial_frame.type.container,
             SourceLocation {
@@ -10166,15 +10389,17 @@ bool Lowerer::lower_hir_callable_body(const std::size_t callable_index)
                 continue;
             }
         }
-        if (variable) {
+        if (variable && (automatic
+                || (record->systemverilog != nullptr
+                    && record->systemverilog->lifetime
+                        == semantic::sv::Lifetime::automatic))) {
             variables.push_back(child);
         }
     }
     const auto packed_begin = next_register_;
     const auto string_begin = next_string_register_;
     const auto container_begin = next_container_register_;
-    const auto declarations_ready = !automatic
-        || initialize_hir_declarations(variables);
+    const auto declarations_ready = initialize_hir_declarations(variables);
     // A task body is an interval that a disable statement naming the task
     // ends (IEEE 1800-2017 9.6.2).
     const auto* const task_declaration = declaration->systemverilog != nullptr

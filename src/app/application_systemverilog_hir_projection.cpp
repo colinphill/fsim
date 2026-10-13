@@ -702,7 +702,9 @@ template <typename Input>
         semantic::ValueKind::variable,
         sv::Direction::unknown,
         input.initializer);
-    if (input.systemverilog_static) {
+    if (input.systemverilog_automatic) {
+        declaration(id).lifetime = sv::Lifetime::automatic;
+    } else if (input.systemverilog_static) {
         declaration(id).lifetime = sv::Lifetime::static_lifetime;
     }
     declaration(id).array_parameter = input.systemverilog_parameter;

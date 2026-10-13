@@ -7238,6 +7238,54 @@ namespace {
                 ? std::optional { spans[unit.source.value()].begin.offset }
                 : std::nullopt;
         };
+        const auto analyzed_after = [&](
+                                        const semantic::vhdl::Unit& candidate,
+                                        const semantic::vhdl::Unit& previous) {
+            if (!candidate.source.valid()
+                || candidate.source.value() >= spans.size()
+                || !previous.source.valid()
+                || previous.source.value() >= spans.size()) {
+                return true;
+            }
+            const auto& candidate_span = spans[candidate.source.value()];
+            const auto& previous_span = spans[previous.source.value()];
+            const auto& source_files = compiled.semantics.source_files();
+            const auto source_file = [&](const semantic::SourceSpan& span)
+                -> const semantic::SourceFile* {
+                return span.file.valid()
+                        && span.file.value() < source_files.size()
+                    ? &source_files[span.file.value()]
+                    : nullptr;
+            };
+            const auto* candidate_file = source_file(candidate_span);
+            const auto* previous_file = source_file(previous_span);
+            const bool same_digest
+                = candidate_file != nullptr && previous_file != nullptr
+                && !candidate_file->content_digest.empty()
+                && candidate_file->content_digest
+                    == previous_file->content_digest;
+            const bool same_source
+                = (candidate_span.file.valid()
+                      && previous_span.file.valid()
+                      && candidate_span.file == previous_span.file)
+                || (!candidate_span.logical_name.empty()
+                    && candidate_span.logical_name
+                        == previous_span.logical_name)
+                || same_digest;
+            if (!same_source) {
+                // Across source files, retain compiled candidate order.
+                return true;
+            }
+            const auto candidate_position = position(candidate);
+            const auto previous_position = position(previous);
+            if (candidate_position && previous_position
+                && *candidate_position != *previous_position) {
+                return *candidate_position > *previous_position;
+            }
+            // SourceSpanIds are relocated while object HIR is linked, so their
+            // order is not the order in which VHDL units were analyzed.
+            return true;
+        };
         for (const auto& candidate : compiled.vhdl_units()) {
             if (candidate.kind != semantic::vhdl::UnitKind::architecture
                 || !compiled_vhdl_library_equal(candidate.library, library)
@@ -7249,12 +7297,8 @@ namespace {
             }
             // Without a name, the most recently analyzed architecture: the
             // later one of a source (IEEE 1076-2008 7.3.3).
-            const auto same_source = latest != nullptr && position(*latest)
-                && position(candidate)
-                && spans[latest->source.value()].logical_name
-                    == spans[candidate.source.value()].logical_name;
-            if (latest == nullptr || !architecture.empty() || !same_source
-                || position(candidate) > position(*latest)) {
+            if (latest == nullptr || !architecture.empty()
+                || analyzed_after(candidate, *latest)) {
                 result = compiled.find_unit(candidate.id);
                 latest = &candidate;
             }
@@ -11144,15 +11188,6 @@ namespace {
             const auto component = vhdl_configuration_detail::
                 configuration_canonical_name(rule.component.spelling);
             sources.insert_or_assign(component, rule.source);
-            if (!matching_instance(rule, std::nullopt)) {
-                report_issue(
-                    "FSIM-ELAB-VHCONFIG-005",
-                    "configuration in '" + std::string { path }
-                        + "' names component '"
-                        + rule.component.spelling
-                        + "' with no component instances",
-                    rule.source);
-            }
             switch (rule.selection) {
             case semantic::vhdl::InstanceSelection::labels: {
                 auto& seen = explicit_labels[component];
@@ -13328,6 +13363,17 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
             return false;
         }
     }
+    for (const auto process_id : active_processes) {
+        const auto process = specialized->find_process(process_id);
+        if (!process || process->systemverilog == nullptr
+            || !materialize_compiled_systemverilog_static_storage(unit,
+                root_materialization, process->systemverilog->declarations,
+                process->systemverilog->statements, { }, false, path,
+                pending_virtual_interface_initializers, packed_type_resolver,
+                packed_default_resolver, packed_fallback_resolver)) {
+            return false;
+        }
+    }
     auto& signals = root_materialization.signals;
     auto& string_objects = root_materialization.string_objects;
     auto& container_objects = root_materialization.container_objects;
@@ -13673,6 +13719,17 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_generated_scopes(
                     pending_virtual_interface_initializers,
                     packed_type_resolver, packed_default_resolver,
                     packed_fallback_resolver)) {
+                return false;
+            }
+        }
+        for (const auto process_id : occurrence.region->processes) {
+            const auto process = occurrence.specialization->find_process(process_id);
+            if (!process || process->systemverilog == nullptr
+                || !materialize_compiled_systemverilog_static_storage(unit,
+                    materialization, process->systemverilog->declarations,
+                    process->systemverilog->statements, { }, false, path,
+                    pending_virtual_interface_initializers, packed_type_resolver,
+                    packed_default_resolver, packed_fallback_resolver)) {
                 return false;
             }
         }
@@ -15090,8 +15147,10 @@ HierarchyBuilder::materialize_compiled_vhdl_port_actual(
                     == semantic::vhdl::ExpressionKind::unary
                 || actual_expression.kind
                     == semantic::vhdl::ExpressionKind::binary
-                || actual_expression.kind
-                    == semantic::vhdl::ExpressionKind::aggregate
+                || (actual_expression.kind
+                        == semantic::vhdl::ExpressionKind::aggregate
+                    && !(actual_expression.text == "@vhdl-formal-subelements"
+                        && name_actual(name_actual, *binding.expression)))
                 || actual_expression.kind
                     == semantic::vhdl::ExpressionKind::concatenation
                 || actual_expression.kind
@@ -19503,6 +19562,21 @@ bool HierarchyBuilder::validate_compiled_vhdl_selected_package_names(
                     && compiled_vhdl_name_equal(
                         candidate.name, package_name);
             });
+        if (package == compiled_->vhdl_units().end() && parts.size() == 2U) {
+            // A use-visible object (a shared variable of a protected type
+            // declared in a package): its name selects a method or element
+            // (IEEE 1076-2008 8.3).
+            semantic::vhdl::Name prefix_name;
+            prefix_name.spelling = std::string { parts.front() };
+            prefix_name.canonical = lowercase_ascii_copy(parts.front());
+            if (semantic::CompiledDesignResolver {
+                    *compiled_, architecture.id, &*specialized }
+                    .resolve_vhdl(prefix_name, expression.scope, { })
+                    .status
+                != semantic::CompiledResolutionStatus::not_found) {
+                continue;
+            }
+        }
         if (package == compiled_->vhdl_units().end()) {
             semantic::vhdl::Name builtin_name;
             builtin_name.spelling
@@ -21629,10 +21703,30 @@ bool HierarchyBuilder::compiled_vhdl_component_profile_matches(
     if (!candidate.component) {
         return false;
     }
+    const auto has_generic_default = [](
+        const semantic::vhdl::Declaration* declaration) {
+        if (declaration == nullptr) {
+            return false;
+        }
+        using Form = semantic::vhdl::DeclarationForm;
+        if (declaration->form == Form::generic_constant) {
+            return declaration->initializer.has_value();
+        }
+        if (declaration->form == Form::generic_function
+            || declaration->form == Form::generic_procedure) {
+            return declaration->callable
+                && declaration->callable->default_callable;
+        }
+        return false;
+    };
     const auto match_surface = [&](
                                    const auto& candidate_ids,
                                    const auto& entity_declarations,
                                    const bool ports) {
+        if (!ports && candidate_ids.empty()) {
+            return std::ranges::all_of(
+                entity_declarations, has_generic_default);
+        }
         if (candidate_ids.size() != entity_declarations.size()) {
             return false;
         }
@@ -21872,27 +21966,44 @@ HierarchyBuilder::select_compiled_vhdl_component_candidate(
         });
     if (matching.empty() && visible_components.size() == 1U) {
         const auto* candidate = visible_components.front();
-        bool generic_mismatch
-            = candidate->component
-            && candidate->component->generics.size()
-                != entity_generics.size();
-        if (!generic_mismatch && candidate->component) {
-            for (std::size_t index { };
-                index < entity_generics.size(); ++index) {
-                const auto formal = compiled_->find_declaration(
-                    candidate->component->generics[index]);
-                if (!formal || formal->vhdl == nullptr
-                    || !compiled_vhdl_component_subtype_compatible(
-                        *formal->vhdl,
-                        *entity_generics[index],
-                        *candidate->component,
-                        true,
-                        target_entity,
-                        working_specialization)) {
-                    generic_mismatch = true;
-                    break;
+        bool generic_mismatch { };
+        if (candidate->component) {
+            if (candidate->component->generics.empty()) {
+                generic_mismatch = !std::ranges::all_of(
+                    entity_generics,
+                    [](const semantic::vhdl::Declaration* formal) {
+                        using Form = semantic::vhdl::DeclarationForm;
+                        return (formal->form == Form::generic_constant
+                                   && formal->initializer.has_value())
+                            || ((formal->form == Form::generic_function
+                                    || formal->form
+                                        == Form::generic_procedure)
+                                && formal->callable
+                                && formal->callable->default_callable);
+                    });
+            } else {
+                generic_mismatch
+                    = candidate->component->generics.size()
+                    != entity_generics.size();
+                for (std::size_t index { };
+                    !generic_mismatch && index < entity_generics.size();
+                    ++index) {
+                    const auto formal = compiled_->find_declaration(
+                        candidate->component->generics[index]);
+                    if (!formal || formal->vhdl == nullptr
+                        || !compiled_vhdl_component_subtype_compatible(
+                            *formal->vhdl,
+                            *entity_generics[index],
+                            *candidate->component,
+                            true,
+                            target_entity,
+                            working_specialization)) {
+                        generic_mismatch = true;
+                    }
                 }
             }
+        } else {
+            generic_mismatch = !entity_generics.empty();
         }
         report(
             generic_mismatch
@@ -24205,9 +24316,22 @@ HierarchyBuilder::select_compiled_vhdl_child(
                     && linked.systemverilog == nullptr
                     && linked.vhdl->kind
                         == semantic::vhdl::UnitKind::architecture;
-                if (executable_module || executable_architecture) {
+                if (executable_module) {
                     child = linked;
                     return true;
+                }
+                if (executable_architecture) {
+                    std::size_t architecture_matches { };
+                    const auto most_recent
+                        = compiled_vhdl_architecture(
+                            *compiled_,
+                            compiled_vhdl_library(*linked.vhdl),
+                            linked.vhdl->primary_name, { },
+                            architecture_matches);
+                    if (architecture_matches != 0U && most_recent) {
+                        child = *most_recent;
+                        return true;
+                    }
                 }
             }
             const auto search_scope = effective_search_scope(
@@ -24285,6 +24409,48 @@ HierarchyBuilder::select_compiled_vhdl_child(
                         + "]; candidates: <none>",
                     compiled_source_span(*compiled_, record.source));
                 return false;
+            }
+            if (candidates.size() > 1U
+                && candidates.front().compiled_unit
+                && candidates.front().compiled_unit->vhdl != nullptr) {
+                const auto* first_architecture
+                    = candidates.front().compiled_unit->vhdl;
+                const bool same_entity_architectures
+                    = first_architecture->kind
+                            == semantic::vhdl::UnitKind::architecture
+                    && std::ranges::all_of(
+                        candidates,
+                        [&](const UnitResolutionCandidate& candidate) {
+                            const auto* target
+                                = candidate.compiled_unit
+                                      ? candidate.compiled_unit->vhdl
+                                      : nullptr;
+                            return candidate.systemc_target == std::nullopt
+                                && target != nullptr
+                                && target->kind
+                                    == semantic::vhdl::UnitKind::architecture
+                                && compiled_vhdl_library_equal(
+                                    target->library,
+                                    first_architecture->library)
+                                && compiled_vhdl_name_equal(
+                                    target->primary_name,
+                                    first_architecture->primary_name);
+                        });
+                if (same_entity_architectures) {
+                    std::size_t architecture_matches { };
+                    const auto most_recent
+                        = compiled_vhdl_architecture(
+                            *compiled_,
+                            compiled_vhdl_library(
+                                *first_architecture),
+                            first_architecture->primary_name,
+                            { }, architecture_matches);
+                    if (architecture_matches == candidates.size()
+                        && most_recent) {
+                        child = *most_recent;
+                        return true;
+                    }
+                }
             }
             if (candidates.size() != 1U) {
                 report(

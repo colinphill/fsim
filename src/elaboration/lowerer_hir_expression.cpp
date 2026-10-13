@@ -6800,6 +6800,16 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
     if (specialized_hir_unit_ == nullptr) {
         return std::nullopt;
     }
+    // An inertial port actual has the value of its expression.
+    if (const auto inertial = specialized_hir_unit_->find_expression(
+            expression_id);
+        inertial && inertial->vhdl != nullptr
+        && inertial->vhdl->kind == semantic::vhdl::ExpressionKind::call
+        && inertial->vhdl->text == "@vhdl-inertial"
+        && inertial->vhdl->operands.size() == 1U) {
+        return lower_hir_expression(
+            inertial->vhdl->operands.front(), expected_width, scalar_context);
+    }
     if (const auto parameter = hir_hierarchical_parameter(expression_id)) {
         const auto destination = allocate_register(
             parameter->value.width(),
@@ -11355,8 +11365,10 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         result = *lowered;
     } else if (const auto selection = hir_vhdl_array_selection(
                    expression_id)) {
-        const auto binding = hir_runtime_binding(
-            selection->declaration, hir_process_scope_, true);
+        const auto binding = selection->root_expression
+            ? std::optional<HirRuntimeBinding> { }
+            : hir_runtime_binding(
+                  selection->declaration, hir_process_scope_, true);
         if (selection->root_width == 0U
             || selection->root_width
                 > std::numeric_limits<std::uint32_t>::max()
@@ -11659,13 +11671,33 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 || selected_declaration->vhdl->form
                     == semantic::vhdl::DeclarationForm::generic_constant);
         std::optional<RegisterId> root;
-        if (!binding || constant_declaration) {
-            root = constant_root();
+        if (selection->root_expression) {
+            const auto root_expression = specialized_hir_unit_->find_expression(
+                *selection->root_expression);
+            if (root_expression && root_expression->vhdl != nullptr
+                && root_expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::aggregate) {
+                const auto root_subtype = hir_vhdl_expression_subtype(
+                    *selection->root_expression);
+                if (root_subtype) {
+                    root = lower_hir_vhdl_aggregate(
+                        *selection->root_expression,
+                        selection->root_width,
+                        &*root_subtype);
+                }
+            } else {
+                root = lower_hir_expression(
+                    *selection->root_expression, selection->root_width);
+            }
+        } else {
+            if (!binding || constant_declaration) {
+                root = constant_root();
+            }
+            if (!root) {
+                root = bound_root();
+            }
         }
-        if (!root) {
-            root = bound_root();
-        }
-        if (!root) {
+        if (!root || register_width(*root) != selection->root_width) {
             return std::nullopt;
         }
         const auto destination = allocate_register(
@@ -13619,8 +13651,11 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
         && expression->vhdl->kind
             == semantic::vhdl::ExpressionKind::aggregate
         && !expression->vhdl->associations.empty()) {
+        const auto contextual_subtype
+            = hir_vhdl_expression_subtype(expression_id);
         result = lower_hir_vhdl_aggregate(
-            expression_id, expected_width);
+            expression_id, expected_width,
+            contextual_subtype ? &*contextual_subtype : nullptr);
     } else if (source.concatenation && source.operands.empty()) {
         report(
             "FSIM-ELAB-069",
@@ -15467,10 +15502,16 @@ std::optional<RegisterId> Lowerer::lower_hir_expression_impl(
                 }
                 if (selected && selected->vhdl != nullptr
                     && selected->vhdl->kind
-                        == semantic::vhdl::ExpressionKind::aggregate
-                    && subtype) {
-                    return lower_hir_vhdl_aggregate(
-                        operand, width, &*subtype);
+                        == semantic::vhdl::ExpressionKind::aggregate) {
+                    auto aggregate_subtype
+                        = hir_vhdl_expression_subtype(operand);
+                    if (!aggregate_subtype) {
+                        aggregate_subtype = subtype;
+                    }
+                    if (aggregate_subtype) {
+                        return lower_hir_vhdl_aggregate(
+                            operand, width, &*aggregate_subtype);
+                    }
                 }
                 hir_unsigned_extension_ = unsigned_extension;
                 return lower_hir_expression(operand, width);
@@ -16723,6 +16764,12 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
     if (const auto target = hir_vhdl_alias_target_expression(expression_id)) {
         return lower_hir_string_expression(*target);
     }
+    if (const auto binding = hir_hierarchical_string_binding(expression_id)) {
+        const auto destination = allocate_string_register();
+        process_.operations.emplace_back(ReadStringObject {
+            destination, *binding->object });
+        return destination;
+    }
     // `p.get_randstate()` of a process (IEEE 1800-2017 9.7, 18.13.4).
     if (const auto call = specialized_hir_unit_->find_expression(expression_id);
         call && call->systemverilog != nullptr
@@ -17898,6 +17945,13 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_expression(
         };
         process_.operations[finish] = Jump { end };
         return destination;
+    }
+    if (source.kind == semantic::sv::ExpressionKind::call && !declaration) {
+        const auto profile = hir_interface_function_profile(expression_id, hir_process_scope_);
+        const auto type = profile ? hir_callable_type(profile->declaration) : std::nullopt;
+        if (type && type->string) {
+            return lower_hir_string_function_call(expression_id);
+        }
     }
     if (source.kind == semantic::sv::ExpressionKind::call
         && declaration) {
@@ -19511,6 +19565,13 @@ bool Lowerer::lower_hir_string_copy_out(
     const semantic::ExpressionId target,
     const StringRegisterId source)
 {
+    if (const auto binding = hir_hierarchical_string_binding(target)) {
+        if (read_only_string_objects_.contains(*binding->object)) {
+            return false;
+        }
+        process_.operations.emplace_back(WriteStringObject { *binding->object, source });
+        return true;
+    }
     const auto expression = specialized_hir_unit_ != nullptr
         ? specialized_hir_unit_->find_expression(target)
         : std::nullopt;

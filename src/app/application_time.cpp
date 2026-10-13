@@ -33,6 +33,81 @@ std::optional<ParsedMagnitude> magnitude_and_unit(std::string_view text)  {
       magnitude, std::string(split, compact.end())};
 }
 
+std::optional<std::uint64_t> decimal_physical_femtoseconds(
+    const std::string_view text, const std::uint64_t factor)
+{
+  // An abstract real literal times a unit, rounded to the nearest
+  // femtosecond (IEEE 1076-2008 5.2.4.1): `8.2 ms`, `1.0e-3 sec`.
+  std::string digits;
+  int scale = 0;
+  bool point = false;
+  std::size_t index = 0;
+  for (; index < text.size(); ++index) {
+    const char character = text[index];
+    if (character == '_') {
+      continue;
+    }
+    if (character == '.') {
+      if (point) {
+        return std::nullopt;
+      }
+      point = true;
+      continue;
+    }
+    if (character < '0' || character > '9') {
+      break;
+    }
+    digits.push_back(character);
+    if (point) {
+      --scale;
+    }
+  }
+  if (digits.empty()) {
+    return std::nullopt;
+  }
+  if (index < text.size()) {
+    if (text[index] != 'e' && text[index] != 'E') {
+      return std::nullopt;
+    }
+    int exponent = 0;
+    const auto first = text.data() + index + 1U
+        + (index + 1U < text.size() && text[index + 1U] == '+' ? 1U : 0U);
+    const auto [end, error] = std::from_chars(
+        first, text.data() + text.size(), exponent);
+    if (error != std::errc { } || end != text.data() + text.size()) {
+      return std::nullopt;
+    }
+    scale += exponent;
+  }
+  // value = digits * 10^scale * factor, exactly, then rounded.
+  unsigned __int128 numerator = 0;
+  for (const char digit : digits) {
+    numerator = numerator * 10U + static_cast<unsigned>(digit - '0');
+    if (numerator > (static_cast<unsigned __int128>(1) << 100U)) {
+      return std::nullopt;
+    }
+  }
+  numerator *= factor;
+  for (; scale > 0; --scale) {
+    numerator *= 10U;
+    if (numerator > (static_cast<unsigned __int128>(1) << 120U)) {
+      return std::nullopt;
+    }
+  }
+  unsigned __int128 denominator = 1;
+  for (; scale < 0; ++scale) {
+    denominator *= 10U;
+    if (denominator > (static_cast<unsigned __int128>(1) << 120U)) {
+      return std::nullopt;
+    }
+  }
+  const auto rounded = (numerator + denominator / 2U) / denominator;
+  if (rounded > std::numeric_limits<std::uint64_t>::max()) {
+    return std::nullopt;
+  }
+  return static_cast<std::uint64_t>(rounded);
+}
+
 std::optional<std::uint64_t> unit_femtoseconds(std::string_view unit)  {
   if (unit == "fs") {
     return 1;
@@ -723,6 +798,30 @@ bool normalize_delays(
             span(expression.span));
         valid = false;
         return false;
+      }
+      // A real magnitude (`8.2 ms`).
+      if (expression.operands.front().text.find_first_of(".eE")
+              != std::string::npos
+          && *tick_femtoseconds != 0) {
+        const auto femtoseconds = decimal_physical_femtoseconds(
+            expression.operands.front().text, *factor);
+        if (!femtoseconds || *femtoseconds % *tick_femtoseconds != 0
+            || *femtoseconds / *tick_femtoseconds
+                > static_cast<std::uint64_t>(
+                    std::numeric_limits<std::int64_t>::max())) {
+          diagnostics.error(
+              "FSIM-ELAB-VHTIME-003",
+              "physical time literal is not exactly representable at project "
+              "resolution '" + std::string{effective_resolution} + "'",
+              span(expression.span));
+          valid = false;
+          return false;
+        }
+        expression.kind = frontend::ExpressionKind::IntegerLiteral;
+        expression.text = std::to_string(*femtoseconds / *tick_femtoseconds);
+        expression.operands.clear();
+        expression.nominal_type = "@builtin:time";
+        return true;
       }
       const auto parsed_literal = magnitude_and_unit(
           expression.operands.front().text + unit_name);
@@ -1642,6 +1741,42 @@ private:
             return;
         }
         const auto operand = expression.operands.front();
+        // A real magnitude (`8.2 ms`).
+        if (operand.valid() && operand.value() < expressions.size()
+            && expressions[operand.value()] != nullptr
+            && expressions[operand.value()]->kind
+                == semantic::vhdl::ExpressionKind::real_literal
+            && tick_femtoseconds_ && *tick_femtoseconds_ != 0U) {
+            const auto femtoseconds = decimal_physical_femtoseconds(
+                expressions[operand.value()]->text, *factor);
+            if (!femtoseconds || *femtoseconds % *tick_femtoseconds_ != 0U
+                || *femtoseconds / *tick_femtoseconds_
+                    > static_cast<std::uint64_t>(
+                        std::numeric_limits<std::int64_t>::max())) {
+                vhdl_error(
+                    "FSIM-ELAB-VHTIME-003",
+                    "physical time literal is not exactly representable at "
+                    "project resolution '" + resolution_ + "'",
+                    expression.source);
+                return;
+            }
+            const auto retained_id = expression.id;
+            const auto retained_scope = expression.scope;
+            const auto retained_source = expression.source;
+            const auto retained_origin = expression.origin;
+            semantic::vhdl::Expression replacement;
+            replacement.id = retained_id;
+            replacement.scope = retained_scope;
+            replacement.kind = semantic::vhdl::ExpressionKind::integer_literal;
+            replacement.text = std::to_string(
+                *femtoseconds / *tick_femtoseconds_);
+            replacement.source = retained_source;
+            replacement.origin = retained_origin;
+            replacement.nominal_type = "@builtin:time";
+            replacement.folded = true;
+            expression = std::move(replacement);
+            return;
+        }
         if (!operand.valid() || operand.value() >= expressions.size()
             || expressions[operand.value()] == nullptr
             || expressions[operand.value()]->kind

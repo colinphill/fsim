@@ -2612,6 +2612,20 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         return hir_effective_vhdl_subtype(
             *type->vhdl->element_subtype);
     };
+    const auto standard_text_file = [&](const semantic::ExpressionId value) {
+        const auto declaration_id = hir_target_declaration(value);
+        const auto declaration = declaration_id
+            ? specialized_hir_unit_->find_declaration(*declaration_id)
+            : std::nullopt;
+        if (!declaration || declaration->vhdl == nullptr
+            || !declaration->vhdl->subtype) {
+            return false;
+        }
+        const auto subtype = hir_effective_vhdl_subtype(
+            *declaration->vhdl->subtype);
+        return subtype && !subtype->type_mark.target.valid()
+            && vhdl_simple_name(subtype->type_mark.spelling) == "text";
+    };
     const auto standard_output = [&](const semantic::ExpressionId value) {
         if (hir_target_declaration(value)) {
             return false;
@@ -3220,9 +3234,7 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             process_.operations.emplace_back(
                 LoadConstant { *handle, unsigned_value(1U, 32U) });
         } else if (const auto text_file = file_actual(0U);
-            text_file && file_element_subtype(text_file->first)
-            && file_element_subtype(text_file->first)->domain
-                == semantic::vhdl::ValueDomain::string) {
+            text_file && standard_text_file(text_file->first)) {
             handle = *text_file->second.local;
         }
         if (handle) {

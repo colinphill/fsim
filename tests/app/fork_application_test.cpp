@@ -122,13 +122,8 @@ Capture execute(
     const auto automatic_capture = simulation.find_signal(
         "fork_processes.automatic_capture");
     assert(automatic_capture);
-    const auto& process = simulation.process_program(0U);
-    const auto local = std::find_if(
-        process.debug_locals.begin(), process.debug_locals.end(),
-        [](const auto& value) { return value.name == "root.shared"; });
-    assert(local != process.debug_locals.end());
-    const auto local_index = static_cast<std::size_t>(
-        std::distance(process.debug_locals.begin(), local));
+    const auto shared = simulation.find_signal("fork_processes.root.shared");
+    assert(shared);
 
     Capture capture;
     capture.compiled_processes = simulation.compiled_process_count();
@@ -156,8 +151,7 @@ Capture execute(
                 assert(point.design_process == 0);
                 assert(!simulation.process_program(
                     point.design_process).name.empty());
-                (void)simulation.read_process_local(
-                    point.process, local_index);
+                (void)simulation.read_signal(*shared);
                 capture.child_debug_safe = true;
             }
             return false;
@@ -165,7 +159,7 @@ Capture execute(
     capture.result = simulation.run();
     capture.value = simulation.read_signal(*result).to_msb_string();
     capture.lifecycle = simulation.read_signal(*lifecycle).to_msb_string();
-    capture.local = simulation.read_process_local(0, local_index).to_msb_string();
+    capture.local = simulation.read_signal(*shared).to_msb_string();
     capture.automatic_capture
         = simulation.read_signal(*automatic_capture).to_msb_string();
     vcd.flush();

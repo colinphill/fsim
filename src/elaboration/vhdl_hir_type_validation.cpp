@@ -1843,21 +1843,39 @@ private:
                 continue;
             }
             const auto value = specialization_.find_expression(*profile.value);
-            const auto attribute = std::ranges::find_if(declarations,
-                [&](const semantic::vhdl::Declaration& candidate) {
-                    return candidate.form == Form::attribute_declaration
-                        && candidate.attribute
-                        && candidate.attribute->subtype
-                        && equal_ignoring_ascii_case(candidate.name, declaration.name)
-                        && visible_in(declaration.scope, candidate.scope);
-                });
+            semantic::vhdl::Name attribute_reference;
+            attribute_reference.spelling = declaration.name;
+            attribute_reference.canonical = declaration.name;
+            const semantic::CompiledDeclarationPredicate attribute_declaration
+                = [](const semantic::CompiledDeclarationView& candidate) {
+                      return candidate.vhdl != nullptr
+                          && candidate.vhdl->form
+                              == Form::attribute_declaration;
+                  };
+            const auto resolved_attribute
+                = semantic::CompiledDesignResolver { specialization_ }
+                      .resolve_vhdl(attribute_reference, declaration.scope,
+                          attribute_declaration)
+                      .unique();
+            const auto resolved_view = resolved_attribute
+                ? specialization_.find_declaration(*resolved_attribute)
+                : std::nullopt;
+            const semantic::vhdl::Declaration* attribute
+                = resolved_view && resolved_view->vhdl != nullptr
+                    ? resolved_view->vhdl
+                    : nullptr;
             if (!value || value->vhdl == nullptr
-                || attribute == declarations.end()) {
+                || attribute == nullptr || !attribute->attribute
+                || !attribute->attribute->subtype) {
                 continue;
             }
             const auto expected
                 = subtype_operand_type(*attribute->attribute->subtype, 0U).kind;
             using Kind = semantic::vhdl::ExpressionKind;
+            if (value->vhdl->kind == Kind::aggregate) {
+                validate_aggregate(
+                    *profile.value, *attribute->attribute->subtype);
+            }
             if ((expected == OperandClass::floating
                     && value->vhdl->kind == Kind::integer_literal)
                 || (expected == OperandClass::integer
@@ -1943,6 +1961,28 @@ private:
         if (!expression || expression->vhdl == nullptr) {
             return std::nullopt;
         }
+        constexpr std::string_view user_attribute_marker {
+            "@fsim-vhdl-user-attribute:"
+        };
+        if (expression->vhdl->nominal_type.starts_with(
+                user_attribute_marker)) {
+            const auto subtype = expression_subtype(id);
+            const auto type = subtype ? subtype_type(*subtype) : std::nullopt;
+            return type ? array_root(*type) : std::nullopt;
+        }
+        if (expression->vhdl->kind == semantic::vhdl::ExpressionKind::index
+            || expression->vhdl->kind
+                == semantic::vhdl::ExpressionKind::slice
+            || (expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::call
+                && expression->vhdl->text.starts_with("@vhdl-member:"))) {
+            if (const auto subtype = expression_subtype(id)) {
+                const auto type = subtype_type(*subtype);
+                if (type) {
+                    return array_root(*type);
+                }
+            }
+        }
         if (!expression->vhdl->nominal_type.empty()) {
             const auto nominal = named_type(
                 expression->vhdl->nominal_type,
@@ -2004,6 +2044,54 @@ private:
         return type ? array_root(*type) : std::nullopt;
     }
 
+    std::optional<SubtypeIndication> function_result_subtype(
+        const semantic::vhdl::Expression& expression) const
+    {
+        if (expression.kind != semantic::vhdl::ExpressionKind::call
+            || !expression.referenced_name
+            || expression.text.starts_with('@')
+            || expression.text.find('\'') != std::string::npos) {
+            return std::nullopt;
+        }
+        const semantic::CompiledDesignResolver resolver { specialization_ };
+        const auto candidates = resolver.resolve_vhdl_callables(
+            *expression.referenced_name, expression.scope).candidates;
+        std::vector<std::pair<std::string, semantic::ExpressionId>> actuals;
+        actuals.reserve(expression.operands.size());
+        for (std::size_t index { }; index < expression.operands.size(); ++index) {
+            actuals.emplace_back(index < expression.argument_names.size()
+                    ? expression.argument_names[index]
+                    : std::string { },
+                expression.operands[index]);
+        }
+        std::optional<semantic::DeclarationId> matched;
+        for (const auto& candidate : candidates) {
+            const auto declaration = specialization_.find_declaration(
+                candidate.body);
+            if (!declaration || declaration->vhdl == nullptr
+                || !declaration->vhdl->callable
+                || !declaration->vhdl->callable->function
+                || !declaration->vhdl->callable->return_type
+                || !callable_accepts(candidate.body, actuals)) {
+                continue;
+            }
+            if (matched && *matched != candidate.body) {
+                return std::nullopt;
+            }
+            matched = candidate.body;
+        }
+        if (!matched) {
+            return std::nullopt;
+        }
+        const auto declaration = specialization_.find_declaration(*matched);
+        return declaration && declaration->vhdl != nullptr
+                && declaration->vhdl->callable
+                && declaration->vhdl->callable->return_type
+            ? std::optional { specialized_subtype(
+                  *declaration->vhdl->callable->return_type) }
+            : std::nullopt;
+    }
+
     std::optional<SubtypeIndication> expression_subtype(
         const semantic::ExpressionId id) const
     {
@@ -2012,6 +2100,22 @@ private:
             return std::nullopt;
         }
         const auto& value = *expression->vhdl;
+        constexpr std::string_view user_attribute_marker {
+            "@fsim-vhdl-user-attribute:"
+        };
+        if (value.nominal_type.starts_with(user_attribute_marker)) {
+            return resolve_vhdl_user_attribute_subtype(
+                specialization_, value.nominal_type, value.scope);
+        }
+        if (value.kind == semantic::vhdl::ExpressionKind::call) {
+            if (const auto result = function_result_subtype(value)) {
+                return result;
+            }
+            if (const auto selection = array_selection(id);
+                selection && !selection->slice_result) {
+                return selection_result_subtype(*selection);
+            }
+        }
         if (value.referenced_name) {
             const semantic::CompiledDeclarationPredicate type_declaration
                 = [](const semantic::CompiledDeclarationView& candidate) {
@@ -2140,10 +2244,35 @@ private:
                 }
             }
         }
+        if (value.kind == semantic::vhdl::ExpressionKind::call
+            && value.text.starts_with("@vhdl-member:")
+            && value.operands.size() == 1U) {
+            const auto prefix = expression_subtype(value.operands.front());
+            const auto* record = prefix ? root_definition(*prefix) : nullptr;
+            if (record == nullptr || record->form != TypeForm::record) {
+                return std::nullopt;
+            }
+            const auto member_name = std::string_view { value.text }
+                .substr(std::string_view { "@vhdl-member:" }.size());
+            const auto member = std::ranges::find_if(
+                record->record_elements,
+                [&](const semantic::vhdl::RecordElement& element) {
+                    return equal_ignoring_ascii_case(element.name, member_name);
+                });
+            return member == record->record_elements.end()
+                ? std::nullopt
+                : std::optional { record_member_subtype(*prefix, *member) };
+        }
         if ((value.kind == semantic::vhdl::ExpressionKind::index
                 || value.kind
                     == semantic::vhdl::ExpressionKind::slice)
             && !value.operands.empty()) {
+            if (value.kind == semantic::vhdl::ExpressionKind::index) {
+                if (const auto selection = array_selection(id);
+                    selection && !selection->slice_result) {
+                    return selection_result_subtype(*selection);
+                }
+            }
             const auto base = expression_subtype(value.operands.front());
             if (!base
                 || value.kind == semantic::vhdl::ExpressionKind::slice) {
@@ -3378,7 +3507,7 @@ private:
     // formal without a default is associated, and a scalar actual has its
     // formal's type (IEEE 1076-2008 4.2.2.1, 6.5.7.1).
     bool callable_accepts(const semantic::DeclarationId body,
-        const std::vector<std::pair<std::string, semantic::ExpressionId>>& actuals)
+        const std::vector<std::pair<std::string, semantic::ExpressionId>>& actuals) const
     {
         const auto declaration = specialization_.find_declaration(body);
         if (!declaration || declaration->vhdl == nullptr
@@ -6412,6 +6541,7 @@ private:
         std::vector<semantic::ExpressionId> selectors;
         semantic::SourceSpanId source;
         bool slice_result { };
+        bool invalid_index_group { };
     };
 
     std::optional<Selection> array_selection(
@@ -6455,12 +6585,16 @@ private:
             const auto subtype = specialized_subtype(
                 *declaration->vhdl->subtype);
             std::unordered_set<std::uint32_t> visiting;
-            if (profile(subtype, visiting).kind
-                != ProfileKind::array) {
+            const auto selected_profile = profile(subtype, visiting);
+            if (selected_profile.kind != ProfileKind::array) {
                 return std::nullopt;
             }
-            return Selection {
+            Selection selection {
                 subtype, value.operands, value.source, false };
+            selection.invalid_index_group
+                = selection.selectors.size()
+                    != selected_profile.dimensions.size();
+            return selection;
         }
         if ((value.kind != semantic::vhdl::ExpressionKind::index
                 && value.kind
@@ -6499,11 +6633,37 @@ private:
             base->selectors.push_back(id);
             base->slice_result = true;
         } else {
-            base->selectors.push_back(value.operands[1]);
+            const auto group_size = value.operands.size() - 1U;
+            std::unordered_set<std::uint32_t> group_visiting;
+            const auto group_profile = profile(base->subtype, group_visiting);
+            const auto rank = group_profile.dimensions.size();
+            if (!base->selectors.empty() || group_size != rank) {
+                base->invalid_index_group = true;
+            }
+            for (std::size_t index = 1U;
+                index < value.operands.size(); ++index) {
+                base->selectors.push_back(value.operands[index]);
+            }
             base->slice_result = false;
         }
         base->source = value.source;
         return base;
+    }
+
+    std::optional<SubtypeIndication> selection_result_subtype(
+        const Selection& selection) const
+    {
+        if (selection.invalid_index_group) {
+            return std::nullopt;
+        }
+        const auto* array = root_definition(selection.subtype);
+        if (array == nullptr || array->form != TypeForm::array
+            || array->array_dimensions.empty()
+            || selection.selectors.size()
+                != array->array_dimensions.size()) {
+            return std::nullopt;
+        }
+        return array_element_subtype(selection.subtype);
     }
 
     // A static index of an object of a constrained STRING subtype must lie
@@ -6585,8 +6745,12 @@ private:
         std::unordered_set<std::uint32_t> visiting;
         const auto selected_profile = profile(
             selected->subtype, visiting);
-        if (selected->selectors.size()
-            > selected_profile.dimensions.size()) {
+        if (selected->invalid_index_group
+            || selected->selectors.size()
+                > selected_profile.dimensions.size()
+            || (!selected->slice_result
+                && selected->selectors.size()
+                    != selected_profile.dimensions.size())) {
             report(
                 "FSIM-ELAB-VHARRAYSEL-004",
                 "VHDL array selection has incompatible contextual shape",
@@ -7598,7 +7762,11 @@ private:
                        const auto operand = specialization_.find_expression(id);
                        return operand && operand->vhdl != nullptr
                            && operand->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate;
-                   })) {
+                   })
+                && std::ranges::none_of(expression.operands,
+                    [&](const semantic::ExpressionId id) {
+                        return expression_subtype(id).has_value();
+                    })) {
                 report("FSIM-ELAB-VHAGG-020",
                     "the type of a VHDL aggregate operand of a relational operator "
                     "cannot be determined",
@@ -7642,7 +7810,11 @@ private:
                        return operand && operand->vhdl != nullptr
                            && operand->vhdl->kind == semantic::vhdl::ExpressionKind::logic_literal
                            && (operand->vhdl->text == "'0'" || operand->vhdl->text == "'1'");
-                   })) {
+                   })
+                && std::ranges::none_of(expression.operands,
+                    [&](const semantic::ExpressionId id) {
+                        return expression_subtype(id).has_value();
+                    })) {
                 report("FSIM-ELAB-VHOPER-003",
                     "the operand type of a VHDL comparison of two character literals is "
                     "ambiguous",
@@ -7889,8 +8061,35 @@ private:
             }
             const auto value_expression
                 = specialization_.find_expression(*statement.value);
-            const auto target_subtype
+            auto target_subtype
                 = expression_subtype(*statement.target);
+            // An aggregate assigned to a slice takes the slice's index
+            // range (IEEE 1076-2008 9.3.3.3).
+            if (const auto target_expression
+                = specialization_.find_expression(*statement.target);
+                target_expression && target_expression->vhdl != nullptr
+                && target_expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::slice
+                && target_expression->vhdl->operands.size() == 3U
+                && (target_expression->vhdl->text == "to"
+                    || target_expression->vhdl->text == "downto")) {
+                const auto& slice = *target_expression->vhdl;
+                auto base = expression_subtype(slice.operands[0]);
+                const auto left = bound(std::nullopt, slice.operands[1]);
+                const auto right = bound(std::nullopt, slice.operands[2]);
+                if (base && left && right) {
+                    RangeConstraint range;
+                    range.kind = semantic::vhdl::RangeKind::array_index;
+                    range.left = *left;
+                    range.right = *right;
+                    range.left_expression = slice.operands[1];
+                    range.right_expression = slice.operands[2];
+                    range.descending = slice.text == "downto";
+                    base->constraints = { std::move(range) };
+                    base->unconstrained = false;
+                    target_subtype = std::move(base);
+                }
+            }
             if (value_expression
                 && value_expression->vhdl != nullptr
                 && value_expression->vhdl->kind
@@ -7946,6 +8145,168 @@ private:
 };
 
 } // namespace
+
+std::optional<semantic::vhdl::SubtypeIndication>
+resolve_vhdl_user_attribute_subtype(
+    const semantic::SpecializedHirUnit& specialization,
+    const std::string_view nominal_type,
+    const semantic::ScopeId use_scope)
+{
+    constexpr std::string_view marker {
+        "@fsim-vhdl-user-attribute:"
+    };
+    if (!nominal_type.starts_with(marker)) {
+        return std::nullopt;
+    }
+    const auto spelling = nominal_type.substr(marker.size());
+    const auto separator = spelling.rfind(':');
+    if (separator == std::string_view::npos
+        || separator == 0U || separator + 1U == spelling.size()) {
+        return std::nullopt;
+    }
+    const auto prefix = spelling.substr(0U, separator);
+    const auto attribute_name = spelling.substr(separator + 1U);
+    const auto last_dot = prefix.rfind('.');
+    const auto target_name = last_dot == std::string_view::npos
+        ? prefix
+        : prefix.substr(last_dot + 1U);
+    if (target_name.empty()) {
+        return std::nullopt;
+    }
+
+    const auto& scopes = specialization.design().semantics.scopes();
+    const auto& units = specialization.design().semantics.units();
+    const auto& declarations
+        = specialization.design().vhdl_hir.declarations();
+    const auto visible_in = [&](const semantic::ScopeId inner,
+                                const semantic::ScopeId outer) {
+        auto scope = inner;
+        for (std::size_t depth { }; depth <= scopes.size(); ++depth) {
+            if (scope == outer) {
+                return true;
+            }
+            if (!scope.valid() || scope.value() >= scopes.size()
+                || !scopes[scope.value()].parent) {
+                return false;
+            }
+            scope = *scopes[scope.value()].parent;
+        }
+        return false;
+    };
+    const auto unit_matches_prefix = [&](const semantic::ScopeId scope) {
+        if (!scope.valid() || scope.value() >= scopes.size()) {
+            return false;
+        }
+        const auto unit = scopes[scope.value()].unit;
+        if (!unit.valid() || unit.value() >= units.size()) {
+            return false;
+        }
+        const auto& unit_name = units[unit.value()].name;
+        auto remaining = prefix;
+        while (!remaining.empty()) {
+            const auto dot = remaining.find('.');
+            const auto component = remaining.substr(0U, dot);
+            if (equal_ignoring_ascii_case(component, unit_name)) {
+                return true;
+            }
+            if (dot == std::string_view::npos) {
+                break;
+            }
+            remaining.remove_prefix(dot + 1U);
+        }
+        return false;
+    };
+    const auto scope_distance = [&](const semantic::ScopeId inner,
+                                    const semantic::ScopeId outer) {
+        auto scope = inner;
+        for (std::size_t depth { }; depth <= scopes.size(); ++depth) {
+            if (scope == outer) {
+                return depth;
+            }
+            if (!scope.valid() || scope.value() >= scopes.size()
+                || !scopes[scope.value()].parent) {
+                break;
+            }
+            scope = *scopes[scope.value()].parent;
+        }
+        return scopes.size() + 1U;
+    };
+
+    const semantic::vhdl::Declaration* selected_specification { };
+    auto selected_score = std::tuple {
+        std::numeric_limits<int>::max(),
+        std::numeric_limits<int>::max(),
+        std::numeric_limits<std::size_t>::max()
+    };
+    bool ambiguous_specification { };
+    for (const auto& candidate : declarations) {
+        using Form = semantic::vhdl::DeclarationForm;
+        if (candidate.form != Form::attribute_specification
+            || !candidate.attribute
+            || !equal_ignoring_ascii_case(candidate.name, attribute_name)) {
+            continue;
+        }
+        int entity_rank = std::numeric_limits<int>::max();
+        for (const auto& entity : candidate.attribute->entity_names) {
+            if (equal_ignoring_ascii_case(entity.spelling, target_name)) {
+                entity_rank = std::min(entity_rank, 0);
+            } else if (equal_ignoring_ascii_case(entity.spelling, "others")) {
+                entity_rank = std::min(entity_rank, 1);
+            } else if (equal_ignoring_ascii_case(entity.spelling, "all")) {
+                entity_rank = std::min(entity_rank, 2);
+            }
+        }
+        if (entity_rank == std::numeric_limits<int>::max()) {
+            continue;
+        }
+        const bool visible = visible_in(use_scope, candidate.scope);
+        if (!visible && !unit_matches_prefix(candidate.scope)) {
+            continue;
+        }
+        const auto score = std::tuple {
+            entity_rank,
+            visible ? 0 : 1,
+            visible ? scope_distance(use_scope, candidate.scope)
+                    : std::size_t { }
+        };
+        if (score < selected_score) {
+            selected_score = score;
+            selected_specification = &candidate;
+            ambiguous_specification = false;
+        } else if (score == selected_score
+            && selected_specification != &candidate) {
+            ambiguous_specification = true;
+        }
+    }
+    if (selected_specification == nullptr || ambiguous_specification) {
+        return std::nullopt;
+    }
+
+    semantic::vhdl::Name reference;
+    reference.spelling = std::string { attribute_name };
+    reference.canonical = reference.spelling;
+    const semantic::CompiledDeclarationPredicate attribute_declaration
+        = [](const semantic::CompiledDeclarationView& candidate) {
+              return candidate.vhdl != nullptr
+                  && candidate.vhdl->form
+                      == semantic::vhdl::DeclarationForm::attribute_declaration;
+          };
+    const auto resolved
+        = semantic::CompiledDesignResolver { specialization }
+              .resolve_vhdl(reference, selected_specification->scope,
+                  attribute_declaration)
+              .unique();
+    if (resolved) {
+        const auto declaration = specialization.find_declaration(*resolved);
+        if (declaration && declaration->vhdl != nullptr
+            && declaration->vhdl->attribute
+            && declaration->vhdl->attribute->subtype) {
+            return *declaration->vhdl->attribute->subtype;
+        }
+    }
+
+    return std::nullopt;
+}
 
 std::vector<VhdlHirTypeValidationIssue> validate_vhdl_hir_types(
     const semantic::SpecializedHirUnit& specialization,

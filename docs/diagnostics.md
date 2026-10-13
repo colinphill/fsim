@@ -2291,7 +2291,6 @@ scheduler.
 | `FSIM-ELAB-VHCONFIG-002` | error | A configuration declaration's target entity is missing or ambiguous in its library. |
 | `FSIM-ELAB-VHCONFIG-003` | error | A configuration declaration selects a missing architecture of its target entity. |
 | `FSIM-ELAB-VHCONFIG-004` | error | A configuration declaration selects an ambiguous architecture. |
-| `FSIM-ELAB-VHCONFIG-005` | error | A configuration rule names a component with no component-style instances in the configured region. |
 | `FSIM-ELAB-VHCONFIG-006` | error | A configuration label does not select an instance of the stated component. |
 | `FSIM-ELAB-VHCONFIG-007` | error | Configuration label, `all`, or `others` rules overlap or occur more than once for one component. |
 | `FSIM-ELAB-VHCONFIG-008` | error | A configuration binding has a malformed entity aspect or selects a missing VHDL entity/architecture. |

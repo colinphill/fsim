@@ -364,6 +364,8 @@ void run_systemverilog_unsized_arithmetic_test()
         "hir_direct");
     assert(result.ok() && result.design);
     assert(result.design->processes().size() == 1U);
+    // Unsized decimal integer literals (40 and 2) are signed (IEEE 1800-2017
+    // 5.7.1), so their addition lowers to a signed operation.
     assert(std::ranges::any_of(
         result.design->processes().front().operations,
         [](const runtime::simir::Operation& operation) {
@@ -371,7 +373,7 @@ void run_systemverilog_unsized_arithmetic_test()
                 runtime::simir::Binary>(&operation);
             return binary != nullptr
                 && binary->operation
-                    == runtime::simir::BinaryOperator::add_unsigned;
+                    == runtime::simir::BinaryOperator::add_signed;
         }));
 }
 

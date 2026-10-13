@@ -673,9 +673,17 @@ bool VhdlParser::parse_vhdl_generate_declarations(
           parse_vhdl_component_configuration(previous(), false));
       continue;
     }
+    if (keyword("use", 0, true)) {
+      // A use clause in a generate or block declarative part (IEEE
+      // 1076-2008 12.4) is treated as part of the unit's context clause.
+      parsed = true;
+      if (auto item = parse_context_item()) {
+        deferred_context_items_.push_back(std::move(*item));
+      }
+      continue;
+    }
     if (keyword("variable", 0, true)
         || keyword("shared", 0, true)
-        || keyword("use", 0, true)
         || keyword("package", 0, true)) {
       parsed = true;
       const auto unsupported = advance();
@@ -1027,7 +1035,17 @@ void VhdlParser::parse_vhdl_port_map(
       }
       expect(TokenKind::Arrow, "'=>' after formal subelement",
           "FSIM-VHDL-PARSE-042");
-      auto actual = parse_expression();
+      auto actual = [&] {
+        if (!match_keyword("inertial", true)) {
+          return parse_expression();
+        }
+        const auto keyword = previous();
+        (void)require_vhdl_standard(keyword, VhdlStandard::Vhdl2008,
+            "an inertial port actual", "associate the signal directly");
+        auto value = parse_expression();
+        return Expression { ExpressionKind::Call, "@vhdl-inertial",
+            { std::move(value) }, cover(keyword.span, previous().span) };
+      }();
       auto group = std::ranges::find(
           subelement_groups, port, &SubelementGroup::port);
       if (group == subelement_groups.end()) {
@@ -1307,6 +1325,19 @@ PortConnection VhdlParser::parse_vhdl_port_connection() {
     return connection;
   }
 
+  // `inertial e` drives the formal through an implicit signal updated by
+  // an inertial assignment of `e` (IEEE 1076-2008 6.5.6.3, 6.5.7.3), as an
+  // expression actual is.
+  if (match_keyword("inertial", true)) {
+    const auto keyword = previous();
+    (void)require_vhdl_standard(keyword, VhdlStandard::Vhdl2008,
+        "an inertial port actual", "associate the signal directly");
+    auto value = parse_expression();
+    connection.value = Expression { ExpressionKind::Call, "@vhdl-inertial",
+        { std::move(value) }, cover(keyword.span, previous().span) };
+    connection.span = cover(start.span, previous().span);
+    return connection;
+  }
   connection.value = parse_expression();
   connection.span = cover(start.span, previous().span);
   return connection;

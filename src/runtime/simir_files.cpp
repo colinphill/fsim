@@ -118,18 +118,19 @@ void Interpreter::Impl::set_file_root(
 FileHandle Interpreter::Impl::open_file(
     const ProcessId process,
     const std::string_view path_text,
-    const std::string_view mode_text)
+    const std::string_view mode_text,
+    const bool vhdl)
 {
     if (processes.scheduling_domain(process)
         != ProcessSchedulingDomain::systemverilog) {
-        return open_file_unchecked(process, path_text, mode_text);
+        return open_file_unchecked(process, path_text, mode_text, vhdl);
     }
     // $fopen returns zero when the file cannot be opened (IEEE 1800-2017
     // 21.3.1).
     // A name outside the manifest root stays an error: file access is
     // confined to the project.
     try {
-        return open_file_unchecked(process, path_text, mode_text);
+        return open_file_unchecked(process, path_text, mode_text, vhdl);
     } catch (const std::runtime_error& error) {
         const std::string_view message { error.what() };
         if (message.find("manifest root") != std::string_view::npos
@@ -156,7 +157,8 @@ Interpreter::Impl::FileState* Interpreter::Impl::open_systemverilog_file(
 FileHandle Interpreter::Impl::open_file_unchecked(
     const ProcessId process,
     const std::string_view path_text,
-    const std::string_view mode_text)
+    const std::string_view mode_text,
+    const bool vhdl)
 {
     if (files.size() >= maximum_open_file_handles) {
         throw std::length_error {
@@ -271,7 +273,8 @@ FileHandle Interpreter::Impl::open_file_unchecked(
             { },
             false,
             mode->readable,
-            mode->writable });
+            mode->writable,
+            vhdl });
     return handle;
 }
 
@@ -502,7 +505,10 @@ std::string Interpreter::Impl::read_file_line(
     }
     std::string line;
     line.reserve(128);
-    while (line.size() < maximum_string_bytes) {
+    const auto maximum_line_bytes = file.vhdl
+        ? static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())
+        : maximum_string_bytes;
+    while (line.size() < maximum_line_bytes) {
         const auto character = read_file_character(process, handle);
         if (character < 0) {
             if (file.stream->eof()) {
@@ -517,6 +523,20 @@ std::string Interpreter::Impl::read_file_line(
             count = static_cast<std::uint32_t>(line.size());
             return line;
         }
+    }
+    if (file.vhdl) {
+        const auto extra = read_file_character(process, handle);
+        if (extra < 0) {
+            if (file.stream->eof()) {
+                count = static_cast<std::uint32_t>(line.size());
+                return line;
+            }
+            count = 0;
+            return { };
+        }
+        throw std::length_error {
+            "VHDL file line exceeds the 32-bit byte-count limit"
+        };
     }
     const auto extra = read_file_character(process, handle);
     if (extra < 0) {
@@ -756,7 +776,8 @@ void Interpreter::Impl::execute_file(
         const auto handle = open_file(
             process.id,
             get_string_register(process, operation.path),
-            get_string_register(process, operation.mode));
+            get_string_register(process, operation.mode),
+            operation.vhdl);
         get_register(process, operation.destination) = PackedLogic4::from_aval_bval(32, handle, 0);
         if (operation.status) {
             get_register(process, *operation.status) = PackedLogic4::from_aval_bval(2, 0, 0);

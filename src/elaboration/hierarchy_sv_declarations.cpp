@@ -713,7 +713,173 @@ namespace {
             : std::string_view { unit.library };
     }
 
+    template<typename LocalMap, typename GlobalMap>
+    bool register_static_storage_alias(LocalMap& local, GlobalMap& global,
+        const std::string& name, const std::string& path,
+        const std::string& key)
+    {
+        const auto found = local.find(name);
+        if (found == local.end()) {
+            return false;
+        }
+        const auto id = found->second;
+        local.emplace(key, id);
+        global.emplace(path + "." + key, id);
+        return true;
+    }
+
 } // namespace
+
+bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
+    const semantic::sv::Unit& unit,
+    SystemVerilogHirMaterialization& materialization,
+    const std::span<const semantic::DeclarationId> declarations,
+    const std::span<const semantic::StatementId> statements,
+    const std::string& scope_path,
+    const bool automatic,
+    const std::string& path,
+    std::vector<PendingVirtualInterfaceInitializer>& initializers,
+    const SystemVerilogPackedTypeResolver& packed_type_resolver,
+    const SystemVerilogPackedDefaultResolver& packed_default_resolver,
+    const SystemVerilogPackedFallbackResolver& packed_fallback_resolver)
+{
+    const auto& specialization = *materialization.specialization;
+    for (const auto id : declarations) {
+        const auto record = specialization.find_declaration(id);
+        if (!record || record->systemverilog == nullptr) {
+            return false;
+        }
+        const auto& source = *record->systemverilog;
+        if (scope_path.empty()
+            || (source.form != semantic::sv::DeclarationForm::variable
+                && source.form != semantic::sv::DeclarationForm::port)
+            || !source.type
+            || source.lifetime == semantic::sv::Lifetime::automatic
+            || (automatic
+                && source.lifetime != semantic::sv::Lifetime::static_lifetime)) {
+            continue;
+        }
+        const bool string = compiled_systemverilog_string_declaration(source);
+        const auto container
+            = hierarchy_sv_type_layout_detail::systemverilog_container_type(
+                specialization, *source.type);
+        const auto width
+            = hierarchy_sv_type_layout_detail::systemverilog_declaration_width(
+                specialization, source);
+        if (!width && !string && !container) {
+            continue;
+        }
+        std::optional<HirSystemVerilogConstant> packed_initializer;
+        // Runtime initializers still use the callable initialization path.
+        if (source.form == semantic::sv::DeclarationForm::variable
+            && source.initializer) {
+            if (string) {
+                if (!specialization.evaluate_string_expression(*source.initializer)) {
+                    continue;
+                }
+            } else if (container) {
+                auto element_type = *source.type;
+                element_type.unpacked_dimensions.clear();
+                element_type.container_form.reset();
+                element_type.container_element_types.clear();
+                if (!constant_container_initializer(specialization, *container,
+                        *source.initializer, &element_type)) {
+                    continue;
+                }
+            } else {
+                std::string error;
+                packed_initializer = evaluate_hir_systemverilog_typed_constant(
+                    specialization, *source.initializer, *source.type, error);
+                if (!packed_initializer || packed_initializer->unbounded
+                    || packed_initializer->width != *width) {
+                    continue;
+                }
+            }
+        }
+        const auto key = "@static:" + std::to_string(id.value());
+        if (materialization.signals.contains(key)
+            || materialization.string_objects.contains(key)
+            || materialization.container_objects.contains(key)) {
+            continue;
+        }
+        auto storage = source;
+        // Callable formals are variables, not design input/output nets.
+        storage.form = semantic::sv::DeclarationForm::variable;
+        storage.direction = semantic::sv::Direction::unknown;
+        if (source.form == semantic::sv::DeclarationForm::port
+            || packed_initializer) {
+            storage.initializer.reset();
+        }
+        storage.name = scope_path + "." + source.name;
+        if (!materialize_compiled_systemverilog_declaration(unit, id,
+                materialization, storage, path,
+                semantic::sv::UnconnectedDrive::none, initializers,
+                packed_type_resolver, packed_default_resolver,
+                packed_fallback_resolver)) {
+            return false;
+        }
+        const auto signal = register_static_storage_alias(materialization.signals,
+            design_.signal_by_name_, storage.name, materialization.path, key);
+        if (signal && packed_initializer) {
+            design_.signals_[materialization.signals.at(key)].initial_value
+                = std::move(packed_initializer->packed);
+        }
+        const auto string_object = register_static_storage_alias(
+            materialization.string_objects, design_.string_by_name_,
+            storage.name, materialization.path, key);
+        const auto container_object = register_static_storage_alias(
+            materialization.container_objects, design_.container_by_name_,
+            storage.name, materialization.path, key);
+        if (!signal && !string_object && !container_object) {
+            return false;
+        }
+    }
+    for (const auto id : statements) {
+        const auto record = specialization.find_statement(id);
+        if (!record || record->systemverilog == nullptr) {
+            return false;
+        }
+        const auto& statement = *record->systemverilog;
+        // A retained class task body belongs to the called method.
+        if (statement.kind == semantic::sv::StatementKind::task_call) {
+            continue;
+        }
+        auto nested_path = scope_path;
+        if (statement.nested_scope
+            && (!statement.label.empty() || !scope_path.empty())) {
+            const auto name = !statement.label.empty()
+                ? statement.label
+                : "$block_" + std::to_string(statement.nested_scope->value());
+            nested_path = scope_path.empty() ? name : scope_path + "." + name;
+        }
+        if (!materialize_compiled_systemverilog_static_storage(unit,
+                materialization,
+                statement.kind == semantic::sv::StatementKind::loop
+                    ? std::span<const semantic::DeclarationId> { }
+                    : statement.declarations,
+                statement.statements,
+                nested_path, automatic, path, initializers,
+                packed_type_resolver, packed_default_resolver,
+                packed_fallback_resolver)
+            || !materialize_compiled_systemverilog_static_storage(unit,
+                materialization, { }, statement.else_statements,
+                nested_path, automatic, path, initializers,
+                packed_type_resolver, packed_default_resolver,
+                packed_fallback_resolver)) {
+            return false;
+        }
+        for (const auto& alternative : statement.case_alternatives) {
+            if (!materialize_compiled_systemverilog_static_storage(unit,
+                    materialization, { }, alternative.statements,
+                    nested_path, automatic, path, initializers,
+                    packed_type_resolver, packed_default_resolver,
+                    packed_fallback_resolver)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
 
 bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
     const semantic::sv::Unit& unit,
@@ -794,6 +960,49 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         = *materialization.specialization;
     const auto& materialized_path = materialization.path;
     using Form = semantic::sv::DeclarationForm;
+    if (declaration.callable) {
+        if (declaration.callable->function
+            && declaration.callable->lifetime != semantic::sv::Lifetime::automatic
+            && declaration.type
+            && declaration.type->target.spelling != "void"
+            && (compiled_systemverilog_string_declaration(declaration)
+                || hierarchy_sv_type_layout_detail::systemverilog_container_type(
+                    working_specialization, *declaration.type)
+                || hierarchy_sv_type_layout_detail::systemverilog_declaration_width(
+                    working_specialization, declaration))) {
+            auto result = declaration;
+            result.form = Form::variable;
+            result.callable.reset();
+            result.initializer.reset();
+            if (!materialize_compiled_systemverilog_declaration(unit,
+                    declaration_id, materialization, result, path,
+                    semantic::sv::UnconnectedDrive::none,
+                    pending_virtual_interface_initializers,
+                    packed_type_resolver, packed_default_resolver,
+                    packed_fallback_resolver)) {
+                return false;
+            }
+            const auto key = "@static:" + std::to_string(declaration_id.value());
+            const auto signal = register_static_storage_alias(materialization.signals,
+                design_.signal_by_name_, result.name, materialization.path, key);
+            const auto string_object = register_static_storage_alias(
+                materialization.string_objects, design_.string_by_name_,
+                result.name, materialization.path, key);
+            const auto container_object = register_static_storage_alias(
+                materialization.container_objects, design_.container_by_name_,
+                result.name, materialization.path, key);
+            if (!signal && !string_object && !container_object) {
+                return false;
+            }
+        }
+        return materialize_compiled_systemverilog_static_storage(unit,
+            materialization, declaration.children, declaration.statements,
+            declaration.name,
+            declaration.callable->lifetime == semantic::sv::Lifetime::automatic,
+            path, pending_virtual_interface_initializers,
+            packed_type_resolver, packed_default_resolver,
+            packed_fallback_resolver);
+    }
     const auto net_type_for = [](const semantic::sv::Declaration& value,
                                   const semantic::sv::TypeReference& type) {
         const auto explicit_net_type = [](

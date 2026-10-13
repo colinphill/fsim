@@ -454,7 +454,8 @@ std::uint32_t LlvmProcessExecutor::file_open(
         }
         *result = state.context->open_file(
             state.executor->string_registers_.at(operation->path),
-            state.executor->string_registers_.at(operation->mode));
+            state.executor->string_registers_.at(operation->mode),
+            operation->vhdl);
         return 0;
     } catch (const std::exception& error) {
         if (operation != nullptr && operation->status) {
@@ -621,7 +622,15 @@ std::uint32_t LlvmProcessExecutor::file_read_line(
         if (*result != 0) {
             switch (operation->target_kind) {
             case runtime::simir::FileTextTargetKind::string_register:
-                state.executor->write_string_register(operation->target, line);
+                if (operation->vhdl_textio) {
+                    // VHDL LINE is dynamically sized. Preserve the full value
+                    // instead of applying the SystemVerilog string limit.
+                    state.executor->string_registers_.at(operation->target)
+                        = line;
+                } else {
+                    state.executor->write_string_register(
+                        operation->target, line);
+                }
                 break;
             case runtime::simir::FileTextTargetKind::packed_register:
                 state.executor->write_register(

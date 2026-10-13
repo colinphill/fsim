@@ -253,6 +253,119 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 55: static callable storage, VHDL binding, indexing and typed files
+
+Fixtures: `sv_static_callable_storage.sv`, `sv_static_interface_storage.sv`,
+`sv_bounded_queue_function_conversion.sv`,
+`sv_constant_function_and_wide_literals.sv`,
+`vhdl_lexical_replacement_characters.vhd`,
+`vhdl_component_binding_lrm.vhd`, `vhdl_guarded_bus_port.vhd`,
+`vhdl_user_attribute_subtype_context_20261013.vhd`,
+`vhdl_chained_function_result_indexing.vhd`,
+`vhdl_function_result_array_of_arrays_indexing_20261013.vhd`,
+`vhdl_partial_function_result_indexing_20261013.vhd`,
+`vhdl_typed_file_long_row_roundtrip_20261013.vhd`,
+`vhdl_typed_file_string_write_roundtrip_20261013.vhd`,
+`vhdl_record_member_preservation_file_roundtrip_20261013.vhd`,
+`vhdl_record_array_member_dynamic_index_20261013.vhd`.
+
+- Static lifetime: task/function locals, formals, implicit results and named
+  blocks use instance-owned storage, retain values across calls, and expose
+  hierarchical names (IEEE 1800-2017 6.21, 13.3; IEEE 1364 task/function
+  lifetime). Packed values, strings and containers share the same lifetime
+  rule; automatic variables remain per activation. Interface calls use the
+  selected instance's storage. Static formals copy in/out of shared storage;
+  overlapping calls therefore observe that shared state.
+- Queue assignment and function returns convert between queue bounds,
+  retaining only the elements that fit a bounded destination (1800 7.10).
+  Constant-function locals receive their type's default value; wide unsized
+  based literals retain their full width (5.7.1, 6.8, 13.4.3). Negative
+  localparams keep their parameter identity through normalization, fixing
+  the long-standing `param-extend` regression in unsigned expressions.
+- VHDL port associations: `inertial` expression actuals receive expression
+  adapters (1076-2008 6.5.6.3); slice-by-slice output associations copy only
+  the corresponding formal slice. Aggregate assignments to slices use the
+  slice's index range. Selected protected-object names visible through use
+  clauses resolve in the object scope.
+- VHDL physical time: decimal real literals scale exactly to femtoseconds
+  before rounding. Function, procedure, generate and configuration context
+  items retain their use clauses.
+- VHDL lexical and configuration forms: replacement `!`/`%` characters,
+  guarded bus ports, omitted/default bindings and selected component names
+  parse with their standard meanings. An entity with only defaulted
+  generics can bind an empty generic component interface; empty `all`
+  configuration specifications are legal. An omitted architecture selects
+  the most recently analyzed architecture when source order is available.
+- VHDL user attributes retain their declared subtype for aggregate and
+  selected-value contexts. Each parenthesized index group supplies all
+  dimensions of its array subtype (1076-1993 6.1); chained groups descend
+  into array-valued elements. Function results are evaluated once before
+  selection. Partial multidimensional groups are rejected.
+- VHDL typed files: STRINGWRITE's TEXT shortcut applies only to TEXT;
+  fixed-shape files preserve record boundaries, long rows and CHARACTER
+  bytes. VHDL reads are no longer subject to the SystemVerilog 4096-byte
+  line limit. STRING record-member writes preserve adjacent fields.
+  The execution-context adapter retains the public object layout and vtable
+  and uses the existing serialized/JIT-hashed FileOpen VHDL flag.
+- Runner: VEST typed-file readers execute after their own writers in one
+  workspace, without importing another simulator's file representation.
+  Filtered runs retain both members and remove stale files before writing.
+  Five runner unit tests cover the chaining behavior.
+
+Excluded this batch: Verilator `t_static_task_args` expects independent
+recursive input arguments in a static task (1800 13.3.2), and VESTs `tc300`
+expects an implementation-dependent REAL overflow to be an analysis error
+(1076-1993 3.1.4/3.1.4.1). Typed-file readers remain in scope.
+
+Investigated and left open: runtime/time-zero static initializers, unnamed
+process-block locals, package callable storage coverage, automatic local
+events and hierarchical block defparams; defaulted function calls whose
+parentheses need late disambiguation from array indexes; configuration
+maps that refer to component generics; broader VHDL user-attribute and
+runtime-bound array cases. This batch does not claim complete static
+storage or language closure.
+
+Measurement: the union of the b51a and b54b failure sets in all six suites
+(`m55a`, frozen `wip55-luna6`), followed by the 295-case fast set
+(`m55afs`), overlaid on b54b. There are **66 closures: 64 new passes and
+two exclusions**, with no observed regressions. New passes: ivtest 9,
+Verilator 4, VESTs 35 and nvc 16. This is a failure-set overlay, not a new
+full-suite qualification; the next full six-suite run is due at Batch 57.
+The fast set passes all 295 cases.
+
+Validation: full release build; labelled CTest 422/433, with exactly the
+11 previously recorded failures; diagnostic catalog 2957; runner unit
+tests 5/5; source-package manifest 2713 files in a clean tracked-source
+snapshot including registered new files. Focused fixtures pass in both
+engines, including the NUL/space typed-record round trip and dynamic
+record-member indexes. A direct file-runtime test confirms preservation
+of the SystemVerilog 4096-byte limit; its later missing-file exception
+expectation fails identically on the pre-file-fix control and remains
+open. The aggregate runtime test stops at an earlier known failure.
+
+Excluded (out-of-scope) cases:
+
+- ivtest 160: Icarus diagnostics in gold output (53), Icarus system tasks
+  (23), Icarus process order (22), implementation-defined or Icarus-only
+  results (22), iverilog options and test types (18), Icarus syntax (11),
+  SystemVerilog features in Verilog-2005 mode (11).
+- Verilator 200: SystemC, PLI/VPI or DPI harness (85), `$c` (32),
+  non-standard behaviour, flags and configuration (30), C++ harness (24),
+  lint-only (21), missing top file (8).
+- nvc 217: nvc-specific test kinds (208), nvc options (5), named work
+  libraries (2), nvc operator extensions (2).
+- VESTs 1: implementation-dependent REAL overflow detection (`tc300`).
+- sv-tests and VHDL Compliance-Tests: none.
+
+| Suite | Batch 54 (wip54e) | Batch 55 (wip55-luna6 overlay) |
+|---|---:|---:|
+| VESTs | 3383/3648 | 3418/3647 |
+| nvc regress | 688/1265 | 704/1265 |
+| VHDL Compliance-Tests | 33/72 | 33/72 |
+| ivtest | 2394/2666 | 2403/2666 |
+| Verilator test_regress | 1363/2216 | 1367/2215 |
+| sv-tests | 1418/1497 | 1418/1497 |
+
 ### Batch 54: constant-expression widths, hierarchical typedefs and members, unpacked slices and concatenations, nvc Verilog
 
 Fixtures: `sv_language_details_batch54.sv`, `vhdl_assertion_sensitivity.vhd`.

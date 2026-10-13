@@ -1062,7 +1062,7 @@ endmodule
                 !rejected_result.ok()
                 && has_diagnostic(rejected_result, code));
         };
-    const auto accept_recursive_return =
+    const auto accept_function_return =
         [](const std::string_view path,
             const std::string_view source,
             const std::string_view top) {
@@ -1229,7 +1229,7 @@ endmodule
 )",
         "sv:work.nonstatic_kind_mismatch_function_return",
         "FSIM-ELAB-SVFUNC-008");
-    reject_fixed_return(
+    accept_function_return(
         "queue_bound_mismatch_function_return.sv",
         R"(
 module queue_bound_mismatch_function_return;
@@ -1241,8 +1241,7 @@ module queue_bound_mismatch_function_return;
   initial target = result();
 endmodule
 )",
-        "sv:work.queue_bound_mismatch_function_return",
-        "FSIM-ELAB-SVFUNC-008");
+        "sv:work.queue_bound_mismatch_function_return");
     reject_fixed_return(
         "element_profile_mismatch_function_return.sv",
         R"(
@@ -1298,7 +1297,7 @@ endmodule
 )",
         "sv:work.task_container_argument_mismatch",
         "FSIM-ELAB-SVTASK-011");
-    accept_recursive_return(
+    accept_function_return(
         "recursive_dynamic_function_return.sv",
         R"(
 module recursive_dynamic_function_return;
@@ -1380,7 +1379,7 @@ endmodule
 )",
         "sv:work.profile_mismatch_function_return",
         "FSIM-ELAB-SVSLICE-006");
-    accept_recursive_return(
+    accept_function_return(
         "recursive_fixed_function_return.sv",
         R"(
 module recursive_fixed_function_return;

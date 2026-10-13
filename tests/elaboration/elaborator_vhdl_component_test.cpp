@@ -1215,30 +1215,34 @@ end architecture;
     assert(has_diagnostic(
         missing_target, "FSIM-ELAB-VHCOMP-003"));
 
-    const auto ambiguous_architecture = elaborate_vhdl_component_text(
-        "ambiguous_component_architecture.vhd",
+    const auto most_recent_architecture = elaborate_vhdl_component_text(
+        "most_recent_component_architecture.vhd",
         R"(
-entity ambiguous_leaf is
+entity selected_architecture_leaf is
 end entity;
-architecture first of ambiguous_leaf is
+architecture z_earlier of selected_architecture_leaf is
 begin
 end architecture;
-architecture second of ambiguous_leaf is
+architecture a_latest of selected_architecture_leaf is
 begin
 end architecture;
-entity ambiguous_component_top is
+entity selected_architecture_top is
 end entity;
-architecture rtl of ambiguous_component_top is
-  component ambiguous_leaf is
+architecture rtl of selected_architecture_top is
+  component selected_architecture_leaf is
   end component;
 begin
-  child: ambiguous_leaf port map ();
+  child: selected_architecture_leaf port map ();
 end architecture;
 )",
-        "vhdl:work.ambiguous_component_top(rtl)");
-    assert(!ambiguous_architecture.ok());
-    assert(has_diagnostic(
-        ambiguous_architecture, "FSIM-ELAB-VHCOMP-005"));
+        "vhdl:work.selected_architecture_top(rtl)");
+    assert(most_recent_architecture.ok());
+    assert(
+        component_specialization(
+            most_recent_architecture,
+            "selected_architecture_top.child")
+            .unit
+        == "vhdl:work.selected_architecture_leaf(a_latest)");
 
     const auto ambiguous_entity = elaborate_vhdl_component_text(
         "ambiguous_component_entity.vhd",

@@ -94,9 +94,8 @@ struct Expression {
     support::RareVector<std::string> aggregate_choices { };
     support::RareVector<std::vector<Expression>>
         aggregate_choice_expressions { };
-    // Set only on elaboration-internal folded VHDL enumeration constants so
-    // contextual nominal typing survives substitution into comparisons and
-    // conditional expressions.
+    // Preserve contextual VHDL nominal typing when enumeration constants or
+    // user-defined attribute values are substituted into expressions.
     std::string nominal_type;
     // Verilog/SystemVerilog source string literals are decoded once by the
     // parser. The original token spelling remains in text for diagnostics and
@@ -912,6 +911,9 @@ struct VariableDeclaration {
     // True for a SystemVerilog local declared `static`, which keeps its value
     // across calls of an automatic callable (IEEE 1800-2017 6.21).
     bool systemverilog_static { };
+    // An explicit automatic lifetime must survive projection to HIR even
+    // when the enclosing block or callable has static lifetime.
+    bool systemverilog_automatic { };
     // True for an unpacked array value parameter or local parameter (IEEE
     // 1800-2017 6.20.2); it is kept as a constant container object
     // initialized by its value. Only a non-local one may be overridden.

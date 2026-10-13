@@ -3,8 +3,11 @@
 
 #include "fsim/semantic/compiled_design.hpp"
 #include "fsim/semantic/compiled_design_specialization.hpp"
+#include "fsim/semantic/vhdl_hir.hpp"
 
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace fsim::elaboration {
@@ -14,6 +17,12 @@ struct VhdlHirTypeValidationIssue {
     std::string message;
     semantic::SourceSpanId source;
 };
+
+[[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
+resolve_vhdl_user_attribute_subtype(
+    const semantic::SpecializedHirUnit& specialization,
+    std::string_view nominal_type,
+    semantic::ScopeId use_scope);
 
 [[nodiscard]] std::vector<VhdlHirTypeValidationIssue>
 validate_vhdl_hir_types(

@@ -1625,26 +1625,51 @@ Expression VhdlParser::parse_lvalue() {
   for (;;) {
     if (match(TokenKind::LeftParen)) {
       bool saw_slice = false;
+      std::vector<Expression> indices;
       do {
         Expression first = parse_expression();
         if (match_keyword("downto", true) || match_keyword("to", true)) {
           saw_slice = true;
+          // A legal slice has one range, rather than a list of selectors.
+          // Preserve the parser's existing recovery for mixed forms by
+          // flushing any preceding selectors before building the slice.
+          for (auto& index : indices) {
+            const auto index_span = cover(expression.span, index.span);
+            expression = Expression{
+                ExpressionKind::Index, "index",
+                {std::move(expression), std::move(index)}, index_span};
+          }
+          indices.clear();
           const auto direction = previous();
           Expression second = parse_expression();
+          const auto slice_span = cover(expression.span, second.span);
           expression = Expression{
               ExpressionKind::Slice, detail::ascii_lower(direction.text),
               {std::move(expression), std::move(first), std::move(second)},
-              cover(expression.span, second.span)};
-        } else {
+              slice_span};
+        } else if (saw_slice) {
+          const auto index_span = cover(expression.span, first.span);
           expression = Expression{
               ExpressionKind::Index, "index",
-              {std::move(expression), std::move(first)},
-              cover(expression.span, first.span)};
+              {std::move(expression), std::move(first)}, index_span};
+        } else {
+          indices.push_back(std::move(first));
         }
       } while (match(TokenKind::Comma));
       expect(TokenKind::RightParen, "')' after indices",
              saw_slice ? "FSIM-VHDL-PARSE-031"
                        : "FSIM-VHDL-PARSE-032");
+      if (!indices.empty()) {
+        const auto group_span = cover(expression.span, previous().span);
+        std::vector<Expression> operands;
+        operands.reserve(indices.size() + 1U);
+        operands.push_back(std::move(expression));
+        for (auto& index : indices) {
+          operands.push_back(std::move(index));
+        }
+        expression = Expression{
+            ExpressionKind::Index, "index", std::move(operands), group_span};
+      }
       expression.span = cover(expression.span, previous().span);
       continue;
     }

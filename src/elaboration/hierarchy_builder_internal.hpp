@@ -1435,6 +1435,19 @@ private:
         SpecializationInfo& specialization,
         std::optional<std::uint32_t> program_owner);
 
+    bool materialize_compiled_systemverilog_static_storage(
+        const semantic::sv::Unit& unit,
+        SystemVerilogHirMaterialization& materialization,
+        std::span<const semantic::DeclarationId> declarations,
+        std::span<const semantic::StatementId> statements,
+        const std::string& scope_path,
+        bool automatic,
+        const std::string& path,
+        std::vector<PendingVirtualInterfaceInitializer>& initializers,
+        const SystemVerilogPackedTypeResolver& packed_type_resolver,
+        const SystemVerilogPackedDefaultResolver& packed_default_resolver,
+        const SystemVerilogPackedFallbackResolver& packed_fallback_resolver);
+
     bool materialize_compiled_systemverilog_declaration(
         const semantic::sv::Unit& unit,
         semantic::DeclarationId declaration_id,

@@ -732,6 +732,32 @@ end configuration;
         invalid_open_result,
         "FSIM-ELAB-VHCOMP-005"));
 
+    auto unused_component_configuration = fsim::frontend::parse_text(
+        "unused_component_configuration.vhd",
+        R"(
+entity unused_binding_target is
+end entity;
+architecture rtl of unused_binding_target is
+begin
+end architecture;
+entity unused_component_configuration_top is
+end entity;
+architecture rtl of unused_component_configuration_top is
+  component dormant_component is
+  end component;
+  for all : dormant_component
+    use entity work.unused_binding_target;
+begin
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(unused_component_configuration.ok());
+    const auto unused_component_configuration_result =
+        compile_and_elaborate(
+            unused_component_configuration.design,
+            "vhdl:work.unused_component_configuration_top(rtl)");
+    assert(unused_component_configuration_result.ok());
+
     auto invalid = fsim::frontend::parse_text(
         "invalid_configuration_bindings.vhd",
         R"(
@@ -786,7 +812,6 @@ end architecture;
             "vhdl:work.invalid_configuration_top(rtl)");
     assert(!invalid_result.ok());
     for (const auto code : {
-             "FSIM-ELAB-VHCONFIG-005",
              "FSIM-ELAB-VHCONFIG-006",
              "FSIM-ELAB-VHCONFIG-007",
              "FSIM-ELAB-VHCONFIG-008"}) {

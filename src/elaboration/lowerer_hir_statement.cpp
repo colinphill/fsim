@@ -6131,10 +6131,14 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     : ProjectedDelayMode::inertial,
             };
         }
-        if (const auto string_binding = declaration
-                ? hir_string_binding(
-                      *declaration, hir_process_scope_, true)
-                : std::nullopt) {
+        if (const auto string_binding = [&] {
+                if (const auto hierarchical = hir_hierarchical_string_binding(*target)) {
+                    return hierarchical;
+                }
+                return declaration
+                    ? hir_string_binding(*declaration, hir_process_scope_, true)
+                    : std::nullopt;
+            }()) {
             const auto string_element
                 = target_expression->systemverilog != nullptr
                     && target_expression->systemverilog->kind
@@ -7427,6 +7431,41 @@ bool Lowerer::lower_hir_statement_unsuspended(
         }();
         if (projected_packed_slice_context) {
             aggregate_context_subtype = projected_packed_slice_context;
+        } else if (target_subtype && slice
+            && target_expression->vhdl != nullptr
+            && target_expression->vhdl->kind
+                == semantic::vhdl::ExpressionKind::slice
+            && target_operands.size() == 3U
+            && (selection_operation == "to" || selection_operation == "downto")
+            && value_expression && value_expression->vhdl != nullptr
+            && value_expression->vhdl->kind
+                == semantic::vhdl::ExpressionKind::aggregate
+            && target_subtype->constraints.size() == 1U
+            && target_subtype->constraints.front().kind
+                == semantic::vhdl::RangeKind::array_index) {
+            // An aggregate assigned to a slice takes the slice's index range
+            // (IEEE 1076-2008 9.3.3.3).
+            const auto left = hir_constant_integer(target_operands[1]);
+            const auto right = hir_constant_integer(target_operands[2]);
+            const bool descending = selection_operation == "downto";
+            if (left && right
+                && (descending ? *left >= *right : *left <= *right)) {
+                semantic::vhdl::RangeConstraint selected_range;
+                selected_range.kind = semantic::vhdl::RangeKind::array_index;
+                selected_range.left = *left;
+                selected_range.right = *right;
+                selected_range.left_expression = target_operands[1];
+                selected_range.right_expression = target_operands[2];
+                selected_range.descending = descending;
+                selected_range.source = target_expression->vhdl->source;
+                auto projected = *target_subtype;
+                projected.constraints.front() = std::move(selected_range);
+                projected.executable_width = assignment_width
+                    ? std::optional<std::size_t> { *assignment_width }
+                    : std::nullopt;
+                projected.unconstrained = false;
+                aggregate_context_subtype = std::move(projected);
+            }
         }
         const auto vhdl_aggregate
             = value_expression && value_expression->vhdl != nullptr
@@ -14253,15 +14292,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
             // A hierarchical event, `-> top.u.e` (IEEE 1800-2017 15.5.1,
             // 23.6).
             if (!binding || !binding->signal) {
-                const auto target_expression
-                    = specialized_hir_unit_->find_expression(*input.target);
-                if (target_expression
-                    && target_expression->systemverilog != nullptr
-                    && target_expression->systemverilog->kind
-                        == semantic::sv::ExpressionKind::name
-                    && target_expression->systemverilog->text.find('.')
-                        != std::string::npos) {
-                    const auto& path = target_expression->systemverilog->text;
+                const auto target_path
+                    = hir_systemverilog_constant_path(*input.target);
+                if (target_path && target_path->find('.') != std::string::npos) {
+                    const auto& path = *target_path;
                     auto signal = hir_named_signal(path, hir_process_scope_);
                     if (!signal) {
                         signal = hir_hierarchical_signal(path);

@@ -1146,6 +1146,12 @@ Expression VhdlParser::parse_primary()
                     if (found != values->second.end()) {
                         auto value = found->second;
                         value.span = cover(name.span, attribute.span);
+                        // Keep the specification's prefix and designator so
+                        // the HIR can recover the declared attribute subtype
+                        // after replacing this occurrence with its static
+                        // value (IEEE 1076-2008 6.7).
+                        value.nominal_type = "@fsim-vhdl-user-attribute:"
+                            + canonical + ":" + designator;
                         for (;;) {
                             if (match(TokenKind::Dot)) {
                                 const auto member = expect_identifier("selected attribute element");
@@ -1184,11 +1190,16 @@ Expression VhdlParser::parse_primary()
                             }
                             expect(TokenKind::RightParen, "')' after index",
                                 "FSIM-VHDL-PARSE-033");
+                            const auto suffix_span
+                                = cover(name.span, previous().span);
+                            std::vector<Expression> operands;
+                            operands.reserve(indices.size() + 1U);
+                            operands.push_back(std::move(value));
                             for (auto& index : indices) {
-                                value = Expression { ExpressionKind::Index, "index",
-                                    { std::move(value), std::move(index) },
-                                    cover(name.span, previous().span) };
+                                operands.push_back(std::move(index));
                             }
+                            value = Expression { ExpressionKind::Index, "index",
+                                std::move(operands), suffix_span };
                         }
                         return value;
                     }
@@ -1366,12 +1377,26 @@ Expression VhdlParser::parse_primary()
                             cover(name.span, previous().span)
                         };
                     } else {
+                        std::vector<Expression> indices;
+                        indices.push_back(std::move(first));
+                        while (match(TokenKind::Comma)) {
+                            indices.push_back(parse_expression());
+                        }
                         expect(TokenKind::RightParen, "')' after chained index",
                             "FSIM-VHDL-PARSE-033");
+                        const auto suffix_span = cover(name.span, previous().span);
+                        // Keep all selectors from one parenthesized suffix in
+                        // one Index node. A multidimensional array uses one
+                        // parenthesized selector group; a nested array applies
+                        // another group after the element subtype is selected.
+                        std::vector<Expression> operands;
+                        operands.reserve(indices.size() + 1U);
+                        operands.push_back(std::move(call));
+                        for (auto& index : indices) {
+                            operands.push_back(std::move(index));
+                        }
                         call = Expression { ExpressionKind::Index,
-                            "index",
-                            { std::move(call), std::move(first) },
-                            cover(name.span, previous().span) };
+                            "index", std::move(operands), suffix_span };
                     }
                     continue;
                 }

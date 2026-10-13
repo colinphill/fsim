@@ -848,6 +848,15 @@ std::optional<ConstantValue> constant_name_value(
     auto value = initializer != nullptr && initializer->folded
         && dependency_free(initializer->dependencies)
         ? constant_value(*initializer) : std::nullopt;
+    // Keep a named negative constant as a reference. Replacing a parameter
+    // such as `P = -1` with the literal `-1` changes its context sizing: the
+    // unary minus then receives an enclosing expression's width instead of
+    // the parameter's already-established value width (IEEE 1800-2017
+    // 6.20.2, 11.8.1).
+    if (value && value->kind == ConstantKind::integer
+        && value->integer < 0) {
+        return std::nullopt;
+    }
     // A local parameter with a type or a range converts its value to that
     // type (IEEE 1800-2017 6.20.2). The folded literal is a 32-bit signed
     // integer, so only int and integer parameters whose value fits fold;

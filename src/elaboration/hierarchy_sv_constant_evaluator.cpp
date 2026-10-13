@@ -3667,6 +3667,44 @@ private:
                 if (!initialize_local_array(declaration_id, source)) {
                     return false;
                 }
+                if (frames_.back().arrays.contains(declaration_id)
+                    || source.form
+                        != semantic::sv::DeclarationForm::variable
+                    || !source.type || source.type->container_form
+                    || !source.type->unpacked_dimensions.empty()
+                    || !source.type->value_form) {
+                    continue;
+                }
+                using TypeForm = semantic::sv::TypeForm;
+                const auto form = *source.type->value_form;
+                if (form != TypeForm::packed_integral
+                    && form != TypeForm::enumeration
+                    && form != TypeForm::packed_structure
+                    && form != TypeForm::packed_union
+                    && form != TypeForm::tagged_union) {
+                    continue;
+                }
+                std::unordered_set<std::uint32_t> visiting;
+                const auto width = resolved_type_width(
+                    *source.type, &specialization_, visiting);
+                if (!width || *width == 0U
+                    || *width > maximum_constant_width) {
+                    error_ = "constant function local type width is unresolved";
+                    return false;
+                }
+                auto initial_value = make_value(
+                    PackedLogic4 {
+                        static_cast<std::size_t>(*width),
+                        source.type->four_state ? Logic4::x : Logic4::zero },
+                    source.type->signed_value, false,
+                    type_domain(*source.type));
+                auto converted = convert_record_type(
+                    std::move(initial_value), *source.type);
+                if (!converted) {
+                    return false;
+                }
+                frames_.back().values.insert_or_assign(
+                    declaration_id, std::move(*converted));
                 continue;
             }
             auto value = evaluate(*source.initializer);

@@ -504,6 +504,28 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
                     && repeat != 0U;
                 const bool separator = !first && !run_continues;
                 first = false;
+                // A fixed CHARACTER array is serialized byte by byte. The
+                // SystemVerilog string display format would replace NUL with
+                // a space, and one character conversion writes only one byte.
+                if (leaf.kind == Kind::characters && leaf_width > 8U) {
+                    for (std::size_t offset = leaf_width; offset != 0U; offset -= 8U) {
+                        const auto byte = allocate_register(
+                            8U, frontend::ValueDomain::Bit2);
+                        process_.operations.emplace_back(Extract {
+                            byte, part, static_cast<std::uint32_t>(offset - 8U), 8U });
+                        const auto character = allocate_string_register();
+                        process_.operations.emplace_back(LoadStringConstant {
+                            character, { } });
+                        append_formatted(character, byte, 8U,
+                            runtime::simir::OutputFormat::character, false,
+                            frontend::SystemVerilogScalarKind::None);
+                        process_.operations.emplace_back(FileWriteString {
+                            handle, character,
+                            separator && offset == leaf_width ? " " : "",
+                            { }, false, false });
+                    }
+                    continue;
+                }
                 // Each part is written as it is formatted, so a line is not
                 // limited by the runtime string size.
                 const auto text = allocate_string_register();
@@ -599,13 +621,12 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
     if (string_element && declaration) {
         if (const auto text = hir_string_binding(*declaration, hir_process_scope_, true);
             text && text->local) {
-            const auto line = allocate_string_register();
+            const auto line = *text->local;
             process_.operations.emplace_back(FileReadLine { allocate_register(32U,
                                                                 frontend::ValueDomain::Integer),
                 handle, line, 0U, FileReadKind::line, true });
             const auto characters = allocate_register(32U, frontend::ValueDomain::Integer);
             process_.operations.emplace_back(StringLength { characters, line });
-            process_.operations.emplace_back(CopyStringRegister { *text->local, line });
             if (length) {
                 const auto length_declaration = hir_target_declaration(*length);
                 const auto length_binding = length_declaration
@@ -898,9 +919,12 @@ Lowerer::HirVhdlFileImageResult Lowerer::lower_hir_vhdl_file_image(
         }
         process_.operations.emplace_back(CopyRegister {
             *target->local, assemble(parts, part_width) });
-        process_.operations.emplace_back(FileReadLine { allocate_register(32U,
-                                                            frontend::ValueDomain::Integer),
-            handle, allocate_string_register(), 0U, FileReadKind::line, false });
+        const auto discarded_line = allocate_register(
+            1U, frontend::ValueDomain::Bit2);
+        process_.operations.emplace_back(FileReadLine {
+            allocate_register(32U, frontend::ValueDomain::Integer),
+            handle, discarded_line, 0U, FileReadKind::line, false,
+            FileTextTargetKind::packed_register, 1U });
         return HirVhdlFileImageResult::lowered;
     }
 

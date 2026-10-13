@@ -168,6 +168,12 @@ public:
 
     [[nodiscard]] virtual FileHandle open_file(
         std::string_view, std::string_view);
+    /// Preserve the established virtual callback ABI while forwarding the
+    /// serialized language metadata for a generated FileOpen operation.
+    [[nodiscard]] FileHandle open_file(
+        const std::string_view path,
+        const std::string_view mode,
+        bool vhdl);
     virtual void close_file(FileHandle);
     virtual void write_file(
         FileHandle, std::string_view, bool);
@@ -596,4 +602,7 @@ public:
     /// another one is allocated at the same address.
     [[nodiscard]] virtual DirectSignalReadCapabilityKey
     direct_signal_read_capability_key() const noexcept;
+
+protected:
+    [[nodiscard]] static bool current_file_open_is_vhdl() noexcept;
 };

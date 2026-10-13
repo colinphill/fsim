@@ -1576,24 +1576,15 @@ void VerilogParser::parse_procedural_declaration(Statement& block) {
     if (match(TokenKind::Assign)) {
       initializer = parse_expression();
     }
-    // An automatic variable is initialized each time its scope is entered,
-    // also inside a static callable or block (IEEE 1800-2017 6.21).
-    if (automatic && initializer && !automatic_callable_) {
-      Statement initialization;
-      initialization.kind = StatementKind::Assignment;
-      initialization.assignment_kind = AssignmentKind::Blocking;
-      initialization.target = Expression{
-          ExpressionKind::Identifier, name.text, {}, name.span};
-      initialization.value = *initializer;
-      initialization.span = span_from(name, previous());
-      block.statements.push_back(std::move(initialization));
-    }
     block.declarations.push_back(VariableDeclaration{
         name.text,
         std::move(declaration_type),
         std::move(initializer),
         span_from(name, previous())});
     block.declarations.back().systemverilog_static = static_lifetime;
+    block.declarations.back().systemverilog_automatic = automatic
+        || (!static_lifetime && unit_default_automatic_
+            && !in_task_ && current_function_name_.empty());
     if (!match(TokenKind::Comma)) {
       break;
     }

@@ -5,7 +5,10 @@
 #include <limits>
 
 namespace fsim::runtime::simir {
+
 namespace {
+
+thread_local bool vhdl_file_open_requested { };
 
 [[nodiscard]] std::uint64_t allocate_nonwrapping_owner_token() noexcept
 {
@@ -146,6 +149,28 @@ void ProcessExecutionContext::write_container_object_dynamic_part_element(
     throw std::logic_error {
         "alternate process executor does not support file open"
     };
+}
+
+FileHandle ProcessExecutionContext::open_file(
+    const std::string_view path,
+    const std::string_view mode,
+    const bool vhdl)
+{
+    const auto previous = vhdl_file_open_requested;
+    vhdl_file_open_requested = vhdl;
+    try {
+        const auto result = open_file(path, mode);
+        vhdl_file_open_requested = previous;
+        return result;
+    } catch (...) {
+        vhdl_file_open_requested = previous;
+        throw;
+    }
+}
+
+bool ProcessExecutionContext::current_file_open_is_vhdl() noexcept
+{
+    return vhdl_file_open_requested;
 }
 
 void ProcessExecutionContext::close_file(FileHandle)

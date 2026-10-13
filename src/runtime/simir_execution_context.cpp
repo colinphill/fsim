@@ -496,7 +496,8 @@ void Interpreter::Impl::ExecutionContext::write_container_object_dynamic_part_el
 [[nodiscard]] FileHandle Interpreter::Impl::ExecutionContext::open_file(
     const std::string_view path,
     const std::string_view mode){
-    return owner.open_file(process, path, mode);
+    return owner.open_file(
+        process, path, mode, current_file_open_is_vhdl());
 }
 
 void Interpreter::Impl::ExecutionContext::close_file(const FileHandle handle){

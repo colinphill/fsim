@@ -537,15 +537,47 @@ end architecture;
                   ExpressionKind::Call &&
               selection_statements[1].value.text == "downto",
           "multidimensional reads and subarray slices retain HIR");
-  require(selection_statements[2].target.kind == ExpressionKind::Index &&
-              selection_statements[2].target.operands[0].kind ==
-                  ExpressionKind::Index &&
-              selection_statements[3].target.kind == ExpressionKind::Slice &&
-              selection_statements[3].target.operands[0].kind ==
-                  ExpressionKind::Index &&
-              selection_statements[4].target.operands[0].kind ==
-                  ExpressionKind::Index,
-          "multidimensional targets and chained selections retain HIR");
+  const auto &matrix_target = selection_statements[2].target;
+  const auto &nested_slice_target = selection_statements[3].target;
+  const auto &nested_cell_target = selection_statements[4].target;
+  require(
+      matrix_target.kind == ExpressionKind::Index &&
+          matrix_target.operands.size() == 3 &&
+          matrix_target.operands[0].kind == ExpressionKind::Identifier &&
+          matrix_target.operands[0].text == "local_matrix" &&
+          matrix_target.operands[1].kind == ExpressionKind::IntegerLiteral &&
+          matrix_target.operands[1].text == "1" &&
+          matrix_target.operands[2].kind == ExpressionKind::IntegerLiteral &&
+          matrix_target.operands[2].text == "2" &&
+          nested_slice_target.kind == ExpressionKind::Slice &&
+          nested_slice_target.operands.size() == 3 &&
+          nested_slice_target.text == "downto" &&
+          nested_slice_target.operands[0].kind == ExpressionKind::Index &&
+          nested_slice_target.operands[0].operands.size() == 2 &&
+          nested_slice_target.operands[0].operands[0].kind ==
+              ExpressionKind::Identifier &&
+          nested_slice_target.operands[0].operands[0].text == "nested" &&
+          nested_slice_target.operands[0].operands[1].kind ==
+              ExpressionKind::IntegerLiteral &&
+          nested_slice_target.operands[0].operands[1].text == "0" &&
+          nested_slice_target.operands[1].kind == ExpressionKind::IntegerLiteral &&
+          nested_slice_target.operands[1].text == "3" &&
+          nested_slice_target.operands[2].kind == ExpressionKind::IntegerLiteral &&
+          nested_slice_target.operands[2].text == "2" &&
+          nested_cell_target.kind == ExpressionKind::Index &&
+          nested_cell_target.operands.size() == 2 &&
+          nested_cell_target.operands[0].kind == ExpressionKind::Index &&
+          nested_cell_target.operands[0].operands.size() == 2 &&
+          nested_cell_target.operands[0].operands[0].kind ==
+              ExpressionKind::Identifier &&
+          nested_cell_target.operands[0].operands[0].text == "nested" &&
+          nested_cell_target.operands[0].operands[1].kind ==
+              ExpressionKind::IntegerLiteral &&
+          nested_cell_target.operands[0].operands[1].text == "1" &&
+          nested_cell_target.operands[1].kind == ExpressionKind::IntegerLiteral &&
+          nested_cell_target.operands[1].text == "2",
+      "multidimensional selectors stay grouped and nested indexing stays "
+      "chained");
 
   const auto discrete_index = parse_text("discrete_array_index_type.vhd",
                                          R"(

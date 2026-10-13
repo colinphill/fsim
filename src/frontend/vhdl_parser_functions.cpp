@@ -947,6 +947,14 @@ FunctionDeclaration VhdlParser::parse_vhdl_function(
           function.variables, previous());
       continue;
     }
+    if (keyword("use", 0, true)) {
+      // A use clause in a subprogram declarative part (IEEE 1076-2008
+      // 12.4) is treated as part of the enclosing unit's context clause.
+      if (auto item = parse_context_item()) {
+        deferred_context_items_.push_back(std::move(*item));
+      }
+      continue;
+    }
     if (parse_vhdl_local_nonobject_declaration(
             function.constants,
             function.type_aliases,
@@ -1201,6 +1209,14 @@ ProcedureDeclaration VhdlParser::parse_vhdl_procedure(
     if (match_keyword("file", true)) {
       parse_vhdl_file_declaration(
           procedure.variables, previous());
+      continue;
+    }
+    if (keyword("use", 0, true)) {
+      // A use clause in a subprogram declarative part (IEEE 1076-2008
+      // 12.4) is treated as part of the enclosing unit's context clause.
+      if (auto item = parse_context_item()) {
+        deferred_context_items_.push_back(std::move(*item));
+      }
       continue;
     }
     if (parse_vhdl_local_nonobject_declaration(

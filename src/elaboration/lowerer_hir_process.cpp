@@ -795,15 +795,18 @@ bool Lowerer::initialize_hir_declarations(
             return result;
         }
         const auto& frame = hir_callable_frames_[*active_hir_callable_];
-        auto result = frame.debug_name.empty()
+        const auto base = frame.debug_name.empty()
             ? "@hir-callable-"
                 + std::to_string(frame.declaration.value()) + "::"
                 + std::string { name }
             : frame.debug_name + "." + std::string { name };
-        if (!debug_local_names_.emplace(result).second) {
-            result += "@hir-callable-"
-                + std::to_string(frame.invocation_identity);
-            debug_local_names_.emplace(result);
+        auto result = base;
+        std::size_t occurrence { };
+        while (!debug_local_names_.emplace(result).second) {
+            result = base + "@hir-callable-"
+                + std::to_string(frame.invocation_identity)
+                + "-declaration-" + std::to_string(declaration_id.value())
+                + "-" + std::to_string(occurrence++);
         }
         return result;
     };
@@ -827,6 +830,9 @@ bool Lowerer::initialize_hir_declarations(
                 && scopes[scope.value()].name == "<loop>";
         }();
         if (declaration->systemverilog != nullptr) {
+            if (hir_static_storage(declaration_id)) {
+                continue;
+            }
             using Form = semantic::sv::DeclarationForm;
             const auto form = declaration->systemverilog->form;
             if (form != Form::port && form != Form::net
@@ -910,7 +916,10 @@ bool Lowerer::initialize_hir_declarations(
                 = active_hir_callable_
                 && !hir_callable_frames_[*active_hir_callable_]
                         .type.automatic
-                && !first_initialization;
+                && !first_initialization
+                && declaration->systemverilog != nullptr
+                && declaration->systemverilog->lifetime
+                    != semantic::sv::Lifetime::automatic;
             if (first_initialization) {
                 hir_local_container_registers_.emplace(
                     declaration_id.value(), destination);
@@ -1064,7 +1073,10 @@ bool Lowerer::initialize_hir_declarations(
                 = active_hir_callable_
                 && !hir_callable_frames_[*active_hir_callable_]
                         .type.automatic
-                && !first_initialization;
+                && !first_initialization
+                && declaration->systemverilog != nullptr
+                && declaration->systemverilog->lifetime
+                    != semantic::sv::Lifetime::automatic;
             if (is_hir_vhdl_environment_call_path(declaration_id)
                 && declaration->vhdl->initializer
                 && !retained_static) {
@@ -1101,7 +1113,10 @@ bool Lowerer::initialize_hir_declarations(
                 = active_hir_callable_
                 && !hir_callable_frames_[*active_hir_callable_]
                         .type.automatic
-                && !first_initialization;
+                && !first_initialization
+                && declaration->systemverilog != nullptr
+                && declaration->systemverilog->lifetime
+                    != semantic::sv::Lifetime::automatic;
             if (first_initialization) {
                 hir_local_string_registers_.emplace(
                     declaration_id.value(), destination);
@@ -1332,7 +1347,10 @@ bool Lowerer::initialize_hir_declarations(
             = active_hir_callable_
             && !hir_callable_frames_[*active_hir_callable_]
                     .type.automatic
-            && !first_initialization;
+            && !first_initialization
+            && declaration->systemverilog != nullptr
+            && declaration->systemverilog->lifetime
+                != semantic::sv::Lifetime::automatic;
         locals_.insert_or_assign(binding->name, destination);
         if (first_initialization) {
             hir_local_registers_.emplace(
@@ -3296,6 +3314,67 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
                     ? SignalUpdateDomain::systemverilog_active
                     : SignalUpdateDomain::generic,
             });
+        } else if (const auto subelements = specialized_hir_unit_->find_expression(
+                       *description.output_actual);
+            subelements && subelements->vhdl != nullptr
+            && subelements->vhdl->kind == semantic::vhdl::ExpressionKind::aggregate
+            && subelements->vhdl->text == "@vhdl-formal-subelements") {
+            // An output formal associated slice by slice (IEEE 1076-2008
+            // 6.5.7.1): each actual receives its part of the formal.
+            if (!signal.packed_range
+                || signal.packed_range->width() != register_width(value)) {
+                process_ = { };
+                return std::nullopt;
+            }
+            const auto& range = *signal.packed_range;
+            const bool descending = range.left >= range.right;
+            const auto low = std::min(range.left, range.right);
+            const auto high = std::max(range.left, range.right);
+            const auto position = [&](const std::int64_t index)
+                -> std::optional<std::uint32_t> {
+                if (index < low || index > high) {
+                    return std::nullopt;
+                }
+                return static_cast<std::uint32_t>(descending
+                        ? index - range.right
+                        : range.right - index);
+            };
+            for (const auto& association : subelements->vhdl->associations) {
+                if (association.choices.size() != 1U) {
+                    process_ = { };
+                    return std::nullopt;
+                }
+                const auto choice = specialized_hir_unit_->find_expression(
+                    association.choices.front());
+                std::optional<std::int64_t> first;
+                std::optional<std::int64_t> last;
+                if (choice && choice->vhdl != nullptr
+                    && choice->vhdl->kind == semantic::vhdl::ExpressionKind::binary
+                    && (choice->vhdl->text == "to" || choice->vhdl->text == "downto")
+                    && choice->vhdl->operands.size() == 2U) {
+                    first = hir_constant_integer(choice->vhdl->operands[0]);
+                    last = hir_constant_integer(choice->vhdl->operands[1]);
+                } else {
+                    first = hir_constant_integer(association.choices.front());
+                    last = first;
+                }
+                const auto first_position = first ? position(*first) : std::nullopt;
+                const auto last_position = last ? position(*last) : std::nullopt;
+                if (!first_position || !last_position) {
+                    process_ = { };
+                    return std::nullopt;
+                }
+                const auto offset = std::min(*first_position, *last_position);
+                const auto width = std::max(*first_position, *last_position)
+                    - offset + 1U;
+                const auto part = allocate_register(width, register_domain(value));
+                process_.operations.emplace_back(Extract {
+                    part, value, offset, width });
+                if (!lower_hir_output_actual_write(association.value, part)) {
+                    process_ = { };
+                    return std::nullopt;
+                }
+            }
         } else if (!lower_hir_output_actual_write(
                 *description.output_actual, value)) {
             process_ = { };

@@ -525,57 +525,34 @@ endmodule
             fsim::app::Simulation simulation {
                 std::move(*project), config.run.max_deltas, engine
             };
-            std::optional<fsim::runtime::simir::ProcessId> process_id;
-            std::optional<std::size_t> function_text;
-            std::optional<std::size_t> task_text;
-            std::optional<std::size_t> function_memory;
-            std::optional<std::size_t> task_memory;
-            bool function_count = false;
-            bool task_count = false;
-            for (std::size_t id = 0;
-                 id < simulation.design_ir().processes().size(); ++id) {
-                const auto& process = simulation.process_program(
-                    static_cast<fsim::runtime::simir::ProcessId>(id));
-                for (std::size_t index = 0;
-                    index < process.debug_string_locals.size(); ++index) {
-                    const auto& name = process.debug_string_locals[index].name;
-                    if (name == "retained_function.outer.text") {
-                        process_id = process.id;
-                        function_text = index;
-                    } else if (name == "retained_task.scope.text") {
-                        process_id = process.id;
-                        task_text = index;
-                    }
-                }
-                for (std::size_t index = 0;
-                    index < process.debug_container_locals.size(); ++index) {
-                    const auto& name = process.debug_container_locals[index].name;
-                    if (name == "retained_function.outer.memory") {
-                        process_id = process.id;
-                        function_memory = index;
-                    } else if (name == "retained_task.scope.memory") {
-                        process_id = process.id;
-                        task_memory = index;
-                    }
-                }
-                function_count = function_count
-                    || std::ranges::any_of(
-                        process.debug_locals,
-                        [](const auto& local) {
-                            return local.name
-                                == "retained_function.outer.inner.count";
-                        });
-                task_count = task_count
-                    || std::ranges::any_of(
-                        process.debug_locals,
-                        [](const auto& local) {
-                            return local.name
-                                == "retained_task.scope.count";
-                        });
-            }
-            assert(
-                process_id && function_text && task_text
-                && function_memory && task_memory
+            const auto& strings = simulation.design().string_objects();
+            const auto& containers = simulation.design().container_objects();
+            const auto function_text = std::ranges::find_if(strings,
+                [](const auto& object) {
+                    return object.name
+                        == "static_callable_lifetime.retained_function.outer.text";
+                });
+            const auto task_text = std::ranges::find_if(strings,
+                [](const auto& object) {
+                    return object.name
+                        == "static_callable_lifetime.retained_task.scope.text";
+                });
+            const auto function_memory = std::ranges::find_if(containers,
+                [](const auto& object) {
+                    return object.name
+                        == "static_callable_lifetime.retained_function.outer.memory";
+                });
+            const auto task_memory = std::ranges::find_if(containers,
+                [](const auto& object) {
+                    return object.name
+                        == "static_callable_lifetime.retained_task.scope.memory";
+                });
+            const auto function_count = simulation.find_signal(
+                "static_callable_lifetime.retained_function.outer.inner.count");
+            const auto task_count = simulation.find_signal(
+                "static_callable_lifetime.retained_task.scope.count");
+            assert(function_text != strings.end() && task_text != strings.end()
+                && function_memory != containers.end() && task_memory != containers.end()
                 && function_count && task_count);
             const auto function_first = simulation.find_signal(
                 "static_callable_lifetime.function_first");
@@ -598,16 +575,14 @@ endmodule
                 && simulation.read_signal(*task_first).low_word().aval == 8
                 && simulation.read_signal(*task_second).low_word().aval == 11);
             assert(
-                simulation.read_process_string_local(
-                    *process_id, *function_text)
+                simulation.read_string_object(function_text->id)
                     == "ABB"
-                && simulation.read_process_string_local(
-                       *process_id, *task_text)
+                && simulation.read_string_object(task_text->id)
                     == "TXX");
-            const auto retained_function_memory = simulation.read_process_container_local(
-                *process_id, *function_memory);
-            const auto retained_task_memory = simulation.read_process_container_local(
-                *process_id, *task_memory);
+            assert(simulation.read_signal(*function_count).low_word().aval == 2
+                && simulation.read_signal(*task_count).low_word().aval == 2);
+            const auto retained_function_memory = simulation.read_container_object(function_memory->id);
+            const auto retained_task_memory = simulation.read_container_object(task_memory->id);
             assert(
                 retained_function_memory.elements[1].low_word().aval == 4
                 && retained_task_memory.elements[1].low_word().aval == 6);

@@ -129,16 +129,56 @@ VhdlParser::parse_vhdl_component_configuration(
       TokenKind::Colon,
       "':' after configuration instantiation list",
       "FSIM-VHDL-PARSE-207");
-  const auto component =
+  auto component =
       expect_identifier(
           "component name in configuration");
+  // A component declared in a package may be named by a selected name
+  // (IEEE 1076-2008 7.3.2.1).
+  while (at(TokenKind::Dot) && at(TokenKind::Identifier, 1)) {
+    (void)advance();
+    component = advance();
+  }
   result.component_name =
       vhdl_name(component.text);
-  const auto use =
-      expect_keyword(
-          "use", true, "FSIM-VHDL-PARSE-208");
-  result.binding =
-      parse_vhdl_binding_indication(use);
+  // A binding indication without an entity aspect (IEEE 1076-2008 7.3.2.1)
+  // keeps the default binding, the entity named like the component (7.3.3),
+  // and supplies its generic or port map.
+  if (!keyword("use", 0, true)
+      && (keyword("generic", 0, true) || keyword("port", 0, true)
+          || (require_end_for && keyword("end", 0, true)))) {
+    VhdlBindingIndication incremental;
+    incremental.kind = VhdlBindingAspectKind::Entity;
+    incremental.entity_name = "work." + result.component_name;
+    if (match_keyword("generic", true)) {
+      Instance map_holder;
+      parse_vhdl_generic_map(map_holder, previous());
+      incremental.generic_map = std::move(map_holder.parameter_overrides);
+    }
+    if (match_keyword("port", true)) {
+      parse_vhdl_binding_port_map(incremental.port_map, previous());
+    }
+    // A component configuration may omit the binding indication entirely.
+    if (!keyword("end", 0, true)
+        || !incremental.generic_map.empty()
+        || !incremental.port_map.empty()) {
+      expect(TokenKind::Semicolon,
+          "';' after configuration binding indication",
+          "FSIM-VHDL-PARSE-214");
+    }
+    incremental.span = span_from(component, previous());
+    result.binding = std::move(incremental);
+  } else {
+    const auto use =
+        expect_keyword(
+            "use", true, "FSIM-VHDL-PARSE-208");
+    result.binding =
+        parse_vhdl_binding_indication(use);
+  }
+  // A block configuration of the bound architecture (IEEE 1076-2008 3.4.3)
+  // is not retained; its instances take their default bindings.
+  if (require_end_for && keyword("for", 0, true)) {
+    skip_vhdl_configuration_for_block();
+  }
 
   if (require_end_for) {
     expect_keyword(
@@ -223,6 +263,14 @@ VhdlParser::parse_vhdl_block_configuration(
       }
       continue;
     }
+    // A use clause in a block configuration (IEEE 1076-2008 3.4.2) makes
+    // its names visible to the configuration.
+    if (keyword("use", 0, true)) {
+      if (auto item = parse_context_item()) {
+        deferred_context_items_.push_back(std::move(*item));
+      }
+      continue;
+    }
     const auto unsupported = advance();
     error(
         unsupported,
@@ -268,6 +316,14 @@ DesignUnit VhdlParser::parse_vhdl_configuration(
       "is", true, "FSIM-VHDL-PARSE-205");
   while (!at_end() && !keyword("for", 0, true)
          && !keyword("end", 0, true)) {
+    // A use clause in a configuration declarative part (IEEE 1076-2008
+    // 3.4.1) joins the unit's context clause.
+    if (keyword("use", 0, true)) {
+      if (auto item = parse_context_item()) {
+        unit.vhdl_context.push_back(std::move(*item));
+      }
+      continue;
+    }
     const auto unsupported = advance();
     error(
         unsupported,
@@ -303,6 +359,10 @@ DesignUnit VhdlParser::parse_vhdl_configuration(
   unit.vhdl_configuration =
       std::move(declaration);
   unit.span = span_from(start, previous());
+  for (auto& item : deferred_context_items_) {
+    unit.vhdl_context.push_back(std::move(item));
+  }
+  deferred_context_items_.clear();
   return unit;
 }
 

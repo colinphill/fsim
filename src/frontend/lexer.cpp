@@ -582,11 +582,19 @@ class Lexer {
 
   void lex_string() {
     const auto begin = current_location();
+    const bool percent_delimited = is_vhdl() && peek() == '%';
+    const char delimiter = percent_delimited ? '%' : '"';
     // In a macro's `" string, `\`" is an escaped quote, not the end of the
     // string (IEEE 1800-2017 22.5.1).
     const bool macro_string = !is_vhdl() && !result_.tokens.empty()
         && result_.tokens.back().kind == TokenKind::Backtick
         && result_.tokens.back().span.end.offset == begin.offset;
+    std::string normalized_text;
+    if (percent_delimited) {
+      // Normalize the VHDL replacement delimiter to the ordinary spelling so
+      // parser consumers can keep using the existing doubled-quote handling.
+      normalized_text.push_back('"');
+    }
     advance();
     bool terminated = false;
     while (!at_end()) {
@@ -597,14 +605,29 @@ class Lexer {
         advance();
         continue;
       }
-      if (peek() == '"') {
+      if (peek() == delimiter) {
         advance();
-        if (is_vhdl() && peek() == '"') {
+        if (percent_delimited && peek() == '%') {
+          advance();
+          normalized_text.push_back('%');
+          continue;
+        }
+        if (is_vhdl() && !percent_delimited && peek() == '"') {
           advance();
           continue;
         }
         terminated = true;
         break;
+      }
+      if (percent_delimited && peek() == '"') {
+        const auto quote = current_location();
+        advance();
+        diagnose(
+            "FSIM-FE-LEX-001",
+            "a quote cannot appear inside a percent-delimited VHDL string literal",
+            quote);
+        normalized_text.push_back('"');
+        continue;
       }
       if (!is_vhdl() && peek() == '\\') {
         advance();
@@ -616,10 +639,16 @@ class Lexer {
       if (peek() == '\n' || peek() == '\r') {
         break;
       }
+      if (percent_delimited) {
+        normalized_text.push_back(peek());
+      }
       advance();
     }
     if (!terminated) {
       diagnose("FSIM-FE-LEX-004", "unterminated string literal", begin);
+    }
+    if (percent_delimited && terminated) {
+      normalized_text.push_back('"');
     }
     if (is_vhdl() && vhdl_standard_ < VhdlStandard::Vhdl2008 && terminated && !result_.tokens.empty()) {
         const auto& specifier_token = result_.tokens.back();
@@ -650,6 +679,9 @@ class Lexer {
         }
     }
     emit(TokenKind::StringLiteral, begin);
+    if (percent_delimited && terminated) {
+      result_.tokens.back().text = std::move(normalized_text);
+    }
   }
 
   void lex_quote() {
@@ -713,7 +745,7 @@ class Lexer {
       lex_number();
       return;
     }
-    if (character == '"') {
+    if (character == '"' || (is_vhdl() && character == '%')) {
       lex_string();
       return;
     }
@@ -846,6 +878,10 @@ class Lexer {
         }
         return;
       case '!':
+        if (is_vhdl()) {
+          emit(TokenKind::Pipe, begin);
+          return;
+        }
         if (consume_if('=')) {
           if (!is_vhdl() && consume_if('?')) {
             emit(TokenKind::WildcardNotEqual, begin);

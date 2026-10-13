@@ -1207,6 +1207,11 @@ namespace {
             output.scope = scope;
             output.form = sv::DeclarationForm::variable;
             output.name = input.name;
+            output.lifetime = input.systemverilog_automatic
+                ? sv::Lifetime::automatic
+                : input.systemverilog_static
+                ? sv::Lifetime::static_lifetime
+                : sv::Lifetime::implicit;
             output.source = variable_source;
             output.origin = variable_origin;
             output.type = type_reference(
