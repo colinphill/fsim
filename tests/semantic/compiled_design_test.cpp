@@ -3783,6 +3783,45 @@ void test_compiled_vhdl_resolver_array_shapes()
         exact, scope, rank_mismatch, scope).value_or(true));
     assert(!resolver.vhdl_array_shapes_match(
         exact, scope, residual, scope).has_value());
+    assert(resolver.vhdl_array_lengths_match(
+        exact, scope, direction_mismatch, scope).value_or(false));
+    assert(resolver.vhdl_array_lengths_match(
+        exact, scope, bounds_mismatch, scope).value_or(false));
+    assert(!resolver.vhdl_array_lengths_match(
+        exact, scope, rank_mismatch, scope).value_or(true));
+    assert(!resolver.vhdl_array_lengths_match(
+        exact, scope, residual, scope).has_value());
+    const auto equal_storage_different_lengths = subtype({
+        constraint(0, 2, false), constraint(1, 0, true) });
+    assert(!resolver.vhdl_array_lengths_match(
+        exact, scope, equal_storage_different_lengths, scope).value_or(true));
+    const auto null_ascending = subtype({
+        constraint(1, 0, false), constraint(3, 1, true) });
+    const auto null_descending = subtype({
+        constraint(0, 5, true), constraint(0, 2, false) });
+    assert(resolver.vhdl_array_lengths_match(
+        null_ascending, scope, null_descending, scope).value_or(false));
+    assert(!resolver.vhdl_array_lengths_match(
+        exact, scope, null_descending, scope).value_or(true));
+    auto unresolved_direction_unequal = subtype({
+        constraint(0, 1, false), constraint(3, 1, true) });
+    unresolved_direction_unequal.constraints.front().direction_from_bounds
+        = true;
+    assert(!resolver.vhdl_array_lengths_match(
+        exact, scope, unresolved_direction_unequal, scope).has_value());
+    const auto equal_endpoint_known = subtype({
+        constraint(7, 7, false), constraint(3, 1, true) });
+    auto equal_endpoint_from_bounds = equal_endpoint_known;
+    equal_endpoint_from_bounds.constraints.front().direction_from_bounds
+        = true;
+    assert(resolver.vhdl_array_lengths_match(
+        equal_endpoint_known, scope, equal_endpoint_from_bounds, scope)
+        .value_or(false));
+    auto equal_endpoint_explicit_null = equal_endpoint_known;
+    equal_endpoint_explicit_null.constraints.front().null = true;
+    assert(!resolver.vhdl_array_lengths_match(
+        equal_endpoint_known, scope, equal_endpoint_explicit_null, scope)
+        .value_or(true));
     assert(resolver.vhdl_subtype_profiles_match(
         exact, scope, exact, scope));
     assert(!resolver.vhdl_subtype_profiles_match(
@@ -4440,7 +4479,8 @@ void test_specialized_hir_parameter_bit_selection()
     const auto add_expression
         = [&](const sv::ExpressionKind kind, std::string text,
               std::vector<ExpressionId> operands = { },
-              const std::optional<DeclarationId> selected = std::nullopt) {
+              const std::optional<DeclarationId> selected = std::nullopt,
+              const bool signed_value = false) {
               const auto id = builder.model.add_expression_identity(
                   scope, builder.source, builder.origin);
               sv::Expression expression;
@@ -4449,6 +4489,7 @@ void test_specialized_hir_parameter_bit_selection()
               expression.kind = kind;
               expression.text = std::move(text);
               expression.operands = std::move(operands);
+              expression.signed_value = signed_value;
               expression.source = builder.source;
               expression.origin = builder.origin;
               if (selected) {
@@ -4523,6 +4564,46 @@ void test_specialized_hir_parameter_bit_selection()
         = add_parameter("ASCENDING", 0, 7, "8'b10000000");
     const auto [unknown_parameter, unknown]
         = add_parameter("UNKNOWN", 3, 0, "4'b1x0z");
+    const auto unsized_based_x = add_expression(
+        sv::ExpressionKind::logic_literal, "'bx");
+    const auto unsized_based_z = add_expression(
+        sv::ExpressionKind::logic_literal, "'bz");
+    const auto unsized_based_hex_x = add_expression(
+        sv::ExpressionKind::logic_literal, "'hX");
+    const auto unsized_based_one = add_expression(
+        sv::ExpressionKind::logic_literal, "'b1");
+    const auto unsized_based_decimal_x = add_expression(
+        sv::ExpressionKind::logic_literal, "'dx");
+    const auto unsized_based_decimal_one = add_expression(
+        sv::ExpressionKind::logic_literal, "'d1");
+    const auto sized_based_decimal_x = add_expression(
+        sv::ExpressionKind::logic_literal, "8'dx");
+    const auto unsized_signed_x = add_expression(
+        sv::ExpressionKind::logic_literal, "'sbx", { }, std::nullopt, true);
+    const auto unsized_signed_one = add_expression(
+        sv::ExpressionKind::logic_literal, "'sb1", { }, std::nullopt, true);
+    const auto unsized_signed_all_ones = add_expression(
+        sv::ExpressionKind::logic_literal, "'shFFFFFFFF", { },
+        std::nullopt, true);
+    const auto canonical_signed_all_ones = add_expression(
+        sv::ExpressionKind::logic_literal,
+        "svconst-v3:b=0:w=32:s=1:u=0:d=0:v=" + std::string(32U, '1'));
+    const auto unsized_unsigned_all_ones = add_expression(
+        sv::ExpressionKind::logic_literal, "'hFFFFFFFF");
+    const auto sized_based_x = add_expression(
+        sv::ExpressionKind::logic_literal, "8'bx");
+    const auto unbased_unsized_x = add_expression(
+        sv::ExpressionKind::logic_literal, "'x");
+    const auto unbased_unsized_one = add_expression(
+        sv::ExpressionKind::logic_literal, "'1");
+    const auto unsized_signed_decimal_2p31 = add_expression(
+        sv::ExpressionKind::logic_literal, "'sd2147483648", { },
+        std::nullopt, true);
+    const auto unsized_signed_decimal_ffffffff = add_expression(
+        sv::ExpressionKind::logic_literal, "'sd4294967295", { },
+        std::nullopt, true);
+    const auto unsized_based_hex_leading_zeroes = add_expression(
+        sv::ExpressionKind::logic_literal, "'h000000000");
     const auto [signed_parameter, signed_bits]
         = add_parameter("SIGNED_BITS", 7, 0, "8'sh8", true);
     const auto [extended_x_parameter, extended_x]
@@ -4733,6 +4814,24 @@ void test_specialized_hir_parameter_bit_selection()
     builder.systemverilog_unit(unit).declarations.push_back(narrow);
     const auto narrow_call = add_expression(sv::ExpressionKind::call,
         "narrow", { }, narrow);
+    const auto negative_one = add_expression(
+        sv::ExpressionKind::unary, "-", { literal(1) });
+    const auto clog2_negative_one = add_expression(
+        sv::ExpressionKind::call, "$clog2", { negative_one });
+    const auto signed_8_all_ones = add_expression(
+        sv::ExpressionKind::logic_literal, "8'shff", { }, std::nullopt,
+        true);
+    const auto clog2_signed_8 = add_expression(
+        sv::ExpressionKind::call, "$clog2", { signed_8_all_ones });
+    const auto unsigned_8_all_ones = add_expression(
+        sv::ExpressionKind::logic_literal, "8'hff");
+    const auto clog2_unsigned_8 = add_expression(
+        sv::ExpressionKind::call, "$clog2", { unsigned_8_all_ones });
+    const auto signed_64_all_ones = add_expression(
+        sv::ExpressionKind::logic_literal, "64'shffffffffffffffff", { },
+        std::nullopt, true);
+    const auto clog2_signed_64 = add_expression(
+        sv::ExpressionKind::call, "$clog2", { signed_64_all_ones });
 
     auto design = builder.finish();
     assert(design.valid());
@@ -4767,12 +4866,13 @@ void test_specialized_hir_parameter_bit_selection()
                             << (actual_bits ? *actual_bits : "unknown")
                             << " integral="
                             << (actual_integral
-                                    ? std::to_string(*actual_integral)
-                                    : "unknown")
+                                       ? std::to_string(*actual_integral)
+                                       : "unknown")
                             << " truth="
                             << (actual_truth
-                                    ? (*actual_truth ? "true" : "false")
-                                    : "unknown") << '\n';
+                                       ? (*actual_truth ? "true" : "false")
+                                       : "unknown")
+                            << '\n';
               }
               assert(actual_bits == std::optional<std::string> { bits });
               assert(actual_integral == integral);
@@ -4784,6 +4884,40 @@ void test_specialized_hir_parameter_bit_selection()
     assert_selected(ascending_right, "0", 0, false);
     assert_selected(unknown_x, "x", std::nullopt, std::nullopt);
     assert_selected(unknown_z, "z", std::nullopt, std::nullopt);
+    assert_selected(unsized_based_x, std::string(32U, 'x'),
+        std::nullopt, std::nullopt);
+    assert_selected(unsized_based_z, std::string(32U, 'z'),
+        std::nullopt, std::nullopt);
+    assert_selected(unsized_based_hex_x, std::string(32U, 'x'),
+        std::nullopt, std::nullopt);
+    assert_selected(unsized_based_one,
+        std::string(31U, '0') + "1", 1, true);
+    assert_selected(unsized_based_decimal_x, std::string(32U, 'x'),
+        std::nullopt, std::nullopt);
+    assert_selected(unsized_based_decimal_one,
+        std::string(31U, '0') + "1", 1, true);
+    assert_selected(sized_based_decimal_x, std::string(8U, 'x'),
+        std::nullopt, std::nullopt);
+    assert_selected(unsized_signed_x, std::string(32U, 'x'),
+        std::nullopt, std::nullopt);
+    assert_selected(unsized_signed_one,
+        std::string(31U, '0') + "1", 1, true);
+    assert_selected(unsized_signed_all_ones, std::string(32U, '1'),
+        -1, true);
+    assert_selected(canonical_signed_all_ones, std::string(32U, '1'),
+        -1, true);
+    assert_selected(unsized_unsigned_all_ones, std::string(32U, '1'),
+        4'294'967'295LL, true);
+    assert_selected(sized_based_x, std::string(8U, 'x'),
+        std::nullopt, std::nullopt);
+    assert_selected(unbased_unsized_x, "x", std::nullopt, std::nullopt);
+    assert_selected(unbased_unsized_one, "1", 1, true);
+    assert_selected(unsized_signed_decimal_2p31,
+        "010000000000000000000000000000000", 2'147'483'648LL, true);
+    assert_selected(unsized_signed_decimal_ffffffff,
+        "011111111111111111111111111111111", 4'294'967'295LL, true);
+    assert_selected(unsized_based_hex_leading_zeroes,
+        std::string(36U, '0'), 0, false);
     assert_selected(out_of_range, "x", std::nullopt, std::nullopt);
     assert_selected(signed_sign_bit, "0", 0, false);
     assert_selected(signed_value_bit, "1", 1, true);
@@ -4811,6 +4945,14 @@ void test_specialized_hir_parameter_bit_selection()
         == std::optional<std::int64_t> { 1 });
     assert(specialized->evaluate_integral_expression(narrow_call)
         == std::optional<std::int64_t> { 0x1d });
+    assert(specialized->evaluate_integral_expression(clog2_negative_one)
+        == std::optional<std::int64_t> { 32 });
+    assert(specialized->evaluate_integral_expression(clog2_signed_8)
+        == std::optional<std::int64_t> { 8 });
+    assert(specialized->evaluate_integral_expression(clog2_unsigned_8)
+        == std::optional<std::int64_t> { 8 });
+    assert(specialized->evaluate_integral_expression(clog2_signed_64)
+        == std::optional<std::int64_t> { 64 });
 }
 
 void test_specialized_hir_vhdl_while_function()

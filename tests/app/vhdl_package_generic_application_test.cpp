@@ -177,6 +177,57 @@ std::string key_for(
 }
 #endif
 
+void verify_variable_class_signal_actual_rejected(
+    const std::filesystem::path& directory) {
+  const auto workspace = directory / "variable-class-signal-negative";
+  std::filesystem::create_directories(workspace);
+  const auto source = workspace / "variable_class_signal_actual.vhd";
+  {
+    std::ofstream output(source, std::ios::binary);
+    output << R"(
+entity variable_class_signal_actual is
+end entity;
+architecture rtl of variable_class_signal_actual is
+  signal target_signal : integer := 0;
+  procedure store(variable target : inout integer) is
+  begin
+    target := 1;
+  end procedure;
+begin
+  process
+  begin
+    store(target_signal);
+    wait;
+  end process;
+end architecture;
+)";
+    assert(output.good());
+  }
+
+  fsim::project::Config config;
+  config.base_directory = workspace;
+  config.project.name = "vhdl-variable-class-signal-negative";
+  config.project.top = "vhdl:work.variable_class_signal_actual(rtl)";
+  config.project.time_resolution = "1ns";
+  config.run.max_deltas = 1000;
+  fsim::project::SourceSet sources;
+  sources.language = fsim::project::Language::vhdl;
+  sources.standard = "2008";
+  sources.library = "work";
+  sources.compilation_unit = "file";
+  sources.files = {source};
+  config.source_sets.push_back(std::move(sources));
+
+  fsim::diagnostic::Engine diagnostics;
+  const auto project = fsim::app::build_project(config, diagnostics);
+  assert(!project);
+  assert(std::ranges::any_of(
+      diagnostics.diagnostics(),
+      [](const auto& diagnostic) {
+        return diagnostic.code == "FSIM-ELAB-VHPROC-018";
+      }));
+}
+
 void verify(
     const Capture& capture,
     const std::uint32_t body_increment) {
@@ -203,6 +254,7 @@ int main() {
       std::filesystem::temp_directory_path()
       / ("fsim-vhdl-package-generic-" + std::to_string(serial))};
   std::filesystem::create_directories(directory.path);
+  verify_variable_class_signal_actual_rejected(directory.path);
   const auto declaration =
       directory.path / "service_template.vhd";
   const auto body =
@@ -271,9 +323,12 @@ end entity;
 architecture rtl of package_leaf is
 begin
   process(input_value)
+    variable total_work : api.value_type;
   begin
     output_value <= api.apply(input_value);
-    api.update(input_value, total_value);
+    total_work := total_value;
+    api.update(input_value, total_work);
+    total_value <= total_work;
   end process;
 end architecture;
 

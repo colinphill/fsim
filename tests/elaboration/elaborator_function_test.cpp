@@ -241,6 +241,29 @@ endmodule
         && has_diagnostic(
             rejected_malformed, "FSIM-ELAB-SVFUNC-010"));
 
+    const auto class_open_duplicate = fsim::frontend::parse_text(
+        "class_open_duplicate.sv",
+        R"(
+class class_open_duplicate;
+  function integer sum3(integer x = 1, integer y = 2);
+    return x + y;
+  endfunction
+endclass
+module class_open_duplicate_top(output integer result);
+  class_open_duplicate object_handle = new;
+  initial result = object_handle.sum3(.y(), .y(6));
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(class_open_duplicate.ok());
+    const auto rejected_class_open_duplicate = compile_and_elaborate(
+        class_open_duplicate.design,
+        "sv:work.class_open_duplicate_top");
+    assert(
+        !rejected_class_open_duplicate.ok()
+        && has_diagnostic(
+            rejected_class_open_duplicate, "FSIM-ELAB-HIR-001"));
+
     const auto ref_signal = fsim::frontend::parse_text(
         "function_ref_signal.sv",
         R"(

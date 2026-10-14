@@ -453,6 +453,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         }
         if (const auto* scan = fsim::runtime::simir::operation_get_if<runtime::simir::FileScan>(&operation)) {
             runtime::simir::InputScanResult scanned;
+            const auto active_time_format
+                = state.context->systemverilog_time_format();
             const bool vhdl_textio_line = vhdl_textio_read(*scan);
             auto effective_scan = *scan;
             if (vhdl_textio_line && !vhdl_textio_sread(*scan)) {
@@ -488,7 +490,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             if (scan->string_source) {
                 auto& source = state.executor->string_registers_.at(scan->source);
                 scanned = runtime::simir::scan_formatted_string(
-                    effective_scan, source);
+                    effective_scan, source, active_time_format);
                 consumed_source = &source;
                 if (scan->consume_string_source && !vhdl_textio_line) {
                     source.erase(0, std::min(source.size(), scanned.consumed));
@@ -506,7 +508,7 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     }
                 };
                 scanned = runtime::simir::scan_formatted_input(
-                    effective_scan, read, unread);
+                    effective_scan, read, unread, active_time_format);
             }
             const auto expected = static_cast<std::int32_t>(
                 std::ranges::count_if(

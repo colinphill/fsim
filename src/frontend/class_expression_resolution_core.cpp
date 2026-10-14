@@ -1544,6 +1544,110 @@ void Resolver::retain_result_type(
     return type;
   }
 
+  // A class handle may be a variable in a module-instance scope
+  // (`m1.c.method()`, IEEE 1800-2017 23.8). Resolve only a path rooted at an
+  // exact instance declared by the current unit and require unique unit and
+  // declaration matches at every step. This supplies method selection with
+  // the declared handle type; runtime reads still use the ordinary
+  // hierarchical signal binding.
+  const auto first_dot = expression.text.find('.');
+  if (first_dot != std::string::npos) {
+    std::vector<std::string_view> components;
+    std::string_view remaining { expression.text };
+    while (true) {
+      const auto separator = remaining.find('.');
+      components.push_back(remaining.substr(0U, separator));
+      if (separator == std::string_view::npos) {
+        break;
+      }
+      remaining.remove_prefix(separator + 1U);
+    }
+    if (components.size() >= 2U
+        && scope.instances.contains(components.front())) {
+      const auto select_unit = [&](const std::string_view unit_name,
+                                   const std::string_view library)
+          -> const DesignUnit* {
+        const DesignUnit* selected = nullptr;
+        for (const auto& candidate : design_.units) {
+          if (candidate.name != unit_name
+              || candidate.language != Language::SystemVerilog2017
+              || effective_library(candidate.library) != library) {
+            continue;
+          }
+          if (selected != nullptr) {
+            return nullptr;
+          }
+          selected = &candidate;
+        }
+        return selected;
+      };
+      const auto root_instance
+          = scope.instances.find(components.front());
+      const DesignUnit* target = select_unit(
+          root_instance->second, scope.library);
+      for (std::size_t index = 1U;
+           target != nullptr && index + 1U < components.size(); ++index) {
+        const Instance* child = nullptr;
+        for (const auto& candidate : target->instances) {
+          if (candidate.name != components[index]) {
+            continue;
+          }
+          if (child != nullptr) {
+            child = nullptr;
+            break;
+          }
+          child = &candidate;
+        }
+        target = child == nullptr
+            ? nullptr
+            : select_unit(child->unit_name,
+                  effective_library(target->library));
+      }
+      if (target != nullptr) {
+        const VariableDeclaration* variable = nullptr;
+        for (const auto& candidate : target->variables) {
+          if (candidate.name != components.back()) {
+            continue;
+          }
+          if (variable != nullptr) {
+            variable = nullptr;
+            break;
+          }
+          variable = &candidate;
+        }
+        if (variable != nullptr) {
+          Scope declaration_scope = scope;
+          declaration_scope.library = effective_library(target->library);
+          declaration_scope.compilation_unit_identity
+              = target->compilation_unit_identity;
+          declaration_scope.lexical_identity
+              = declaration_scope.library + "::" + target->name;
+          declaration_scope.class_owner = nullptr;
+          declaration_scope.objects.clear();
+          declaration_scope.instances.clear();
+          auto type = resolve_alias_type(
+              variable->type, declaration_scope.lexical_identity);
+          type = canonicalize_selected_type(
+              std::move(type), declaration_scope);
+          if (!class_identity(type) && !type.named_type.empty()) {
+            const auto declarations = resolve_class_name(
+                type.named_type, declaration_scope);
+            if (declarations.size() == 1U) {
+              auto selected_type = class_type(*declarations.front());
+              selected_type.systemverilog_container
+                  = type.systemverilog_container;
+              type = std::move(selected_type);
+            }
+          }
+          if (class_identity(type) && !type.systemverilog_container) {
+            expression.nominal_type = *class_identity(type);
+            return type;
+          }
+        }
+      }
+    }
+  }
+
   const auto dot = expression.text.rfind('.');
   if (dot != std::string::npos) {
     Expression receiver{

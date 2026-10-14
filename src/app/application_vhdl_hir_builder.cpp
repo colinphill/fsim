@@ -947,7 +947,7 @@ void VhdlHirBuilder::add_generate_body(
     output.iteration = expression(
         input.iteration, output.scope, declaration_origin);
     output.generic_map = associations(
-        input.block_generic_map, output.scope, declaration_origin);
+        input.block_generic_map, parent_scope, declaration_origin);
     output.port_map = associations(
         input.block_port_map, output.scope, declaration_origin);
     output.source = declaration_source;

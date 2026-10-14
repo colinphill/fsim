@@ -1463,8 +1463,9 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
         }
         auto left_expression = std::move(parsed_range->left);
         auto right_expression = std::move(parsed_range->right);
-        // A scalar range taken from a range attribute is ascending unless
-        // its bounds say otherwise; integer subtypes keep that default.
+        // Keep a range attribute's direction alongside its endpoint
+        // expressions. Equal endpoints cannot encode whether the source was
+        // ascending or descending.
         const bool descending = parsed_range->descending
             && !parsed_range->direction_from_bounds;
         const auto left = simple_vhdl_integer_constant(left_expression);
@@ -1479,7 +1480,8 @@ Type VhdlParser::parse_vhdl_type(const bool allow_integer,
             }
             type.integer_range_expression = IntegerRangeExpression {
                 std::move(left_expression), std::move(right_expression),
-                cover(range_start.span, previous().span), descending
+                cover(range_start.span, previous().span), descending,
+                parsed_range->direction_from_bounds
             };
         } else {
             type.discrete_range_expression = DiscreteRangeExpression {

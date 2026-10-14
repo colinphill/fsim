@@ -1056,8 +1056,7 @@ architecture rtl of composite_default_array_leaf is
 begin
   verify_default : process
   begin
-    assert gB(1).field_1 = 11 and gB(1).field_2 = 1.25
-      and gB(2).field_1 = 22 and gB(2).field_2 = 2.5
+    assert gB = ((11, 1.25), (22, 2.5))
       report "FAIL composite component generic default was not passed"
       severity failure;
     report "PASS" severity note;
@@ -2057,6 +2056,84 @@ end architecture;
                    ->signal_value(*buffer_signal).low_word().aval
                == 7);
     }
+
+    const auto incompatible_boolean_array = elaborate_vhdl_component_text(
+        "block_boolean_array_nominal_mismatch.vhd",
+        R"(
+entity block_boolean_array_nominal_mismatch is
+end entity;
+architecture sim of block_boolean_array_nominal_mismatch is
+  type boolean_v is array (integer range <>) of boolean;
+  type other_boolean_v is array (integer range <>) of boolean;
+  subtype boolean_eight is boolean_v(1 to 8);
+  subtype other_boolean_four is other_boolean_v(1 to 4);
+  constant other_left : other_boolean_four :=
+    (true, false, true, false);
+  constant other_right : other_boolean_four :=
+    (false, true, false, true);
+begin
+  wrong_type : block
+    generic (info : boolean_eight);
+    generic map (other_left & other_right);
+  begin
+  end block;
+end architecture;
+)",
+        "vhdl:work.block_boolean_array_nominal_mismatch(sim)");
+    assert(!incompatible_boolean_array.ok());
+    assert(has_diagnostic(
+        incompatible_boolean_array, "FSIM-ELAB-VHBLOCK-001"));
+
+    const auto incompatible_boolean_element = elaborate_vhdl_component_text(
+        "block_boolean_array_element_mismatch.vhd",
+        R"(
+entity block_boolean_array_element_mismatch is
+end entity;
+architecture sim of block_boolean_array_element_mismatch is
+  type boolean_v is array (integer range <>) of boolean;
+  type bit_v is array (integer range <>) of bit;
+  subtype boolean_four is boolean_v(1 to 4);
+  subtype boolean_eight is boolean_v(1 to 8);
+  subtype bit_four is bit_v(1 to 4);
+  constant left_bits : bit_four := ('1', '0', '1', '0');
+  constant right_bits : bit_four := ('0', '1', '0', '1');
+begin
+  wrong_element : block
+    generic (info : boolean_eight);
+    generic map (left_bits & right_bits);
+  begin
+  end block;
+end architecture;
+)",
+        "vhdl:work.block_boolean_array_element_mismatch(sim)");
+    assert(!incompatible_boolean_element.ok());
+    assert(has_diagnostic(
+        incompatible_boolean_element, "FSIM-ELAB-VHBLOCK-001"));
+
+    const auto incompatible_boolean_length = elaborate_vhdl_component_text(
+        "block_boolean_array_length_mismatch.vhd",
+        R"(
+entity block_boolean_array_length_mismatch is
+end entity;
+architecture sim of block_boolean_array_length_mismatch is
+  type boolean_v is array (integer range <>) of boolean;
+  subtype boolean_eight is boolean_v(8 to 15);
+  subtype boolean_four is boolean_v(2 to 5);
+  subtype boolean_three is boolean_v(20 downto 18);
+  constant left_bits : boolean_four := (true, false, true, false);
+  constant right_bits : boolean_three := (false, true, false);
+begin
+  wrong_length : block
+    generic (info : boolean_eight);
+    generic map (left_bits & right_bits);
+  begin
+  end block;
+end architecture;
+)",
+        "vhdl:work.block_boolean_array_length_mismatch(sim)");
+    assert(!incompatible_boolean_length.ok());
+    assert(has_diagnostic(
+        incompatible_boolean_length, "FSIM-ELAB-VHBLOCK-001"));
 
     test_vhdl_component_defaults_and_revision();
 }

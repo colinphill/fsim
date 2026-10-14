@@ -186,7 +186,8 @@ public:
     resolve_systemverilog(std::string_view name, ScopeId use_scope,
         const CompiledDeclarationPredicate& predicate = { },
         bool same_library_fallback = true,
-        std::optional<ScopeId> stop_scope = std::nullopt) const;
+        std::optional<ScopeId> stop_scope = std::nullopt,
+        std::uint64_t source_order = 0U) const;
 
     /// Resolve a callable or signal selected through an interface instance or
     /// interface port. A selected modport restricts the visible member set.
@@ -204,12 +205,14 @@ public:
     [[nodiscard]] CompiledDeclarationResolution
     resolve_systemverilog_constant(
         std::string_view name, ScopeId use_scope,
-        bool same_library_fallback = false) const;
+        bool same_library_fallback = false,
+        std::uint64_t source_order = 0U) const;
 
     [[nodiscard]] CompiledDeclarationResolution
     resolve_systemverilog_named_type(
         std::string_view name, ScopeId use_scope,
-        bool same_library_fallback = true) const;
+        bool same_library_fallback = true,
+        std::uint64_t source_order = 0U) const;
 
     /// Resolve a VHDL named type through source-stable identity, lexical and
     /// associated-entity visibility, package use clauses, and generic-package
@@ -242,6 +245,13 @@ public:
     effective_vhdl_subtype(
         const vhdl::SubtypeIndication&, ScopeId use_scope) const;
 
+    /// Resolve a constant object's subtype and infer per-dimension bounds
+    /// from a positional nested aggregate when every unconstrained index is
+    /// the exact predefined STD.STANDARD NATURAL subtype.
+    [[nodiscard]] std::optional<vhdl::SubtypeIndication>
+    effective_vhdl_constant_object_subtype(
+        DeclarationId, ScopeId use_scope) const;
+
     /// Resolve an enumeration literal against an expected nominal type.
     /// Context is required because distinct VHDL enumeration types may expose
     /// the same literal spelling in one package.
@@ -254,6 +264,12 @@ public:
     /// result means that the pair is not an array pair or still has a
     /// residual shape; false identifies a complete, incompatible shape.
     [[nodiscard]] std::optional<bool> vhdl_array_shapes_match(
+        const vhdl::SubtypeIndication& left, ScopeId left_scope,
+        const vhdl::SubtypeIndication& right, ScopeId right_scope) const;
+
+    /// Compare array lengths dimension by dimension for parameter value
+    /// association. Index bounds and directions may differ; rank must match.
+    [[nodiscard]] std::optional<bool> vhdl_array_lengths_match(
         const vhdl::SubtypeIndication& left, ScopeId left_scope,
         const vhdl::SubtypeIndication& right, ScopeId right_scope) const;
 
@@ -286,7 +302,8 @@ public:
     /// precedence as ordinary SystemVerilog declarations.
     [[nodiscard]] CompiledSystemVerilogClassResolution
     resolve_systemverilog_class(std::string_view name, ScopeId use_scope,
-        bool same_library_fallback = true) const;
+        bool same_library_fallback = true,
+        std::uint64_t source_order = 0U) const;
 
     [[nodiscard]] CompiledSystemVerilogClassResolution
     resolve_systemverilog_package_class(std::string_view library,
@@ -395,6 +412,11 @@ public:
         std::string_view name) const;
 
 private:
+    [[nodiscard]] std::optional<bool> vhdl_array_shapes_match(
+        const vhdl::SubtypeIndication& left, ScopeId left_scope,
+        const vhdl::SubtypeIndication& right, ScopeId right_scope,
+        bool compare_lengths) const;
+
     [[nodiscard]] bool vhdl_callable_profiles_match(
         DeclarationId expected, DeclarationId candidate,
         bool include_function_result, bool compare_interface_modes) const;

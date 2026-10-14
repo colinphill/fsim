@@ -2077,11 +2077,17 @@ void lower_process(llvm::Module& module, const std::string& symbol,
     }
     auto* local_register_type = llvm::ArrayType::get(
         i64, std::max<std::uint64_t>(register_word_count, 1U));
+    // Native services exchange register values through the public frame even
+    // when the process keeps its working registers in transient local slots.
+    const bool native_service_register_frame = validated.uses_coverage_sample
+        || validated.uses_class_property_operation
+        || validated.uses_event_triggered;
     llvm::Value* frame_register_aval = nullptr;
     llvm::Value* frame_register_bval = nullptr;
     if (!transient_register_frame || validated.uses_exact_signal_operation
         || validated.uses_files || validated.uses_vital_delay
         || validated.uses_containers || validated.uses_strings
+        || native_service_register_frame
         || (signal_callback_ids_are_actual
             && !signal_callback_operands.empty())) {
         frame_register_aval = builder.CreateLoad(
@@ -2112,7 +2118,8 @@ void lower_process(llvm::Module& module, const std::string& symbol,
             || validated.uses_exact_signal_operation
             || validated.uses_vital_delay
             || validated.uses_containers
-            || validated.uses_strings)
+            || validated.uses_strings
+            || native_service_register_frame)
         && validated.uses_logic9) {
         frame_register_logic9_plane2 = builder.CreateLoad(
             pointer,

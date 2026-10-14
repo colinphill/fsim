@@ -489,14 +489,64 @@ SystemVerilogClassHirExecution::evaluate_packed(
             return runtime::PackedLogic4::from_aval_bval(64U, handle, 0U);
         }
         const auto found = environment.find(value->text);
-        if (found != environment.end())
+        if (found != environment.end()) {
             return found->second;
+        }
+        bool owner_context_available { };
+        if (handle != 0U && value->referenced_name
+            && value->referenced_name->selected
+            && read_owner_parameter_) {
+            const auto binding = read_owner_parameter_(
+                handle, *value->referenced_name->selected);
+            owner_context_available = binding.context_available;
+            if (binding.found)
+                return binding.value;
+        }
         // A class-scope constant or enumeration literal (IEEE 1800-2017
         // 8.25, 6.19) evaluates its declaration's constant initializer.
         const auto* constant = value->referenced_name
                 && value->referenced_name->selected
             ? declaration(*value->referenced_name->selected)
             : nullptr;
+        if (constant != nullptr && read_owner_parameter_
+            && (constant->form
+                    == semantic::sv::DeclarationForm::local_parameter
+                || constant->form
+                    == semantic::sv::DeclarationForm::parameter)) {
+            const bool class_constant = std::ranges::any_of(
+                hir_.classes(), [&](const auto& candidate) {
+                    return std::ranges::any_of(
+                               candidate.parameters,
+                               [&](const auto& parameter) {
+                                   return parameter.declaration == constant->id;
+                               })
+                        || std::ranges::find(
+                               candidate.member_declarations, constant->id)
+                            != candidate.member_declarations.end()
+                        || candidate.scope == constant->scope;
+                });
+            const bool package_constant = std::ranges::any_of(
+                hir_.units(), [&](const auto& unit) {
+                    return unit.kind == semantic::sv::UnitKind::package
+                        && std::ranges::find(
+                               unit.declarations, constant->id)
+                            != unit.declarations.end();
+                });
+            const bool owner_local_parameter
+                = constant->form
+                    == semantic::sv::DeclarationForm::local_parameter
+                && owner_context_available;
+            if (!class_constant && !package_constant
+                && !owner_local_parameter) {
+                // A module parameter's source default is not a substitute
+                // for a missing actual, and a package/global allocation has
+                // no module owner from which to specialize it.
+                return std::nullopt;
+            }
+            // A module localparam is not an override. When its value was not
+            // materialized in the owner map, the retained initializer below
+            // evaluates against that exact owner's parameter bindings.
+        }
         if (constant != nullptr && constant->initializer
             && *constant->initializer != id
             && (constant->form
@@ -511,13 +561,89 @@ SystemVerilogClassHirExecution::evaluate_packed(
             --constant_depth_;
             return result;
         }
-        // An enumeration literal of a type declared in another unit may
-        // not resolve to its declaration; a unique literal of that name gives
-        // its value (6.19: an unvalued literal follows its predecessor).
+        // A hierarchical instance reference such as `test.A` must belong to
+        // this object's exact owning module occurrence. A same-named module
+        // definition elsewhere in the design is not enough.
         if (constant_depth_ < 64U) {
+            std::optional<semantic::DeclarationId>
+                qualified_literal_declaration;
+            std::string_view literal_name { value->text };
+            const auto dot = value->text.find('.');
+            if (dot != std::string::npos
+                && value->text.find('.', dot + 1U) == std::string::npos
+                && value->text.find("::") == std::string::npos
+                && handle != 0U && read_owner_parameter_) {
+                const auto unit_name
+                    = std::string_view { value->text }.substr(0U, dot);
+                const auto selected_literal_name
+                    = std::string_view { value->text }.substr(dot + 1U);
+                bool ambiguous_owner_literal { };
+                for (const auto& unit : hir_.units()) {
+                    if (unit.kind != semantic::sv::UnitKind::module
+                        || unit.name != unit_name) {
+                        continue;
+                    }
+                    const semantic::sv::Declaration* selected_declaration { };
+                    bool ambiguous_declaration { };
+                    for (const auto& candidate : hir_.declarations()) {
+                        if (candidate.scope != unit.scope
+                            || candidate.name != selected_literal_name
+                            || candidate.form
+                                != semantic::sv::DeclarationForm::enumeration_literal) {
+                            continue;
+                        }
+                        if (selected_declaration != nullptr
+                            && selected_declaration->id != candidate.id) {
+                            ambiguous_declaration = true;
+                            break;
+                        }
+                        selected_declaration = &candidate;
+                    }
+                    if (ambiguous_declaration || selected_declaration == nullptr
+                        || selected_declaration->form
+                            != semantic::sv::DeclarationForm::enumeration_literal) {
+                        continue;
+                    }
+                    const auto owner = read_owner_parameter_(
+                        handle, selected_declaration->id);
+                    const bool owner_matches
+                        = owner.owner_unit && *owner.owner_unit == unit.id
+                        && owner.owner_path == unit_name;
+                    if (!owner_matches) {
+                        continue;
+                    }
+                    if (qualified_literal_declaration
+                        && *qualified_literal_declaration
+                            != selected_declaration->id) {
+                        ambiguous_owner_literal = true;
+                        break;
+                    }
+                    qualified_literal_declaration = selected_declaration->id;
+                }
+                if (!ambiguous_owner_literal
+                    && qualified_literal_declaration) {
+                    literal_name = selected_literal_name;
+                } else {
+                    qualified_literal_declaration.reset();
+                }
+            } else if (const auto separator = value->text.rfind("::");
+                separator != std::string::npos) {
+                // A package-qualified literal names the same literal.
+                literal_name = std::string_view { value->text }.substr(
+                    separator + 2U);
+            }
             std::optional<runtime::PackedLogic4> literal_value;
             std::size_t matches { };
             for (const auto& definition : hir_.types()) {
+                if (qualified_literal_declaration
+                    && std::ranges::none_of(
+                        definition.enumeration_literals,
+                        [&](const auto& literal) {
+                            return literal.declaration
+                                == *qualified_literal_declaration;
+                        })) {
+                    continue;
+                }
                 std::optional<runtime::PackedLogic4> previous;
                 for (const auto& literal : definition.enumeration_literals) {
                     std::optional<runtime::PackedLogic4> current;
@@ -534,14 +660,10 @@ SystemVerilogClassHirExecution::evaluate_packed(
                             64U, previous->low_word().aval + 1U, 0U);
                     }
                     previous = current;
-                    // A package-qualified literal (`uvm_pkg::UVM_INFO`)
-                    // names the same literal.
-                    const auto separator = value->text.rfind("::");
-                    const auto name = separator == std::string::npos
-                        ? std::string_view { value->text }
-                        : std::string_view { value->text }.substr(
-                              separator + 2U);
-                    if (literal.name == name) {
+                    if (literal.name == literal_name
+                        && (!qualified_literal_declaration
+                            || literal.declaration
+                                == *qualified_literal_declaration)) {
                         // The same literal reached through several types
                         // (a typedef of the enumeration) has one value.
                         if (matches == 0U || literal_value != current) {
@@ -687,7 +809,7 @@ SystemVerilogClassHirExecution::evaluate_packed(
         auto names = value->argument_names;
         names.resize(actuals.size());
         const auto object = construct_(
-            value->class_identity, actuals, string_actuals, names);
+            value->class_identity, actuals, string_actuals, names, handle);
         return runtime::PackedLogic4::from_aval_bval(64U, object, 0U);
     }
     constexpr std::string_view static_method_prefix {

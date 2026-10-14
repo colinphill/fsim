@@ -155,6 +155,7 @@ class VerilogParser final : private detail::ParserBase {
       std::string code = "FSIM-FE-PARSE-001");
 
   static SourceSpan span_from(const Token& first, const Token& last);
+  [[nodiscard]] std::uint64_t systemverilog_source_order() const noexcept;
 
   [[nodiscard]] bool verilog_attribute_instance_start() const;
 
@@ -238,6 +239,10 @@ class VerilogParser final : private detail::ParserBase {
     // implicitly declares a net (IEEE 1364-2005 4.5, 1800-2017 6.10).
     bool declares { true };
   };
+  struct WildcardImportUse {
+    std::string name;
+    SourceSpan use_span;
+  };
   bool implicit_net_context_ { };
   // The `iff` guard of the single event of the last event control parsed
   // (IEEE 1800-2017 9.4.2.3).
@@ -271,7 +276,8 @@ class VerilogParser final : private detail::ParserBase {
   // Names of every class declared so far; a class name is never a net.
   std::unordered_set<std::string> known_class_names_;
 
-  void note_implicit_net_reference(const Token& name);
+  void note_implicit_net_reference(const Token& name, bool call = false);
+  void note_wildcard_import_type_reference(const Token& name);
 
   void resolve_implicit_nets(DesignUnit& unit);
 
@@ -607,6 +613,7 @@ class VerilogParser final : private detail::ParserBase {
       const Token& hash);
 
   void parse_module_ports(DesignUnit& unit);
+  void validate_non_ansi_port_selections(const DesignUnit& unit);
 
   void skip_to_port_delimiter();
 
@@ -809,15 +816,26 @@ class VerilogParser final : private detail::ParserBase {
   Expression parse_unary();
 
   Expression parse_primary();
+  Expression parse_primary_impl();
 
   Expression parse_postfix(Expression expression);
 
   Language language_;
   StandardRevision standard_revision_;
+  // Synthetic randsequence token vectors do not share the preprocessed input
+  // ordinal space. Their references intentionally carry ordinal zero.
+  bool synthetic_token_stream_ { };
   std::string compatibility_profile_ { "none" };
   KeywordSet keyword_set_;
   std::vector<KeywordSet> keyword_stack_;
   std::unordered_set<std::string> non_ansi_ports_;
+  struct NonAnsiPortSelection {
+    std::string port_name;
+    Expression left;
+    Expression right;
+    SourceSpan span;
+  };
+  std::vector<NonAnsiPortSelection> non_ansi_port_selections_;
   // The design unit's default lifetime for its tasks and functions
   // (`module automatic m;`, IEEE 1800-2017 6.21).
   bool unit_default_automatic_ = false;
@@ -889,6 +907,8 @@ class VerilogParser final : private detail::ParserBase {
   std::vector<Token> external_genvar_uses_;
   std::size_t next_implicit_generate_scope_{1};
   std::vector<ImplicitNetReference> implicit_net_references_;
+  std::vector<WildcardImportUse> wildcard_import_uses_;
+  std::size_t unit_package_import_count_ { };
   std::unordered_set<std::string> container_iterator_names_;
   std::vector<SystemVerilogImport>
       compilation_unit_imports_;

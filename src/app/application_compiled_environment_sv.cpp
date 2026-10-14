@@ -47,6 +47,10 @@ struct SourceScope {
     const frontend::DesignUnit* unit { };
     // The package imports of a compilation-unit ($unit) class.
     const std::vector<frontend::SystemVerilogImport>* imports { };
+    // Block imports are searched from the innermost lexical scope outwards,
+    // before the enclosing design-unit or compilation-unit imports.
+    std::vector<const support::RareVector<frontend::SystemVerilogImport>*>
+        block_imports;
     std::string library { "work" };
     std::string class_identity;
     std::map<std::string, ClassTypeView, std::less<>> objects;
@@ -177,12 +181,14 @@ private:
 
     template<typename Lookup>
     auto visible(std::string_view spelling, const SourceScope& scope,
-        const frontend::SourceSpan& source, Lookup&& lookup)
+        const frontend::SourceSpan& source, Lookup&& lookup,
+        const std::uint64_t source_order = 0U)
     {
         using Result = decltype(lookup(std::string_view { },
             std::string_view { }, std::string_view { }));
         Result result;
-        const auto append = [&](std::string_view package_name,
+        const auto append = [&](Result& destination,
+                                std::string_view package_name,
                                 std::string_view member) {
             const auto* selected = package(scope.library, package_name, source);
             if (selected == nullptr)
@@ -191,38 +197,65 @@ private:
                 check_profile(*selected, *scope.unit, source);
             auto found = lookup(selected->library, selected->name, member);
             for (const auto candidate : found) {
-                if (std::ranges::find(result, candidate) == result.end())
-                    result.push_back(candidate);
+                if (std::ranges::find(destination, candidate)
+                    == destination.end()) {
+                    destination.push_back(candidate);
+                }
             }
         };
         const auto separator = spelling.rfind("::");
         if (separator != std::string_view::npos) {
-            append(spelling.substr(0, separator), spelling.substr(separator + 2U));
+            append(result, spelling.substr(0, separator),
+                spelling.substr(separator + 2U));
             return result;
+        }
+        const auto candidates_from = [&](const auto& imports)
+            -> std::optional<Result> {
+            Result candidates;
+            bool explicit_import { };
+            const auto visible_at_use = [&](
+                const frontend::SystemVerilogImport& import) {
+                return source_order == 0U
+                    || import.systemverilog_source_order == 0U
+                    || import.systemverilog_source_order < source_order;
+            };
+            for (const auto& import : imports) {
+                if (!visible_at_use(import)) {
+                    continue;
+                }
+                if (import.name == spelling) {
+                    explicit_import = true;
+                    append(candidates, import.package, spelling);
+                }
+            }
+            if (explicit_import)
+                return candidates;
+            for (const auto& import : imports) {
+                if (visible_at_use(import) && import.name.empty())
+                    append(candidates, import.package, spelling);
+            }
+            return candidates.empty()
+                ? std::nullopt
+                : std::optional<Result> { std::move(candidates) };
+        };
+        for (auto imports = scope.block_imports.rbegin();
+             imports != scope.block_imports.rend(); ++imports) {
+            if (const auto imported = candidates_from(**imports))
+                return *imported;
         }
         const auto* imports = scope.unit != nullptr
             ? &scope.unit->systemverilog_imports
             : scope.imports;
-        if (imports == nullptr)
-            return result;
-        bool explicit_import { };
-        for (const auto& import : *imports) {
-            if (import.name == spelling) {
-                explicit_import = true;
-                append(import.package, spelling);
-            }
-        }
-        if (explicit_import)
-            return result;
-        for (const auto& import : *imports) {
-            if (import.name.empty())
-                append(import.package, spelling);
+        if (imports != nullptr) {
+            if (const auto imported = candidates_from(*imports))
+                return *imported;
         }
         return result;
     }
 
     const sv::ClassDeclaration* named_class(std::string_view spelling,
-        const SourceScope& scope, const frontend::SourceSpan& source)
+        const SourceScope& scope, const frontend::SourceSpan& source,
+        const std::uint64_t source_order = 0U)
     {
         if (const auto found = std::ranges::find(imported_.systemverilog_hir.classes(),
                 spelling, &sv::ClassDeclaration::canonical_identity);
@@ -234,7 +267,7 @@ private:
             [&](auto library, auto package_name, auto member) {
                 return resolver_.resolve_systemverilog_package_class(
                     library, package_name, member).candidates;
-            });
+            }, source_order);
         if (found.size() > 1U) {
             error("FSIM-SV-CLASS-004", "compiled class '"
                 + std::string { spelling } + "' is ambiguous in import scope", source);
@@ -244,13 +277,14 @@ private:
     }
 
     const sv::Declaration* named_declaration(std::string_view spelling,
-        const SourceScope& scope, const frontend::SourceSpan& source)
+        const SourceScope& scope, const frontend::SourceSpan& source,
+        const std::uint64_t source_order = 0U)
     {
         const auto found = visible(spelling, scope, source,
             [&](auto library, auto package_name, auto member) {
                 return resolver_.resolve_systemverilog_package_member(
                     library, package_name, member).candidates;
-            });
+            }, source_order);
         if (found.size() != 1U)
             return nullptr;
         const auto declaration = imported_.find_declaration(found.front());
@@ -337,11 +371,12 @@ private:
             type.systemverilog_class_name = type.named_type;
             type.systemverilog_class_declaration = source_declaration->canonical_identity;
         } else if (const auto* class_declaration = named_class(type.named_type, scope,
-                       type.named_type_span)) {
+                       type.named_type_span, type.systemverilog_source_order)) {
             type.systemverilog_class_name = type.named_type;
             type.systemverilog_class_declaration = class_declaration->canonical_identity;
         } else if (const auto* named = named_declaration(type.named_type,
-                       scope, type.named_type_span)) {
+                       scope, type.named_type_span,
+                       type.systemverilog_source_order)) {
             if (named->type)
                 type.systemverilog_class_declaration = compiled_type(*named->type).identity;
             if (named->declared_type) {
@@ -854,6 +889,20 @@ private:
     void prepare_statement(frontend::Statement& input, SourceScope scope,
         const ClassTypeView& returned)
     {
+        if (!input.systemverilog_imports.empty()) {
+            scope.block_imports.push_back(&input.systemverilog_imports);
+            for (const auto& import : input.systemverilog_imports) {
+                const auto* provider = package(
+                    scope.library, import.package, import.span);
+                // This pass runs before the current source units are linked.
+                // Defer an unresolved package here: the final linked-design
+                // pass validates ownership after both local and imported
+                // packages are present.
+                if (provider != nullptr && scope.unit != nullptr) {
+                    check_profile(*provider, *scope.unit, import.span);
+                }
+            }
+        }
         declarations(input.constants, scope);
         aliases(input.type_aliases, scope);
         declarations(input.declarations, scope);
@@ -918,6 +967,19 @@ public:
             for (auto& item : unit.exports) {
                 if (item.package.spelling != "*")
                     bind_package(item.package.spelling, unit, item.source, true);
+            }
+        }
+        for (auto& statement : statements) {
+            if (statement.imports.empty()) {
+                continue;
+            }
+            const auto* owner = scope_unit(statement.scope);
+            if (owner == nullptr) {
+                continue;
+            }
+            for (auto& import : statement.imports) {
+                bind_package(
+                    import.package.spelling, *owner, import.source, true);
             }
         }
         for (auto& declaration : declarations) {
@@ -1083,7 +1145,8 @@ private:
         qualify_member(type.target.spelling, *unit, type.target.source);
         semantic::CompiledDesignResolver resolver { design_, unit->id };
         if (!type.target.target.valid() && !type.target.spelling.empty()) {
-            const auto resolved = resolver.resolve_systemverilog_named_type(type.target.spelling, scope, false);
+            const auto resolved = resolver.resolve_systemverilog_named_type(type.target.spelling, scope, false,
+                type.source_order);
             if (resolved.status == semantic::CompiledResolutionStatus::ambiguous) {
                 diagnostics_.error("FSIM-SV-PACKAGE-003", "type '" + type.target.spelling
                     + "' is ambiguous in package import scope", source_span(type.target.source));
@@ -1095,7 +1158,8 @@ private:
             }
         }
         if (type.class_identity.empty()) {
-            const auto resolved = resolver.resolve_systemverilog_class(type.target.spelling, scope, false);
+            const auto resolved = resolver.resolve_systemverilog_class(type.target.spelling, scope, false,
+                type.source_order);
             if (const auto* declaration = resolved.unique()) {
                 type.class_identity = declaration->canonical_identity;
                 type.value_form = sv::TypeForm::class_handle;

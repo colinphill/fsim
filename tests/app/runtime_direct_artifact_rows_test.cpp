@@ -35,12 +35,25 @@ void test_string_method_archive_enum_range()
 
 void test_schema_and_direct_row_roundtrip()
 {
-    assert(fsim::app::kRuntimeStateSchema == 79U);
+    assert(fsim::app::kRuntimeStateSchema == 81U);
     const auto source_bytes = encode_source_design();
     assert(source_bytes.has_value());
 
     auto restored = decode_design(*source_bytes);
     assert_view_rows(*restored);
+    using ProcessAccess
+        = fsim::elaboration::detail::ElaboratedDesignProcessAccess;
+    const auto independent_view = ProcessAccess::process_view(*restored, 2U);
+    const auto archived_scan_operation
+        = independent_view.operations().expanded(5U);
+    const auto* archived_scan
+        = fsim::runtime::simir::operation_get_if<fsim::runtime::simir::FileScan>(
+            &archived_scan_operation);
+    assert(archived_scan != nullptr
+        && archived_scan->time_unit_femtoseconds == 1'000'000U
+        && archived_scan->conversions.size() == 1U
+        && archived_scan->conversions.front().format
+            == fsim::runtime::simir::InputScanFormat::time);
     const auto original_table = fsim::elaboration::detail::ElaboratedDesignProcessAccess::process_table(
         *restored);
 

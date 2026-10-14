@@ -4,6 +4,55 @@
 namespace fsim::tests::elaboration {
 
 void test_vhdl_attribute_closure() {
+  const auto range_direction_retention = fsim::frontend::parse_text(
+      "vhdl_integer_range_direction_retention.vhd",
+      R"(
+entity Range_Direction_Retention is end entity;
+architecture rtl of range_direction_retention is
+  constant Ascending_Source : bit_vector(5 to 5) := "0";
+  constant Descending_Source : bit_vector(5 downto 5) := "1";
+  subtype Ascending_Index_T is integer range Ascending_Source'range;
+  subtype Descending_Index_T is integer range Descending_Source'range;
+begin
+  wait_process : process
+  begin
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(range_direction_retention.ok());
+  const auto frontend_index = [&](const std::string_view name)
+      -> const fsim::frontend::TypeAliasDeclaration* {
+    for (const auto& unit : range_direction_retention.design.units) {
+      const auto found = std::ranges::find_if(
+          unit.type_aliases,
+          [&](const auto& alias) { return alias.name == name; });
+      if (found != unit.type_aliases.end()) {
+        return &*found;
+      }
+    }
+    return nullptr;
+  };
+  for (const auto name : { "ascending_index_t", "descending_index_t" }) {
+    const auto* alias = frontend_index(name);
+    assert(alias != nullptr && alias->type.integer_range_expression
+        && alias->type.integer_range_expression->direction_from_bounds);
+  }
+  const auto range_compiled = compile_test_design(
+      range_direction_retention.design);
+  assert(range_compiled.valid());
+  for (const auto name : { "ascending_index_t", "descending_index_t" }) {
+    const auto found = std::ranges::find_if(
+        range_compiled.vhdl_hir.types(),
+        [&](const auto& type) { return type.name == name; });
+    assert(found != range_compiled.vhdl_hir.types().end()
+        && found->scalar_range
+        && found->scalar_range->direction_from_bounds
+        && found->scalar_range->left_expression
+        && found->scalar_range->right_expression);
+  }
+
   const auto parsed = fsim::frontend::parse_text(
       "vhdl_attribute_closure.vhd",
       R"(
@@ -129,6 +178,192 @@ end architecture;
       && value("dimension_ascending") == 1
       && value("nested_length") == 5 && value("null_length") == 0
       && value("static_result") == 7 && value("loop_count") == 14);
+
+  const auto physical_positions = fsim::frontend::parse_text(
+      "vhdl_physical_scalar_positions.vhd",
+      R"(
+entity Physical_Scalar_Positions is end entity;
+architecture rtl of physical_scalar_positions is
+  type Distance_T is range 0 to 100 units
+    tick;
+    double = 2 tick;
+    octuple = 8 tick;
+  end units Distance_T;
+  signal Real_Value : Distance_T;
+  signal Literal_Position : integer;
+  signal Object_Position : integer;
+  signal Time_Position : integer;
+  signal Integer_Value : Distance_T;
+begin
+  drive : process
+    variable Current : Distance_T := 3 double;
+  begin
+    Real_Value <= 0.5 octuple;
+    Literal_Position <= Distance_T'pos(0.5 octuple);
+    Object_Position <= Distance_T'pos(Current);
+    Time_Position <= time'pos(fs);
+    Integer_Value <= Distance_T'val(5);
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008,
+      fsim::frontend::VhdlStandard::Vhdl2008);
+  assert(physical_positions.ok());
+  const auto physical_positions_result = compile_and_elaborate(
+      physical_positions.design,
+      "vhdl:work.physical_scalar_positions(rtl)");
+  if (!physical_positions_result.ok()) {
+    for (const auto& diagnostic : physical_positions_result.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(physical_positions_result.ok());
+  auto physical_interpreter
+      = physical_positions_result.design->create_interpreter();
+  const auto physical_run = physical_interpreter->run();
+  assert(physical_run.status == fsim::runtime::RunStatus::completed);
+  const auto physical_value = [&](const std::string_view name) {
+    const auto signal = physical_positions_result.design->find_signal(name);
+    assert(signal);
+    return static_cast<std::int32_t>(
+        physical_interpreter->signal_value(*signal).low_word().aval);
+  };
+  assert(physical_value("real_value") == 4
+      && physical_value("literal_position") == 4
+      && physical_value("object_position") == 6
+      && physical_value("time_position") == 1
+      && physical_value("integer_value") == 5);
+
+  const auto repeated_physical_units = fsim::frontend::parse_text(
+      "vhdl_physical_unit_scope_positions.vhd",
+      R"(
+entity First_Physical_Unit_Scope is end entity;
+architecture rtl of first_physical_unit_scope is
+  type Scale_T is range 0 to 20 units
+    tick;
+    double = 2 tick;
+  end units Scale_T;
+  signal Position : integer;
+begin
+  drive : process
+  begin
+    Position <= Scale_T'pos(1 double);
+    wait;
+  end process;
+end architecture;
+
+entity Second_Physical_Unit_Scope is end entity;
+architecture rtl of second_physical_unit_scope is
+  type Scale_T is range 0 to 20 units
+    tick;
+    double = 3 tick;
+  end units Scale_T;
+  signal Position : integer;
+begin
+  drive : process
+  begin
+    Position <= Scale_T'pos(1 double);
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008,
+      fsim::frontend::VhdlStandard::Vhdl2008);
+  assert(repeated_physical_units.ok());
+  const auto scoped_physical_value = [&](const std::string_view top) {
+    const auto compiled = compile_and_elaborate(
+        repeated_physical_units.design, top);
+    assert(compiled.ok());
+    auto interpreter = compiled.design->create_interpreter();
+    assert(interpreter->run().status == fsim::runtime::RunStatus::completed);
+    const auto signal = compiled.design->find_signal("position");
+    assert(signal);
+    return static_cast<std::int32_t>(
+        interpreter->signal_value(*signal).low_word().aval);
+  };
+  assert(scoped_physical_value(
+             "vhdl:work.first_physical_unit_scope(rtl)") == 2
+      && scoped_physical_value(
+             "vhdl:work.second_physical_unit_scope(rtl)") == 3);
+
+  const auto wrong_physical_position = fsim::frontend::parse_text(
+      "vhdl_physical_scalar_position_wrong_type.vhd",
+      R"(
+entity Physical_Scalar_Position_Wrong_Type is end entity;
+architecture rtl of physical_scalar_position_wrong_type is
+  type First_T is range 0 to 10 units
+    first_tick;
+  end units First_T;
+  type Second_T is range 0 to 10 units
+    second_tick;
+  end units Second_T;
+  signal Result : integer;
+begin
+  Result <= First_T'pos(1 second_tick);
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008,
+      fsim::frontend::VhdlStandard::Vhdl2008);
+  assert(wrong_physical_position.ok());
+  const auto wrong_physical_position_result = compile_and_elaborate(
+      wrong_physical_position.design,
+      "vhdl:work.physical_scalar_position_wrong_type(rtl)");
+  assert(!wrong_physical_position_result.ok()
+      && has_diagnostic(
+          wrong_physical_position_result,
+          "FSIM-ELAB-VHSCALARATTR-001"));
+
+  const auto shadowed_time_position = fsim::frontend::parse_text(
+      "vhdl_physical_scalar_position_shadowed_time.vhd",
+      R"(
+entity Physical_Scalar_Position_Shadowed_Time is end entity;
+architecture rtl of physical_scalar_position_shadowed_time is
+  type time is range 0 to 10 units
+    local_tick;
+  end units time;
+  signal Result : integer;
+begin
+  Result <= time'pos(fs);
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008,
+      fsim::frontend::VhdlStandard::Vhdl2008);
+  assert(shadowed_time_position.ok());
+  const auto shadowed_time_position_result = compile_and_elaborate(
+      shadowed_time_position.design,
+      "vhdl:work.physical_scalar_position_shadowed_time(rtl)");
+  assert(!shadowed_time_position_result.ok()
+      && has_diagnostic(
+          shadowed_time_position_result,
+          "FSIM-ELAB-VHSCALARATTR-001"));
+
+  const auto wrong_physical_value = fsim::frontend::parse_text(
+      "vhdl_physical_scalar_value_wrong_type.vhd",
+      R"(
+entity Physical_Scalar_Value_Wrong_Type is end entity;
+architecture rtl of physical_scalar_value_wrong_type is
+  type First_T is range 0 to 10 units
+    first_tick;
+  end units First_T;
+  type Second_T is range 0 to 10 units
+    second_tick;
+  end units Second_T;
+  signal Result : First_T;
+begin
+  Result <= First_T'val(1 second_tick);
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008,
+      fsim::frontend::VhdlStandard::Vhdl2008);
+  assert(wrong_physical_value.ok());
+  const auto wrong_physical_value_result = compile_and_elaborate(
+      wrong_physical_value.design,
+      "vhdl:work.physical_scalar_value_wrong_type(rtl)");
+  assert(!wrong_physical_value_result.ok()
+      && has_diagnostic(
+          wrong_physical_value_result,
+          "FSIM-ELAB-VHSCALARATTR-001"));
 
   const auto reject = [](
       const std::string_view filename,

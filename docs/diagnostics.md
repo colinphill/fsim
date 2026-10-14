@@ -1835,6 +1835,7 @@ scheduler.
 | `FSIM-SV-SEM-418` | error | A compilation-unit type declaration names an undeclared type, or a forward type declaration is never completed (IEEE 1800-2017 6.18). |
 | `FSIM-SV-SEM-419` | error | An overridable parameter's value names a specparam (IEEE 1800-2017 6.20.5). |
 | `FSIM-SV-SEM-420` | error | A foreach loop has more loop-variable positions than dimensions in its array (IEEE 1800-2017 12.7.3). |
+| `FSIM-SV-SEM-421` | error | A wildcard-imported identifier is referenced before a later conflicting declaration in the same scope. |
 | `FSIM-SV-SEM-073` | error | A module or package declares the same bounded task name more than once. |
 | `FSIM-SV-SEM-075` | error | A bounded text-file system function has the wrong argument count. |
 | `FSIM-SV-SEM-076` | error | `$fdisplay` or `$fwrite` has a nonliteral, malformed, unsupported, or multi-value format. |
@@ -1893,6 +1894,8 @@ scheduler.
 | `FSIM-SV-UNSUPPORTED-046` | error | A `randsequence` production is recursive or returns a value; productions expand inline and only `void` productions are supported. |
 | `FSIM-SV-UNSUPPORTED-047` | error | An assignment within an expression (IEEE 1800-2017 11.3.6) appears in a loop control expression; such assignments run once before their statement. |
 | `FSIM-SV-UNSUPPORTED-048` | error | An event control with an `iff` guard has more than one event, or more than one guard; only a single guarded event is executable. |
+| `FSIM-SV-UNSUPPORTED-050` | error | `$bits` of an anonymous aggregate data type requires a statically known width. |
+| `FSIM-SV-UNSUPPORTED-051` | error | A non-ANSI selected port must exactly match its declared packed range; partial selections are not supported. |
 
 ## Elaboration and SimIR lowering
 
@@ -2129,6 +2132,7 @@ scheduler.
 | `FSIM-ELAB-SVFUNC-012` | error | A bounded `ref` function actual is not a writable variable target or the function is not automatic. |
 | `FSIM-ELAB-SVFUNC-013` | error | A `ref static` function actual lacks static storage lifetime. |
 | `FSIM-ELAB-SVFUNC-014` | error | A void function is called where a value is required, including inside `void'(...)` (IEEE 1800-2017 13.4.1). |
+| `FSIM-ELAB-SVFUNC-015` | error | A SystemVerilog parameter or localparam constant function call names no visible function declaration. |
 | `FSIM-ELAB-VHFUNC-001` | error | An interface-function generic has no retained profile in HIR. |
 | `FSIM-ELAB-VHFUNC-002` | error | An interface-function association or selected actual is not same-language VHDL. |
 | `FSIM-ELAB-VHFUNC-003` | error | An interface-function actual is not a simple visible function name. |
@@ -2661,6 +2665,7 @@ scheduler.
 | `FSIM-ELAB-SVQUERY-002` | error | A bounded unpacked-container query dimension is not the locally constant dimension `1`. |
 | `FSIM-ELAB-SVQUERY-003` | error | A finite-bound query is applied to an associative array. |
 | `FSIM-ELAB-SVQUERY-004` | error | A type-only SystemVerilog query is outside the bounded container-query subset. |
+| `FSIM-ELAB-SVQUERY-005` | error | `$bits` is applied to a real, shortreal, or realtime value, which is not a bit-stream type (IEEE 1800-2017 20.6.2, 6.24.3). |
 | `FSIM-ELAB-SVPATTERN-001` | error | A container assignment pattern has inconsistent metadata or uses keyed versus positional members with the wrong container kind. |
 | `FSIM-ELAB-SVPATTERN-002` | error | A static pattern has the wrong element count or a dynamic pattern exceeds its container capacity. |
 | `FSIM-ELAB-SVPATTERN-003` | error | An associative pattern key is not locally constant and known or duplicates another converted key. |

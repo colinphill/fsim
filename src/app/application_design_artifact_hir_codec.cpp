@@ -254,6 +254,26 @@ namespace codec_detail {
                 return error;
             }
         }
+        for (std::size_t index { }; index < state.statements.size(); ++index) {
+            const auto& statement = state.statements[index];
+            if (statement.imports.empty()) {
+                continue;
+            }
+            if (statement.kind != semantic::sv::StatementKind::block
+                || !statement.nested_scope) {
+                return "block imports are attached to a statement without a "
+                       "nested block scope";
+            }
+            for (const auto& import : statement.imports) {
+                if (import.package.spelling.empty()
+                    || import.wildcard == import.member.has_value()
+                    || (import.member
+                        && import.member->spelling.empty())) {
+                    return "block imports contain an invalid package/member "
+                           "selection";
+                }
+            }
+        }
         if (!semantic::sv::top_level_hir_collections_well_formed(
                 semantics,
                 { validation_span(state.instances),
@@ -292,6 +312,45 @@ namespace codec_detail {
         if (!unique_required_ids(
                 state.processes, &semantic::sv::Process::id)) {
             return "process IDs are missing or duplicated";
+        }
+        for (const auto& unit : state.units) {
+            if (!unit.port_slots) {
+                continue;
+            }
+            std::unordered_map<std::string_view, std::size_t> slot_counts;
+            for (const auto& slot : *unit.port_slots) {
+                if (slot) {
+                    ++slot_counts[*slot];
+                }
+            }
+            for (const auto& [name, count] : slot_counts) {
+                if (name.empty() || count != 1U) {
+                    return "unit port slots contain an empty or duplicate "
+                           "port name";
+                }
+            }
+            std::unordered_map<std::string_view, std::size_t> declared_ports;
+            for (const auto id : unit.declarations) {
+                const auto declaration = std::ranges::find(
+                    state.declarations, id,
+                    &semantic::sv::Declaration::id);
+                if (declaration != state.declarations.end()
+                    && (*declaration).scope == unit.scope
+                    && (*declaration).form
+                        == semantic::sv::DeclarationForm::port) {
+                    ++declared_ports[(*declaration).name];
+                }
+            }
+            if (declared_ports.size() != slot_counts.size()) {
+                return "unit port slots do not name every port declaration";
+            }
+            for (const auto& [name, count] : declared_ports) {
+                const auto slot = slot_counts.find(name);
+                if (count != 1U || slot == slot_counts.end()
+                    || slot->second != 1U) {
+                    return "unit port slots disagree with port declarations";
+                }
+            }
         }
         return { };
     }

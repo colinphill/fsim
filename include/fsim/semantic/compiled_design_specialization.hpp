@@ -16,6 +16,15 @@
 
 namespace fsim::semantic {
 
+namespace detail {
+
+/// Convert one nonnegative VHDL real physical magnitude to its rounded
+/// primary-unit integer value using exact decimal arithmetic.
+[[nodiscard]] std::optional<std::uint64_t> decimal_physical_magnitude(
+    std::string_view text, std::uint64_t scale);
+
+} // namespace detail
+
 /// A fully known VHDL packed vector produced by bounded constant evaluation.
 /// `bits` are ordered from the left bound through the right bound.
 struct SpecializedHirVhdlPackedValue {
@@ -25,6 +34,23 @@ struct SpecializedHirVhdlPackedValue {
 
     friend bool operator==(const SpecializedHirVhdlPackedValue&,
         const SpecializedHirVhdlPackedValue&) = default;
+};
+
+/// A bounded, statically evaluated one-dimensional array whose element type
+/// is the predefined VHDL BOOLEAN type. The array and element identities are
+/// retained separately from the values so a Boolean array cannot be
+/// reinterpreted as a packed logic vector or as another nominal array type.
+struct SpecializedHirVhdlBooleanArrayValue {
+    TypeId array_type;
+    TypeId element_type;
+    std::int64_t left_bound { };
+    std::int64_t right_bound { };
+    bool descending { };
+    bool null_range { };
+    std::vector<std::uint8_t> elements;
+
+    friend bool operator==(const SpecializedHirVhdlBooleanArrayValue&,
+        const SpecializedHirVhdlBooleanArrayValue&) = default;
 };
 
 struct SpecializedHirActualIdentity {
@@ -55,6 +81,10 @@ struct SpecializedHirActualIdentity {
     // target unit evaluate lexical references to packed generic actuals
     // without re-evaluating a parent expression in the child's context.
     std::optional<SpecializedHirVhdlPackedValue> vhdl_packed_value { };
+    // A typed Boolean array actual is kept as Boolean elements with its
+    // nominal array identity and bounds. It is not encoded as packed bits.
+    std::optional<SpecializedHirVhdlBooleanArrayValue>
+        vhdl_boolean_array_value { };
 
     friend bool operator==(const SpecializedHirActualIdentity&,
         const SpecializedHirActualIdentity&) = default;
@@ -289,6 +319,21 @@ public:
     /// index through the right index.
     [[nodiscard]] std::optional<SpecializedHirVhdlPackedArrayValue>
     evaluate_vhdl_packed_array_expression(ExpressionId expression) const;
+
+    /// Whether a subtype is a one-dimensional array of the predefined
+    /// BOOLEAN type, proven from retained type identity or an unshadowed
+    /// compiler-owned STD.STANDARD spelling.
+    [[nodiscard]] bool is_vhdl_boolean_array_subtype(
+        const vhdl::SubtypeIndication& subtype, ScopeId use_scope) const;
+
+    /// Evaluate a bounded Boolean array expression and apply its expected
+    /// subtype. Positional Boolean aggregates, array concatenation, and pure
+    /// function results are supported; dynamic or nominally incompatible
+    /// expressions return no value.
+    [[nodiscard]] std::optional<SpecializedHirVhdlBooleanArrayValue>
+    evaluate_vhdl_boolean_array_expression(ExpressionId expression,
+        const vhdl::SubtypeIndication& expected_subtype,
+        ScopeId use_scope) const;
 
     /// Evaluate and coerce a bounded packed-vector VHDL constant declaration
     /// to its effective subtype. Unsupported or mismatched values return no

@@ -290,7 +290,10 @@ struct Simulation::Impl {
         const std::span<const std::string> string_actuals,
         const std::span<const std::string> actual_names,
         const std::string_view allocation_scope,
-        const runtime::SystemVerilogUvmRootHandle requested_root = 0);
+        const runtime::SystemVerilogUvmRootHandle requested_root = 0,
+        const std::optional<runtime::simir::ProcessId> owner_design_process
+            = std::nullopt,
+        const runtime::SystemVerilogClassHandle owner_context_handle = 0U);
 
     using PackedSnapshot = std::map<
         std::pair<runtime::SystemVerilogClassHandle, std::string>,
@@ -412,6 +415,12 @@ struct Simulation::Impl {
 
     BuiltProject built;
 
+    // Package class allocations are evaluated after the class heap and its
+    // construction services are configured, so retain their exact signal and
+    // expression identities before the interpreter takes ownership of design.
+    std::vector<std::pair<runtime::simir::SignalId, semantic::ExpressionId>>
+        package_class_handle_initializers;
+
     bool vpi_runtime_updates_enabled { true };
 
     runtime::SystemVerilogClassHeap class_heap;
@@ -420,6 +429,19 @@ struct Simulation::Impl {
     std::map<std::pair<std::uint64_t, std::string>,
         runtime::simir::ContainerValue>
         class_value_containers;
+    // Exact enclosing module/interface parameter values and owner process
+    // captured by class objects. Declaration identity distinguishes same-name
+    // parameters; the process recovers the exact unit and instance path.
+    // UVM teardown removes entries when it releases the corresponding handle.
+    using ClassOwnerParameterValues = std::map<
+        semantic::DeclarationId,
+        std::optional<runtime::PackedLogic4>>;
+    struct ClassOwnerParameterContext {
+        ClassOwnerParameterValues parameters;
+        std::optional<runtime::simir::ProcessId> owner_design_process;
+    };
+    std::map<runtime::SystemVerilogClassHandle, ClassOwnerParameterContext>
+        class_owner_parameter_values;
 
     runtime::SystemVerilogChandleRegistry chandle_registry;
 

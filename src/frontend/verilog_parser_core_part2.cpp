@@ -9,6 +9,7 @@ namespace fsim::frontend {
 void VerilogParser::parse_import_clause(
     std::vector<SystemVerilogImport>& imports,
     const Token& start) {
+  const auto source_order = systemverilog_source_order();
   for (;;) {
     const auto package = expect_identifier("package name in import");
     expect(
@@ -24,7 +25,8 @@ void VerilogParser::parse_import_clause(
     imports.push_back({
         package.text,
         std::move(name),
-        cover(start.span, previous().span)});
+        cover(start.span, previous().span),
+        source_order});
     if (!match(TokenKind::Comma)) {
       break;
     }
@@ -498,20 +500,32 @@ void VerilogParser::parse_timescale(const Token& directive) {
       std::to_string(*precision_magnitude) + precision_token.text;
 }
 
-void VerilogParser::note_implicit_net_reference(const Token& name) {
+void VerilogParser::note_implicit_net_reference(
+    const Token& name, const bool call) {
   // `new` (a dynamic array or class constructor) and `$` (an unbounded
   // range end) are never nets.
   if (name.text == "new" || name.text.starts_with('$')) {
     return;
   }
-  for (const auto& import_item : active_package_imports_) {
-    if ((!import_item.name.empty()
-         && import_item.name == name.text)
-        || (import_item.name.empty()
-            && (package_constant_names_[
-                    import_item.package].contains(name.text)
-                || (package_member_lookup_
-                    && package_member_lookup_(import_item.package, name.text))))) {
+  if (!current_procedural_names_.contains(name.text)
+      && !current_function_arguments_.contains(name.text)) {
+    for (std::size_t index = active_package_imports_.size(); index > 0U;
+         --index) {
+      const auto& import_item = active_package_imports_[index - 1U];
+      const bool imported_member = !import_item.name.empty()
+          ? import_item.name == name.text
+          : package_constant_names_[import_item.package].contains(name.text)
+              || (package_member_lookup_
+                  && package_member_lookup_(import_item.package, name.text));
+      if (!imported_member) {
+        continue;
+      }
+      if (import_item.name.empty()
+          && index - 1U < unit_package_import_count_
+          && !call) {
+        wildcard_import_uses_.push_back(
+            { name.text, name.span });
+      }
       return;
     }
   }
@@ -537,6 +551,25 @@ void VerilogParser::note_implicit_net_reference(const Token& name) {
     implicit_net_references_.push_back(
         {name.text, current_default_nettype_, name.span,
          name.expansion_stack, implicit_net_context_});
+  }
+}
+
+void VerilogParser::note_wildcard_import_type_reference(
+    const Token& name) {
+  for (std::size_t index = active_package_imports_.size(); index > 0U;
+       --index) {
+    const auto& import_item = active_package_imports_[index - 1U];
+    if (!import_item.name.empty()
+        || !(package_constant_names_[import_item.package].contains(name.text)
+            || (package_member_lookup_
+                && package_member_lookup_(import_item.package, name.text)))) {
+      continue;
+    }
+    if (index - 1U < unit_package_import_count_) {
+      wildcard_import_uses_.push_back(
+          { name.text, name.span });
+    }
+    return;
   }
 }
 
@@ -580,6 +613,44 @@ void VerilogParser::resolve_compilation_unit_references(
 }
 
 void VerilogParser::resolve_implicit_nets(DesignUnit& unit) {
+  std::unordered_set<std::string> rejected_late_imports;
+  for (const auto& use : wildcard_import_uses_) {
+    if (!rejected_late_imports.insert(use.name).second) {
+      continue;
+    }
+    const auto later_declaration = [&](const auto& declarations)
+        -> const SourceSpan* {
+      for (const auto& declaration : declarations) {
+        if (declaration.name == use.name
+            && declaration.span.source_name == use.use_span.source_name
+            && declaration.span.begin.offset > use.use_span.begin.offset) {
+          return &declaration.span;
+        }
+      }
+      return nullptr;
+    };
+    const SourceSpan* conflict { };
+    conflict = later_declaration(unit.parameters);
+    if (conflict == nullptr) conflict = later_declaration(unit.ports);
+    if (conflict == nullptr) conflict = later_declaration(unit.signals);
+    if (conflict == nullptr) conflict = later_declaration(unit.variables);
+    if (conflict == nullptr) conflict = later_declaration(unit.type_aliases);
+    if (conflict == nullptr) {
+      conflict = later_declaration(unit.functions);
+    }
+    if (conflict == nullptr) {
+      conflict = later_declaration(unit.tasks);
+    }
+    if (conflict != nullptr) {
+      diagnostics_.push_back({
+          DiagnosticSeverity::Error,
+          "FSIM-SV-SEM-421",
+          "wildcard-imported identifier '" + use.name
+              + "' became visible before a later local declaration",
+          *conflict,
+          {}});
+    }
+  }
   std::unordered_set<std::string> known;
   known.insert(
       declared_genvars_.begin(), declared_genvars_.end());
@@ -722,6 +793,7 @@ DesignUnit VerilogParser::parse_module(
     const bool extern_declaration)
 {
     non_ansi_ports_.clear();
+    non_ansi_port_selections_.clear();
     unit_value_parameter_names_.clear();
     explicit_port_types_.clear();
     body_port_declarations_.clear();
@@ -731,6 +803,8 @@ DesignUnit VerilogParser::parse_module(
     unit_foreach_types_.clear();
     port_type_refinements_.clear();
     implicit_net_references_.clear();
+    wildcard_import_uses_.clear();
+    unit_package_import_count_ = 0U;
     container_iterator_names_.clear();
     current_procedural_names_.clear();
     current_procedural_types_.clear();
@@ -777,6 +851,7 @@ DesignUnit VerilogParser::parse_module(
     unit.verilog_compatibility_profile = compatibility_profile_;
     unit.systemverilog_imports = compilation_unit_imports_;
     active_package_imports_ = unit.systemverilog_imports;
+    unit_package_import_count_ = active_package_imports_.size();
     unit.default_nettype = current_default_nettype_;
     unit.is_cell = current_cell_define_;
     unit.systemverilog_extern = extern_declaration;
@@ -819,6 +894,7 @@ DesignUnit VerilogParser::parse_module(
         parse_import_clause(
             unit.systemverilog_imports, previous());
         active_package_imports_ = unit.systemverilog_imports;
+        unit_package_import_count_ = active_package_imports_.size();
     }
 
     const bool has_parameter_port_list = match(TokenKind::Hash);
@@ -926,6 +1002,7 @@ DesignUnit VerilogParser::parse_module(
             parse_import_clause(
                 unit.systemverilog_imports, previous());
             active_package_imports_ = unit.systemverilog_imports;
+            unit_package_import_count_ = active_package_imports_.size();
         } else if (match_keyword("nettype")) {
             module_has_non_time_item_ = true;
             parse_nettype(unit, previous());
@@ -1642,6 +1719,7 @@ DesignUnit VerilogParser::parse_module(
             {}});
       }
     }
+    validate_non_ansi_port_selections(unit);
     // A generate block and a named block of a process share the module's
     // name space (IEEE 1364-2005 12.4.3, IEEE 1800-2017 27.6).
     {

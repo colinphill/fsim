@@ -150,8 +150,21 @@ package body vunit_shim_pkg is
   procedure test_runner_setup(
     constant runner : in runner_sync_t;
     constant runner_cfg : in string := "") is
+    procedure shim_notify is
+    begin
+      -- VUnit's notify handshake resumes on the activation delta, then waits
+      -- one additional delta by default before returning.
+      wait for 0 ns;
+      wait for 0 ns;
+    end procedure;
   begin
     state.begin_suite;
+    -- VUnit run_pkg.test_runner_setup performs five default notify calls in
+    -- the unlocked path: setup entry, entry_gate, exit_gate, suite setup, and
+    -- its second entry_gate.
+    for notification in 1 to 5 loop
+      shim_notify;
+    end loop;
   end procedure;
 
   procedure test_runner_cleanup(constant runner : in runner_sync_t) is

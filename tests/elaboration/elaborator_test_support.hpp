@@ -141,6 +141,7 @@ void test_specialization_and_packages();
 void test_verilog_specify_specialization();
 void test_systemverilog_typed_constants();
 void test_systemverilog_constant_function_memoization_dependencies();
+void test_systemverilog_unresolved_constant_function_call();
 void test_systemverilog_2023_utility_system_callables();
 void test_systemverilog_aliases();
 void test_systemverilog_string_constants();

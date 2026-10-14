@@ -918,7 +918,7 @@ namespace {
         const std::optional<IntegerRangeExpression>& left,
         const std::optional<IntegerRangeExpression>& right)
     {
-        return left.has_value() == right.has_value() && (!left || (left->descending == right->descending && same_expression_shape(left->left, right->left) && same_expression_shape(left->right, right->right)));
+        return left.has_value() == right.has_value() && (!left || (left->descending == right->descending && left->direction_from_bounds == right->direction_from_bounds && same_expression_shape(left->left, right->left) && same_expression_shape(left->right, right->right)));
     }
 
     bool same_discrete_range_expression(

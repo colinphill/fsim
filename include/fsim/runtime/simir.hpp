@@ -2221,8 +2221,10 @@ public:
     /// The identity is the static design process that owns the fork, including
     /// when a dynamic child creates a nested fork.
     using ForkSpawnFilter = std::function<bool(ProcessId)>;
+    /// The first identity is the owning static design process. Runtime fork
+    /// children retain it even though their ProcessProgram id is dynamic.
     using ClassAllocateHook = std::function<std::uint64_t(
-        std::string_view, std::string_view,
+        ProcessId, std::string_view, std::string_view,
         std::string_view,
         std::span<const PackedLogic4>,
         std::span<const std::string>,

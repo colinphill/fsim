@@ -1955,7 +1955,8 @@ std::optional<Process> Lowerer::lower_hir_process(
                 && input.sensitivities.size() > 1U
                 && semantic::CompiledDesignResolver { *specialized_hir_unit_ }
                        .resolve_systemverilog_constant(
-                           sensitivity.signal, input.scope)
+                           sensitivity.signal, input.scope, false,
+                           sensitivity.source_order)
                        .unique()) {
                 continue;
             }

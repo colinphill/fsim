@@ -846,8 +846,7 @@ static std::optional<CompilationWorkspace> check_project_impl(
   if (!identify_compiled_source_units(checked, source_identities, diagnostics)
       || !validate_and_link_vhdl_compiled_environment(checked, diagnostics,
           allow_external_vhdl_architecture_primary)
-      || (imported && !resolve_compiled_systemverilog_environment(
-          checked, diagnostics))) {
+      || !resolve_compiled_systemverilog_environment(checked, diagnostics)) {
     return std::nullopt;
   }
   (void)validate_vhdl_mode_view_hir(

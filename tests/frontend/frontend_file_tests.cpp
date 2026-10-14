@@ -45,6 +45,36 @@ void test_systemverilog_text_files()
             && raw_input.conversions[1].format
                 == InputScanFormat::Unformatted4,
         "unformatted two-state and four-state input conversions stay distinct");
+    const auto hierarchy_input = parse_input_format("%mX%d");
+    require(
+        hierarchy_input.valid
+            && hierarchy_input.conversions.size() == 2U
+            && hierarchy_input.conversions[0].format
+                == InputScanFormat::Hierarchy
+            && hierarchy_input.conversions[1].format
+                == InputScanFormat::Decimal
+            && hierarchy_input.conversions[1].prefix == "X",
+        "hierarchy scan conversion leaves following literal with next field");
+    const auto suppressed_hierarchy = parse_input_format("%*m%d");
+    require(
+        suppressed_hierarchy.valid
+            && suppressed_hierarchy.conversions.size() == 2U
+            && suppressed_hierarchy.conversions[0].format
+                == InputScanFormat::Hierarchy
+            && suppressed_hierarchy.conversions[0].suppress,
+        "hierarchy conversion retains general assignment-suppression syntax");
+    require(
+        !parse_input_format("%5m").valid
+            && !parse_input_format("%*5m").valid,
+        "hierarchy conversion rejects an undefined maximum field width");
+    const auto time_input = parse_input_format("%6t %*t");
+    require(
+        time_input.valid && time_input.conversions.size() == 2U
+            && time_input.conversions[0].format == InputScanFormat::Time
+            && time_input.conversions[0].maximum_characters == 6U
+            && time_input.conversions[1].format == InputScanFormat::Time
+            && time_input.conversions[1].suppress,
+        "%t retains its optional field width and assignment suppression");
     require(
         !parse_input_format("%8u").valid
             && !parse_input_format("%*z").valid,

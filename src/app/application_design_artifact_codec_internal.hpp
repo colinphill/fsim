@@ -532,7 +532,7 @@ namespace codec_detail {
         } else if constexpr (
             std::same_as<T, runtime::simir::InputScanFormat>) {
             return value >= runtime::simir::InputScanFormat::binary
-                && value <= runtime::simir::InputScanFormat::unformatted4;
+                && value <= runtime::simir::InputScanFormat::time;
         } else if constexpr (std::same_as<T, runtime::simir::OutputFormat>) {
             return value >= runtime::simir::OutputFormat::binary
                 && value <= runtime::simir::OutputFormat::unformatted4;
@@ -913,7 +913,8 @@ namespace codec_detail {
         return std::tie(
             value.destination, value.handle, value.source, value.string_source,
             value.conversions, value.trailing_text, value.require_assignments,
-            value.success, value.consume_string_source);
+            value.success, value.consume_string_source,
+            value.hierarchy_path, value.time_unit_femtoseconds);
     }
 
     template <typename T>

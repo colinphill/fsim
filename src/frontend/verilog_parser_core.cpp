@@ -148,6 +148,14 @@ VerilogParser::VerilogParser(
           standard_revision, compatibility_profile_)),
       package_member_lookup_(std::move(package_member_lookup)) {}
 
+std::uint64_t VerilogParser::systemverilog_source_order() const noexcept
+{
+    if (language_ != Language::SystemVerilog2017 || synthetic_token_stream_) {
+        return 0U;
+    }
+    return static_cast<std::uint64_t>(position()) + 1U;
+}
+
 ParseResult VerilogParser::run() {
     ParsedDesign design;
     parsed_design_ = &design;

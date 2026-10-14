@@ -40,7 +40,8 @@ Process VerilogParser::parse_initial()
     auto body = parse_statement();
     if (body) {
         if (body->kind == StatementKind::Block
-            && body->label.empty()) {
+            && body->label.empty()
+            && body->systemverilog_imports.empty()) {
             process.variables = std::move(body->declarations);
             process.statements = std::move(body->statements);
         } else {
@@ -79,7 +80,8 @@ Process VerilogParser::parse_final()
     auto body = parse_statement();
     if (body) {
         if (body->kind == StatementKind::Block
-            && body->label.empty()) {
+            && body->label.empty()
+            && body->systemverilog_imports.empty()) {
             process.variables = std::move(body->declarations);
             process.statements = std::move(body->statements);
         } else {
@@ -147,11 +149,16 @@ Process VerilogParser::parse_final()
 
 std::optional<Statement> VerilogParser::parse_statement()
 {
+    const auto source_order = systemverilog_source_order();
     if (language_ == Language::SystemVerilog2017
         && (keyword("randcase") || keyword("randsequence"))) {
         const auto start = advance();
-        return start.text == "randcase" ? parse_randcase(start)
-                                        : parse_randsequence(start);
+        auto generated = start.text == "randcase" ? parse_randcase(start)
+                                                   : parse_randsequence(start);
+        if (generated) {
+            generated->systemverilog_source_order = source_order;
+        }
+        return generated;
     }
     // The statement is returned in place; deeply nested statements recurse
     // through here, so the block construction stays out of this frame.
@@ -161,6 +168,9 @@ std::optional<Statement> VerilogParser::parse_statement()
     --statement_hoist_depth_;
     if (hoisted_statements_.size() != mark) {
         prepend_hoisted_statements(statement, mark);
+    }
+    if (statement) {
+        statement->systemverilog_source_order = source_order;
     }
     return statement;
 }
@@ -650,6 +660,8 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         Statement block;
         block.kind = StatementKind::Block;
         block.label = opening_label;
+        const auto prior_import_count = active_package_imports_.size();
+        bool block_statement_started { };
         DesignUnit local_declarations;
         struct PriorBlockType {
             std::string name;
@@ -659,7 +671,40 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         std::vector<PriorBlockType> prior_block_types;
         while (!at_end() && !keyword("end")) {
             const auto before = position();
-            if (match_keyword("typedef")) {
+            const bool package_import_keyword = match_keyword("import");
+            const bool legacy_package_import
+                = !package_import_keyword
+                && at(TokenKind::Identifier)
+                && current().text == "import"
+                && current(1).kind == TokenKind::Identifier
+                && current(2).kind == TokenKind::Scope;
+            if (package_import_keyword || legacy_package_import) {
+                const auto import_start = package_import_keyword
+                    ? previous()
+                    : advance();
+                if (block_statement_started) {
+                    error(import_start, "FSIM-SV-PARSE-001",
+                        "a block import must precede procedural statements");
+                }
+                const bool supported = require_standard(
+                    "a package import in a procedural block",
+                    StandardRevision::SystemVerilog2005,
+                    import_start,
+                    "FSIM-SV-PARSE-348");
+                std::vector<SystemVerilogImport> rejected_imports;
+                auto& imports = supported
+                    ? block.systemverilog_imports.mutable_storage()
+                    : rejected_imports;
+                const auto first_new_import = imports.size();
+                parse_import_clause(imports, import_start);
+                if (supported) {
+                    active_package_imports_.insert(
+                        active_package_imports_.end(),
+                        imports.begin() + static_cast<std::ptrdiff_t>(
+                            first_new_import),
+                        imports.end());
+                }
+            } else if (match_keyword("typedef")) {
                 const auto alias_count = local_declarations.type_aliases.size();
                 parse_typedef(local_declarations, previous());
                 if (local_declarations.type_aliases.size() > alias_count) {
@@ -689,6 +734,7 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                 parse_procedural_declaration(block);
             } else if (auto child = parse_statement()) {
                 block.statements.push_back(std::move(*child));
+                block_statement_started = true;
             }
             if (position() == before) {
                 advance();
@@ -727,6 +773,7 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
                 block_typedef_types_.erase(prior->name);
             }
         }
+        active_package_imports_.resize(prior_import_count);
         block.span = span_from(start, previous());
         return block;
     }
@@ -802,7 +849,8 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
         if (auto true_branch = parse_statement()) {
             if (true_branch->kind == StatementKind::Block
                 && true_branch->label.empty()
-                && true_branch->declarations.empty()) {
+                && true_branch->declarations.empty()
+                && true_branch->systemverilog_imports.empty()) {
                 statement.statements = std::move(true_branch->statements);
             } else {
                 statement.statements.push_back(std::move(*true_branch));
@@ -812,7 +860,8 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             if (auto false_branch = parse_statement()) {
                 if (false_branch->kind == StatementKind::Block
                     && false_branch->label.empty()
-                    && false_branch->declarations.empty()) {
+                    && false_branch->declarations.empty()
+                    && false_branch->systemverilog_imports.empty()) {
                     statement.else_statements = std::move(false_branch->statements);
                 } else {
                     statement.else_statements.push_back(

@@ -67,7 +67,10 @@ resolve_constant_name_declaration(
     if (const auto rebound
         = semantic::CompiledDesignResolver { specialization }
               .resolve_systemverilog_constant(
-                  expression.text, specialization.scope(), false)
+                  expression.text, specialization.scope(), false,
+                  expression.referenced_name
+                      ? expression.referenced_name->source_order
+                      : 0U)
               .unique()) {
         return rebound;
     }
@@ -2865,11 +2868,9 @@ private:
                 }
                 return std::nullopt;
             }
-            const auto value = numeric_integer(*operand);
-            if (value < 0) {
-                error_ = "$clog2 requires a nonnegative integral argument";
-                return std::nullopt;
-            }
+            // IEEE 1800-2017 20.8.1 requires the argument to be treated as
+            // an unsigned value, irrespective of the operand's signedness.
+            const auto value = unsigned_integer(*operand);
             std::uint32_t result { };
             if (value > 1) {
                 const auto highest = boost::multiprecision::msb(value);
@@ -3049,13 +3050,29 @@ private:
             const auto resolved = semantic::CompiledDesignResolver {
                 specialization_ }
                                       .resolve_systemverilog(record.text,
-                                          record.scope, function, false)
-                                      .unique();
-            const auto declaration = resolved
-                ? specialization_.find_declaration(*resolved)
+                                          record.scope, function, false);
+            const auto selected = resolved.unique();
+            const auto declaration = selected
+                ? specialization_.find_declaration(*selected)
                 : std::nullopt;
             if (declaration && declaration->systemverilog != nullptr) {
                 return evaluate_callable(*declaration->systemverilog, record);
+            }
+            const auto visible_name
+                = semantic::CompiledDesignResolver { specialization_ }
+                      .resolve_systemverilog(
+                          record.text, record.scope, { }, false);
+            const bool class_member_call
+                = !record.class_identity.empty()
+                || !record.class_member_identity.empty();
+            if (!selected && !class_member_call
+                && resolved.status
+                    == semantic::CompiledResolutionStatus::not_found
+                && visible_name.status
+                    == semantic::CompiledResolutionStatus::not_found) {
+                error_ = "unresolved SystemVerilog function call '"
+                    + record.text + "'";
+                return std::nullopt;
             }
         }
         error_ = "unsupported SystemVerilog integral constant call '"

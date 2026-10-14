@@ -29,7 +29,8 @@ namespace sv = semantic::sv;
     const semantic::Model& model,
     const sv::Hir& hir,
     semantic::ScopeId scope,
-    std::string_view spelling) noexcept;
+    std::string_view spelling,
+    std::uint64_t source_order = 0U) noexcept;
 
 /// An omitted call argument, positional `f(, 1)` or named `f(.s())`,
 /// takes the formal's default (IEEE 1800-2017 13.5.3). The returned flags
@@ -138,7 +139,8 @@ private:
     [[nodiscard]] sv::Name name(
         std::string_view spelling,
         const frontend::SourceSpan& span,
-        semantic::ScopeId scope);
+        semantic::ScopeId scope,
+        std::uint64_t source_order = 0U);
     [[nodiscard]] std::optional<semantic::ExpressionId> expression(
         const frontend::Expression& input,
         semantic::ScopeId scope,
@@ -148,7 +150,8 @@ private:
     [[nodiscard]] semantic::TypeId find_type(
         semantic::ScopeId scope,
         std::string_view type_name,
-        std::optional<semantic::SourceSpanId> exact_source = std::nullopt)
+        std::optional<semantic::SourceSpanId> exact_source = std::nullopt,
+        std::uint64_t source_order = 0U)
         const noexcept;
     [[nodiscard]] semantic::ValueId find_value(
         semantic::ScopeId scope,

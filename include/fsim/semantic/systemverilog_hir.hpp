@@ -266,6 +266,16 @@ struct Name {
     SourceSpanId source;
     std::optional<DeclarationId> selected;
     std::vector<DeclarationId> overloads;
+    // One-based source-token ordinal; zero denotes legacy or generated data.
+    std::uint64_t source_order { };
+};
+
+struct Import {
+    Name package;
+    std::optional<Name> member;
+    bool wildcard { };
+    SourceSpanId source;
+    std::uint64_t source_order { };
 };
 
 struct AssignmentPatternAssociation {
@@ -368,6 +378,7 @@ struct Sensitivity {
     std::string signal;
     std::optional<ExpressionId> expression;
     SourceSpanId source;
+    std::uint64_t source_order { };
 };
 
 struct TaskAssociation {
@@ -473,6 +484,9 @@ struct Statement {
     bool class_handle_transfer { };
     std::string class_handle_type;
     GeneratedTextKind output_generated_text { GeneratedTextKind::none };
+    // Imports are owned by a block statement and apply only within its
+    // nested lexical scope.
+    std::vector<Import> imports;
 };
 
 struct Process {
@@ -523,6 +537,7 @@ struct TypeReference {
     std::vector<TypeReference> container_element_types;
     std::optional<std::uint64_t> executable_width;
     bool four_state { };
+    std::uint64_t source_order { };
 
     friend bool operator==(
         const TypeReference&, const TypeReference&) = default;
@@ -860,13 +875,6 @@ struct Declaration {
     bool array_parameter { };
     // An unpacked array local parameter, kept the same way.
     bool array_local_parameter { };
-};
-
-struct Import {
-    Name package;
-    std::optional<Name> member;
-    bool wildcard { };
-    SourceSpanId source;
 };
 
 struct Export {
@@ -2013,6 +2021,10 @@ struct Unit {
     std::vector<CheckerInstance> checker_instances;
     // The `unconnected_drive in effect where the module is defined (22.9).
     UnconnectedDrive unconnected_drive { UnconnectedDrive::none };
+    // Ordered external port slots from the module header. A disengaged slot
+    // denotes a legal empty port expression and has no internal declaration or
+    // runtime connection. Absent metadata preserves legacy declaration order.
+    std::optional<std::vector<std::optional<std::string>>> port_slots;
 };
 
 /// Owning SystemVerilog semantic HIR, including opaque class-handle operations.

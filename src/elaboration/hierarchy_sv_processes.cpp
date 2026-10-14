@@ -547,6 +547,8 @@ bool HierarchyBuilder::lower_compiled_systemverilog_processes(
             &materialization.container_declaration_bindings);
         generated_lowerer.set_specialized_hir_unit(
             occurrence.specialization.get());
+        generated_lowerer.set_ancestor_systemverilog_specializations(
+            &materialization.type_owner_contexts);
         generated_lowerer.set_hir_code_coverage_context(
             coverage_, unit.kind == semantic::sv::UnitKind::module
                 && source_language == frontend::Language::SystemVerilog2017);
@@ -812,6 +814,8 @@ bool HierarchyBuilder::lower_deferred_generated_systemverilog(
             &materialization.container_declaration_bindings);
         generated_lowerer.set_specialized_hir_unit(
             occurrence.specialization.get());
+        generated_lowerer.set_ancestor_systemverilog_specializations(
+            &materialization.type_owner_contexts);
         generated_lowerer.set_systemverilog_interface_handles(
             &systemverilog_interface_handles_, &systemverilog_interface_types_);
         generated_lowerer.set_systemverilog_program_owner(program_owner);

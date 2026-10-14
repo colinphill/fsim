@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "fsim/semantic/compiled_design_resolver.hpp"
+#include "fsim/semantic/compiled_design_specialization.hpp"
 
 namespace fsim::app::application_detail {
 
@@ -31,81 +33,6 @@ std::optional<ParsedMagnitude> magnitude_and_unit(std::string_view text)  {
   }
   return ParsedMagnitude{
       magnitude, std::string(split, compact.end())};
-}
-
-std::optional<std::uint64_t> decimal_physical_femtoseconds(
-    const std::string_view text, const std::uint64_t factor)
-{
-  // An abstract real literal times a unit, rounded to the nearest
-  // femtosecond (IEEE 1076-2008 5.2.4.1): `8.2 ms`, `1.0e-3 sec`.
-  std::string digits;
-  int scale = 0;
-  bool point = false;
-  std::size_t index = 0;
-  for (; index < text.size(); ++index) {
-    const char character = text[index];
-    if (character == '_') {
-      continue;
-    }
-    if (character == '.') {
-      if (point) {
-        return std::nullopt;
-      }
-      point = true;
-      continue;
-    }
-    if (character < '0' || character > '9') {
-      break;
-    }
-    digits.push_back(character);
-    if (point) {
-      --scale;
-    }
-  }
-  if (digits.empty()) {
-    return std::nullopt;
-  }
-  if (index < text.size()) {
-    if (text[index] != 'e' && text[index] != 'E') {
-      return std::nullopt;
-    }
-    int exponent = 0;
-    const auto first = text.data() + index + 1U
-        + (index + 1U < text.size() && text[index + 1U] == '+' ? 1U : 0U);
-    const auto [end, error] = std::from_chars(
-        first, text.data() + text.size(), exponent);
-    if (error != std::errc { } || end != text.data() + text.size()) {
-      return std::nullopt;
-    }
-    scale += exponent;
-  }
-  // value = digits * 10^scale * factor, exactly, then rounded.
-  unsigned __int128 numerator = 0;
-  for (const char digit : digits) {
-    numerator = numerator * 10U + static_cast<unsigned>(digit - '0');
-    if (numerator > (static_cast<unsigned __int128>(1) << 100U)) {
-      return std::nullopt;
-    }
-  }
-  numerator *= factor;
-  for (; scale > 0; --scale) {
-    numerator *= 10U;
-    if (numerator > (static_cast<unsigned __int128>(1) << 120U)) {
-      return std::nullopt;
-    }
-  }
-  unsigned __int128 denominator = 1;
-  for (; scale < 0; ++scale) {
-    denominator *= 10U;
-    if (denominator > (static_cast<unsigned __int128>(1) << 120U)) {
-      return std::nullopt;
-    }
-  }
-  const auto rounded = (numerator + denominator / 2U) / denominator;
-  if (rounded > std::numeric_limits<std::uint64_t>::max()) {
-    return std::nullopt;
-  }
-  return static_cast<std::uint64_t>(rounded);
 }
 
 std::optional<std::uint64_t> unit_femtoseconds(std::string_view unit)  {
@@ -571,6 +498,41 @@ void visit_vhdl_hir_delays(
   // their statement IDs refer to the dense table visited above.
 }
 
+// Bare predefined unit names have the same value as a physical literal with
+// magnitude one. A visible declaration, including a non-unit homograph,
+// prevents the implicit STD.STANDARD fallback.
+std::optional<std::uint64_t> implicit_vhdl_time_unit(
+    const semantic::CompiledDesign& compiled,
+    const semantic::vhdl::Expression& expression)
+{
+    if (expression.kind != semantic::vhdl::ExpressionKind::name
+        || !expression.scope.valid()
+        || expression.scope.value() >= compiled.semantics.scopes().size()
+        || (expression.referenced_name
+            && expression.referenced_name->selected)) {
+        return std::nullopt;
+    }
+    auto spelling = expression.text;
+    std::ranges::transform(spelling, spelling.begin(),
+        [](const unsigned char character) {
+            return static_cast<char>(std::tolower(character));
+        });
+    const auto factor = spelling == "s"
+        ? std::nullopt : unit_femtoseconds(spelling);
+    if (!factor) {
+        return std::nullopt;
+    }
+    const semantic::CompiledDesignResolver resolver {
+        compiled, compiled.semantics.scopes()[expression.scope.value()].unit
+    };
+    semantic::vhdl::Name name;
+    name.spelling = spelling;
+    name.canonical = spelling;
+    return resolver.resolve_vhdl(name, expression.scope).status
+            == semantic::CompiledResolutionStatus::not_found
+        ? factor : std::nullopt;
+}
+
 } // namespace
 
 std::string effective_resolution(
@@ -662,6 +624,10 @@ std::string effective_resolution(
   // divides each one, wherever the literal appears.
   constexpr std::string_view physical_prefix { "@vhdl-physical:" };
   for (const auto& expression : compiled.vhdl_hir.expressions()) {
+    if (implicit_vhdl_time_unit(compiled, expression)) {
+      consider_resolution("1" + expression.text);
+      continue;
+    }
     if (!expression.text.starts_with(physical_prefix)
         || expression.operands.size() != 1U) {
       continue;
@@ -803,7 +769,7 @@ bool normalize_delays(
       if (expression.operands.front().text.find_first_of(".eE")
               != std::string::npos
           && *tick_femtoseconds != 0) {
-        const auto femtoseconds = decimal_physical_femtoseconds(
+        const auto femtoseconds = semantic::detail::decimal_physical_magnitude(
             expression.operands.front().text, *factor);
         if (!femtoseconds || *femtoseconds % *tick_femtoseconds != 0
             || *femtoseconds / *tick_femtoseconds
@@ -1711,6 +1677,41 @@ private:
 
             constexpr auto prefix
                 = std::string_view { "@vhdl-physical:" };
+            if (const auto factor = implicit_vhdl_time_unit(
+                    compiled_, expression)) {
+                if (!tick_femtoseconds_ || *tick_femtoseconds_ == 0U
+                    || *factor % *tick_femtoseconds_ != 0U) {
+                    vhdl_error(
+                        "FSIM-ELAB-VHTIME-003",
+                        "physical time unit is not exactly representable at "
+                        "project resolution '" + resolution_ + "'",
+                        expression.source);
+                } else {
+                    // Preserve the proven predefined unit name for consumers
+                    // such as TextIO and TO_STRING. The expression is now a
+                    // tick-valued integer, so its original spelling is no
+                    // longer available in `text`. This branch is reached
+                    // only after implicit_vhdl_time_unit has proved that the
+                    // bare name is an unshadowed predefined unit.
+                    semantic::vhdl::Name unit_name;
+                    unit_name.spelling = expression.text;
+                    unit_name.canonical = expression.text;
+                    std::ranges::transform(unit_name.canonical,
+                        unit_name.canonical.begin(),
+                        [](const unsigned char character) {
+                            return static_cast<char>(
+                                std::tolower(character));
+                        });
+                    unit_name.source = expression.source;
+                    expression.kind
+                        = semantic::vhdl::ExpressionKind::integer_literal;
+                    expression.text = std::to_string(
+                        *factor / *tick_femtoseconds_);
+                    expression.referenced_name = std::move(unit_name);
+                    expression.nominal_type = "@builtin:time";
+                    expression.folded = true;
+                }
+            }
             if (expression.kind == semantic::vhdl::ExpressionKind::call
                 && expression.text.starts_with(prefix)) {
                 normalize_vhdl_physical_expression(expression, index);
@@ -1747,7 +1748,7 @@ private:
             && expressions[operand.value()]->kind
                 == semantic::vhdl::ExpressionKind::real_literal
             && tick_femtoseconds_ && *tick_femtoseconds_ != 0U) {
-            const auto femtoseconds = decimal_physical_femtoseconds(
+            const auto femtoseconds = semantic::detail::decimal_physical_magnitude(
                 expressions[operand.value()]->text, *factor);
             if (!femtoseconds || *femtoseconds % *tick_femtoseconds_ != 0U
                 || *femtoseconds / *tick_femtoseconds_

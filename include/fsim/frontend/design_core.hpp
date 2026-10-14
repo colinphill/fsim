@@ -87,6 +87,9 @@ struct Expression {
     std::string text;
     std::vector<Expression> operands;
     SourceSpan span;
+    // One-based position in the preprocessed SystemVerilog token stream.
+    // Zero means the node was synthesized or has no ordering provenance.
+    std::uint64_t systemverilog_source_order { };
     // Aggregate choices parallel operands. Empty denotes positional; named,
     // `others`, `@array`, SystemVerilog `@key`, and `default` associations retain
     // their source choices in aggregate_choice_expressions. A SystemVerilog
@@ -269,6 +272,7 @@ struct IntegerRangeExpression {
     Expression right;
     SourceSpan span;
     bool descending { };
+    bool direction_from_bounds { };
 };
 
 /// A concrete constraint over declaration-order VHDL enumeration ordinals.
@@ -654,6 +658,8 @@ struct Type {
     std::string systemverilog_interface_modport;
     std::vector<SystemVerilogClassTypeActual>
         systemverilog_class_parameter_actuals;
+    // One-based parser-token ordinal of this type-name use; zero is unknown.
+    std::uint64_t systemverilog_source_order { };
 
     Type() = default;
     Type(ValueDomain domain_value, std::string spelling_value,
@@ -1540,11 +1546,22 @@ struct Sensitivity {
     // General packed event expressions retain their exact value graph. Direct
     // signal and wildcard controls keep the compact `signal` representation.
     Expression expression;
+    // One-based parser-token ordinal for a direct identifier sensitivity.
+    std::uint64_t systemverilog_source_order { };
 };
 
 struct CaseAlternative;
 struct FunctionDeclaration;
 struct ProcedureDeclaration;
+
+struct SystemVerilogImport {
+    std::string package;
+    // Empty means wildcard import.
+    std::string name;
+    SourceSpan span;
+    // One-based preprocessed-token ordinal of the import declaration.
+    std::uint64_t systemverilog_source_order { };
+};
 
 enum class SystemVerilogAssertionControlKind {
     None,
@@ -1749,6 +1766,12 @@ struct Statement {
     support::RareVector<VariableDeclaration> declarations;
     support::RareVector<VhdlAttributeDeclaration> vhdl_attributes;
     support::RareVector<VhdlGroupDeclaration> vhdl_groups;
+    // Package imports declared in this statement's block scope. Import
+    // visibility is lexical and must survive syntax disposal in compiled HIR.
+    support::RareVector<SystemVerilogImport> systemverilog_imports;
+    // One-based preprocessed-token ordinal for references such as task calls.
+    // Generated statements use zero and retain legacy resolution behavior.
+    std::uint64_t systemverilog_source_order { };
 };
 
 struct CaseAlternative {

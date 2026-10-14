@@ -70,10 +70,28 @@ public:
         std::string_view,
         std::span<const runtime::PackedLogic4>,
         std::span<const std::string>,
-        std::span<const std::string>)>;
+        std::span<const std::string>,
+        runtime::SystemVerilogClassHandle)>;
     void set_construct_service(ObjectConstructor construct)
     {
         construct_ = std::move(construct);
+    }
+
+    struct OwnerParameterBinding {
+        // Distinguish a package/global object with no module owner from an
+        // owner context that has no binding for this declaration.
+        bool context_available { };
+        bool found { };
+        std::optional<runtime::PackedLogic4> value;
+        std::optional<::fsim::semantic::UnitId> owner_unit;
+        std::string owner_path;
+    };
+    using OwnerParameterRead = std::function<OwnerParameterBinding(
+        runtime::SystemVerilogClassHandle,
+        ::fsim::semantic::DeclarationId)>;
+    void set_owner_parameter_service(OwnerParameterRead read)
+    {
+        read_owner_parameter_ = std::move(read);
     }
 
     void set_runtime_services(FunctionInvoker function,
@@ -209,6 +227,7 @@ private:
     StringPropertyWrite write_string_property_;
     TimeSource now_;
     ObjectConstructor construct_;
+    OwnerParameterRead read_owner_parameter_;
     // The string locals of the statements being executed.
     const StringEnvironment* strings_ { };
     SystemVerilogClassExecutionStatistics statistics_;

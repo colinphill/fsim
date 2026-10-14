@@ -8,9 +8,12 @@
 
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -217,6 +220,122 @@ void test_simir_text_files()
         scanner.string_object_value(scanned_text) == "alpha",
         "formatted string scan stores bounded text");
 
+    const auto rejects_leading_separator = [](
+        const InputScanFormat format,
+        const std::string_view input) {
+        FileScan scan;
+        scan.string_source = true;
+        scan.conversions = {
+            { "", format, 0U, false,
+                { InputScanTargetKind::packed_register, 0U, 32U, false } },
+        };
+        const auto result = scan_formatted_string(scan, input);
+        return result.assignments == 0 && result.values.size() == 1U
+            && !result.values[0];
+    };
+    require(
+        rejects_leading_separator(InputScanFormat::binary, "_01")
+            && rejects_leading_separator(InputScanFormat::octal, "_7")
+            && rejects_leading_separator(InputScanFormat::decimal, "_1")
+            && rejects_leading_separator(InputScanFormat::decimal, "+_1")
+            && rejects_leading_separator(InputScanFormat::hexadecimal, "_a"),
+        "formatted integer scans reject a leading underscore");
+
+    FileScan embedded_separator_scan;
+    embedded_separator_scan.string_source = true;
+    embedded_separator_scan.conversions = {
+        { "", InputScanFormat::decimal, 0U, false,
+            { InputScanTargetKind::packed_register, 0U, 32U, true } },
+    };
+    const auto embedded_separator = scan_formatted_string(
+        embedded_separator_scan, "1_2");
+    require(
+        embedded_separator.assignments == 1
+            && embedded_separator.values[0]
+            && embedded_separator.values[0]->packed == number(12),
+        "formatted integer scans continue to accept embedded underscores");
+
+    FileScan unknown_scan;
+    unknown_scan.string_source = true;
+    unknown_scan.conversions = {
+        { "", InputScanFormat::binary, 0U, false,
+            { InputScanTargetKind::packed_register, 0U, 1U, false } },
+    };
+    const auto unknown_value = scan_formatted_string(unknown_scan, "x");
+    FileScan high_impedance_scan;
+    high_impedance_scan.string_source = true;
+    high_impedance_scan.conversions = {
+        { "", InputScanFormat::hexadecimal, 0U, false,
+            { InputScanTargetKind::packed_register, 0U, 4U, false } },
+    };
+    const auto high_impedance_value = scan_formatted_string(
+        high_impedance_scan, "z");
+    require(
+        unknown_value.assignments == 1 && unknown_value.values[0]
+            && unknown_value.values[0]->packed == PackedLogic4(1U, Logic4::x)
+            && high_impedance_value.assignments == 1
+            && high_impedance_value.values[0]
+            && high_impedance_value.values[0]->packed
+                == PackedLogic4(4U, Logic4::z),
+        "valid X and Z starts remain valid numeric scan fields");
+
+    FileScan whitespace_string_scan;
+    whitespace_string_scan.string_source = true;
+    whitespace_string_scan.conversions = {
+        { "", InputScanFormat::string, 0U, false,
+            { InputScanTargetKind::string_register, 0U, 1U, false } },
+    };
+    const auto whitespace_string = scan_formatted_string(
+        whitespace_string_scan, " ");
+    require(
+        whitespace_string.assignments == -1
+            && whitespace_string.values.size() == 1U
+            && !whitespace_string.values[0],
+        "sscanf returns EOF when whitespace-only input ends before conversion");
+
+    FileScan hierarchy_scan;
+    hierarchy_scan.string_source = true;
+    hierarchy_scan.hierarchy_path = "top.scope";
+    hierarchy_scan.conversions = {
+        { "", InputScanFormat::hierarchy, 0, false,
+            { InputScanTargetKind::packed_register, 1, 64, false } },
+        { "X", InputScanFormat::decimal, 0, false,
+            { InputScanTargetKind::packed_register, 0, 32, true } },
+        { "", InputScanFormat::hierarchy, 0, false,
+            { InputScanTargetKind::string_register, 0, 1, false } },
+    };
+    const auto hierarchy_values = scan_formatted_string(
+        hierarchy_scan, "X7");
+    require(
+        hierarchy_values.assignments == 3
+            && hierarchy_values.consumed == 2U
+            && hierarchy_values.values[0]
+            && hierarchy_values.values[0]->packed
+                == pack_file_text("top.scope", 64U)
+            && hierarchy_values.values[1]
+            && hierarchy_values.values[1]->packed == number(7)
+            && hierarchy_values.values[2]
+            && hierarchy_values.values[2]->string
+            && hierarchy_values.values[2]->text == "top.scope",
+        "%m assigns the current path without consuming input before later conversions");
+    FileScan suppressed_hierarchy_scan;
+    suppressed_hierarchy_scan.string_source = true;
+    suppressed_hierarchy_scan.hierarchy_path = "top.scope";
+    suppressed_hierarchy_scan.conversions = {
+        { "", InputScanFormat::hierarchy, 0, true, { } },
+        { "", InputScanFormat::decimal, 0, false,
+            { InputScanTargetKind::packed_register, 0, 32, true } },
+    };
+    const auto suppressed_hierarchy = scan_formatted_string(
+        suppressed_hierarchy_scan, "7");
+    require(
+        suppressed_hierarchy.assignments == 1
+            && suppressed_hierarchy.consumed == 1U
+            && !suppressed_hierarchy.values[0]
+            && suppressed_hierarchy.values[1]
+            && suppressed_hierarchy.values[1]->packed == number(7),
+        "suppressed %m assigns nothing and consumes no input");
+
     FileScan scalar_scan;
     scalar_scan.string_source = true;
     scalar_scan.conversions = {
@@ -247,6 +366,404 @@ void test_simir_text_files()
             && scalar_values.values[2]->packed.low_word().aval == 0,
         "scalar scan preserves real, time, and null chandle payloads");
 
+    FileScan real_overflow_scan;
+    real_overflow_scan.string_source = true;
+    real_overflow_scan.conversions = {
+        { "", InputScanFormat::real, 0, false,
+            { InputScanTargetKind::packed_register, 0, 64, true,
+                SystemVerilogScalarKind::Real } },
+        { " ", InputScanFormat::real, 0, false,
+            { InputScanTargetKind::packed_register, 1, 32, true,
+                SystemVerilogScalarKind::ShortReal } },
+        { " ", InputScanFormat::real, 0, false,
+            { InputScanTargetKind::packed_register, 2, 64, true,
+                SystemVerilogScalarKind::Realtime } },
+    };
+    const auto real_overflow_values = scan_formatted_string(
+        real_overflow_scan, "1e5000 -1e5000 1e5000");
+    const auto overflow_real = real_overflow_values.values[0]
+        ? decode_systemverilog_scalar_payload(
+              real_overflow_values.values[0]->packed,
+              SystemVerilogScalarKind::Real)
+        : SystemVerilogScalarResult { };
+    const auto overflow_shortreal = real_overflow_values.values[1]
+        ? decode_systemverilog_scalar_payload(
+              real_overflow_values.values[1]->packed,
+              SystemVerilogScalarKind::ShortReal)
+        : SystemVerilogScalarResult { };
+    const auto overflow_realtime = real_overflow_values.values[2]
+        ? decode_systemverilog_scalar_payload(
+              real_overflow_values.values[2]->packed,
+              SystemVerilogScalarKind::Realtime)
+        : SystemVerilogScalarResult { };
+    const auto overflow_real_value = overflow_real
+        ? overflow_real.value.as_real()
+        : std::optional<double> { };
+    const auto overflow_shortreal_value = overflow_shortreal
+        ? overflow_shortreal.value.as_shortreal()
+        : std::optional<float> { };
+    const auto overflow_realtime_value = overflow_realtime
+        ? overflow_realtime.value.as_real()
+        : std::optional<double> { };
+    require(
+        real_overflow_values.assignments == 3
+            && overflow_real_value && std::isinf(*overflow_real_value)
+            && !std::signbit(*overflow_real_value)
+            && overflow_shortreal_value
+            && std::isinf(*overflow_shortreal_value)
+            && std::signbit(*overflow_shortreal_value)
+            && overflow_realtime_value && std::isinf(*overflow_realtime_value)
+            && !std::signbit(*overflow_realtime_value),
+        "real input overflow stores signed infinity for real scalar targets");
+
+    FileScan finite_real_scan;
+    finite_real_scan.string_source = true;
+    finite_real_scan.conversions = {
+        { "", InputScanFormat::real, 0, false,
+            { InputScanTargetKind::packed_register, 0, 64, true,
+                SystemVerilogScalarKind::Real } },
+        { " ", InputScanFormat::real, 0, false,
+            { InputScanTargetKind::packed_register, 1, 32, true,
+                SystemVerilogScalarKind::ShortReal } },
+    };
+    const auto finite_real_values = scan_formatted_string(
+        finite_real_scan, "1.7e308 -3.4e38");
+    const auto finite_real = finite_real_values.values[0]
+        ? decode_systemverilog_scalar_payload(
+              finite_real_values.values[0]->packed,
+              SystemVerilogScalarKind::Real)
+        : SystemVerilogScalarResult { };
+    const auto finite_shortreal = finite_real_values.values[1]
+        ? decode_systemverilog_scalar_payload(
+              finite_real_values.values[1]->packed,
+              SystemVerilogScalarKind::ShortReal)
+        : SystemVerilogScalarResult { };
+    const auto finite_real_value = finite_real
+        ? finite_real.value.as_real()
+        : std::optional<double> { };
+    const auto finite_shortreal_value = finite_shortreal
+        ? finite_shortreal.value.as_shortreal()
+        : std::optional<float> { };
+    require(
+        finite_real_values.assignments == 2
+            && finite_real_value && std::isfinite(*finite_real_value)
+            && *finite_real_value > 1.6e308
+            && finite_shortreal_value
+            && std::isfinite(*finite_shortreal_value)
+            && *finite_shortreal_value < -3.3e38F,
+        "large finite real and shortreal input values remain finite");
+
+    FileScan real_underflow_scan;
+    real_underflow_scan.string_source = true;
+    real_underflow_scan.conversions = {
+        { "", InputScanFormat::real, 0, false,
+            { InputScanTargetKind::packed_register, 0, 64, true,
+                SystemVerilogScalarKind::Real } },
+    };
+    const auto real_underflow = scan_formatted_string(
+        real_underflow_scan, "1e-5000");
+    require(
+        real_underflow.assignments == 0 && real_underflow.values.size() == 1U
+            && !real_underflow.values[0],
+        "real underflow retains the existing failed-conversion behavior");
+
+    FileScan significand_overflow_scan;
+    significand_overflow_scan.string_source = true;
+    significand_overflow_scan.conversions = {
+        { "", InputScanFormat::real, 0, false,
+            { InputScanTargetKind::packed_register, 0, 64, true,
+                SystemVerilogScalarKind::Real } },
+    };
+    const auto long_significand = std::string(309U, '9');
+    const auto significand_overflow = scan_formatted_string(
+        significand_overflow_scan, long_significand);
+    const auto significand_real = significand_overflow.values[0]
+        ? decode_systemverilog_scalar_payload(
+              significand_overflow.values[0]->packed,
+              SystemVerilogScalarKind::Real)
+        : SystemVerilogScalarResult { };
+    const auto significand_real_value = significand_real
+        ? significand_real.value.as_real()
+        : std::optional<double> { };
+    require(
+        significand_overflow.assignments == 1 && significand_real_value
+            && std::isinf(*significand_real_value)
+            && !std::signbit(*significand_real_value),
+        "real significand overflow without an exponent stores positive infinity");
+
+    SystemVerilogTimeFormat scan_time_format;
+    scan_time_format.units = -3;
+    scan_time_format.precision = 2;
+    scan_time_format.resolution_femtoseconds = 100'000U;
+    FileScan scaled_time_scan;
+    scaled_time_scan.string_source = true;
+    scaled_time_scan.time_unit_femtoseconds = 1'000'000U;
+    scaled_time_scan.conversions = {
+        { "", InputScanFormat::time, 0, false,
+            { InputScanTargetKind::packed_register, 0, 64, true,
+                SystemVerilogScalarKind::Real } },
+        { " ", InputScanFormat::time, 0, false,
+            { InputScanTargetKind::packed_register, 1, 32, true,
+                SystemVerilogScalarKind::ShortReal } },
+        { " ", InputScanFormat::time, 0, false,
+            { InputScanTargetKind::packed_register, 2, 64, true,
+                SystemVerilogScalarKind::Realtime } },
+    };
+    const auto scaled_time_values = scan_formatted_string(
+        scaled_time_scan, "8.125 -8.125 1.25e+1", scan_time_format);
+    const auto scaled_real = scaled_time_values.values[0]
+        ? decode_systemverilog_scalar_payload(
+              scaled_time_values.values[0]->packed,
+              SystemVerilogScalarKind::Real)
+        : SystemVerilogScalarResult { };
+    const auto scaled_shortreal = scaled_time_values.values[1]
+        ? decode_systemverilog_scalar_payload(
+              scaled_time_values.values[1]->packed,
+              SystemVerilogScalarKind::ShortReal)
+        : SystemVerilogScalarResult { };
+    const auto scaled_realtime = scaled_time_values.values[2]
+        ? decode_systemverilog_scalar_payload(
+              scaled_time_values.values[2]->packed,
+              SystemVerilogScalarKind::Realtime)
+        : SystemVerilogScalarResult { };
+    require(
+        scaled_time_values.assignments == 3 && scaled_real
+            && scaled_real.value.as_real() == 8'130'000.0
+            && scaled_shortreal
+            && scaled_shortreal.value.as_real() == -8'130'000.0
+            && scaled_realtime
+            && scaled_realtime.value.as_real() == 12'500'000.0,
+        "%t scales by $timeformat units and rounds ties away for real targets");
+
+    scan_time_format.units = -11;
+    scan_time_format.precision = 0;
+    scan_time_format.resolution_femtoseconds = 10'000U;
+    FileScan default_time_scan;
+    default_time_scan.string_source = true;
+    default_time_scan.time_unit_femtoseconds = 1'000'000U;
+    default_time_scan.conversions = {
+        { "", InputScanFormat::time, 0, false,
+            { InputScanTargetKind::packed_register, 0, 64, true,
+                SystemVerilogScalarKind::Real } },
+    };
+    const auto default_time_values = scan_formatted_string(
+        default_time_scan, "012345678925", scan_time_format);
+    const auto default_time_real = default_time_values.values[0]
+        ? decode_systemverilog_scalar_payload(
+              default_time_values.values[0]->packed,
+              SystemVerilogScalarKind::Real)
+        : SystemVerilogScalarResult { };
+    require(
+        default_time_values.assignments == 1 && default_time_real
+            && default_time_real.value.as_real() == 123'456'789.25,
+        "%t uses the default global-precision unit when it differs from local timeunit");
+
+    FileScan width_time_scan;
+    width_time_scan.string_source = true;
+    width_time_scan.time_unit_femtoseconds = 1'000'000U;
+    width_time_scan.conversions = {
+        { "", InputScanFormat::time, 6, false,
+            { InputScanTargetKind::packed_register, 0, 64, true,
+                SystemVerilogScalarKind::Real } },
+        { " ", InputScanFormat::decimal, 0, false,
+            { InputScanTargetKind::packed_register, 1, 32, true } },
+        { " ", InputScanFormat::time, 6, false,
+            { InputScanTargetKind::packed_register, 2, 64, true,
+                SystemVerilogScalarKind::Real } },
+        { " ", InputScanFormat::decimal, 0, false,
+            { InputScanTargetKind::packed_register, 3, 32, true } },
+    };
+    scan_time_format.units = -9;
+    scan_time_format.precision = 3;
+    const auto width_time_values = scan_formatted_string(
+        width_time_scan, "-2.2566789 +2.e+16789", scan_time_format);
+    const auto width_time_real = width_time_values.values[0]
+        ? decode_systemverilog_scalar_payload(
+              width_time_values.values[0]->packed,
+              SystemVerilogScalarKind::Real)
+        : SystemVerilogScalarResult { };
+    const auto width_exponent_real = width_time_values.values[2]
+        ? decode_systemverilog_scalar_payload(
+              width_time_values.values[2]->packed,
+              SystemVerilogScalarKind::Real)
+        : SystemVerilogScalarResult { };
+    require(
+        width_time_values.assignments == 4 && width_time_real
+            && width_time_real.value.as_real() == -2.256
+            && width_time_values.values[1]
+            && width_time_values.values[1]->packed == number(6789)
+            && width_exponent_real
+            && width_exponent_real.value.as_real() == 20.0
+            && width_time_values.values[3]
+            && width_time_values.values[3]->packed == number(6789),
+        "bounded %t fields handle exponent text and leave later digits for the next conversion");
+
+    FileScan suppressed_time_scan;
+    suppressed_time_scan.string_source = true;
+    suppressed_time_scan.time_unit_femtoseconds = 1'000'000U;
+    suppressed_time_scan.conversions = {
+        { "", InputScanFormat::decimal, 0, false,
+            { InputScanTargetKind::packed_register, 1, 32, true } },
+        { " ", InputScanFormat::time, 0, true, { } },
+        { " ", InputScanFormat::time, 0, false,
+            { InputScanTargetKind::packed_register, 0, 64, true,
+                SystemVerilogScalarKind::Real } },
+    };
+    const auto suppressed_time_values = scan_formatted_string(
+        suppressed_time_scan, "123 1.0 2.5", scan_time_format);
+    const auto suppressed_time_real = suppressed_time_values.values[2]
+        ? decode_systemverilog_scalar_payload(
+              suppressed_time_values.values[2]->packed,
+              SystemVerilogScalarKind::Real)
+        : SystemVerilogScalarResult { };
+    require(
+        suppressed_time_values.assignments == 2
+            && !suppressed_time_values.values[1] && suppressed_time_real
+            && suppressed_time_real.value.as_real() == 2.5,
+        "suppressed %t consumes a field without assigning or counting it");
+
+    FileScan unsupported_time_target;
+    unsupported_time_target.string_source = true;
+    unsupported_time_target.time_unit_femtoseconds = 1'000'000U;
+    unsupported_time_target.conversions = {
+        { "", InputScanFormat::time, 0, false,
+            { InputScanTargetKind::packed_register, 0, 64, true,
+                SystemVerilogScalarKind::Time } },
+    };
+    const auto unsupported_time_values = scan_formatted_string(
+        unsupported_time_target, "2.5", scan_time_format);
+    require(
+        unsupported_time_values.assignments == 0
+            && !unsupported_time_values.values[0],
+        "the initial %t lowering slice rejects non-real target payloads");
+
+    FileScan time_field_boundary_scan {
+        0, 0, 0, true,
+        { { "", InputScanFormat::time, 0, false,
+            { InputScanTargetKind::packed_register, 0, 64, true,
+                SystemVerilogScalarKind::Real } } } };
+    time_field_boundary_scan.time_unit_femtoseconds = 1'000'000U;
+    const auto time_field_boundary = scan_formatted_string(
+        time_field_boundary_scan, "1_2", scan_time_format);
+    require(
+        time_field_boundary.assignments == 1
+            && time_field_boundary.consumed == 1U
+            && time_field_boundary.values[0],
+        "the %t input field stops before a character outside its decimal grammar");
+
+    const auto native_word_bytes = [](const std::uint32_t word) {
+        std::string bytes(sizeof(word), '\0');
+        std::memcpy(bytes.data(), &word, sizeof(word));
+        return bytes;
+    };
+
+    auto one_bit_x = PackedLogic4 { 1U, Logic4::x };
+    const auto expected_one_bit = PackedLogic4 { 1U, Logic4::zero };
+    const auto raw_one_bit = format_output_value(
+        one_bit_x, OutputFormat::unformatted2, false, false);
+    const auto one_bit_scan = scan_formatted_string(
+        FileScan { 0, 0, 0, true,
+            { { "", InputScanFormat::unformatted2, 0, false,
+                { InputScanTargetKind::packed_register, 0, 1, true } } } },
+        raw_one_bit);
+    require(
+        raw_one_bit == native_word_bytes(0U)
+            && one_bit_scan.assignments == 1 && one_bit_scan.values[0]
+            && one_bit_scan.values[0]->packed == expected_one_bit,
+        "%u pads a one-bit word to four native-endian bytes and maps X to zero");
+
+    auto byte_value = PackedLogic4 { 8U, Logic4::zero };
+    byte_value.set(0U, Logic4::one);
+    byte_value.set(1U, Logic4::x);
+    byte_value.set(2U, Logic4::z);
+    byte_value.set(7U, Logic4::one);
+    const auto raw_byte = format_output_value(
+        byte_value, OutputFormat::unformatted2, false, false);
+    const auto byte_scan = scan_formatted_string(
+        FileScan { 0, 0, 0, true,
+            { { "", InputScanFormat::unformatted2, 0, false,
+                { InputScanTargetKind::packed_register, 0, 8, true } } } },
+        raw_byte);
+    auto expected_byte = PackedLogic4 { 8U, Logic4::zero };
+    expected_byte.set(0U, Logic4::one);
+    expected_byte.set(7U, Logic4::one);
+    require(
+        raw_byte == native_word_bytes(UINT32_C(0x81))
+            && byte_scan.assignments == 1 && byte_scan.values[0]
+            && byte_scan.values[0]->packed == expected_byte,
+        "%u pads an eight-bit word, preserves native byte order, and clears X/Z");
+
+    auto word_plus_one = PackedLogic4 { 33U, Logic4::zero };
+    word_plus_one.set(0U, Logic4::one);
+    word_plus_one.set(2U, Logic4::one);
+    word_plus_one.set(5U, Logic4::z);
+    word_plus_one.set(31U, Logic4::x);
+    word_plus_one.set(32U, Logic4::one);
+    const auto raw_word_plus_one = format_output_value(
+        word_plus_one, OutputFormat::unformatted2, false, false);
+    const auto word_plus_one_scan = scan_formatted_string(
+        FileScan { 0, 0, 0, true,
+            { { "", InputScanFormat::unformatted2, 0, false,
+                { InputScanTargetKind::packed_register, 0, 33, true } } } },
+        raw_word_plus_one);
+    auto expected_word_plus_one = PackedLogic4 { 33U, Logic4::zero };
+    expected_word_plus_one.set(0U, Logic4::one);
+    expected_word_plus_one.set(2U, Logic4::one);
+    expected_word_plus_one.set(32U, Logic4::one);
+    require(
+        raw_word_plus_one
+                == native_word_bytes(UINT32_C(5))
+                    + native_word_bytes(UINT32_C(1))
+            && word_plus_one_scan.assignments == 1
+            && word_plus_one_scan.values[0]
+            && word_plus_one_scan.values[0]->packed == expected_word_plus_one,
+        "%u writes the low word first and pads a 33-bit value to two words");
+
+    auto one_bit_z = PackedLogic4 { 1U, Logic4::z };
+    const auto raw_one_bit_four = format_output_value(
+        one_bit_z, OutputFormat::unformatted4, false, false);
+    require(
+        raw_one_bit_four
+            == native_word_bytes(UINT32_C(0))
+                + native_word_bytes(UINT32_C(1)),
+        "%z emits native-endian aval and bval words for a one-bit value");
+
+    auto byte_four_state = PackedLogic4 { 8U, Logic4::zero };
+    byte_four_state.set(0U, Logic4::one);
+    byte_four_state.set(1U, Logic4::x);
+    byte_four_state.set(2U, Logic4::z);
+    byte_four_state.set(7U, Logic4::one);
+    const auto raw_byte_four = format_output_value(
+        byte_four_state, OutputFormat::unformatted4, false, false);
+    require(
+        raw_byte_four
+            == native_word_bytes(UINT32_C(0x83))
+                + native_word_bytes(UINT32_C(0x6)),
+        "%z preserves the native-endian four-state bit planes at eight bits");
+
+    auto word_plus_one_four = PackedLogic4 { 33U, Logic4::zero };
+    word_plus_one_four.set(0U, Logic4::one);
+    word_plus_one_four.set(31U, Logic4::x);
+    word_plus_one_four.set(32U, Logic4::z);
+    const auto raw_word_plus_one_four = format_output_value(
+        word_plus_one_four, OutputFormat::unformatted4, false, false);
+    const auto expected_word_plus_one_four
+        = native_word_bytes(UINT32_C(0x80000001))
+        + native_word_bytes(UINT32_C(0x80000000))
+        + native_word_bytes(UINT32_C(0))
+        + native_word_bytes(UINT32_C(1));
+    const auto word_plus_one_four_scan = scan_formatted_string(
+        FileScan { 0, 0, 0, true,
+            { { "", InputScanFormat::unformatted4, 0, false,
+                { InputScanTargetKind::packed_register, 0, 33, false } } } },
+        raw_word_plus_one_four);
+    require(
+        raw_word_plus_one_four == expected_word_plus_one_four
+            && word_plus_one_four_scan.assignments == 1
+            && word_plus_one_four_scan.values[0]
+            && word_plus_one_four_scan.values[0]->packed == word_plus_one_four,
+        "%z writes low-to-high native aval/bval words across 33 bits");
+
     auto raw_value = PackedLogic4 { 37U, Logic4::zero };
     raw_value.set(0U, Logic4::one);
     raw_value.set(5U, Logic4::x);
@@ -255,32 +772,91 @@ void test_simir_text_files()
     raw_value.set(36U, Logic4::one);
     const auto raw_four = format_output_value(
         raw_value, OutputFormat::unformatted4, false, false);
+    const auto expected_four
+        = native_word_bytes(UINT32_C(0x80000021))
+        + native_word_bytes(UINT32_C(0x120))
+        + native_word_bytes(UINT32_C(0x10))
+        + native_word_bytes(UINT32_C(0));
     const auto four_values = scan_formatted_string(
         FileScan { 0, 0, 0, true,
             { { "", InputScanFormat::unformatted4, 0, false,
                 { InputScanTargetKind::packed_register, 0, 37, false } } } },
         raw_four);
     require(
-        raw_four.size() == 16U && four_values.assignments == 1
+        raw_four == expected_four && raw_four.size() == 16U
+            && four_values.assignments == 1
             && four_values.values[0]
             && four_values.values[0]->packed == raw_value,
         "%z round trips native aval and bval words without losing X or Z");
 
     const auto raw_two = format_output_value(
         raw_value, OutputFormat::unformatted2, false, false);
+    const auto expected_two_bytes
+        = native_word_bytes(UINT32_C(0x80000001))
+        + native_word_bytes(UINT32_C(0x10));
     const auto two_values = scan_formatted_string(
         FileScan { 0, 0, 0, true,
             { { "", InputScanFormat::unformatted2, 0, false,
                 { InputScanTargetKind::packed_register, 0, 37, true } } } },
         raw_two);
-    auto expected_two = raw_value;
-    expected_two.set(5U, Logic4::zero);
-    expected_two.set(8U, Logic4::zero);
+    auto expected_two_value = raw_value;
+    expected_two_value.set(5U, Logic4::zero);
+    expected_two_value.set(8U, Logic4::zero);
     require(
-        raw_two.size() == 5U && two_values.assignments == 1
+        raw_two == expected_two_bytes && raw_two.size() == 8U
+            && two_values.assignments == 1
             && two_values.values[0]
-            && two_values.values[0]->packed == expected_two,
+            && two_values.values[0]->packed == expected_two_value,
         "%u round trips native two-state bytes and collapses X and Z to zero");
+    const auto incomplete_two = scan_formatted_string(
+        FileScan { 0, 0, 0, true,
+            { { "", InputScanFormat::unformatted2, 0, false,
+                { InputScanTargetKind::packed_register, 0, 37, true } } } },
+        std::string_view { raw_two }.substr(0, raw_two.size() - 1U));
+    require(
+        incomplete_two.assignments == -1 && !incomplete_two.values[0],
+        "an incomplete %u word leaves its target unmodified");
+    FileScan bounded_two;
+    bounded_two.string_source = true;
+    bounded_two.trailing_text = "!";
+    bounded_two.conversions = {
+        { "", InputScanFormat::unformatted2, 12, false,
+            { InputScanTargetKind::packed_register, 0, 37, true } },
+    };
+    const auto bounded_two_values = scan_formatted_string(
+        bounded_two, raw_two + "!");
+    require(
+        bounded_two_values.assignments == 1
+            && bounded_two_values.consumed == raw_two.size() + 1U
+            && bounded_two_values.values[0]
+            && bounded_two_values.values[0]->packed == expected_two_value,
+        "%u input consumes its target's complete words under a wider field cap");
+    FileScan short_width_two;
+    short_width_two.string_source = true;
+    short_width_two.conversions = {
+        { "", InputScanFormat::unformatted2, 4, false,
+            { InputScanTargetKind::packed_register, 0, 37, true } },
+    };
+    const auto short_width_two_values = scan_formatted_string(
+        short_width_two, raw_two);
+    require(
+        short_width_two_values.assignments == 0
+            && short_width_two_values.consumed == 4U
+            && !short_width_two_values.values[0],
+        "%u reports an incomplete capped field without claiming EOF");
+    FileScan short_width_four;
+    short_width_four.string_source = true;
+    short_width_four.conversions = {
+        { "", InputScanFormat::unformatted4, 8, false,
+            { InputScanTargetKind::packed_register, 0, 37, false } },
+    };
+    const auto short_width_four_values = scan_formatted_string(
+        short_width_four, raw_four);
+    require(
+        short_width_four_values.assignments == 0
+            && short_width_four_values.consumed == 8U
+            && !short_width_four_values.values[0],
+        "%z reports an incomplete capped field without claiming EOF");
     const auto incomplete_four = scan_formatted_string(
         FileScan { 0, 0, 0, true,
             { { "", InputScanFormat::unformatted4, 0, false,
@@ -296,9 +872,19 @@ void test_simir_text_files()
                 { InputScanTargetKind::packed_register, 0, 64, true,
                     SystemVerilogScalarKind::Real } } } },
         "1e9999");
+    const auto overflowing_real = overflowing.values.size() == 1U
+            && overflowing.values[0]
+        ? decode_systemverilog_scalar_payload(
+              overflowing.values[0]->packed, SystemVerilogScalarKind::Real)
+        : SystemVerilogScalarResult { };
+    const auto overflowing_value = overflowing_real
+        ? overflowing_real.value.as_real()
+        : std::optional<double> { };
     require(
-        overflowing.assignments == 0 && !overflowing.values[0],
-        "overflowing real scan leaves its target transaction uncommitted");
+        overflowing.assignments == 1 && overflowing_value
+            && std::isinf(*overflowing_value)
+            && !std::signbit(*overflowing_value),
+        "overflowing real scan stores positive infinity");
     const auto partial_scalar = scan_formatted_string(
         FileScan { 0, 0, 0, true,
             { { "real=", InputScanFormat::real, 0, false,
@@ -570,18 +1156,44 @@ void test_simir_text_files()
             FileOpen { 0, 0, 1 },
             Halt { } },
         "manifest-root-relative");
-    expect_failure(
-        { LoadStringConstant { 0, "missing.txt" },
-            LoadStringConstant { 1, "r" },
-            FileOpen { 0, 0, 1 },
-            Halt { } },
-        "cannot open SimIR text file");
+    const auto expect_systemverilog_open_failure_returns_zero =
+        [&](const std::string_view path, const std::string_view mode) {
+            Interpreter unable_to_open;
+            unable_to_open.set_file_root(files.path);
+            Process candidate;
+            candidate.id = 0;
+            candidate.name = "systemverilog_fopen_failure_returns_zero";
+            candidate.register_count = 1;
+            candidate.string_register_count = 2;
+            candidate.debug_locals = {
+                { "handle", "integer", 0, 32, { }, std::nullopt,
+                    std::nullopt, ValueKind::logic4, { } }
+            };
+            candidate.scheduling_domain =
+                ProcessSchedulingDomain::systemverilog;
+            candidate.operations = {
+                LoadStringConstant { 0, std::string { path } },
+                LoadStringConstant { 1, std::string { mode } },
+                FileOpen { 0, 0, 1 },
+                Halt { }
+            };
+            (void)unable_to_open.add_process(std::move(candidate));
+            require(
+                unable_to_open.run().status == RunStatus::completed,
+                "failed SystemVerilog $fopen completes normally");
+            require(
+                unable_to_open.read_debug_local(0, 0) == number(0),
+                "failed SystemVerilog $fopen returns handle zero");
+        };
+
+    expect_systemverilog_open_failure_returns_zero("missing.txt", "r");
     expect_failure(
         { LoadStringConstant { 0, "invalid.txt" },
             LoadStringConstant { 1, "rt" },
             FileOpen { 0, 0, 1 },
             Halt { } },
         "unsupported SimIR text file mode");
+    expect_systemverilog_open_failure_returns_zero("invalid.txt", "rt");
     expect_failure(
         { LoadStringConstant { 0, "closed.txt" },
             LoadStringConstant { 1, "w" },

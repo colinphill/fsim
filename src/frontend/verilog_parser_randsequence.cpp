@@ -79,11 +79,14 @@ std::optional<Statement> VerilogParser::parse_generated_statement(
   tokens.push_back(std::move(end));
   auto saved_tokens = std::move(tokens_);
   const auto saved_index = index_;
+  const auto saved_synthetic_stream = synthetic_token_stream_;
   tokens_ = std::move(tokens);
   index_ = 0;
+  synthetic_token_stream_ = true;
   auto statement = parse_statement();
   tokens_ = std::move(saved_tokens);
   index_ = saved_index;
+  synthetic_token_stream_ = saved_synthetic_stream;
   return statement;
 }
 

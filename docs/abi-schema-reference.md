@@ -169,8 +169,8 @@ model `none`; enabled foundation coverage uses
 rejected directly; there is no compatibility reader or migration.
 
 The compiled-HIR bundle is schema 1 and embeds semantic schema 4,
-SystemVerilog HIR schema 8, and VHDL HIR schema 5. The standalone design's
-other current state schemas are runtime 64, DesignIR 5, coverage 7, and UVM 3.
+SystemVerilog HIR schema 11, and VHDL HIR schema 7. The standalone design's
+other current state schemas are runtime 81, DesignIR 5, coverage 7, and UVM 3.
 Runtime and DesignIR references use the canonical `FSIMHPT1` hierarchy-path
 table, schema 1, stored at `state/hierarchy-paths.bin`; standalone DesignIR
 and runtime payloads carry their own inline schema-1 table when serialized

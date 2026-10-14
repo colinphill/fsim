@@ -15,6 +15,79 @@ namespace fsim::app {
 
 namespace {
 
+using PackageClassHandleInitializer = std::pair<
+    runtime::simir::SignalId, semantic::ExpressionId>;
+
+[[nodiscard]] std::vector<PackageClassHandleInitializer>
+compiled_systemverilog_package_class_handle_initializers(
+    const BuiltProject& built)
+{
+    std::vector<PackageClassHandleInitializer> result;
+    std::set<std::uint32_t> seen_declarations;
+    for (const auto& unit : built.systemverilog_hir.units()) {
+        if (unit.kind != semantic::sv::UnitKind::package) {
+            continue;
+        }
+        for (const auto declaration_id : unit.declarations) {
+            const auto declaration = std::ranges::find(
+                built.systemverilog_hir.declarations(), declaration_id,
+                &semantic::sv::Declaration::id);
+            if (declaration == built.systemverilog_hir.declarations().end()
+                || declaration->scope != unit.scope
+                || declaration->form
+                    != semantic::sv::DeclarationForm::variable
+                || !declaration->initializer) {
+                continue;
+            }
+            const auto initializer = std::ranges::find(
+                built.systemverilog_hir.expressions(),
+                *declaration->initializer, &semantic::sv::Expression::id);
+            if (initializer == built.systemverilog_hir.expressions().end()
+                || initializer->kind
+                    != semantic::sv::ExpressionKind::class_allocation) {
+                continue;
+            }
+            if (!declaration->declared_value) {
+                throw std::logic_error {
+                    "package class allocation has no declaration value identity"
+                };
+            }
+            std::optional<runtime::simir::SignalId> signal;
+            for (const auto& object : built.design_ir.objects()) {
+                if (object.kind != semantic::design::ObjectKind::signal
+                    || object.declaration_value != declaration->declared_value) {
+                    continue;
+                }
+                if (object.runtime_index
+                        > std::numeric_limits<runtime::simir::SignalId>::max()
+                    || object.runtime_index >= built.design.signals().size()) {
+                    throw std::logic_error {
+                        "package class allocation maps to an invalid runtime signal"
+                    };
+                }
+                const auto candidate
+                    = static_cast<runtime::simir::SignalId>(
+                        object.runtime_index);
+                if (signal && *signal != candidate) {
+                    throw std::logic_error {
+                        "package class allocation has multiple runtime signals"
+                    };
+                }
+                signal = candidate;
+            }
+            if (!signal) {
+                throw std::logic_error {
+                    "package class allocation has no exact runtime signal binding"
+                };
+            }
+            if (seen_declarations.insert(declaration_id.value()).second) {
+                result.push_back({ *signal, *declaration->initializer });
+            }
+        }
+    }
+    return result;
+}
+
 #if defined(FSIM_HAS_LLVM)
 /// The static-kernel plan persisted for a loaded artifact (elaborate --aot
 /// stores it; simulate restores it), keyed by the artifact's content and
@@ -294,6 +367,8 @@ Simulation::Impl::Impl(
     const SimulationEngine engine,
     const SystemVerilogVpiRuntimeUpdates vpi_runtime_updates)
     : built(std::move(project))
+    , package_class_handle_initializers(
+          compiled_systemverilog_package_class_handle_initializers(built))
     , vpi_runtime_updates_enabled(
           vpi_runtime_updates == SystemVerilogVpiRuntimeUpdates::enabled)
     , class_heap(
@@ -381,13 +456,94 @@ Simulation::Impl::Impl(
           class_heap)
     , interpreter(create_simulation_interpreter(built, max_deltas))
 {
+    uvm_components.set_post_destroy_hook(
+        [this](const runtime::SystemVerilogUvmComponentSnapshot& object) {
+            class_owner_parameter_values.erase(object.object);
+        });
     class_hir_execution.set_construct_service(
         [this](const std::string_view class_identity,
             const std::span<const runtime::PackedLogic4> actuals,
             const std::span<const std::string> string_actuals,
-            const std::span<const std::string> actual_names) {
+            const std::span<const std::string> actual_names,
+            const runtime::SystemVerilogClassHandle owner_handle) {
             return construct_class(class_identity, class_identity, actuals,
-                string_actuals, actual_names, "$class");
+                string_actuals, actual_names, "$class", 0U, std::nullopt,
+                owner_handle);
+        });
+    class_hir_execution.set_owner_parameter_service(
+        [this](const runtime::SystemVerilogClassHandle handle,
+            const semantic::DeclarationId declaration) {
+            application_detail::SystemVerilogClassHirExecution::
+                OwnerParameterBinding result;
+            const auto owner = class_owner_parameter_values.find(handle);
+            if (owner == class_owner_parameter_values.end()) {
+                return result;
+            }
+            result.context_available = true;
+            if (owner->second.owner_design_process) {
+                const semantic::design::ProcessOccurrence*
+                    owner_occurrence = nullptr;
+                for (const auto& process : built.design_ir.processes()) {
+                    if (process.runtime_index
+                        != *owner->second.owner_design_process) {
+                        continue;
+                    }
+                    if (owner_occurrence != nullptr) {
+                        throw std::logic_error {
+                            "class owner process context is ambiguous"
+                        };
+                    }
+                    owner_occurrence = &process;
+                }
+                if (owner_occurrence == nullptr) {
+                    throw std::logic_error {
+                        "class owner process context is stale"
+                    };
+                }
+                const auto specialization_id = owner_occurrence->specialization;
+                const auto& specializations = built.design_ir.specializations();
+                if (!specialization_id.valid()
+                    || specialization_id.value() >= specializations.size()
+                    || specializations[specialization_id.value()].id
+                        != specialization_id) {
+                    throw std::logic_error {
+                        "class owner process has no exact specialization"
+                    };
+                }
+                const auto& owner_specialization
+                    = specializations[specialization_id.value()];
+                if (owner_specialization.language
+                        == semantic::Language::system_verilog
+                    && owner_specialization.unit.valid()
+                    && owner_specialization.instance.valid()) {
+                    const semantic::design::InstanceOccurrence*
+                        owner_instance = nullptr;
+                    for (const auto& instance : built.design_ir.instances()) {
+                        if (instance.id != owner_specialization.instance) {
+                            continue;
+                        }
+                        if (owner_instance != nullptr) {
+                            throw std::logic_error {
+                                "class owner instance context is ambiguous"
+                            };
+                        }
+                        owner_instance = &instance;
+                    }
+                    if (owner_instance != nullptr && owner_instance->path.valid()) {
+                        result.owner_unit = owner_specialization.unit;
+                        result.owner_path = std::string {
+                            built.design_ir.path(owner_instance->path)
+                        };
+                    }
+                }
+            }
+            const auto binding = owner->second.parameters.find(declaration);
+            if (binding == owner->second.parameters.end()) {
+                return result;
+            }
+            result.found = true;
+            result.value = binding->second;
+            return result;
         });
     class_hir_execution.set_output_services(
         [this](const std::string_view text, const bool newline) {
@@ -584,7 +740,8 @@ Simulation::Impl::Impl(
     register_systemverilog_uvm_registry_types(
         built.compiled_systemverilog_class_specializations, uvm_registry);
     interpreter->set_class_allocate_hook(
-        [this](const std::string_view scope,
+        [this](const runtime::simir::ProcessId owner_design_process,
+            const std::string_view scope,
             const std::string_view specialization,
             const std::string_view declared_type,
             const std::span<const runtime::PackedLogic4> actuals,
@@ -592,7 +749,7 @@ Simulation::Impl::Impl(
             const std::span<const std::string> actual_names) {
             return construct_class(
                 specialization, declared_type, actuals, string_actuals,
-                actual_names, scope);
+                actual_names, scope, 0U, owner_design_process);
         });
     // A string class property read or written from a process travels as
     // the single string actual of a reserved method identity,
@@ -673,7 +830,23 @@ Simulation::Impl::Impl(
                 const auto copy = allocate_class(
                     source.specialization_identity, source.declared_type,
                     source.random_root_identity);
-                class_heap.object(copy).properties = source.properties;
+                try {
+                    class_heap.object(copy).properties = source.properties;
+                    const auto owner = class_owner_parameter_values.find(handle);
+                    if (owner != class_owner_parameter_values.end()) {
+                        const bool inserted = class_owner_parameter_values
+                            .emplace(copy, owner->second).second;
+                        if (!inserted) {
+                            throw std::logic_error {
+                                "shallow copy reused a live owner context handle"
+                            };
+                        }
+                    }
+                } catch (...) {
+                    class_owner_parameter_values.erase(copy);
+                    (void)class_heap.release(copy);
+                    throw;
+                }
                 notify_class_changes(before);
                 return runtime::PackedLogic4::from_aval_bval(64U, copy, 0U);
             }
@@ -1020,6 +1193,17 @@ Simulation::Impl::Impl(
                     property.canonical_identity, *value);
             }
         }
+    }
+    for (const auto& [signal, initializer] :
+        package_class_handle_initializers) {
+        const auto value
+            = class_hir_execution.evaluate_initializer(initializer);
+        if (!value || value->width() != 64U) {
+            throw std::logic_error {
+                "compiled package class-handle initializer could not be evaluated"
+            };
+        }
+        interpreter->deposit_signal(signal, *value);
     }
     interpreter->set_file_root(built.file_root);
     if (vpi_runtime_updates

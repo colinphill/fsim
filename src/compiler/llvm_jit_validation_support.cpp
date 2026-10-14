@@ -599,20 +599,25 @@ std::optional<std::string> validate_file_scan_metadata(
     if (operation.string_source && operation.source >= process.string_register_count)
         return "FileScan source string register is out of range";
     if (operation.conversions.empty() || operation.conversions.size() > 64U
-        || operation.trailing_text.size() > maximum_string_bytes)
+        || operation.trailing_text.size() > maximum_string_bytes
+        || operation.hierarchy_path.size() > maximum_string_bytes)
         return "FileScan format metadata is empty or oversized";
+    bool has_time_conversion { };
     for (const auto& conversion : operation.conversions) {
-        if (conversion.format > InputScanFormat::unformatted4
+        if (conversion.format > InputScanFormat::time
             || conversion.prefix.size() > maximum_string_bytes
             || conversion.maximum_characters > maximum_string_bytes)
             return "FileScan conversion metadata is invalid or oversized";
+        has_time_conversion = has_time_conversion
+            || conversion.format == InputScanFormat::time;
         if (conversion.suppress)
             continue;
         const bool string_target = conversion.target.kind
                 == InputScanTargetKind::string_register
             || conversion.target.kind == InputScanTargetKind::string_object;
         const bool text_format = conversion.format == InputScanFormat::character
-            || conversion.format == InputScanFormat::string;
+            || conversion.format == InputScanFormat::string
+            || conversion.format == InputScanFormat::hierarchy;
         const bool unformatted = conversion.format
                 == InputScanFormat::unformatted2
             || conversion.format == InputScanFormat::unformatted4;
@@ -625,7 +630,9 @@ std::optional<std::string> validate_file_scan_metadata(
             : 64U;
         const bool scalar_format = scalar == runtime::SystemVerilogScalarKind::None
             ? conversion.format != InputScanFormat::real
+                && conversion.format != InputScanFormat::time
             : real_scalar ? conversion.format == InputScanFormat::real
+                    || conversion.format == InputScanFormat::time
             : scalar == runtime::SystemVerilogScalarKind::Time
             ? conversion.format == InputScanFormat::decimal
                 || conversion.format == InputScanFormat::unsigned_decimal
@@ -682,6 +689,8 @@ std::optional<std::string> validate_file_scan_metadata(
             return "FileScan target string register is out of range";
         }
     }
+    if (has_time_conversion != (operation.time_unit_femtoseconds != 0U))
+        return "FileScan time-unit metadata is inconsistent";
     return std::nullopt;
 }
 

@@ -87,6 +87,9 @@ public:
     /// Lowerer.
     void set_specialized_hir_unit(
         const semantic::SpecializedHirUnit* unit) noexcept;
+    void set_ancestor_systemverilog_specializations(
+        const std::vector<const semantic::SpecializedHirUnit*>* contexts)
+        noexcept;
     void set_hir_container_declaration_bindings(
         const ContainerDeclarationBindings* bindings) noexcept;
     void set_hir_code_coverage_context(
@@ -242,6 +245,16 @@ public:
     }
 
 private:
+    enum class HirSystemVerilogScanValueKind : std::uint8_t {
+        unsupported,
+        packed_integral,
+        string,
+        real,
+    };
+    [[nodiscard]] HirSystemVerilogScanValueKind
+    hir_systemverilog_scan_value_kind(
+        semantic::ExpressionId expression) const;
+
     struct HirEffectiveVhdlSubtypeCacheEntry {
         semantic::vhdl::SubtypeIndication subtype;
         semantic::ScopeId scope;
@@ -430,6 +443,11 @@ private:
         std::int64_t right { };
         bool descending { };
     };
+    struct HirVhdlFunctionResultShape {
+        std::size_t width { };
+        frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
+        HirPackedRange range;
+    };
     struct HirVhdlArrayIndex {
         semantic::ExpressionId expression;
         std::int64_t left { };
@@ -455,6 +473,14 @@ private:
         semantic::ScopeId process_scope) const;
     [[nodiscard]] std::optional<HirPackedRange> hir_expression_range(
         semantic::ExpressionId expression,
+        semantic::ScopeId process_scope) const;
+    [[nodiscard]] std::optional<HirVhdlFunctionResultShape>
+    hir_vhdl_function_result_shape(
+        semantic::ExpressionId expression,
+        semantic::ScopeId process_scope,
+        std::optional<semantic::DeclarationId> selected_body = std::nullopt) const;
+    [[nodiscard]] std::optional<bool> hir_vhdl_range_direction(
+        const semantic::vhdl::RangeConstraint& range,
         semantic::ScopeId process_scope) const;
     [[nodiscard]] std::optional<std::optional<HirPackedRange>>
     hir_vhdl_callable_formal_range(
@@ -1378,7 +1404,9 @@ private:
         std::int64_t scale { };
     };
     [[nodiscard]] std::optional<HirVhdlPhysicalUnit> hir_vhdl_physical_unit(
-        std::string_view unit_name, std::size_t expected_width) const;
+        std::string_view unit_name,
+        std::size_t expected_width,
+        semantic::ScopeId source_scope) const;
     [[nodiscard]] std::optional<std::string> hir_vhdl_physical_unit_name(
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<RegisterId>
@@ -1836,7 +1864,8 @@ private:
     // The signal a plain event-control name denotes: a local signal, or an
     // imported package variable.
     [[nodiscard]] std::optional<SignalId> hir_named_signal(
-        const std::string& name, semantic::ScopeId scope);
+        const std::string& name, semantic::ScopeId scope,
+        std::uint64_t source_order = 0U);
     [[nodiscard]] bool lower_hir_class_string_property_write(
         semantic::ExpressionId target, StringRegisterId value);
     struct HirClassMethodActual {
@@ -2322,6 +2351,8 @@ private:
     const ReadOnlyContainerBindings& read_only_container_objects_;
     std::vector<Diagnostic>& diagnostics_;
     const semantic::SpecializedHirUnit* specialized_hir_unit_ { };
+    const std::vector<const semantic::SpecializedHirUnit*>*
+        ancestor_systemverilog_specializations_ { };
     const CoverageHirContext* coverage_hir_context_ { };
     bool coverage_hir_process_active_ { };
     // Set for one function call lowered as a call statement, whose result is
@@ -2454,6 +2485,8 @@ private:
         hir_case_pattern_binding_frames_;
     mutable std::vector<semantic::CompiledBindingFrame>
         hir_generic_binding_frames_;
+    mutable std::unordered_set<std::uint32_t>
+        hir_vhdl_function_shape_frames_;
     Process process_;
     bool sample_concurrent_assertion_reads_ { };
     struct DeferredAssertionActionHandoff {

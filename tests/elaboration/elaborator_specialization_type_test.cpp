@@ -443,6 +443,135 @@ endmodule
     assert(
         multidimensional_value("dynamic_observed").to_msb_string()
         == "1010");
+
+    const auto packed_bound_design = fsim::frontend::parse_text(
+        "systemverilog-packed-bounds.sv",
+        R"(
+module packed_bound_child #(
+  parameter integer BOUND = 32'b01x
+) ();
+  logic [BOUND:0] value;
+endmodule
+
+module packed_bound_generated_child #(
+  parameter integer BOUND = 2
+) ();
+  for (genvar lane = 0; lane < 1; lane = lane + 1) begin : lanes
+    logic [BOUND + lane:0] value;
+  end
+endmodule
+
+module packed_bound_known;
+  localparam integer BOUND = 3;
+  logic [BOUND:0] value;
+endmodule
+
+module packed_bound_override;
+  packed_bound_child #(.BOUND(3)) child();
+endmodule
+
+module packed_bound_generated_override;
+  packed_bound_generated_child #(.BOUND(3)) child();
+endmodule
+
+module packed_bound_generated_invalid_x;
+  packed_bound_generated_child #(.BOUND(32'b01x)) child();
+endmodule
+
+module packed_bound_generated_invalid_z;
+  packed_bound_generated_child #(.BOUND(32'b01z)) child();
+endmodule
+
+module packed_bound_invalid_x_left;
+  localparam integer LPX = 32'b01x;
+  logic [LPX:0] x_left;
+endmodule
+
+module packed_bound_invalid_x_right;
+  localparam integer LPX = 32'b01x;
+  logic [0:LPX] x_right;
+endmodule
+
+module packed_bound_invalid_z_left;
+  localparam integer LPZ = 32'b01z;
+  logic [LPZ:0] z_left;
+endmodule
+
+module packed_bound_invalid_z_right;
+  localparam integer LPZ = 32'b01z;
+  logic [0:LPZ] z_right;
+endmodule
+
+module packed_bound_invalid_unused_localparam;
+  localparam integer LPX = 32'b01x;
+  localparam integer LPZ = 32'b01z;
+  localparam [LPX:0] pr1 = 1;
+  localparam [LPZ:0] pr2 = 2;
+  localparam [0:LPX] pr3 = 1;
+  localparam [0:LPZ] pr4 = 2;
+endmodule
+
+module packed_bound_invalid_default;
+  packed_bound_child child();
+endmodule
+
+module packed_bound_unused_xz;
+  localparam integer UNUSED_X = 32'b01x;
+  localparam integer UNUSED_Z = 32'b01z;
+  logic [3:0] value;
+endmodule
+
+module packed_bound_inactive_generate;
+  if (1'b0) begin : inactive
+    localparam integer UNUSED_BOUND = 32'b01x;
+    logic [UNUSED_BOUND:0] value;
+  end
+  if (1'b1) begin : active
+    localparam integer BOUND = 2;
+    logic [BOUND:0] value;
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(packed_bound_design.ok());
+    for (const auto* accepted : {
+             "packed_bound_known", "packed_bound_override",
+             "packed_bound_generated_override",
+             "packed_bound_unused_xz",
+             "packed_bound_inactive_generate" }) {
+        const auto result = compile_and_elaborate(
+            packed_bound_design.design, "sv:work." + std::string { accepted });
+        if (!result.ok()) {
+            std::cerr << accepted << ": packed-bound control failed\n";
+            for (const auto& diagnostic : result.diagnostics) {
+                std::cerr << accepted << ": " << diagnostic.code << ": "
+                          << diagnostic.message << '\n';
+            }
+        }
+        assert(result.ok());
+    }
+    for (const auto* rejected : {
+             "packed_bound_invalid_x_left",
+             "packed_bound_invalid_x_right",
+             "packed_bound_invalid_z_left",
+             "packed_bound_invalid_z_right",
+             "packed_bound_generated_invalid_x",
+             "packed_bound_generated_invalid_z",
+             "packed_bound_invalid_unused_localparam",
+             "packed_bound_invalid_default" }) {
+        const auto result = compile_and_elaborate(
+            packed_bound_design.design, "sv:work." + std::string { rejected });
+        if (result.ok()
+            || !has_diagnostic(result, "FSIM-ELAB-SVCONST-001")) {
+            std::cerr << rejected << ": expected an unknown packed-range bound\n";
+            for (const auto& diagnostic : result.diagnostics) {
+                std::cerr << rejected << ": " << diagnostic.code << ": "
+                          << diagnostic.message << '\n';
+            }
+        }
+        assert(!result.ok()
+            && has_diagnostic(result, "FSIM-ELAB-SVCONST-001"));
+    }
 }
 
 } // namespace fsim::tests::elaboration

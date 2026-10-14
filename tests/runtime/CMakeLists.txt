@@ -185,6 +185,10 @@ add_dependencies(
   fsim_vpi_reference_cpp_plugin)
 fsim_configure_test(fsim_runtime_tests)
 add_test(NAME fsim.runtime COMMAND fsim_runtime_tests)
+add_test(NAME fsim.runtime.text_files COMMAND fsim_runtime_tests text_files)
+set_tests_properties(
+  fsim.runtime.text_files
+  PROPERTIES LABELS "fast;runtime;files;systemverilog;vhdl;windows;linux")
 add_test(
   NAME fsim.runtime.generic_update_region
   COMMAND fsim_runtime_tests generic_update_region)

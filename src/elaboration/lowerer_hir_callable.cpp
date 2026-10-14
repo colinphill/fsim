@@ -4,6 +4,7 @@
 
 #include <charconv>
 #include <cstdlib>
+#include <cstdio>
 #include <iostream>
 #include <new>
 #include <unordered_map>
@@ -2272,10 +2273,27 @@ bool Lowerer::hir_genvar_hides_signal(
 }
 
 std::optional<SignalId> Lowerer::hir_named_signal(
-    const std::string& name, const semantic::ScopeId scope)
+    const std::string& name, const semantic::ScopeId scope,
+    const std::uint64_t source_order)
 {
     if (hir_genvar_hides_signal(name, scope)) {
         return std::nullopt;
+    }
+    if (specialized_hir_unit_ != nullptr && source_order != 0U) {
+        const auto resolution = semantic::CompiledDesignResolver {
+            *specialized_hir_unit_, hir_generic_binding_frames_
+        }.resolve_systemverilog(
+            name, scope, { }, true, std::nullopt, source_order);
+        if (resolution.status == semantic::CompiledResolutionStatus::unique) {
+            const auto binding = hir_runtime_binding(
+                resolution.candidates.front(), scope, false);
+            return binding && binding->signal
+                ? binding->signal
+                : std::nullopt;
+        }
+        if (resolution.status != semantic::CompiledResolutionStatus::not_found) {
+            return std::nullopt;
+        }
     }
     if (const auto found = signals_.find(name); found != signals_.end()) {
         return found->second;
@@ -2664,25 +2682,6 @@ Lowerer::hir_class_method_profile(
             > callable.callable->formals.size()) {
         return std::nullopt;
     }
-    std::span<const std::string> argument_names = call.argument_names;
-    if (!argument_names.empty()
-        && argument_names.size() != call.operands.size()
-        && argument_names.size()
-            != call.operands.size() - operand_offset) {
-        return std::nullopt;
-    }
-    const auto argument_name = [&](const std::size_t operand_index) {
-        if (argument_names.empty()) {
-            return std::string_view { };
-        }
-        if (argument_names.size() == call.operands.size()) {
-            return std::string_view { argument_names[operand_index] };
-        }
-        return std::string_view {
-            argument_names[operand_index - operand_offset]
-        };
-    };
-
     HirClassMethodProfile result;
     result.declaration = selected->declaration;
     result.identity = selected->canonical_identity;
@@ -2709,103 +2708,55 @@ Lowerer::hir_class_method_profile(
         }
     }
 
-    result.actuals.reserve(call.operands.size() - operand_offset);
-    std::vector<bool> bound(callable.callable->formals.size());
-    std::size_t positional { };
-    for (std::size_t operand_index = operand_offset;
-        operand_index < call.operands.size(); ++operand_index) {
-        auto formal_index = positional;
-        const auto name = argument_name(operand_index);
-        if (name.empty()) {
-            while (formal_index < bound.size() && bound[formal_index]) {
-                ++formal_index;
-            }
-            positional = formal_index + 1U;
-        } else {
-            const auto found = std::ranges::find_if(
-                callable.callable->formals,
-                [&](const semantic::DeclarationId formal) {
-                    const auto record
-                        = specialized_hir_unit_->find_declaration(formal);
-                    return record && record->systemverilog != nullptr
-                        && record->systemverilog->name == name;
-                });
-            if (found == callable.callable->formals.end()) {
-                return std::nullopt;
-            }
-            formal_index = static_cast<std::size_t>(
-                std::distance(callable.callable->formals.begin(), found));
-        }
-        if (formal_index >= bound.size()
-            || bound[formal_index]) {
+    std::vector<semantic::sv::TaskAssociation> associations;
+    if (!call.call_arguments.empty()) {
+        if (call.call_arguments.size() < operand_offset) {
             return std::nullopt;
         }
-        const auto formal_id = callable.callable->formals[formal_index];
-        const auto formal = specialized_hir_unit_->find_declaration(formal_id);
-        if (!formal || formal->systemverilog == nullptr
-            || !formal->systemverilog->type) {
+        associations.reserve(
+            call.call_arguments.size() - operand_offset);
+        for (std::size_t index = operand_offset;
+            index < call.call_arguments.size(); ++index) {
+            const auto& association = call.call_arguments[index];
+            associations.push_back({
+                association.formal,
+                association.actual,
+                association.source,
+            });
+        }
+    } else {
+        std::span<const std::string> argument_names = call.argument_names;
+        if (!argument_names.empty()
+            && argument_names.size() != call.operands.size()
+            && argument_names.size()
+                != call.operands.size() - operand_offset) {
             return std::nullopt;
         }
-        const auto& formal_record = *formal->systemverilog;
-        const auto direction = class_method_direction(
-            formal_record.direction);
-        if (direction == frontend::PortDirection::Unknown) {
-            return std::nullopt;
-        }
-        HirClassMethodActual actual;
-        actual.formal = formal_id;
-        actual.expression = call.operands[operand_index];
-        actual.direction = direction;
-        actual.name = std::string { name };
-        actual.string = formal_record.type->value_form
-            == semantic::sv::TypeForm::string;
-        actual.container = hir_systemverilog_container_type(
-            *formal_record.type).has_value();
-        if (actual.container) {
-            const auto type = hir_systemverilog_container_type(
-                *formal_record.type);
-            if (!type) {
-                return std::nullopt;
-            }
-            actual.width = type->element_width;
-            actual.domain = type->two_state
-                ? frontend::ValueDomain::Bit2
-                : frontend::ValueDomain::Logic4;
-            actual.signed_value = type->signed_elements;
-        } else if (actual.string) {
-            if (!hir_expression_is_string(
-                    actual.expression, process_scope)) {
-                return std::nullopt;
-            }
-            actual.domain = frontend::ValueDomain::String;
-        } else {
-            const auto width
-                = hir_systemverilog_type_width(*formal_record.type);
-            if (!width || *width == 0U
-                || *width
-                    > std::numeric_limits<std::uint32_t>::max()) {
-                return std::nullopt;
-            }
-            actual.width = *width;
-            actual.domain = formal_record.type->four_state
-                ? frontend::ValueDomain::Logic4
-                : frontend::ValueDomain::Bit2;
-            actual.signed_value = formal_record.type->signed_value;
-        }
-        result.actuals.push_back(std::move(actual));
-        bound[formal_index] = true;
-    }
-    for (std::size_t index { }; index < bound.size(); ++index) {
-        if (bound[index]) {
-            continue;
-        }
-        const auto formal = specialized_hir_unit_->find_declaration(
-            callable.callable->formals[index]);
-        if (!formal || formal->systemverilog == nullptr
-            || !formal->systemverilog->initializer) {
-            return std::nullopt;
+        associations.reserve(call.operands.size() - operand_offset);
+        for (std::size_t operand_index = operand_offset;
+            operand_index < call.operands.size(); ++operand_index) {
+            const auto name = argument_names.empty()
+                ? std::string_view { }
+                : argument_names.size() == call.operands.size()
+                ? std::string_view { argument_names[operand_index] }
+                : std::string_view {
+                      argument_names[operand_index - operand_offset]
+                  };
+            associations.push_back({
+                name.empty()
+                    ? std::nullopt
+                    : std::optional<std::string> { name },
+                call.operands[operand_index],
+                call.source,
+            });
         }
     }
+    auto actuals = bind_hir_class_actuals(
+        selected->declaration, associations, process_scope);
+    if (!actuals) {
+        return std::nullopt;
+    }
+    result.actuals = std::move(*actuals);
     return result;
 }
 
@@ -2852,8 +2803,10 @@ Lowerer::hir_class_task_profile(
         const semantic::CompiledDesignResolver resolver {
             *specialized_hir_unit_, hir_generic_binding_frames_
         };
-        selected = resolver.resolve_systemverilog_class_method(
-            identity, static_call).unique();
+        const auto method_resolution
+            = resolver.resolve_systemverilog_class_method(
+                identity, static_call);
+        selected = method_resolution.unique();
         // A class function called as a statement (a void function, or a
         // discarded result) runs like a task when class functions are
         // lowered (13.4.1).
@@ -2881,6 +2834,28 @@ Lowerer::hir_class_task_profile(
         };
         selected_declaration = resolver.resolve_systemverilog_name(
             call.task, call.scope, task, false).unique();
+        // A class method may call a compilation-unit or package-visible
+        // void function as a statement. Such a call is retained as a task
+        // call by the class-body resolver, so accept only the exact visible
+        // function declaration with the predefined void return type here.
+        if (!selected_declaration
+            && identity.find_first_of(".:") == std::string_view::npos) {
+            const auto void_function = [](
+                const semantic::CompiledDeclarationView& view) {
+                return view.systemverilog != nullptr
+                    && view.systemverilog->form
+                        == semantic::sv::DeclarationForm::function
+                    && view.systemverilog->callable
+                    && view.systemverilog->callable->function
+                    && view.systemverilog->callable->return_type.target.spelling
+                        == "void";
+            };
+            const auto visible_void_lookup
+                = resolver.resolve_systemverilog_name(
+                    call.task, call.scope, void_function, false);
+            selected_declaration = visible_void_lookup.unique();
+            instance_function = selected_declaration.has_value();
+        }
         const auto separator = identity.rfind('.');
         if (!selected_declaration
             && separator != std::string_view::npos
@@ -3087,9 +3062,6 @@ Lowerer::bind_hir_class_actuals(
                 continue;
             }
         } else {
-            if (!association.actual) {
-                return std::nullopt;
-            }
             const auto found = std::ranges::find_if(
                 callable.callable->formals,
                 [&](const semantic::DeclarationId formal) {
@@ -3105,8 +3077,17 @@ Lowerer::bind_hir_class_actuals(
             formal_index = static_cast<std::size_t>(
                 std::distance(callable.callable->formals.begin(), found));
         }
+        if (!association.actual) {
+            if (formal_index >= bound.size()
+                || bound[formal_index] || defaulted[formal_index]) {
+                return std::nullopt;
+            }
+            // An open named actual takes the declared default (13.5.3).
+            defaulted[formal_index] = true;
+            continue;
+        }
         if (formal_index >= bound.size()
-            || bound[formal_index]) {
+            || bound[formal_index] || defaulted[formal_index]) {
             return std::nullopt;
         }
         const auto formal_id = callable.callable->formals[formal_index];
@@ -3401,6 +3382,141 @@ namespace {
 
 constexpr std::string_view base_constructor_prefix { "@sv-base-constructor:" };
 
+bool class_method_reads_enclosing_unit_parameter(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::DeclarationId method_declaration)
+{
+    const auto method_record
+        = specialization.find_declaration(method_declaration);
+    if (!method_record || method_record->systemverilog == nullptr
+        || !method_record->systemverilog->callable
+        || !method_record->systemverilog->nested_scope) {
+        return false;
+    }
+    const auto& design = specialization.design();
+    const semantic::sv::ClassDeclaration* owner = nullptr;
+    for (const auto& candidate : design.systemverilog_hir.classes()) {
+        const bool exact_owner = std::ranges::any_of(
+            candidate.methods, [&](const auto& candidate_method) {
+                return candidate_method.declaration == method_declaration
+                    && candidate_method.owner_identity
+                        == semantic::sv::class_declaration_identity(
+                            candidate);
+            });
+        if (!exact_owner) {
+            continue;
+        }
+        if (owner != nullptr
+            && semantic::sv::class_declaration_identity(*owner)
+                != semantic::sv::class_declaration_identity(candidate)) {
+            return true;
+        }
+        owner = &candidate;
+    }
+    if (owner == nullptr || !owner->scope.valid()) {
+        return false;
+    }
+
+    const auto& scopes = design.semantics.scopes();
+    const auto find_scope = [&](const semantic::ScopeId id) {
+        return std::ranges::find(scopes, id, &semantic::Scope::id);
+    };
+    const auto class_scope = find_scope(owner->scope);
+    if (class_scope == scopes.end()) {
+        return false;
+    }
+    std::vector<semantic::ScopeId> owner_ancestor_scopes;
+    auto current = class_scope->parent;
+    for (std::size_t depth { }; current && depth < scopes.size(); ++depth) {
+        const auto ancestor = find_scope(*current);
+        if (ancestor == scopes.end()) {
+            return false;
+        }
+        owner_ancestor_scopes.push_back(ancestor->id);
+        current = ancestor->parent;
+    }
+    const auto unit = std::ranges::find_if(
+        design.systemverilog_hir.units(), [&](const auto& candidate) {
+            return candidate.scope.valid()
+                && std::ranges::find(owner_ancestor_scopes, candidate.scope)
+                    != owner_ancestor_scopes.end()
+                && (candidate.kind == semantic::sv::UnitKind::module
+                    || candidate.kind == semantic::sv::UnitKind::interface
+                    || candidate.kind == semantic::sv::UnitKind::program);
+        });
+    if (unit == design.systemverilog_hir.units().end()) {
+        return false;
+    }
+
+    std::vector<semantic::DeclarationId> owner_parameters;
+    for (const auto& declaration : design.systemverilog_hir.declarations()) {
+        if (declaration.form
+                != semantic::sv::DeclarationForm::parameter
+            && declaration.form
+                != semantic::sv::DeclarationForm::local_parameter) {
+            continue;
+        }
+        if (std::ranges::find(
+                owner_ancestor_scopes, declaration.scope)
+                == owner_ancestor_scopes.end()) {
+            continue;
+        }
+        const auto declaration_scope = find_scope(declaration.scope);
+        if (declaration_scope == scopes.end()
+            || declaration_scope->unit != unit->id
+            || std::ranges::any_of(
+                design.systemverilog_hir.classes(),
+                [&](const auto& candidate) {
+                    return candidate.scope == declaration.scope;
+                })) {
+            continue;
+        }
+        owner_parameters.push_back(declaration.id);
+    }
+    if (owner_parameters.empty()) {
+        return false;
+    }
+
+    const auto callable_scope = *method_record->systemverilog->nested_scope;
+    const auto is_method_scope = [&](semantic::ScopeId scope) {
+        for (std::size_t depth { }; depth < scopes.size(); ++depth) {
+            const auto current_scope = find_scope(scope);
+            if (current_scope == scopes.end()) {
+                return false;
+            }
+            if (current_scope->id == callable_scope) {
+                return true;
+            }
+            if (!current_scope->parent) {
+                return false;
+            }
+            scope = *current_scope->parent;
+        }
+        return false;
+    };
+    for (const auto& source_expression :
+        design.systemverilog_hir.expressions()) {
+        const auto expression_record
+            = specialization.find_expression(source_expression.id);
+        if (!expression_record
+            || expression_record->systemverilog == nullptr) {
+            continue;
+        }
+        const auto& expression = *expression_record->systemverilog;
+        if (!is_method_scope(expression.scope)
+            || !expression.referenced_name
+            || !expression.referenced_name->selected) {
+            continue;
+        }
+        if (std::ranges::find(owner_parameters,
+                *expression.referenced_name->selected)
+            != owner_parameters.end()) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 bool Lowerer::lower_hir_constructor_prologue(
@@ -3669,6 +3785,19 @@ Lowerer::lower_hir_class_function_call(
         || type->container || type->string != profile.string_result) {
         return std::nullopt;
     }
+    if (receiver && class_method_reads_enclosing_unit_parameter(
+            *specialized_hir_unit_, profile.declaration)) {
+        return std::nullopt;
+    }
+    const auto overrides = profile.virtual_dispatch && receiver
+        ? hir_class_method_overrides(profile.declaration)
+        : std::vector<HirClassOverride> { };
+    if (receiver && std::ranges::any_of(overrides, [&](const auto& item) {
+            return class_method_reads_enclosing_unit_parameter(
+                *specialized_hir_unit_, item.declaration);
+        })) {
+        return std::nullopt;
+    }
     const HirClassTaskProfile call {
         profile.declaration,
         profile.identity,
@@ -3699,9 +3828,6 @@ Lowerer::lower_hir_class_function_call(
     };
     const auto source = record->systemverilog->source;
     std::vector<InstructionIndex> exits;
-    const auto overrides = profile.virtual_dispatch && receiver
-        ? hir_class_method_overrides(profile.declaration)
-        : std::vector<HirClassOverride> { };
     for (const auto& item : overrides) {
         const auto selected = allocate_register(
             1U, frontend::ValueDomain::Logic4);
@@ -4442,7 +4568,9 @@ bool Lowerer::lower_hir_class_task_call(
             }
         }
     }
-    return lower_hir_class_task_invocation(statement_id, *profile, receiver);
+    const auto lowered = lower_hir_class_task_invocation(
+        statement_id, *profile, receiver);
+    return lowered;
 }
 
 std::vector<Lowerer::HirClassOverride> Lowerer::hir_class_method_overrides(
@@ -4552,6 +4680,116 @@ bool Lowerer::lower_hir_class_task_invocation(
     const bool function = callable->systemverilog->callable->function;
     if (function) {
         class_functions_lowered_ = true;
+    }
+    bool virtual_dispatch { };
+    for (const auto& candidate :
+        specialized_hir_unit_->design().systemverilog_hir.classes()) {
+        for (const auto& method : candidate.methods) {
+            if (method.declaration == profile.declaration
+                && method.owner_identity
+                    == semantic::sv::class_declaration_identity(candidate)) {
+                virtual_dispatch = method.virtual_method;
+            }
+        }
+    }
+    bool owner_parameter_read = function && receiver
+        && class_method_reads_enclosing_unit_parameter(
+            *specialized_hir_unit_, profile.declaration);
+    if (!owner_parameter_read && function && receiver && virtual_dispatch) {
+        const auto overrides = hir_class_method_overrides(profile.declaration);
+        owner_parameter_read = std::ranges::any_of(
+            overrides, [&](const auto& item) {
+                return class_method_reads_enclosing_unit_parameter(
+                    *specialized_hir_unit_, item.declaration);
+            });
+    }
+    if (owner_parameter_read) {
+        const auto type = hir_callable_type(profile.declaration);
+        if (!type || type->container) {
+            return false;
+        }
+        std::vector<RegisterId> actuals;
+        std::vector<std::uint8_t> actual_kinds;
+        std::vector<std::string> actual_names;
+        std::vector<std::uint8_t> actual_directions;
+        const auto hidden_string_result = type->string ? 1U : 0U;
+        actuals.reserve(profile.actuals.size() + hidden_string_result);
+        actual_kinds.reserve(profile.actuals.size() + hidden_string_result);
+        actual_names.reserve(profile.actuals.size() + hidden_string_result);
+        actual_directions.reserve(
+            profile.actuals.size() + hidden_string_result);
+        for (const auto& actual : profile.actuals) {
+            if (actual.container) {
+                return false;
+            }
+            if (actual.string) {
+                const auto lowered = lower_hir_string_expression(
+                    actual.expression);
+                if (!lowered) {
+                    return false;
+                }
+                actuals.push_back(*lowered);
+                actual_kinds.push_back(1U);
+            } else {
+                auto lowered = lower_hir_expression(
+                    actual.expression, actual.width);
+                if (!lowered) {
+                    return false;
+                }
+                if (register_width(*lowered) != actual.width) {
+                    lowered = resize_register(
+                        *lowered, actual.width,
+                        hir_actual_extension_signed(
+                            actual.expression, actual.signed_value));
+                }
+                actuals.push_back(*lowered);
+                actual_kinds.push_back(0U);
+            }
+            actual_names.push_back(actual.name);
+            actual_directions.push_back(
+                static_cast<std::uint8_t>(actual.direction));
+        }
+        if (type->string) {
+            const auto result = allocate_string_register();
+            process_.operations.emplace_back(LoadStringConstant {
+                result, { } });
+            actuals.push_back(result);
+            actual_kinds.push_back(1U);
+            actual_names.emplace_back("@result-string");
+            actual_directions.push_back(
+                static_cast<std::uint8_t>(frontend::PortDirection::Output));
+        }
+        const auto result_width = std::max<std::size_t>(type->width, 1U);
+        const auto result_domain = type->domain
+                == frontend::ValueDomain::Unknown
+            ? frontend::ValueDomain::Bit2
+            : type->domain;
+        const auto destination = allocate_register(
+            result_width, result_domain);
+        process_.operations.emplace_back(ClassMethodCall {
+            destination,
+            *receiver,
+            profile.identity,
+            actuals,
+            actual_names,
+            actual_directions,
+            static_cast<std::uint32_t>(result_width),
+            virtual_dispatch,
+            actual_kinds,
+        });
+        for (std::size_t index { }; index < profile.actuals.size(); ++index) {
+            const auto& actual = profile.actuals[index];
+            if (!class_method_copy_out(actual.direction)) {
+                continue;
+            }
+            const auto copied = actual.string
+                ? lower_hir_string_copy_out(actual.expression, actuals[index])
+                : lower_hir_packed_copy_out(actual.expression, actuals[index]);
+            if (!copied) {
+                return false;
+            }
+        }
+        return true;
     }
     return lower_hir_class_callable_invocation(
                statement->systemverilog->source, profile, receiver, function)
@@ -5179,6 +5417,25 @@ Lowerer::hir_vhdl_type_actual(
         const auto declaration = specialized_hir_unit_->find_declaration(
             hir_actual_declaration(*selected).value_or(*selected));
         if (declaration && declaration->vhdl != nullptr) {
+            using Form = semantic::vhdl::DeclarationForm;
+            const auto form = declaration->vhdl->form;
+            const bool type_declaration
+                = form == Form::type || form == Form::subtype;
+            if (type_declaration && declaration->vhdl->declared_type) {
+                const auto type_id = *declaration->vhdl->declared_type;
+                const auto type = specialized_hir_unit_->find_type(type_id);
+                if (type && type->vhdl != nullptr) {
+                    auto subtype = type->vhdl->base;
+                    // The frontend subtype for a user-defined type can retain
+                    // only the source identity while this declaration's
+                    // nominal TypeId is assigned later in HIR construction.
+                    // A type-name prefix denotes the declared type itself;
+                    // attach that scoped identity instead of treating the
+                    // targetless source mark as an unrelated/unknown scalar.
+                    subtype.type_mark.target = type_id;
+                    return subtype;
+                }
+            }
             if (declaration->vhdl->subtype) {
                 return declaration->vhdl->subtype;
             }
@@ -5701,6 +5958,119 @@ Lowerer::hir_callable_resolution(
         .unique();
 }
 
+namespace {
+
+std::vector<semantic::DeclarationId> inactive_generate_declarations(
+    const semantic::SpecializedHirUnit& owner)
+{
+    const auto selected_generates = owner.selected_generates();
+    const auto contains_selected_generate = [&](
+        const semantic::DeclarationId declaration) {
+        return std::ranges::find(selected_generates, declaration)
+            != selected_generates.end();
+    };
+    std::vector<semantic::DeclarationId> inactive;
+    const auto append_inactive_subtree = [&](const auto& self,
+        const semantic::sv::GenerateRegion& region) -> void {
+        inactive.insert(inactive.end(), region.declarations.begin(),
+            region.declarations.end());
+        for (const auto& nested : region.nested) {
+            self(self, nested);
+        }
+    };
+    const auto collect_inactive_conditionals = [&](const auto& self,
+        const semantic::sv::GenerateRegion& region) -> void {
+        if (region.kind == semantic::sv::GenerateKind::conditional) {
+            const auto else_discriminator
+                = region.alternative_discriminator.empty()
+                ? std::string { "else" }
+                : region.alternative_discriminator + "/else";
+            const auto alternative = std::ranges::find(
+                region.nested, else_discriminator,
+                &semantic::sv::GenerateRegion::alternative_discriminator);
+            const bool then_selected
+                = contains_selected_generate(region.declaration);
+            const bool else_selected = alternative != region.nested.end()
+                && contains_selected_generate(alternative->declaration);
+            // The selected IDs are unit-wide. If multiple occurrences
+            // selected both arms, do not infer an inactive arm here.
+            if (then_selected == else_selected) {
+                return;
+            }
+            if (then_selected) {
+                if (alternative != region.nested.end()) {
+                    append_inactive_subtree(append_inactive_subtree,
+                        *alternative);
+                }
+                for (const auto& nested : region.nested) {
+                    if (alternative == region.nested.end()
+                        || &nested != &*alternative) {
+                        self(self, nested);
+                    }
+                }
+            } else {
+                inactive.insert(inactive.end(),
+                    region.declarations.begin(), region.declarations.end());
+                for (const auto& nested : region.nested) {
+                    if (&nested == &*alternative) {
+                        self(self, nested);
+                    } else {
+                        append_inactive_subtree(append_inactive_subtree,
+                            nested);
+                    }
+                }
+            }
+            return;
+        }
+        if (region.kind == semantic::sv::GenerateKind::selection) {
+            const semantic::sv::GenerateRegion* selected_alternative = nullptr;
+            std::size_t selected_alternative_count { };
+            for (const auto& choice : region.alternatives) {
+                const auto nested = std::ranges::find(
+                    region.nested, choice.alternative_discriminator,
+                    &semantic::sv::GenerateRegion::alternative_discriminator);
+                if (nested != region.nested.end()
+                    && contains_selected_generate(nested->declaration)) {
+                    selected_alternative = &*nested;
+                    ++selected_alternative_count;
+                }
+            }
+            // Multiple selected alternatives can arise when generated
+            // occurrences contribute to this unit-wide selection.
+            if (selected_alternative_count != 1U) {
+                return;
+            }
+            for (const auto& nested : region.nested) {
+                const auto choice = std::ranges::find(
+                    region.alternatives, nested.alternative_discriminator,
+                    &semantic::sv::GenerateAlternative::alternative_discriminator);
+                if (choice != region.alternatives.end()
+                    && &nested != selected_alternative) {
+                    append_inactive_subtree(append_inactive_subtree, nested);
+                } else {
+                    self(self, nested);
+                }
+            }
+            return;
+        }
+        for (const auto& nested : region.nested) {
+            self(self, nested);
+        }
+    };
+    const auto& units = owner.design().systemverilog_hir.units();
+    const auto owning_unit = std::ranges::find(
+        units, owner.unit(), &semantic::sv::Unit::id);
+    if (owning_unit != units.end()) {
+        for (const auto& region : owning_unit->generates) {
+            collect_inactive_conditionals(
+                collect_inactive_conditionals, region);
+        }
+    }
+    return inactive;
+}
+
+} // namespace
+
 std::optional<std::pair<semantic::DeclarationId, std::string>>
 Lowerer::hir_instance_callable(const std::string_view receiver,
     const std::string_view member, const bool function) const
@@ -5708,37 +6078,118 @@ Lowerer::hir_instance_callable(const std::string_view receiver,
     if (specialized_hir_unit_ == nullptr || receiver.empty()) {
         return std::nullopt;
     }
-    const auto& scopes_view = specialized_hir_unit_->design().semantics.scopes();
-    const auto member_of_scope = [&](const auto& scope_matches)
-        -> std::optional<semantic::DeclarationId> {
+    const auto& design = specialized_hir_unit_->design();
+    const auto inactive_conditional_declarations
+        = inactive_generate_declarations(*specialized_hir_unit_);
+    const auto member_of_scope = [&](
+        const semantic::SpecializedHirUnit& owner,
+        const std::vector<semantic::DeclarationId>& inactive_declarations,
+        const auto& scope_matches) {
         std::optional<semantic::DeclarationId> selected;
-        for (const auto& declaration :
-            specialized_hir_unit_->design().systemverilog_hir.declarations()) {
+        const auto& scopes = owner.design().semantics.scopes();
+        for (const auto& source_declaration :
+            owner.design().systemverilog_hir.declarations()) {
+            if (std::ranges::find(inactive_declarations,
+                    source_declaration.id)
+                != inactive_declarations.end()) {
+                continue;
+            }
+            const auto effective = owner.find_declaration(
+                source_declaration.id);
+            if (!effective || effective->systemverilog == nullptr) {
+                continue;
+            }
+            const auto& declaration = *effective->systemverilog;
             if (declaration.name != member || !declaration.callable
                 || declaration.callable->function != function
                 || !declaration.nested_scope
                 || (declaration.form != semantic::sv::DeclarationForm::task
-                    && declaration.form != semantic::sv::DeclarationForm::function)
-                || !declaration.scope.valid()
-                || declaration.scope.value() >= scopes_view.size()
-                || !scope_matches(scopes_view[declaration.scope.value()])) {
+                    && declaration.form
+                        != semantic::sv::DeclarationForm::function)) {
+                continue;
+            }
+            const auto scope = std::ranges::find(
+                scopes, declaration.scope, &semantic::Scope::id);
+            if (!declaration.scope.valid() || scope == scopes.end()
+                || !scope_matches(*scope)) {
                 continue;
             }
             if (selected) {
-                return std::nullopt;
+                return std::pair {
+                    std::optional<semantic::DeclarationId> { }, true };
             }
-            selected = declaration.id;
+            selected = source_declaration.id;
         }
-        return selected;
+        return std::pair { selected, false };
     };
     // A task of a generate block of this module (`gen.t`) is local; its
     // variables are this instance's `gen.x` signals.
     if (receiver.find('.') == std::string_view::npos) {
         const auto unit = specialized_hir_unit_->unit();
-        if (const auto local = member_of_scope([&](const semantic::Scope& scope) {
-                return scope.unit == unit && scope.parent && scope.name == receiver;
-            })) {
-            return std::pair { *local, std::string { receiver } };
+        const auto local = member_of_scope(*specialized_hir_unit_,
+            inactive_conditional_declarations,
+            [&](const semantic::Scope& scope) {
+                return scope.unit == unit && scope.parent
+                    && scope.name == receiver;
+            });
+        if (local.second) {
+            return std::nullopt;
+        }
+        if (local.first) {
+            return std::pair { *local.first, std::string { receiver } };
+        }
+        if (ancestor_systemverilog_specializations_ != nullptr
+            && !hierarchy_.empty()) {
+            for (auto candidate = ancestor_systemverilog_specializations_->rbegin();
+                candidate != ancestor_systemverilog_specializations_->rend(); ++candidate) {
+                const auto* owner = *candidate;
+                if (owner == nullptr || &owner->design() != &design) {
+                    continue;
+                }
+                const auto owner_inactive
+                    = inactive_generate_declarations(*owner);
+                const auto parent_member = member_of_scope(*owner,
+                    owner_inactive, [&](const semantic::Scope& scope) {
+                        return scope.unit == owner->unit() && scope.parent
+                            && scope.name == receiver;
+                    });
+                if (parent_member.second) {
+                    return std::nullopt;
+                }
+                if (!parent_member.first) {
+                    continue;
+                }
+                const auto same_unit_contexts = std::ranges::count_if(
+                    *ancestor_systemverilog_specializations_, [&](const auto* context) {
+                        return context != nullptr
+                            && context->unit() == owner->unit();
+                    });
+                if (same_unit_contexts != 1) {
+                    return std::nullopt;
+                }
+                const SpecializationInfo* owner_occurrence { };
+                std::size_t owner_occurrence_count { };
+                for (const auto& specialization : design_.specializations_) {
+                    if (!specialization.source_unit
+                        || *specialization.source_unit != owner->unit()
+                        || hierarchy_.size() <= specialization.instance.size()
+                        || !hierarchy_.starts_with(specialization.instance)
+                        || hierarchy_[specialization.instance.size()] != '.') {
+                        continue;
+                    }
+                    owner_occurrence = &specialization;
+                    ++owner_occurrence_count;
+                }
+                if (owner_occurrence_count != 1U
+                    || owner_occurrence == nullptr) {
+                    return std::nullopt;
+                }
+                auto target_path = owner_occurrence->instance;
+                target_path += ".";
+                target_path.append(receiver.data(), receiver.size());
+                return std::pair { *parent_member.first,
+                    "@instance:" + target_path };
+            }
         }
     }
     // The receiver names a module instance, searched upward from the
@@ -5764,7 +6215,6 @@ Lowerer::hir_instance_callable(const std::string_view receiver,
         lexical = separator == std::string::npos ? std::string { }
                                                  : lexical.substr(0U, separator);
     }
-    const auto& design = specialized_hir_unit_->design();
     if (target == nullptr && receiver.find('.') == std::string_view::npos) {
         // An upward name may begin with the module name of an enclosing
         // instance (IEEE 1800-2017 23.8): `ma.f()` inside an instance below
@@ -6034,7 +6484,71 @@ Lowerer::hir_callable_formal_binding(
     const auto unspecified = subtype->unspecified_class
         != semantic::vhdl::UnspecifiedTypeClass::none;
     const auto contextual = unspecified || subtype->unconstrained;
+    const auto same_nominal_boolean_array_storage = [&](
+        const frontend::ValueDomain formal_domain) {
+        if (formal_domain != frontend::ValueDomain::Boolean
+            || subtype->domain != semantic::vhdl::ValueDomain::boolean) {
+            return false;
+        }
+        const auto actual_node
+            = specialized_hir_unit_->find_expression(actual);
+        if (!actual_node || actual_node->vhdl == nullptr
+            || actual_node->vhdl->kind
+                != semantic::vhdl::ExpressionKind::name) {
+            return false;
+        }
+        const auto actual_domain = hir_expression_domain(actual, actual_scope);
+        if (!actual_domain
+            || *actual_domain != frontend::ValueDomain::Bit2) {
+            return false;
+        }
+        const auto actual_subtype = hir_vhdl_expression_subtype(actual);
+        const auto effective_actual_subtype = actual_subtype
+            ? hir_effective_vhdl_subtype(*actual_subtype)
+            : std::nullopt;
+        if (!effective_actual_subtype
+            || effective_actual_subtype->domain
+                != semantic::vhdl::ValueDomain::bit2
+            || !hir_vhdl_same_nominal_array_type(
+                *subtype, *effective_actual_subtype, actual_scope)) {
+            return false;
+        }
+
+        auto type_id = subtype->type_mark.target;
+        std::unordered_set<std::uint32_t> visited;
+        while (type_id.valid() && visited.insert(type_id.value()).second) {
+            const auto type = specialized_hir_unit_->find_type(type_id);
+            if (!type || type->vhdl == nullptr) {
+                return false;
+            }
+            const auto& definition = *type->vhdl;
+            if (definition.form == semantic::vhdl::TypeForm::array) {
+                if (definition.array_dimensions.size() != 1U
+                    || !definition.element_subtype) {
+                    return false;
+                }
+                const auto element = hir_effective_vhdl_subtype(
+                    *definition.element_subtype);
+                return element
+                    && element->domain
+                        == semantic::vhdl::ValueDomain::boolean
+                    && element->executable_width
+                    && *element->executable_width == 1U;
+            }
+            if (definition.form != semantic::vhdl::TypeForm::subtype
+                && definition.form != semantic::vhdl::TypeForm::alias) {
+                return false;
+            }
+            type_id = definition.base.type_mark.target;
+        }
+        return false;
+    };
     if (existing && !contextual) {
+        if (same_nominal_boolean_array_storage(existing->domain)) {
+            auto packed_binding = *existing;
+            packed_binding.domain = frontend::ValueDomain::Bit2;
+            return packed_binding;
+        }
         return existing;
     }
     const auto actual_expression = specialized_hir_unit_->find_expression(
@@ -6190,6 +6704,10 @@ Lowerer::hir_callable_formal_binding(
             }
         }
     }
+    if (domain
+        && same_nominal_boolean_array_storage(*domain)) {
+        domain = frontend::ValueDomain::Bit2;
+    }
     if (!width || *width == 0U || !domain
         || !callable_scalar_domain(*domain)
         || (*domain == frontend::ValueDomain::Integer
@@ -6342,6 +6860,222 @@ Lowerer::bind_hir_function_actuals(
     return result;
 }
 
+std::optional<Lowerer::HirVhdlFunctionResultShape>
+Lowerer::hir_vhdl_function_result_shape(
+    const semantic::ExpressionId expression_id,
+    const semantic::ScopeId process_scope,
+    const std::optional<semantic::DeclarationId> selected_body) const
+{
+    if (specialized_hir_unit_ == nullptr
+        || !hir_vhdl_function_shape_frames_.insert(
+            expression_id.value()).second) {
+        return std::nullopt;
+    }
+    struct ShapeFrameGuard {
+        std::unordered_set<std::uint32_t>& frames;
+        std::uint32_t expression;
+        ~ShapeFrameGuard()
+        {
+            frames.erase(expression);
+        }
+    } shape_frame_guard {
+        hir_vhdl_function_shape_frames_, expression_id.value()
+    };
+
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->vhdl == nullptr
+        || !expression->vhdl->referenced_name
+        || (expression->vhdl->kind
+                != semantic::vhdl::ExpressionKind::call
+            && expression->vhdl->kind
+                != semantic::vhdl::ExpressionKind::name)) {
+        return std::nullopt;
+    }
+    const auto resolution = selected_body ? std::nullopt
+        : resolve_hir_vhdl_function_call(expression_id, process_scope, 0U);
+    if (!selected_body && !resolution) {
+        return std::nullopt;
+    }
+    const auto body = selected_body ? *selected_body : resolution->body;
+    hir_generic_binding_frames_.push_back(resolution
+            ? resolution->generic_bindings : semantic::CompiledBindingFrame { });
+    const PopBackGuard generic_scope { hir_generic_binding_frames_ };
+
+    const auto declaration = specialized_hir_unit_->find_declaration(
+        body);
+    if (!declaration || declaration->vhdl == nullptr
+        || !declaration->vhdl->callable
+        || !declaration->vhdl->callable->function
+        || !declaration->vhdl->callable->defined
+        || !declaration->vhdl->nested_scope
+        || declaration->vhdl->statements.size() != 1U) {
+        return std::nullopt;
+    }
+    const auto& callable = *declaration->vhdl->callable;
+    // Formal declarations are retained among a callable's children. Only
+    // additional local declarations make this direct-return query inapplicable.
+    if (std::ranges::any_of(declaration->vhdl->children,
+            [&](const semantic::DeclarationId child) {
+                return std::ranges::find(callable.formals, child)
+                    == callable.formals.end();
+            })) {
+        return std::nullopt;
+    }
+    const auto actuals = bind_hir_function_actuals(
+        expression_id, body);
+    if (!actuals || actuals->size() != callable.formals.size()) {
+        return std::nullopt;
+    }
+
+    semantic::CompiledBindingFrame actual_bindings;
+    actual_bindings.reserve(callable.formals.size());
+    for (std::size_t index { }; index < callable.formals.size(); ++index) {
+        if (!(*actuals)[index].valid()) {
+            return std::nullopt;
+        }
+        semantic::CompiledActualBinding binding;
+        binding.formal = callable.formals[index];
+        binding.expression = (*actuals)[index];
+        actual_bindings.push_back(std::move(binding));
+    }
+    hir_generic_binding_frames_.push_back(std::move(actual_bindings));
+    const PopBackGuard actual_scope { hir_generic_binding_frames_ };
+
+    const auto declared_return = callable.return_type
+        ? callable.return_type : declaration->vhdl->subtype;
+    if (!declared_return) {
+        return std::nullopt;
+    }
+    const semantic::CompiledDesignResolver resolver {
+        *specialized_hir_unit_, hir_generic_binding_frames_
+    };
+    const auto return_subtype = resolver.effective_vhdl_subtype(
+        *declared_return, declaration->vhdl->scope);
+    if (!return_subtype || !return_subtype->unconstrained
+        || hir_vhdl_predefined_string_type(*return_subtype)
+        || !hir_vhdl_array_type_family(*return_subtype)) {
+        return std::nullopt;
+    }
+
+    // Only array types with a proven single index dimension can use the
+    // packed result representation. The two targetless IEEE vector types are
+    // known one-dimensional arrays; other targetless spellings fail closed.
+    const semantic::vhdl::TypeDefinition* return_array = nullptr;
+    if (return_subtype->type_mark.target.valid()) {
+        auto type_id = return_subtype->type_mark.target;
+        std::unordered_set<std::uint32_t> visited_types;
+        while (type_id.valid()
+            && visited_types.insert(type_id.value()).second) {
+            const auto type = specialized_hir_unit_->find_type(type_id);
+            if (!type || type->vhdl == nullptr) {
+                return std::nullopt;
+            }
+            const auto& definition = *type->vhdl;
+            if (definition.form == semantic::vhdl::TypeForm::array) {
+                return_array = &definition;
+                break;
+            }
+            if ((definition.form != semantic::vhdl::TypeForm::subtype
+                    && definition.form
+                        != semantic::vhdl::TypeForm::alias)
+                || !definition.base.type_mark.target.valid()) {
+                return std::nullopt;
+            }
+            type_id = definition.base.type_mark.target;
+        }
+        if (return_array == nullptr
+            || return_array->array_dimensions.size() != 1U
+            || !return_array->element_subtype) {
+            return std::nullopt;
+        }
+    } else if (return_subtype->builtin_type
+                != semantic::vhdl::BuiltinTypeIdentity::
+                    ieee_std_logic_1164_std_logic_vector
+        && return_subtype->builtin_type
+                != semantic::vhdl::BuiltinTypeIdentity::
+                    ieee_std_logic_1164_std_ulogic_vector) {
+        return std::nullopt;
+    }
+
+    const auto statement = specialized_hir_unit_->find_statement(
+        declaration->vhdl->statements.front());
+    if (!statement || statement->vhdl == nullptr
+        || statement->vhdl->kind
+            != semantic::vhdl::StatementKind::return_statement
+        || !statement->vhdl->value) {
+        return std::nullopt;
+    }
+    const auto value_id = *statement->vhdl->value;
+    const auto value_subtype = hir_vhdl_expression_subtype(value_id);
+    if (!value_subtype || value_subtype->unconstrained
+        || !hir_vhdl_same_nominal_array_type(
+            *return_subtype, *value_subtype, declaration->vhdl->scope)) {
+        return std::nullopt;
+    }
+    const auto width = hir_expression_width(
+        value_id, process_scope, &*return_subtype);
+    const auto range = hir_expression_range(value_id, process_scope);
+    if (!width || *width == 0U || !range) {
+        return std::nullopt;
+    }
+    const auto distance = index_distance(range->left, range->right);
+    if (distance == std::numeric_limits<std::uint64_t>::max()
+        || distance + 1U
+            > static_cast<std::uint64_t>(
+                std::numeric_limits<std::size_t>::max())
+        || (range->left != range->right
+            && range->descending != (range->left > range->right))) {
+        return std::nullopt;
+    }
+    const auto element_count = static_cast<std::size_t>(distance + 1U);
+    std::optional<std::size_t> element_width;
+    if (return_array != nullptr) {
+        const auto element = hir_effective_vhdl_subtype(
+            semantic::vhdl::constrained_element_subtype(
+                *return_subtype, "", *return_array->element_subtype));
+        if (element) {
+            if (element->executable_width
+                && *element->executable_width != 0U
+                && *element->executable_width
+                    <= std::numeric_limits<std::size_t>::max()) {
+                element_width = static_cast<std::size_t>(
+                    *element->executable_width);
+            } else if (element->domain
+                    == semantic::vhdl::ValueDomain::integer) {
+                const auto integer_width
+                    = element->integer_storage_width != 0U
+                    ? std::optional<std::uint64_t> {
+                          element->integer_storage_width
+                      }
+                    : std::optional<std::uint64_t> {
+                          frontend::vhdl_predefined_integer_storage_width(
+                              vhdl_standard_)
+                      };
+                if (integer_width && *integer_width != 0U
+                    && *integer_width
+                        <= std::numeric_limits<std::size_t>::max()) {
+                    element_width = static_cast<std::size_t>(
+                        *integer_width);
+                }
+            }
+        }
+    } else {
+        element_width = 1U;
+    }
+    if (!element_width || *element_width == 0U
+        || element_count
+            > std::numeric_limits<std::size_t>::max() / *element_width
+        || element_count * *element_width != *width) {
+        return std::nullopt;
+    }
+    const auto type = hir_callable_type(body, *width);
+    if (!type || type->string || type->container || type->width != *width) {
+        return std::nullopt;
+    }
+    return HirVhdlFunctionResultShape { *width, type->domain, *range };
+}
+
 std::optional<Lowerer::HirInterfaceFunctionProfile>
 Lowerer::hir_interface_function_profile(
     const semantic::ExpressionId expression_id,
@@ -6475,7 +7209,30 @@ Lowerer::bind_hir_vhdl_procedure_actuals(
             || result[formal_index].valid()) {
             return std::nullopt;
         }
-        result[formal_index] = association.actual;
+        const auto actual = specialized_hir_unit_->find_expression(
+            association.actual);
+        const bool open_actual = actual && actual->vhdl != nullptr
+            && actual->vhdl->kind == semantic::vhdl::ExpressionKind::name
+            && same_callable_name(actual->vhdl->text, "open", true);
+        if (open_actual) {
+            const auto formal = specialized_hir_unit_->find_declaration(
+                formals[formal_index]);
+            if (!formal || formal->vhdl == nullptr
+                || callable_direction(*formal)
+                    != frontend::PortDirection::Input
+                || (formal->vhdl->object_class
+                        != semantic::vhdl::ObjectClass::constant
+                    && formal->vhdl->object_class
+                        != semantic::vhdl::ObjectClass::variable)
+                || !formal->vhdl->initializer) {
+                return std::nullopt;
+            }
+            // IEEE 1076-1993 4.3.2.2: OPEN on a defaulted IN variable or
+            // constant uses the default as the implicit actual expression.
+            result[formal_index] = *formal->vhdl->initializer;
+        } else {
+            result[formal_index] = association.actual;
+        }
     }
     for (std::size_t index { }; index < result.size(); ++index) {
         if (result[index].valid()) {
@@ -6800,6 +7557,155 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
         }
     }
     auto actual_subtype = hir_vhdl_expression_subtype(actual_id);
+    if (actual && actual->vhdl != nullptr
+        && actual->vhdl->kind
+            == semantic::vhdl::ExpressionKind::slice
+        && actual->vhdl->operands.size() == 3U
+        && (actual->vhdl->text == "to"
+            || actual->vhdl->text == "downto")) {
+        // A slice of a named object can retain its exact bounds and packed
+        // width even when the generic expression-subtype query has no
+        // selected subtype for the plain object name. Recover the declared
+        // array identity from that object, then apply the slice's own range
+        // before overload compatibility is decided. This preserves
+        // nominal-array and constrained-shape checks instead of accepting a
+        // same-width value from an unrelated array type.
+        const auto prefix_id = actual->vhdl->operands.front();
+        const auto prefix = specialized_hir_unit_->find_expression(prefix_id);
+        const auto target = prefix && prefix->vhdl != nullptr
+                && prefix->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::name
+            ? hir_target_declaration(prefix_id)
+            : std::nullopt;
+        const auto object = target
+            ? specialized_hir_unit_->find_declaration(*target)
+            : std::nullopt;
+        using Form = semantic::vhdl::DeclarationForm;
+        const bool object_declaration = object && object->vhdl != nullptr
+            && (object->vhdl->form == Form::generic_constant
+                || object->vhdl->form == Form::port
+                || object->vhdl->form == Form::signal
+                || object->vhdl->form == Form::constant
+                || object->vhdl->form == Form::variable
+                || object->vhdl->form == Form::alias)
+            && object->vhdl->subtype;
+        auto selected_subtype = object_declaration
+            ? hir_effective_vhdl_subtype(*object->vhdl->subtype)
+            : std::nullopt;
+        const auto base_width = object_declaration
+            ? hir_expression_width(prefix_id, process_scope)
+            : std::nullopt;
+        const auto base_range = object_declaration
+            ? hir_expression_range(prefix_id, process_scope)
+            : std::nullopt;
+        const auto selected_left = hir_constant_integer(
+            actual->vhdl->operands[1]);
+        const auto selected_right = hir_constant_integer(
+            actual->vhdl->operands[2]);
+        const auto array_index_constraint_count = selected_subtype
+            ? std::ranges::count_if(
+                  selected_subtype->constraints,
+                  [](const semantic::vhdl::RangeConstraint& candidate) {
+                      return candidate.kind
+                          == semantic::vhdl::RangeKind::array_index;
+                  })
+            : 0;
+        const auto array_type_id = selected_subtype
+                && selected_subtype->type_mark.target.valid()
+            ? std::optional<semantic::TypeId> {
+                  base_type(selected_subtype->type_mark.target)
+              }
+            : std::nullopt;
+        const auto array_type = array_type_id && array_type_id->valid()
+            ? specialized_hir_unit_->find_type(*array_type_id)
+            : std::nullopt;
+        const auto array_family = selected_subtype
+            ? hir_vhdl_array_type_family(*selected_subtype)
+            : std::nullopt;
+        // A subtype of a predefined vector can end at a retained subtype
+        // whose builtin base has no TypeId. User-defined array families
+        // still require their concrete rank-one array definition.
+        const bool predefined_vector = array_family
+            && !array_family->starts_with("type:");
+        const bool rank_one = array_index_constraint_count == 1
+            && (predefined_vector
+                || (array_type && array_type->vhdl != nullptr
+                    && array_type->vhdl->form
+                        == semantic::vhdl::TypeForm::array
+                    && array_type->vhdl->array_dimensions.size() == 1U));
+        if (selected_subtype && base_width && *base_width != 0U
+            && base_range && selected_left && selected_right && rank_one
+            && array_family) {
+            const auto base_distance
+                = index_distance(base_range->left, base_range->right);
+            const auto selected_distance
+                = index_distance(*selected_left, *selected_right);
+            const bool base_nonnull
+                = base_range->descending
+                ? base_range->left >= base_range->right
+                : base_range->left <= base_range->right;
+            const bool selected_descending
+                = actual->vhdl->text == "downto";
+            const bool selected_nonnull = selected_descending
+                ? *selected_left >= *selected_right
+                : *selected_left <= *selected_right;
+            const auto base_count = base_distance + 1U;
+            const auto selected_count = selected_distance + 1U;
+            const auto within_base = [&](const std::int64_t bound) {
+                return bound
+                        >= std::min(base_range->left, base_range->right)
+                    && bound
+                        <= std::max(base_range->left, base_range->right);
+            };
+            const bool range_matches = base_nonnull && selected_nonnull
+                && base_distance
+                    != std::numeric_limits<std::uint64_t>::max()
+                && selected_distance
+                    != std::numeric_limits<std::uint64_t>::max()
+                && selected_count != 0U
+                && base_count != 0U
+                && base_count != std::numeric_limits<std::uint64_t>::max()
+                && base_count
+                    <= std::numeric_limits<std::size_t>::max()
+                && selected_count
+                    <= std::numeric_limits<std::size_t>::max()
+                && selected_descending == base_range->descending
+                && within_base(*selected_left)
+                && within_base(*selected_right)
+                && *base_width % base_count == 0U;
+            if (range_matches) {
+                const auto element_width = *base_width
+                    / static_cast<std::size_t>(base_count);
+                if (element_width != 0U
+                    && selected_count
+                        <= std::numeric_limits<std::size_t>::max()
+                            / element_width) {
+                    auto range = std::ranges::find_if(
+                        selected_subtype->constraints,
+                        [](const semantic::vhdl::RangeConstraint& candidate) {
+                            return candidate.kind
+                                == semantic::vhdl::RangeKind::array_index;
+                        });
+                    if (range != selected_subtype->constraints.end()) {
+                        range->left = *selected_left;
+                        range->right = *selected_right;
+                        range->left_expression
+                            = actual->vhdl->operands[1];
+                        range->right_expression
+                            = actual->vhdl->operands[2];
+                        range->descending = selected_descending;
+                        range->direction_from_bounds = false;
+                        range->null = false;
+                        range->source = actual->vhdl->source;
+                        selected_subtype->unconstrained = false;
+                        selected_subtype->executable_width
+                            = selected_count * element_width;
+                        actual_subtype = std::move(selected_subtype);
+                    }
+                }
+            }
+        }
+    }
     bool actual_is_function_name { };
     if (!actual_subtype
         && actual_kind == semantic::vhdl::ExpressionKind::name) {
@@ -6819,6 +7725,21 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
             } else if (declaration->vhdl->subtype) {
                 actual_subtype = *declaration->vhdl->subtype;
             }
+        }
+    }
+    if (actual_subtype && actual_subtype->unconstrained) {
+        if (const auto shape = hir_vhdl_function_result_shape(
+                actual_id, process_scope)) {
+            // A function actual keeps its nominal return type, but its
+            // instantiated result bounds replace the type's placeholder.
+            semantic::vhdl::RangeConstraint range;
+            range.kind = semantic::vhdl::RangeKind::array_index;
+            range.left = shape->range.left;
+            range.right = shape->range.right;
+            range.descending = shape->range.descending;
+            actual_subtype->constraints = { std::move(range) };
+            actual_subtype->executable_width = shape->width;
+            actual_subtype->unconstrained = false;
         }
     }
     const auto effective_actual_subtype = actual_subtype
@@ -6895,7 +7816,7 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
         ? semantic::CompiledDesignResolver {
               *specialized_hir_unit_,
               hir_generic_binding_frames_
-          }.vhdl_array_shapes_match(
+          }.vhdl_array_lengths_match(
               *formal_subtype,
               formal_declaration->vhdl->scope,
               *effective_actual_subtype,
@@ -6915,14 +7836,16 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
                    && definition->vhdl->form
                        == semantic::vhdl::TypeForm::record;
            }();
-    if (!actual_width || !actual_domain || *actual_domain != formal->domain
+    const bool rejects_actual
+        = !actual_width || !actual_domain || *actual_domain != formal->domain
         || !same_nominal_type
         || unresolved_function_array_profile
         || (array_shapes_match && !*array_shapes_match)
         || (formal->domain != frontend::ValueDomain::Integer
             && *actual_width != formal->width && !same_nominal_array)
         || (formal_record && !aggregate_actual
-            && *actual_width != formal->width)) {
+            && *actual_width != formal->width);
+    if (rejects_actual) {
         return false;
     }
     // Array actuals must belong to the formal's array type; a scalar BIT or
@@ -6940,7 +7863,10 @@ bool Lowerer::hir_vhdl_actual_matches_formal(
             && (scalar_name == "std_ulogic" || scalar_name == "std_logic"
                 || scalar_name == "bit");
         if ((formal_family && actual_family && *formal_family != *actual_family)
-            || (formal_family && !actual_family && scalar_logic_actual)) {
+            || (formal_family && !actual_family && scalar_logic_actual)
+            || (actual_family && !formal_family
+                && formal_subtype->unspecified_class
+                    == semantic::vhdl::UnspecifiedTypeClass::none)) {
             return false;
         }
     }
@@ -7136,9 +8062,10 @@ Lowerer::resolve_hir_vhdl_procedure_call(
         bool compatible = formals.size() == actuals->size();
         for (std::size_t index { };
             compatible && index < formals.size(); ++index) {
-            compatible = hir_vhdl_actual_matches_formal(resolution,
+            const bool matched = hir_vhdl_actual_matches_formal(resolution,
                 formals[index], scope, (*actuals)[index], process_scope,
                 inference);
+            compatible = matched;
         }
         if (!compatible) {
             continue;
@@ -7865,8 +8792,11 @@ Lowerer::lower_hir_function_call_value(
     hir_generic_binding_frames_.push_back(
         resolution->generic_bindings);
     const PopBackGuard generic_scope { hir_generic_binding_frames_ };
-    const auto type = hir_callable_type(
-        resolution->body, expected_width);
+    const auto result_shape = hir_vhdl_function_result_shape(
+        expression_id, hir_process_scope_, resolution->body);
+    const auto result_width = result_shape
+        ? result_shape->width : expected_width;
+    const auto type = hir_callable_type(resolution->body, result_width);
     const auto actuals = bind_hir_function_actuals(
         expression_id, resolution->body);
     const auto declaration = specialized_hir_unit_->find_declaration(
@@ -9164,7 +10094,10 @@ Lowerer::lower_hir_function_call_value(
     if (!packed_destination) {
         return std::nullopt;
     }
-    if (expected_width != 0U && expected_width != frame.type.width) {
+    // A proven unconstrained VHDL result owns its shape independently of
+    // the enclosing expression's storage context.
+    if (!result_shape && expected_width != 0U
+        && expected_width != frame.type.width) {
         packed_destination = resize_register(
             *packed_destination, expected_width,
             frame.type.signed_value);
@@ -9817,10 +10750,152 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
         return std::nullopt;
     }
 
+    std::vector<bool> vhdl_string_formals(formals.size());
+    std::vector<std::optional<HirPackedRange>> vhdl_string_actual_ranges(
+        formals.size());
+    for (std::size_t index { }; index < formals.size(); ++index) {
+        const auto formal = specialized_hir_unit_->find_declaration(
+            formals[index]);
+        if (!formal || formal->vhdl == nullptr || !formal->vhdl->subtype) {
+            continue;
+        }
+        const auto formal_subtype = hir_effective_vhdl_subtype(
+            *formal->vhdl->subtype);
+        const bool formal_is_predefined_string = formal_subtype
+            && hir_vhdl_predefined_string_type(*formal_subtype);
+        if (!formal_subtype
+            || formal_subtype->domain != semantic::vhdl::ValueDomain::string
+            || !formal_is_predefined_string
+            || !formal_subtype->unconstrained
+            || !formal_subtype->constraints.empty()) {
+            continue;
+        }
+        vhdl_string_formals[index] = true;
+        const auto actual_node = specialized_hir_unit_->find_expression(
+            (*actuals)[index]);
+        if (!actual_node || actual_node->vhdl == nullptr) {
+            continue;
+        }
+        const auto actual_subtype = hir_vhdl_expression_subtype(
+            (*actuals)[index]);
+        const bool actual_is_predefined_string = actual_subtype
+            && hir_vhdl_predefined_string_type(*actual_subtype);
+        const bool contextual_string_literal
+            = formal_is_predefined_string
+            && actual_node->vhdl->kind
+                == semantic::vhdl::ExpressionKind::string_literal
+            && actual_node->vhdl->decoded_string.has_value();
+        if ((!actual_subtype || !actual_is_predefined_string)
+            && !contextual_string_literal) {
+            continue;
+        }
+        const auto use_scope = actual_node->vhdl->scope;
+        std::optional<HirPackedRange> actual_range;
+        if (contextual_string_literal) {
+            const auto length = actual_node->vhdl->decoded_string->size();
+            if (length <= static_cast<std::size_t>(
+                              std::numeric_limits<std::int64_t>::max())) {
+                // The selected predefined STRING formal supplies context for
+                // an unqualified literal: its default bounds are 1 to N.
+                // Keep the null literal's range as 1 to 0.
+                actual_range = HirPackedRange {
+                    1, static_cast<std::int64_t>(length), false };
+            }
+        } else {
+            actual_range = hir_expression_range(
+                (*actuals)[index], use_scope);
+            if (!actual_range
+                && actual_node->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::name
+                && actual_subtype) {
+                if (!actual_subtype->unconstrained) {
+                    // A constrained STRING object has an exact subtype range
+                    // even though runtime STRING values have no packed width.
+                    const semantic::vhdl::RangeConstraint* string_range = nullptr;
+                    bool multiple_array_ranges { };
+                    for (const auto& constraint : actual_subtype->constraints) {
+                        if (constraint.kind
+                            != semantic::vhdl::RangeKind::array_index) {
+                            continue;
+                        }
+                        if (string_range != nullptr) {
+                            multiple_array_ranges = true;
+                            break;
+                        }
+                        string_range = &constraint;
+                    }
+                    if (string_range != nullptr && !multiple_array_ranges) {
+                        const auto left = hir_range_left(*string_range);
+                        const auto right = hir_range_right(*string_range);
+                        const auto descending
+                            = string_range->direction_from_bounds
+                            ? hir_vhdl_range_direction(
+                                  *string_range, use_scope)
+                            : std::optional<bool> {
+                                  string_range->descending };
+                        if (left && right && descending) {
+                            actual_range = HirPackedRange {
+                                *left, *right, *descending };
+                        }
+                    }
+                } else {
+                    // A constant object with an unconstrained predefined
+                    // STRING subtype inherits the exact bounds of a direct
+                    // string-literal initializer. Do not infer shape through
+                    // concatenations or function results here.
+                    const auto target = hir_target_declaration(
+                        (*actuals)[index]);
+                    const auto actual_declaration = target
+                        ? specialized_hir_unit_->find_declaration(*target)
+                        : std::nullopt;
+                    const auto initializer = actual_declaration
+                            && actual_declaration->vhdl != nullptr
+                            && actual_declaration->vhdl->form
+                                == semantic::vhdl::DeclarationForm::constant
+                        ? hir_constant_initializer(*target)
+                        : std::nullopt;
+                    const auto initial_value = initializer
+                        ? specialized_hir_unit_->find_expression(*initializer)
+                        : std::nullopt;
+                    if (initial_value && initial_value->vhdl != nullptr
+                        && initial_value->vhdl->kind
+                            == semantic::vhdl::ExpressionKind::string_literal
+                        && initial_value->vhdl->decoded_string) {
+                        const auto length
+                            = initial_value->vhdl->decoded_string->size();
+                        if (length <= static_cast<std::size_t>(
+                                          std::numeric_limits<std::int64_t>::max())) {
+                            actual_range = HirPackedRange {
+                                1, static_cast<std::int64_t>(length), false };
+                        }
+                    }
+                }
+            }
+        }
+        if (actual_range) {
+            vhdl_string_actual_ranges[index] = actual_range;
+        }
+    }
+
     const auto callable_key = std::uint64_t { 1 } << 63U
         | (static_cast<std::uint64_t>(resolution->key.value()) << 32U);
-    const auto callable_key_text = std::to_string(callable_key)
+    auto callable_key_text = std::to_string(callable_key)
         + (interface_callable ? "|receiver:" + interface_callable->receiver : "");
+    for (std::size_t index { }; index < vhdl_string_formals.size(); ++index) {
+        if (!vhdl_string_formals[index]) {
+            continue;
+        }
+        callable_key_text += "|vhdl-string-range:";
+        const auto& range = vhdl_string_actual_ranges[index];
+        if (!range) {
+            callable_key_text += "unknown:"
+                + std::to_string((*actuals)[index].value());
+        } else {
+            callable_key_text += std::to_string(range->left) + ":"
+                + std::to_string(range->right) + ":"
+                + (range->descending ? "down" : "up");
+        }
+    }
     const auto found = hir_callable_indices_.find(callable_key_text);
     const auto frame_index = found != hir_callable_indices_.end()
         ? found->second
@@ -9833,6 +10908,32 @@ std::optional<StringRegisterId> Lowerer::lower_hir_string_function_call(
         frame.type = *type;
         frame.formals = formals;
         frame.generic_bindings = resolution->generic_bindings;
+        const auto profile_declaration
+            = specialized_hir_unit_->find_declaration(resolution->key);
+        if (resolution->key != resolution->body
+            && profile_declaration
+            && profile_declaration->vhdl != nullptr
+            && profile_declaration->vhdl->callable
+            && profile_declaration->vhdl->callable->formals.size()
+                == formals.size()) {
+            frame.profile_formals.assign(
+                profile_declaration->vhdl->callable->formals.begin(),
+                profile_declaration->vhdl->callable->formals.end());
+        }
+        for (std::size_t index { }; index < vhdl_string_formals.size(); ++index) {
+            if (!vhdl_string_formals[index]) {
+                continue;
+            }
+            const std::vector<std::optional<HirPackedRange>> dimensions {
+                vhdl_string_actual_ranges[index],
+            };
+            frame.vhdl_formal_ranges.emplace(
+                formals[index].value(), dimensions);
+            if (frame.profile_formals.size() == frame.formals.size()) {
+                frame.vhdl_formal_ranges.emplace(
+                    frame.profile_formals[index].value(), dimensions);
+            }
+        }
         if (interface_callable) {
             frame.interface_receiver = interface_callable->receiver;
             bind_hir_instance_parameters(frame);
@@ -10436,9 +11537,16 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
             return false;
         }
         const auto direction = callable_direction(*formal);
-        const auto requires_writable
+        const bool defaulted_variable_input
             = formal->vhdl->object_class
                     == semantic::vhdl::ObjectClass::variable
+            && direction == frontend::PortDirection::Input
+            && formal->vhdl->initializer
+            && (*actuals)[index] == *formal->vhdl->initializer;
+        const auto requires_writable
+            = (formal->vhdl->object_class
+                    == semantic::vhdl::ObjectClass::variable
+                && !defaulted_variable_input)
             || formal->vhdl->object_class
                     == semantic::vhdl::ObjectClass::file
             || class_method_copy_out(direction);
@@ -10451,6 +11559,63 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
         const auto target_binding = target
             ? hir_runtime_binding(*target, hir_process_scope_, false)
             : std::nullopt;
+        if (formal->vhdl->object_class
+                == semantic::vhdl::ObjectClass::variable
+            && !defaulted_variable_input) {
+            const auto variable_class_actual = [&](const auto& self,
+                                                   const semantic::ExpressionId id)
+                -> bool {
+                const auto expression
+                    = specialized_hir_unit_->find_expression(id);
+                if (!expression || expression->vhdl == nullptr) {
+                    return false;
+                }
+                if (expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::aggregate) {
+                    return !expression->vhdl->associations.empty()
+                        && std::ranges::all_of(
+                            expression->vhdl->associations,
+                            [&](const semantic::vhdl::AggregateAssociation& item) {
+                                return item.choices.size() <= 1U
+                                    && self(self, item.value);
+                            });
+                }
+                auto actual_target = hir_target_declaration(id);
+                std::unordered_set<std::uint32_t> visited_targets;
+                while (actual_target
+                    && visited_targets.insert(actual_target->value()).second) {
+                    const auto actual_declaration
+                        = specialized_hir_unit_->find_declaration(
+                            *actual_target);
+                    if (!actual_declaration
+                        || actual_declaration->vhdl == nullptr) {
+                        return false;
+                    }
+                    if (actual_declaration->vhdl->form
+                        != semantic::vhdl::DeclarationForm::alias) {
+                        return actual_declaration->vhdl->object_class
+                            == semantic::vhdl::ObjectClass::variable;
+                    }
+                    // A simple object alias has variable class when the
+                    // declaration it denotes does. The alias declaration
+                    // itself is not a variable-class object for this test.
+                    actual_target = hir_vhdl_alias_object(*actual_target);
+                }
+                return false;
+            };
+            if (!variable_class_actual(
+                    variable_class_actual, (*actuals)[index])) {
+                report(
+                    "FSIM-ELAB-VHPROC-018",
+                    "variable-class procedure formal '"
+                        + formal->vhdl->name
+                        + "' requires a variable-class actual",
+                    actual && actual->vhdl != nullptr
+                        ? hir_source_span(actual->vhdl->source)
+                        : hir_source_span(statement->vhdl->source));
+                return true;
+            }
+        }
         const auto string_target = target
             ? hir_string_binding(*target, hir_process_scope_, true)
             : std::nullopt;
@@ -10559,6 +11724,113 @@ bool Lowerer::lower_hir_vhdl_procedure_call(
             continue;
         }
         const auto actual_id = (*actuals)[index];
+        const bool predefined_string_formal
+            = subtype->domain == semantic::vhdl::ValueDomain::string
+            && hir_vhdl_predefined_string_type(*subtype);
+        if (predefined_string_formal) {
+            const auto actual_expression
+                = specialized_hir_unit_->find_expression(actual_id);
+            const auto actual_subtype
+                = hir_vhdl_expression_subtype(actual_id);
+            const auto actual_effective = actual_subtype
+                ? hir_effective_vhdl_subtype(*actual_subtype)
+                : std::nullopt;
+            const bool actual_is_predefined_string = actual_effective
+                && hir_vhdl_predefined_string_type(*actual_effective);
+            const bool contextual_string_literal
+                = actual_expression && actual_expression->vhdl != nullptr
+                && actual_expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::string_literal
+                && actual_expression->vhdl->decoded_string.has_value();
+            std::optional<HirPackedRange> string_actual_range;
+            if (contextual_string_literal) {
+                const auto length
+                    = actual_expression->vhdl->decoded_string->size();
+                if (length <= static_cast<std::size_t>(
+                                  std::numeric_limits<std::int64_t>::max())) {
+                    string_actual_range = HirPackedRange {
+                        1, static_cast<std::int64_t>(length), false };
+                }
+            } else if (actual_expression
+                && actual_expression->vhdl != nullptr
+                && actual_is_predefined_string) {
+                const auto use_scope = actual_expression->vhdl->scope;
+                string_actual_range = hir_expression_range(
+                    actual_id, use_scope);
+                if (!string_actual_range && actual_effective
+                    && !actual_effective->unconstrained) {
+                    const semantic::vhdl::RangeConstraint* string_constraint
+                        = nullptr;
+                    bool multiple_array_constraints { };
+                    for (const auto& constraint : actual_effective->constraints) {
+                        if (constraint.kind
+                            != semantic::vhdl::RangeKind::array_index) {
+                            continue;
+                        }
+                        if (string_constraint != nullptr) {
+                            multiple_array_constraints = true;
+                            break;
+                        }
+                        string_constraint = &constraint;
+                    }
+                    if (string_constraint != nullptr
+                        && !multiple_array_constraints) {
+                        const auto left = hir_range_left(*string_constraint);
+                        const auto right = hir_range_right(*string_constraint);
+                        const auto descending
+                            = string_constraint->direction_from_bounds
+                            ? hir_vhdl_range_direction(
+                                  *string_constraint,
+                                  actual_expression->vhdl->scope)
+                            : std::optional<bool> {
+                                  string_constraint->descending };
+                        if (left && right && descending) {
+                            string_actual_range = HirPackedRange {
+                                *left, *right, *descending };
+                        }
+                    }
+                }
+                if (!string_actual_range && actual_effective
+                    && actual_effective->unconstrained
+                    && actual_expression->vhdl->kind
+                        == semantic::vhdl::ExpressionKind::name) {
+                    const auto target = hir_target_declaration(actual_id);
+                    const auto actual_declaration = target
+                        ? specialized_hir_unit_->find_declaration(*target)
+                        : std::nullopt;
+                    const auto initializer = target
+                            && actual_declaration
+                            && actual_declaration->vhdl != nullptr
+                            && actual_declaration->vhdl->form
+                                == semantic::vhdl::DeclarationForm::constant
+                        ? hir_constant_initializer(*target)
+                        : std::nullopt;
+                    const auto initial_value = initializer
+                        ? specialized_hir_unit_->find_expression(*initializer)
+                        : std::nullopt;
+                    if (initial_value && initial_value->vhdl != nullptr
+                        && initial_value->vhdl->kind
+                            == semantic::vhdl::ExpressionKind::string_literal
+                        && initial_value->vhdl->decoded_string) {
+                        const auto length
+                            = initial_value->vhdl->decoded_string->size();
+                        if (length <= static_cast<std::size_t>(
+                                          std::numeric_limits<std::int64_t>::max())) {
+                            string_actual_range = HirPackedRange {
+                                1, static_cast<std::int64_t>(length), false };
+                        }
+                    }
+                }
+            }
+            if (string_actual_range) {
+                procedure_ranges.emplace_back(index, *string_actual_range);
+                range_actual_key += "|r" + std::to_string(index) + ":"
+                    + std::to_string(string_actual_range->left) + ":"
+                    + std::to_string(string_actual_range->right)
+                    + (string_actual_range->descending ? "d" : "a");
+                continue;
+            }
+        }
         auto range = hir_expression_range(actual_id, hir_process_scope_);
         const auto width = hir_expression_width(actual_id, hir_process_scope_);
         bool null_actual_range { };
@@ -11756,13 +13028,137 @@ void Lowerer::bind_hir_instance_parameters(HirCallableFrame& frame) const
         return;
     }
     auto receiver = std::string_view { *frame.interface_receiver };
-    if (receiver.starts_with("@instance:")) {
+    const bool generated_scope_receiver
+        = receiver.starts_with("@instance:");
+    if (generated_scope_receiver) {
         receiver.remove_prefix(std::string_view { "@instance:" }.size());
     }
-    const auto target = std::ranges::find(design_.specializations_,
+    auto target = std::ranges::find(design_.specializations_,
         receiver, &SpecializationInfo::instance);
-    const auto callable = specialized_hir_unit_->find_declaration(
+    const semantic::SpecializedHirUnit* callable_owner
+        = specialized_hir_unit_;
+    auto callable = specialized_hir_unit_->find_declaration(
         frame.declaration);
+    bool parent_generated_owner_proven { };
+
+    // An ancestor generate-scope callable is represented by its parent
+    // instance followed by one generated-scope label. Resolve that exact
+    // owner only when the declaration, scope, selected-generate view, and
+    // current hierarchy path all prove the relationship. Ordinary missing
+    // instance paths never walk outward to a same-named ancestor.
+    if (target == design_.specializations_.end()
+        && generated_scope_receiver
+        && ancestor_systemverilog_specializations_ != nullptr
+        && callable && callable->systemverilog != nullptr) {
+        const auto separator = receiver.rfind('.');
+        if (separator != std::string_view::npos
+            && separator + 1U < receiver.size()) {
+            const auto parent_instance = receiver.substr(0U, separator);
+            const auto generated_scope_name = receiver.substr(separator + 1U);
+            const bool is_descendant_path
+                = hierarchy_.size() > parent_instance.size()
+                && hierarchy_.starts_with(parent_instance)
+                && hierarchy_[parent_instance.size()] == '.';
+            if (is_descendant_path) {
+                const auto& scopes = specialized_hir_unit_->design()
+                                         .semantics.scopes();
+                const auto declaration_scope = std::ranges::find(
+                    scopes, callable->systemverilog->scope,
+                    &semantic::Scope::id);
+                if (declaration_scope != scopes.end()
+                    && declaration_scope->parent
+                    && declaration_scope->name == generated_scope_name
+                    && callable->systemverilog->nested_scope
+                    && callable->systemverilog->callable
+                    && (callable->systemverilog->form
+                            == semantic::sv::DeclarationForm::task
+                        || callable->systemverilog->form
+                            == semantic::sv::DeclarationForm::function)) {
+                    const semantic::SpecializedHirUnit* proven_owner { };
+                    const SpecializationInfo* proven_target { };
+                    std::size_t proof_count { };
+                    for (const auto* owner :
+                        *ancestor_systemverilog_specializations_) {
+                        if (owner == nullptr
+                            || &owner->design()
+                                != &specialized_hir_unit_->design()
+                            || owner->unit() != declaration_scope->unit
+                            || std::ranges::count_if(
+                                   *ancestor_systemverilog_specializations_,
+                                   [&](const auto* context) {
+                                       return context != nullptr
+                                           && context->unit() == owner->unit();
+                                   })
+                                != 1U) {
+                            continue;
+                        }
+                        const auto effective
+                            = owner->find_declaration(frame.declaration);
+                        if (!effective || effective->systemverilog == nullptr
+                            || !effective->systemverilog->nested_scope
+                            || !effective->systemverilog->callable
+                            || effective->systemverilog->scope
+                                != callable->systemverilog->scope
+                            || effective->systemverilog->name
+                                != callable->systemverilog->name
+                            || effective->systemverilog->form
+                                != callable->systemverilog->form
+                            || effective->systemverilog->callable->function
+                                != callable->systemverilog->callable->function) {
+                            continue;
+                        }
+                        const auto inactive
+                            = inactive_generate_declarations(*owner);
+                        if (std::ranges::find(inactive, frame.declaration)
+                            != inactive.end()) {
+                            continue;
+                        }
+                        const auto& owner_scopes
+                            = owner->design().semantics.scopes();
+                        const auto owner_scope = std::ranges::find(
+                            owner_scopes, effective->systemverilog->scope,
+                            &semantic::Scope::id);
+                        if (owner_scope == owner_scopes.end()
+                            || owner_scope->unit != owner->unit()
+                            || !owner_scope->parent
+                            || owner_scope->name != generated_scope_name) {
+                            continue;
+                        }
+                        const SpecializationInfo* occurrence { };
+                        std::size_t occurrence_count { };
+                        for (const auto& specialization
+                            : design_.specializations_) {
+                            if (specialization.instance != parent_instance
+                                || !specialization.source_unit
+                                || *specialization.source_unit
+                                    != owner->unit()) {
+                                continue;
+                            }
+                            occurrence = &specialization;
+                            ++occurrence_count;
+                        }
+                        if (occurrence_count != 1U || occurrence == nullptr) {
+                            continue;
+                        }
+                        proven_owner = owner;
+                        proven_target = occurrence;
+                        ++proof_count;
+                    }
+                    if (proof_count == 1U && proven_owner != nullptr
+                        && proven_target != nullptr) {
+                        target = std::ranges::find_if(
+                            design_.specializations_, [&](const auto& item) {
+                                return &item == proven_target;
+                            });
+                        callable_owner = proven_owner;
+                        callable = proven_owner->find_declaration(
+                            frame.declaration);
+                        parent_generated_owner_proven = true;
+                    }
+                }
+            }
+        }
+    }
     if (target == design_.specializations_.end()
         || target->parameter_values.empty() || !callable
         || callable->systemverilog == nullptr) {
@@ -11798,12 +13194,32 @@ void Lowerer::bind_hir_instance_parameters(HirCallableFrame& frame) const
         return static_cast<std::int64_t>(raw);
     };
     const auto scope = callable->systemverilog->scope;
+    const auto& semantic_design = callable_owner->design();
+    const auto scope_record = std::ranges::find(
+        semantic_design.semantics.scopes(), scope, &semantic::Scope::id);
+    if (scope_record == semantic_design.semantics.scopes().end()) {
+        return;
+    }
+    const auto unit = std::ranges::find(
+        semantic_design.systemverilog_hir.units(), scope_record->unit,
+        &semantic::sv::Unit::id);
+    if (unit == semantic_design.systemverilog_hir.units().end()) {
+        return;
+    }
     for (const auto& declaration :
-        specialized_hir_unit_->design().systemverilog_hir.declarations()) {
-        if (declaration.scope != scope
-            || (declaration.form != semantic::sv::DeclarationForm::parameter
-                && declaration.form
-                    != semantic::sv::DeclarationForm::local_parameter)) {
+        semantic_design.systemverilog_hir.declarations()) {
+        const bool callable_scope_parameter
+            = declaration.scope == scope
+            && (declaration.form
+                    == semantic::sv::DeclarationForm::parameter
+                || declaration.form
+                    == semantic::sv::DeclarationForm::local_parameter);
+        const bool unit_parameter
+            = parent_generated_owner_proven
+            && declaration.scope == unit->scope
+            && declaration.form
+                == semantic::sv::DeclarationForm::parameter;
+        if (!callable_scope_parameter && !unit_parameter) {
             continue;
         }
         const auto found = std::ranges::find(target->parameter_values,

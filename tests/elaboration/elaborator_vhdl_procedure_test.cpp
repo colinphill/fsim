@@ -320,6 +320,156 @@ end architecture;
     assert(has_diagnostic(
         illegal_call_result, "FSIM-ELAB-VHPROC-018"));
 
+    const auto wrong_slice_class = fsim::frontend::parse_text(
+        "variable-in-slice-class.vhd",
+        R"(
+entity variable_in_slice_class is
+end entity;
+architecture sim of variable_in_slice_class is
+  subtype bit_vector_4 is bit_vector(0 to 3);
+  signal signal_source : bit_vector(0 to 7) := B"1010_1100";
+  procedure consume(variable value : in bit_vector_4) is
+  begin
+    null;
+  end procedure;
+begin
+  process
+  begin
+    consume(signal_source(0 to 3));
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl1993);
+    assert(wrong_slice_class.ok());
+    const auto wrong_slice_class_result = compile_and_elaborate(
+        wrong_slice_class.design,
+        "vhdl:work.variable_in_slice_class(sim)");
+    assert(!wrong_slice_class_result.ok());
+    assert(has_diagnostic(
+        wrong_slice_class_result, "FSIM-ELAB-VHPROC-018"));
+
+    const auto wrong_slice_extent = fsim::frontend::parse_text(
+        "variable-in-slice-wrong-extent.vhd",
+        R"(
+entity variable_in_slice_wrong_extent is
+end entity;
+architecture sim of variable_in_slice_wrong_extent is
+  subtype bit_vector_4 is bit_vector(0 to 3);
+  procedure consume(constant value : in bit_vector_4) is
+  begin
+    null;
+  end procedure;
+begin
+  process
+    variable variable_source : bit_vector(0 to 7) := B"1010_1100";
+  begin
+    consume(variable_source(0 to 2));
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl1993);
+    assert(wrong_slice_extent.ok());
+    const auto wrong_slice_extent_result = compile_and_elaborate(
+        wrong_slice_extent.design,
+        "vhdl:work.variable_in_slice_wrong_extent(sim)");
+    assert(!wrong_slice_extent_result.ok());
+    assert(has_diagnostic(
+        wrong_slice_extent_result, "FSIM-ELAB-VHOVER-005"));
+
+    const auto wrong_slice_nominal_type = fsim::frontend::parse_text(
+        "variable-in-slice-wrong-nominal-type.vhd",
+        R"(
+entity variable_in_slice_wrong_nominal_type is
+end entity;
+architecture sim of variable_in_slice_wrong_nominal_type is
+  subtype bit_vector_4 is bit_vector(0 to 3);
+  type distinct_vector is array (natural range <>) of bit;
+  subtype distinct_vector_8 is distinct_vector(0 to 7);
+  procedure consume(constant value : in bit_vector_4) is
+  begin
+    null;
+  end procedure;
+begin
+  process
+    constant distinct_source : distinct_vector_8 := (others => '0');
+  begin
+    consume(distinct_source(0 to 3));
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl1993);
+    assert(wrong_slice_nominal_type.ok());
+    const auto wrong_slice_nominal_type_result = compile_and_elaborate(
+        wrong_slice_nominal_type.design,
+        "vhdl:work.variable_in_slice_wrong_nominal_type(sim)");
+    assert(!wrong_slice_nominal_type_result.ok());
+    assert(has_diagnostic(
+        wrong_slice_nominal_type_result, "FSIM-ELAB-VHOVER-005"));
+
+    const auto null_slice = fsim::frontend::parse_text(
+        "variable-in-null-slice.vhd",
+        R"(
+entity variable_in_null_slice is
+end entity;
+architecture sim of variable_in_null_slice is
+  subtype bit_vector_4 is bit_vector(0 to 3);
+  subtype bit_vector_8 is bit_vector(0 to 7);
+  procedure consume(constant value : in bit_vector_4) is
+  begin
+    null;
+  end procedure;
+begin
+  process
+    variable variable_source : bit_vector_8 := B"1010_1100";
+  begin
+    -- This is a null range. Its endpoint distance must not be mistaken for
+    -- a non-null extent that happens to match the formal width.
+    consume(variable_source(3 to 0));
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl1993);
+    assert(null_slice.ok());
+    const auto null_slice_result = compile_and_elaborate(
+        null_slice.design, "vhdl:work.variable_in_null_slice(sim)");
+    assert(!null_slice_result.ok());
+    assert(has_diagnostic(null_slice_result, "FSIM-ELAB-VHOVER-005"));
+
+    const auto open_without_default = fsim::frontend::parse_text(
+        "open-variable-without-default.vhd",
+        R"(
+entity open_without_default is
+end entity;
+architecture rtl of open_without_default is
+  procedure consume(variable value : in integer) is
+  begin
+    null;
+  end procedure;
+begin
+  process
+  begin
+    consume(open);
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(open_without_default.ok());
+    const auto open_without_default_result = compile_and_elaborate(
+        open_without_default.design,
+        "vhdl:work.open_without_default(rtl)");
+    assert(!open_without_default_result.ok());
+    assert(has_diagnostic(
+        open_without_default_result, "FSIM-ELAB-VHOVER-005"));
+
     const auto recursive = fsim::frontend::parse_text(
         "recursive-procedure-actual.vhd",
         R"(

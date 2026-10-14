@@ -20,6 +20,8 @@ int main(const int argc, const char* const* argv)
             }
             if (selection == "region_graph") {
                 test_region_graph();
+            } else if (selection == "text_files") {
+                test_simir_text_files();
             } else if (selection == "byte_strings") {
                 test_systemverilog_byte_strings();
             } else if (selection == "vhdl_matching_equality") {

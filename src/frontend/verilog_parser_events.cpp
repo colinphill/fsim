@@ -32,6 +32,7 @@ std::vector<Sensitivity> VerilogParser::parse_sensitivity() {
     return sensitivities;
   }
   if (at(TokenKind::Identifier) && !at(TokenKind::LeftParen, 1)) {
+    const auto source_order = systemverilog_source_order();
     const auto signal = advance();
     std::string signal_name = signal.text;
     while (match(TokenKind::Dot)) {
@@ -47,7 +48,8 @@ std::vector<Sensitivity> VerilogParser::parse_sensitivity() {
     }
     sensitivities.push_back(
         Sensitivity{
-            EdgeKind::Any, std::move(signal_name), signal.span, {}});
+            EdgeKind::Any, std::move(signal_name), signal.span, {},
+            source_order});
     return sensitivities;
   }
   expect(TokenKind::LeftParen, "'(' after '@'", "FSIM-SV-PARSE-014");
@@ -82,6 +84,8 @@ std::vector<Sensitivity> VerilogParser::parse_sensitivity() {
       Sensitivity rising;
       rising.edge = EdgeKind::Positive;
       rising.span = expression.span;
+      rising.systemverilog_source_order
+          = expression.systemverilog_source_order;
       Sensitivity falling = rising;
       falling.edge = EdgeKind::Negative;
       if (expression.kind == ExpressionKind::Identifier) {
@@ -101,9 +105,18 @@ std::vector<Sensitivity> VerilogParser::parse_sensitivity() {
     Sensitivity sensitivity;
     sensitivity.edge = edge;
     sensitivity.span = expression.span;
+    sensitivity.systemverilog_source_order
+        = expression.systemverilog_source_order;
     if (expression.kind == ExpressionKind::Identifier) {
       sensitivity.signal = expression.text;
-      if (sensitivity.signal.find('.') == std::string::npos) {
+      // A package-scoped event is not an implicit module net. Keep escaped
+      // identifiers opaque even if their spelling contains a double colon.
+      const bool has_package_scope =
+          sensitivity.signal.find("::") != std::string::npos
+          && (sensitivity.signal.empty()
+              || sensitivity.signal.front() != '\\');
+      if (sensitivity.signal.find('.') == std::string::npos
+          && !has_package_scope) {
         const auto saved_context = std::exchange(implicit_net_context_, true);
         note_implicit_net_reference(Token{
             TokenKind::Identifier,

@@ -2617,6 +2617,59 @@ endmodule
                    return diagnostic.code == "FSIM-SV-SEM-075";
                })
         == 2);
+    const auto invalid_real_bits = fsim::frontend::parse_text(
+        "invalid-real-bits.sv",
+        R"(module invalid_real_bits;
+  timeunit 1ns;
+  timeprecision 1ps;
+  typedef real real_alias_t;
+  real real_value;
+  shortreal shortreal_value;
+  realtime realtime_value;
+  real_alias_t alias_value;
+  int result;
+  initial begin
+    result = $bits(1.0);
+    result = $bits(real_value);
+    result = $bits(shortreal_value);
+    result = $bits(realtime_value);
+    result = $bits(alias_value);
+    result = $bits(real_value + 1.0);
+    result = $bits(1ns);
+    result = $bits(real_value < 1.0);
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_real_bits.ok());
+    const auto rejected_real_bits = compile_and_elaborate(
+        invalid_real_bits.design, "invalid_real_bits");
+    assert(!rejected_real_bits.ok());
+    assert(std::ranges::count_if(
+               rejected_real_bits.diagnostics,
+               [](const auto& diagnostic) {
+                   return diagnostic.code == "FSIM-ELAB-SVQUERY-005";
+               })
+        == 7);
+    const auto valid_integral_bits = fsim::frontend::parse_text(
+        "valid-integral-bits.sv",
+        R"(module valid_integral_bits;
+  time time_value;
+  logic [7:0] logic_value;
+  real real_value;
+  int result;
+  initial begin
+    result = $bits(time_value);
+    result = $bits(logic_value);
+    result = $bits(real_value != 0.0);
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(valid_integral_bits.ok());
+    assert(compile_and_elaborate(
+               valid_integral_bits.design, "valid_integral_bits")
+               .ok());
     assert(has_diagnostic(
         rejected_dynamic_ports, "FSIM-ELAB-SVPATTERN-001"));
     assert(has_diagnostic(

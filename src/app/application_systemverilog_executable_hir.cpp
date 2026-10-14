@@ -105,14 +105,15 @@ namespace {
             return model_.scopes()[scope.value()].unit;
         }
 
-        void append_imported_name_candidates(
+        [[nodiscard]] bool append_imported_name_candidates(
             sv::Name& result,
-            const semantic::ScopeId scope) const
+            const semantic::ScopeId scope,
+            const std::uint64_t source_order) const
         {
             const auto owner = std::ranges::find(
                 hir_.units(), scope_unit(scope), &sv::Unit::id);
             if (owner == hir_.units().end()) {
-                return;
+                return false;
             }
             const auto append_declarations
                 = [&](const std::string_view package_name,
@@ -146,28 +147,50 @@ namespace {
                         0U, qualifier),
                     std::string_view { result.spelling }.substr(
                         qualifier + 2U));
-                return;
+                return true;
             }
 
-            bool explicitly_imported { };
-            for (const auto& import : owner->imports) {
-                if (import.wildcard || !import.member
-                    || import.member->spelling != result.spelling) {
-                    continue;
-                }
-                explicitly_imported = true;
-                append_declarations(
-                    import.package.spelling, result.spelling);
-            }
-            if (explicitly_imported) {
-                return;
-            }
-            for (const auto& import : owner->imports) {
-                if (import.wildcard) {
+            const auto visible_at_use = [&](const sv::Import& import) {
+                return source_order == 0U || import.source_order == 0U
+                    || import.source_order < source_order;
+            };
+            const auto imports_at_this_scope = [&](const auto& imports) {
+                bool explicit_import { };
+                for (const auto& import : imports) {
+                    if (!visible_at_use(import)) {
+                        continue;
+                    }
+                    if (import.wildcard || !import.member
+                        || import.member->spelling != result.spelling) {
+                        continue;
+                    }
+                    explicit_import = true;
                     append_declarations(
                         import.package.spelling, result.spelling);
                 }
+                if (explicit_import) {
+                    return true;
+                }
+                const auto before = result.overloads.size();
+                for (const auto& import : imports) {
+                    if (visible_at_use(import) && import.wildcard) {
+                        append_declarations(
+                            import.package.spelling, result.spelling);
+                    }
+                }
+                return result.overloads.size() != before;
+            };
+
+            const auto block = block_imports_.find(scope);
+            if (block != block_imports_.end()
+                && imports_at_this_scope(block->second)) {
+                return true;
             }
+            if (owner->scope == scope
+                && imports_at_this_scope(owner->imports)) {
+                return true;
+            }
+            return false;
         }
 
         [[nodiscard]] bool genvar_scope(
@@ -208,9 +231,11 @@ namespace {
         [[nodiscard]] sv::Name name(
             const std::string_view spelling,
             const frontend::SourceSpan& span,
-            const semantic::ScopeId scope)
+            const semantic::ScopeId scope,
+            const std::uint64_t source_order = 0U)
         {
             sv::Name result { std::string { spelling }, source(span), std::nullopt, { } };
+            result.source_order = source_order;
             auto visible_scope = std::optional<semantic::ScopeId> { scope };
             while (visible_scope) {
                 for (const auto& declaration : hir_.declarations()) {
@@ -227,10 +252,11 @@ namespace {
                 if (genvar_scope(*visible_scope, spelling)) {
                     return result;
                 }
+                if (append_imported_name_candidates(
+                        result, *visible_scope, source_order)) {
+                    break;
+                }
                 visible_scope = parent_scope(*visible_scope);
-            }
-            if (result.overloads.empty()) {
-                append_imported_name_candidates(result, scope);
             }
             if (result.overloads.size() == 1) {
                 result.selected = result.overloads.front();
@@ -463,6 +489,175 @@ namespace {
             output.referenced_name.reset();
         }
 
+        void bind_implicit_class_property(
+            sv::Expression& output,
+            const frontend::Expression& input,
+            const semantic::ScopeId scope,
+            const semantic::OriginId parent)
+        {
+            if (output.kind != sv::ExpressionKind::name
+                || (output.referenced_name
+                    && output.referenced_name->selected)) {
+                return;
+            }
+            const auto dot = input.text.rfind('.');
+            if (dot == std::string::npos || dot == 0U
+                || dot + 1U >= input.text.size()
+                || input.text.substr(0U, dot).find('.')
+                    != std::string::npos) {
+                return;
+            }
+            frontend::Expression receiver_input {
+                frontend::ExpressionKind::Identifier,
+                input.text.substr(0U, dot), { }, input.span
+            };
+            if (receiver_input.span.end.offset
+                    >= receiver_input.span.begin.offset
+                && dot <= receiver_input.span.end.offset
+                        - receiver_input.span.begin.offset) {
+                receiver_input.span.end.offset
+                    = receiver_input.span.begin.offset + dot;
+                if (receiver_input.span.end.line
+                    == receiver_input.span.begin.line) {
+                    receiver_input.span.end.column
+                        = receiver_input.span.begin.column + dot;
+                }
+            }
+            const auto receiver_id = expression(
+                receiver_input, scope, parent);
+            if (!receiver_id) {
+                return;
+            }
+            const auto receiver = std::ranges::find(
+                hir_.expressions(), *receiver_id, &sv::Expression::id);
+            if (receiver == hir_.expressions().end()
+                || !receiver->referenced_name
+                || !receiver->referenced_name->selected) {
+                return;
+            }
+            const auto object = std::ranges::find(
+                hir_.declarations(), *receiver->referenced_name->selected,
+                &sv::Declaration::id);
+            if (object == hir_.declarations().end() || !object->type) {
+                return;
+            }
+            const auto identity = !object->type->class_identity.empty()
+                ? std::string_view { object->type->class_identity }
+                : std::string_view { object->type->target.spelling };
+            const auto* declaration = visible_class(identity, scope);
+            if (declaration == nullptr) {
+                return;
+            }
+            const auto member = std::string_view { input.text }.substr(
+                dot + 1U);
+            const auto property = std::ranges::find_if(
+                declaration->properties,
+                [&](const sv::ClassProperty& candidate) {
+                    return candidate.name == member
+                        && !candidate.static_storage
+                        && candidate.visibility
+                            == sv::ClassVisibility::public_access;
+                });
+            if (property == declaration->properties.end()
+                || std::ranges::any_of(
+                    std::next(property), declaration->properties.end(),
+                    [&](const sv::ClassProperty& candidate) {
+                        return candidate.name == member
+                            && !candidate.static_storage
+                            && candidate.visibility
+                                == sv::ClassVisibility::public_access;
+                    })) {
+                return;
+            }
+            output.kind = sv::ExpressionKind::class_property;
+            output.text = "@sv-property:" + property->canonical_identity;
+            output.class_identity = declaration->canonical_identity;
+            output.class_member_identity = property->canonical_identity;
+            output.class_checked = true;
+            output.referenced_name.reset();
+            output.operands = { *receiver_id };
+        }
+
+        [[nodiscard]] std::optional<semantic::ExpressionId>
+        bind_implicit_class_task_call(
+            sv::Statement& output,
+            const frontend::Statement& input,
+            const semantic::ScopeId scope,
+            const semantic::OriginId parent)
+        {
+            if (input.kind != frontend::StatementKind::TaskCall
+                || input.task_name.empty()
+                || input.task_name.front() == '$'
+                || input.task_name.front() == '@') {
+                return std::nullopt;
+            }
+            const auto dot = input.task_name.rfind('.');
+            if (dot == std::string::npos || dot == 0U
+                || dot + 1U >= input.task_name.size()
+                || input.task_name.substr(0U, dot).find('.')
+                    != std::string::npos) {
+                return std::nullopt;
+            }
+            frontend::Expression receiver_input {
+                frontend::ExpressionKind::Identifier,
+                input.task_name.substr(0U, dot), { }, input.span
+            };
+            const auto receiver_id = expression(
+                receiver_input, scope, parent);
+            if (!receiver_id) {
+                return std::nullopt;
+            }
+            const auto receiver = std::ranges::find(
+                hir_.expressions(), *receiver_id, &sv::Expression::id);
+            if (receiver == hir_.expressions().end()
+                || !receiver->referenced_name
+                || !receiver->referenced_name->selected) {
+                return std::nullopt;
+            }
+            const auto object = std::ranges::find(
+                hir_.declarations(), *receiver->referenced_name->selected,
+                &sv::Declaration::id);
+            if (object == hir_.declarations().end() || !object->type) {
+                return std::nullopt;
+            }
+            const auto identity = !object->type->class_identity.empty()
+                ? std::string_view { object->type->class_identity }
+                : std::string_view { object->type->target.spelling };
+            const auto* declaration = visible_class(identity, scope);
+            if (declaration == nullptr) {
+                return std::nullopt;
+            }
+            const auto member = std::string_view { input.task_name }.substr(
+                dot + 1U);
+            const auto method = std::ranges::find_if(
+                declaration->methods,
+                [&](const sv::ClassMethod& candidate) {
+                    return candidate.name == member
+                        && candidate.kind == sv::ClassMethodKind::task
+                        && !candidate.static_method
+                        && candidate.visibility
+                            == sv::ClassVisibility::public_access;
+                });
+            if (method == declaration->methods.end()
+                || std::ranges::any_of(
+                    std::next(method), declaration->methods.end(),
+                    [&](const sv::ClassMethod& candidate) {
+                        return candidate.name == member
+                            && candidate.kind == sv::ClassMethodKind::task
+                            && !candidate.static_method
+                            && candidate.visibility
+                                == sv::ClassVisibility::public_access;
+                    })) {
+                return std::nullopt;
+            }
+            output.task = sv::Name {
+                "@sv-task:" + method->canonical_identity,
+                source(input.span), method->declaration,
+                { method->declaration }
+            };
+            return receiver_id;
+        }
+
         [[nodiscard]] std::optional<semantic::ExpressionId> expression(
             const frontend::Expression& input,
             const semantic::ScopeId scope,
@@ -597,14 +792,17 @@ namespace {
             if (input.kind == frontend::ExpressionKind::Identifier
                 || (input.kind == frontend::ExpressionKind::Call
                     && !input.text.starts_with("@sv-"))) {
-                output.referenced_name = name(input.text, input.span, scope);
+                output.referenced_name = name(
+                    input.text, input.span, scope,
+                    input.systemverilog_source_order);
             } else if (input.kind == frontend::ExpressionKind::Call
                 && input.text.starts_with("@sv-cast:")) {
                 output.referenced_name = name(
                     input.text.substr(
                         std::string_view { "@sv-cast:" }.size()),
                     input.span,
-                    scope);
+                    scope,
+                    input.systemverilog_source_order);
             }
             // A function named without parentheses is a call with no
             // arguments (IEEE 1800-2017 13.4.1), except inside its own body,
@@ -665,6 +863,8 @@ namespace {
                 }
             }
             bind_implicit_class_method(output);
+            bind_implicit_class_property(
+                output, input, scope, expression_origin);
             if (input.kind == frontend::ExpressionKind::Aggregate) {
                 for (std::size_t index = 0; index < output.operands.size(); ++index) {
                     sv::AssignmentPatternAssociation association;
@@ -790,7 +990,8 @@ namespace {
                 edge_kind(input.edge),
                 input.signal,
                 expression(input.expression, scope, parent),
-                source(input.span)
+                source(input.span),
+                input.systemverilog_source_order
             };
         }
 
@@ -1007,10 +1208,67 @@ namespace {
 
         [[nodiscard]] semantic::TypeId find_type(
             const semantic::ScopeId scope,
-            const std::string_view spelling) const noexcept
+            const std::string_view spelling,
+            const std::uint64_t source_order = 0U) const noexcept
         {
+            auto visible_scope = std::optional { scope };
+            while (visible_scope) {
+                const auto local = std::ranges::find_if(
+                    model_.types(), [&](const semantic::Type& type) {
+                        return type.scope == *visible_scope
+                            && type.name == spelling;
+                    });
+                if (local != model_.types().end()) {
+                    return local->id;
+                }
+
+                const auto block = block_imports_.find(*visible_scope);
+                if (block != block_imports_.end()) {
+                    const auto resolve_imports = [&](const bool explicit_only) {
+                        std::vector<semantic::TypeId> candidates;
+                        bool explicit_import { };
+                        for (const auto& import : block->second) {
+                            if (source_order != 0U
+                                && import.source_order != 0U
+                                && import.source_order >= source_order) {
+                                continue;
+                            }
+                            if (explicit_only
+                                ? !import.member
+                                    || import.member->spelling != spelling
+                                : !import.wildcard) {
+                                continue;
+                            }
+                            explicit_import = explicit_import || explicit_only;
+                            const auto qualified = import.package.spelling
+                                + "::" + std::string { spelling };
+                            const auto selected
+                                = systemverilog_hir_detail::find_systemverilog_hir_type(
+                                    model_, hir_, *visible_scope, qualified);
+                            if (selected.valid()
+                                && std::ranges::find(candidates, selected)
+                                    == candidates.end()) {
+                                candidates.push_back(selected);
+                            }
+                        }
+                        return std::pair {
+                            std::move(candidates), explicit_import };
+                    };
+                    auto [candidates, explicit_import]
+                        = resolve_imports(true);
+                    if (!explicit_import) {
+                        candidates = resolve_imports(false).first;
+                    }
+                    if (explicit_import || !candidates.empty()) {
+                        return candidates.size() == 1U
+                            ? candidates.front()
+                            : semantic::TypeId { };
+                    }
+                }
+                visible_scope = parent_scope(*visible_scope);
+            }
             return systemverilog_hir_detail::find_systemverilog_hir_type(
-                model_, hir_, scope, spelling);
+                model_, hir_, scope, spelling, source_order);
         }
 
         [[nodiscard]] sv::TypeReference type_reference(
@@ -1023,9 +1281,12 @@ namespace {
                 ? input.spelling
                 : input.named_type;
             sv::TypeReference output;
+            output.source_order = input.systemverilog_source_order;
             output.target = {
                 input.named_type.empty() ? semantic::TypeId { }
-                                         : find_type(scope, input.named_type),
+                                         : find_type(
+                                               scope, input.named_type,
+                                               input.systemverilog_source_order),
                 source(input.named_type.empty() ? fallback : input.named_type_span),
                 spelling
             };
@@ -1257,7 +1518,8 @@ namespace {
             if (input.kind == frontend::StatementKind::Block
                 || input.kind == frontend::StatementKind::Fork
                 || declares_loop_variable
-                || !input.declarations.empty()) {
+                || !input.declarations.empty()
+                || !input.systemverilog_imports.empty()) {
                 const auto scope_name = input.label.empty()
                     ? (input.kind == frontend::StatementKind::Fork
                               ? "<fork>"
@@ -1269,6 +1531,30 @@ namespace {
                     scope_unit(enclosing_scope), enclosing_scope, scope_name,
                     statement_source, statement_origin);
                 output.nested_scope = child_scope;
+                if (!input.systemverilog_imports.empty()) {
+                    auto& imports = block_imports_[child_scope];
+                    imports.reserve(input.systemverilog_imports.size());
+                    for (const auto& input_import
+                        : input.systemverilog_imports) {
+                        sv::Import converted {
+                            name(input_import.package, input_import.span,
+                                child_scope,
+                                input_import.systemverilog_source_order),
+                            input_import.name.empty()
+                                ? std::nullopt
+                                : std::optional<sv::Name> { name(
+                                      input_import.name, input_import.span,
+                                      child_scope,
+                                      input_import.systemverilog_source_order) },
+                            input_import.name.empty(),
+                            source(input_import.span),
+                        };
+                        converted.source_order
+                            = input_import.systemverilog_source_order;
+                        imports.push_back(converted);
+                        output.imports.push_back(std::move(converted));
+                    }
+                }
                 for (const auto& declaration : input.declarations) {
                     output.declarations.push_back(block_variable(
                         declaration, child_scope, statement_origin));
@@ -1299,7 +1585,12 @@ namespace {
             output.value = expression(input.value, child_scope, statement_origin);
             output.condition = expression(
                 input.condition, child_scope, statement_origin);
-            output.task = name(input.task_name, input.span, child_scope);
+            output.task = name(
+                input.task_name, input.span, child_scope,
+                input.systemverilog_source_order);
+            const auto implicit_class_receiver
+                = bind_implicit_class_task_call(
+                    output, input, child_scope, statement_origin);
             // A function called as a statement (IEEE 1800-2017 13.4.1)
             // discards its result; it lowers like `void'(f(...))`.
             const bool function_statement
@@ -1320,6 +1611,8 @@ namespace {
                 call.kind = frontend::ExpressionKind::Call;
                 call.text = input.task_name;
                 call.span = input.span;
+                call.systemverilog_source_order
+                    = input.systemverilog_source_order;
                 for (const auto& argument : input.task_arguments) {
                     call.operands.push_back(argument);
                 }
@@ -1342,6 +1635,14 @@ namespace {
                     ? source(argument.span)
                     : statement_source;
                 output.task_arguments.push_back(std::move(association));
+            }
+            if (implicit_class_receiver) {
+                output.task_arguments.insert(
+                    output.task_arguments.begin(),
+                    sv::TaskAssociation {
+                        std::nullopt, *implicit_class_receiver,
+                        statement_source
+                    });
             }
             output.loop_variable = input.loop_variable;
             output.loop_variable_declared = input.loop_variable_declared;
@@ -2021,14 +2322,15 @@ namespace {
                         genvar = true;
                         break;
                     }
+                    if (append_imported_name_candidates(
+                            *item.referenced_name, *visible_scope,
+                            item.referenced_name->source_order)) {
+                        break;
+                    }
                     visible_scope = parent_scope(*visible_scope);
                 }
                 if (genvar) {
                     continue;
-                }
-                if (item.referenced_name->overloads.empty()) {
-                    append_imported_name_candidates(
-                        *item.referenced_name, item.scope);
                 }
                 if (item.referenced_name->overloads.size() == 1) {
                     item.referenced_name->selected = item.referenced_name->overloads.front();
@@ -2038,6 +2340,7 @@ namespace {
 
         semantic::Model& model_;
         sv::Hir& hir_;
+        std::map<semantic::ScopeId, std::vector<sv::Import>> block_imports_;
         std::optional<std::map<semantic::ScopeId, std::string>> genvar_scopes_;
         std::set<std::uint32_t> claimed_expressions_;
         std::optional<ExpressionCandidateIndex> expression_identity_candidate_index_;

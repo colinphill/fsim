@@ -2,10 +2,12 @@
 #include "fsim/frontend/frontend.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <ranges>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace fsim::tests::frontend {
 
@@ -497,6 +499,37 @@ endmodule
             && has_code(pattern_in_verilog, "FSIM-SV-PARSE-347"),
         "Verilog-2005 rejects SystemVerilog assignment and pattern forms exactly");
 
+    const auto require_port_slots = [](
+        const std::string_view source,
+        const std::vector<std::optional<std::string>>& expected) {
+        const auto parsed = parse_verilog(
+            SourceText { "empty-port-slots.sv", std::string { source } },
+            StandardRevision::SystemVerilog2017);
+        require(parsed.ok() && parsed.design.units.size() == 1U
+                && parsed.design.units.front().systemverilog_port_slots
+                && *parsed.design.units.front().systemverilog_port_slots
+                    == expected,
+            "non-ANSI empty port slots preserve one position per list item");
+    };
+    require_port_slots(
+        "module adjacent_slots(a,,b); input a; input b; endmodule\n",
+        { std::string { "a" }, std::nullopt, std::string { "b" } });
+    require_port_slots(
+        "module leading_slots(,,a); input a; endmodule\n",
+        { std::nullopt, std::nullopt, std::string { "a" } });
+    require_port_slots(
+        "module adjacent_and_trailing_slots(a,,); input a; endmodule\n",
+        { std::string { "a" }, std::nullopt, std::nullopt });
+    require_port_slots(
+        "module trailing_slot(a,); input a; endmodule\n",
+        { std::string { "a" }, std::nullopt });
+    require_port_slots(
+        "module two_empty_slots(,); endmodule\n",
+        { std::nullopt, std::nullopt });
+    require_port_slots(
+        "module three_empty_slots(,,); endmodule\n",
+        { std::nullopt, std::nullopt, std::nullopt });
+
     const auto unique0_in_2005 = parse_verilog(
         SourceText {
             "unique0-in-2005.sv",
@@ -947,6 +980,142 @@ endmodule
         !reserved_identifier.ok()
             && has_code(reserved_identifier, "FSIM-SV-PARSE-001"),
         "CF-SV-DECL-N02 unescaped reserved identifier is rejected");
+}
+
+void test_systemverilog_block_wildcard_import_visibility()
+{
+    constexpr std::string_view package = R"(
+package b58_import_visibility_pkg;
+  parameter int item = 1;
+  typedef logic [2:0] imported_type_t;
+  function automatic int helper();
+    return 1;
+  endfunction
+endpackage
+)";
+    const auto later_local = parse_text(
+        "wildcard-import-late-local.sv",
+        std::string { package }
+            + R"(
+module wildcard_import_late_local;
+  import b58_import_visibility_pkg::*;
+  initial begin
+    if (item != 1) $display("unreachable");
+  end
+  integer item;
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(
+        !later_local.ok()
+            && has_code(later_local, "FSIM-SV-SEM-421"),
+        "a wildcard-imported reference conflicts with a later same-scope local declaration");
+
+    const auto later_type = parse_text(
+        "wildcard-import-late-type.sv",
+        std::string { package }
+            + R"(
+module wildcard_import_late_type;
+  import b58_import_visibility_pkg::*;
+  initial begin
+    imported_type_t value;
+  end
+  typedef logic imported_type_t;
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(
+        !later_type.ok()
+            && has_code(later_type, "FSIM-SV-SEM-421"),
+        "a wildcard-imported type used before a later same-scope typedef is rejected");
+
+    const auto earlier_local = parse_text(
+        "wildcard-import-earlier-local.sv",
+        std::string { package }
+            + R"(
+module wildcard_import_earlier_local;
+  import b58_import_visibility_pkg::*;
+  integer item;
+  initial begin
+    if (item != 0) $display("unreachable");
+  end
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(
+        earlier_local.ok(),
+        "a same-scope local declaration already visible at the reference is not a wildcard-import collision");
+
+    const auto unreferenced = parse_text(
+        "wildcard-import-unreferenced.sv",
+        std::string { package }
+            + R"(
+module wildcard_import_unreferenced;
+  import b58_import_visibility_pkg::*;
+  integer item;
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(
+        unreferenced.ok(),
+        "an unused wildcard import does not make its package names locally visible");
+
+    const auto later_function = parse_text(
+        "wildcard-import-later-function.sv",
+        std::string { package }
+            + R"(
+module wildcard_import_later_function;
+  import b58_import_visibility_pkg::*;
+  initial begin
+    helper();
+  end
+  function automatic int helper();
+    return 2;
+  endfunction
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(
+        later_function.ok(),
+        "function calls resolve through the complete local declaration scope and do not trigger the wildcard-import late-declaration rule");
+
+    const auto block_import_in_verilog = parse_verilog(
+        SourceText {
+            "block-import-in-verilog-2001.v",
+            "module block_import_in_verilog; initial begin "
+            "import p::*; end endmodule\n" },
+        StandardRevision::Verilog2001);
+    const auto import_identifier_in_verilog = parse_verilog(
+        SourceText {
+            "import-identifier-in-verilog-2001.v",
+            "module import_identifier_in_verilog; reg import; "
+            "initial import = 1; endmodule\n" },
+        StandardRevision::Verilog2001);
+    require(
+        !block_import_in_verilog.ok()
+            && has_code(block_import_in_verilog, "FSIM-SV-PARSE-348"),
+        "procedural package imports remain gated to SystemVerilog revisions");
+    require(
+        import_identifier_in_verilog.ok(),
+        "the SystemVerilog-only import keyword remains an identifier in Verilog-2001");
+
+    const auto late_block_import = parse_text(
+        "wildcard-import-after-statement.sv",
+        std::string { package }
+            + R"(
+module wildcard_import_after_statement;
+  initial begin
+    integer local_value;
+    local_value = 1;
+    import b58_import_visibility_pkg::*;
+  end
+endmodule
+)",
+        Language::SystemVerilog2017);
+    require(
+        !late_block_import.ok()
+            && has_code(late_block_import, "FSIM-SV-PARSE-001"),
+        "a block import must remain within the block declaration portion");
 }
 
 void test_systemverilog_2023_profile_isolation()

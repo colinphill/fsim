@@ -3,6 +3,65 @@
 #include "fsim/frontend/systemverilog_standard_package.hpp"
 
 namespace fsim::frontend {
+namespace {
+
+bool same_port_bound_expression(
+    const Expression& left, const Expression& right)
+{
+  if (left.kind != right.kind || left.text != right.text
+      || left.nominal_type != right.nominal_type
+      || left.operands.size() != right.operands.size()
+      || left.aggregate_choices != right.aggregate_choices
+      || left.aggregate_choice_expressions.size()
+          != right.aggregate_choice_expressions.size()
+      || left.decoded_string != right.decoded_string
+      || left.call_argument_names != right.call_argument_names
+      || left.call_argument_directions != right.call_argument_directions
+      || left.call_result_width != right.call_result_width
+      || left.call_result_domain != right.call_result_domain
+      || left.call_result_signed != right.call_result_signed
+      || left.systemverilog_scalar_kind
+          != right.systemverilog_scalar_kind
+      || left.generated_text != right.generated_text
+      || left.systemverilog_decimal_literal.has_value()
+          != right.systemverilog_decimal_literal.has_value()) {
+    return false;
+  }
+  if (left.systemverilog_decimal_literal
+      && (left.systemverilog_decimal_literal->kind
+              != right.systemverilog_decimal_literal->kind
+          || left.systemverilog_decimal_literal->digits
+              != right.systemverilog_decimal_literal->digits
+          || left.systemverilog_decimal_literal->decimal_exponent
+              != right.systemverilog_decimal_literal->decimal_exponent
+          || left.systemverilog_decimal_literal->time_unit
+              != right.systemverilog_decimal_literal->time_unit)) {
+    return false;
+  }
+  for (std::size_t index = 0; index < left.operands.size(); ++index) {
+    if (!same_port_bound_expression(
+            left.operands[index], right.operands[index])) {
+      return false;
+    }
+  }
+  for (std::size_t index = 0;
+       index < left.aggregate_choice_expressions.size(); ++index) {
+    const auto& left_choices = left.aggregate_choice_expressions[index];
+    const auto& right_choices = right.aggregate_choice_expressions[index];
+    if (left_choices.size() != right_choices.size()) {
+      return false;
+    }
+    for (std::size_t choice = 0; choice < left_choices.size(); ++choice) {
+      if (!same_port_bound_expression(
+              left_choices[choice], right_choices[choice])) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+}  // namespace
 
 void VerilogParser::parse_parameter_overrides(
   Instance& instance,
@@ -91,14 +150,47 @@ void VerilogParser::parse_parameter_overrides(
 }
 
 void VerilogParser::parse_module_ports(DesignUnit& unit) {
+  unit.systemverilog_port_slots.emplace();
   VerilogTypeSpec inherited;
   bool have_inherited_type = false;
+  std::optional<bool> ansi_port_list;
+  std::optional<Token> first_empty_slot;
+  bool first_empty_ansi_error_reported = false;
+  const auto note_port_style = [&](const bool ansi, const Token&) {
+    if (!ansi_port_list) {
+      ansi_port_list = ansi;
+    }
+    if (ansi && first_empty_slot && !first_empty_ansi_error_reported) {
+      error(*first_empty_slot, "FSIM-SV-PARSE-001",
+          "an empty port slot is only valid in a non-ANSI port list");
+      first_empty_ansi_error_reported = true;
+    }
+  };
   while (!at_end() && !at(TokenKind::RightParen)) {
       if (verilog_attribute_instance_start()) {
           parse_verilog_attribute_instances();
           continue;
       }
-    if (at(TokenKind::Dot)) {
+    if (at(TokenKind::Comma)) {
+      const auto empty = current();
+      if (have_inherited_type || ansi_port_list.value_or(false)) {
+        error(empty, "FSIM-SV-PARSE-001",
+            "an empty port slot is only valid in a non-ANSI port list");
+        first_empty_ansi_error_reported = true;
+      }
+      if (!first_empty_slot) {
+        first_empty_slot = empty;
+      }
+      unit.systemverilog_port_slots->push_back(std::nullopt);
+      advance();
+      if (at(TokenKind::RightParen)) {
+        // The consumed comma separates this empty port from a trailing empty
+        // port, preserving both positions in a list such as `(, )`.
+        unit.systemverilog_port_slots->push_back(std::nullopt);
+        break;
+      }
+      continue;
+    } else if (at(TokenKind::Dot)) {
       const auto dot = advance();
       error(dot, "FSIM-SV-UNSUPPORTED-005",
             "named port connections are not valid in a module declaration");
@@ -113,6 +205,7 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
                && at(TokenKind::Identifier, 3))
               || at(TokenKind::Identifier, 1));
       if (explicit_generic_interface || typed_interface) {
+        note_port_style(true, current());
         const auto interface_start = current();
         (void)require_standard(
             "an interface-typed port",
@@ -134,6 +227,7 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
           }
         }
         const auto port_name = expect_identifier("interface port name");
+        unit.systemverilog_port_slots->push_back(port_name.text);
         Type port_type{ValueDomain::Unknown, "interface", std::nullopt, false};
         // An interface port array (IEEE 1800-2017 25.5): `[N]` is
         // `[0:N-1]`.
@@ -188,12 +282,21 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
         if (!match(TokenKind::Comma)) {
           break;
         }
+        if (at(TokenKind::RightParen)) {
+          const auto empty = previous();
+          error(empty, "FSIM-SV-PARSE-001",
+              "an empty port slot is only valid in a non-ANSI port list");
+          first_empty_ansi_error_reported = true;
+          unit.systemverilog_port_slots->push_back(std::nullopt);
+          break;
+        }
         continue;
       }
       VerilogTypeSpec spec = inherited;
       bool declared_here = false;
       if (is_direction_keyword()) {
         const auto direction_token = current();
+        note_port_style(true, direction_token);
         (void)require_standard(
             "an ANSI module-port declaration",
             StandardRevision::Verilog2001,
@@ -268,6 +371,9 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
       }
 
       const auto port_name = expect_identifier("port name");
+      const bool ansi_port = spec.direction != PortDirection::Unknown;
+      note_port_style(ansi_port, port_name);
+      unit.systemverilog_port_slots->push_back(port_name.text);
       SignalDeclaration declaration{
           port_name.text, spec.type, spec.direction, true, port_name.span};
       if (spec.direction == PortDirection::Unknown) {
@@ -304,11 +410,25 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
         }
       }
       if (at(TokenKind::LeftBracket)) {
-        (void)require_standard(
-            "an unpacked port dimension",
-            StandardRevision::SystemVerilog2005,
-            current());
-        (void)parse_optional_container_dimension(declaration.type);
+        if (ansi_port) {
+          (void)require_standard(
+              "an unpacked port dimension",
+              StandardRevision::SystemVerilog2005,
+              current());
+          (void)parse_optional_container_dimension(declaration.type);
+        } else {
+          const auto open = advance();
+          auto left = parse_expression();
+          Expression right = left;
+          if (match(TokenKind::Colon)) {
+            right = parse_expression();
+          }
+          expect(TokenKind::RightBracket,
+              "']' after non-ANSI port selection", "FSIM-SV-PARSE-006");
+          non_ansi_port_selections_.push_back({
+              port_name.text, std::move(left), std::move(right),
+              cover(open.span, previous().span)});
+        }
       }
       const auto duplicate = std::find_if(
           unit.ports.begin(),
@@ -341,6 +461,52 @@ void VerilogParser::parse_module_ports(DesignUnit& unit) {
 
     if (!match(TokenKind::Comma)) {
       break;
+    }
+    if (at(TokenKind::RightParen)) {
+      const auto empty = previous();
+      if (have_inherited_type || ansi_port_list.value_or(false)) {
+        error(empty, "FSIM-SV-PARSE-001",
+            "an empty port slot is only valid in a non-ANSI port list");
+        first_empty_ansi_error_reported = true;
+      }
+      if (!first_empty_slot) {
+        first_empty_slot = empty;
+      }
+      unit.systemverilog_port_slots->push_back(std::nullopt);
+      break;
+    }
+  }
+}
+
+void VerilogParser::validate_non_ansi_port_selections(
+    const DesignUnit& unit)
+{
+  for (const auto& selection : non_ansi_port_selections_) {
+    const auto port = std::ranges::find(
+        unit.ports, selection.port_name, &SignalDeclaration::name);
+    if (port == unit.ports.end() || !port->type.packed_range_expression
+        || !port->type.systemverilog_packed_dimensions.empty()) {
+      diagnostics_.push_back({
+          DiagnosticSeverity::Error,
+          "FSIM-SV-UNSUPPORTED-051",
+          "non-ANSI selected port '" + selection.port_name
+              + "' is supported only when its selection exactly matches one "
+                "declared packed range",
+          selection.span,
+          {}});
+      continue;
+    }
+    const auto& declared = *port->type.packed_range_expression;
+    if (!same_port_bound_expression(selection.left, declared.left)
+        || !same_port_bound_expression(selection.right, declared.right)) {
+      diagnostics_.push_back({
+          DiagnosticSeverity::Error,
+          "FSIM-SV-UNSUPPORTED-051",
+          "non-ANSI selected port '" + selection.port_name
+              + "' is supported only when its selection exactly matches the "
+                "declared packed range; partial selections are not lowered",
+          selection.span,
+          {}});
     }
   }
 }
@@ -699,6 +865,7 @@ void VerilogParser::require_default_port_net_type(
 }
 
 Type VerilogParser::parse_named_type() {
+  const auto source_order = systemverilog_source_order();
   const auto first =
       expect_identifier("SystemVerilog type name");
   std::string name = first.text;
@@ -719,7 +886,12 @@ Type VerilogParser::parse_named_type() {
   if (const auto local = block_typedef_types_.find(name);
       local != block_typedef_types_.end() && !at(TokenKind::Hash)
       && class_parse_depth_ == 0U) {
-    return local->second;
+    auto type = local->second;
+    type.systemverilog_source_order = source_order;
+    return type;
+  }
+  if (name == first.text) {
+    note_wildcard_import_type_reference(first);
   }
   Type type{
       ValueDomain::Unknown,
@@ -728,6 +900,7 @@ Type VerilogParser::parse_named_type() {
       false};
   type.named_type = name;
   type.named_type_span = span;
+  type.systemverilog_source_order = source_order;
   const auto standard_name = name.starts_with("std::")
       && name.find("::", 5U) == std::string::npos
       ? std::string_view { name }.substr(5U)
@@ -2266,7 +2439,8 @@ Process VerilogParser::parse_always() {
   auto body = parse_statement();
   if (body) {
     if (body->kind == StatementKind::Block
-        && body->label.empty()) {
+        && body->label.empty()
+        && body->systemverilog_imports.empty()) {
       process.variables = std::move(body->declarations);
       process.statements = std::move(body->statements);
     } else {

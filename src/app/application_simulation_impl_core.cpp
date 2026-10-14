@@ -1,7 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_simulation_internal.hpp"
 
+#include "../elaboration/hierarchy_sv_constant_evaluator.hpp"
+
 #include "fsim/support/native_filesystem.hpp"
+
+#include <charconv>
 
 namespace fsim::app {
 
@@ -551,7 +555,9 @@ Simulation::Impl::static_property_parts(const std::string_view identity)
     const std::span<const std::string> string_actuals,
     const std::span<const std::string> actual_names,
     const std::string_view allocation_scope,
-    const runtime::SystemVerilogUvmRootHandle requested_root)
+    const runtime::SystemVerilogUvmRootHandle requested_root,
+    const std::optional<runtime::simir::ProcessId> owner_design_process,
+    const runtime::SystemVerilogClassHandle owner_context_handle)
 {
     // `@no-constructor:` allocates the object for a constructor the
     // elaborated process runs itself.
@@ -562,10 +568,216 @@ Simulation::Impl::static_property_parts(const std::string_view identity)
         ? specialization_identity
         : specialization_identity.substr(lowered_constructor.size());
     const auto& specialization = class_specialization(identity);
+    ClassOwnerParameterValues owner_parameters;
+    std::optional<runtime::simir::ProcessId> owner_process_context;
+    bool owner_context_available { };
+    if (owner_context_handle != 0U) {
+        const auto inherited = class_owner_parameter_values.find(
+            owner_context_handle);
+        if (inherited != class_owner_parameter_values.end()) {
+            owner_parameters = inherited->second.parameters;
+            owner_process_context = inherited->second.owner_design_process;
+            owner_context_available = true;
+        }
+    }
+    if (owner_design_process) {
+        owner_process_context = owner_design_process;
+        const semantic::design::ProcessOccurrence* owner_occurrence = nullptr;
+        for (const auto& process : built.design_ir.processes()) {
+            if (process.runtime_index != *owner_design_process) {
+                continue;
+            }
+            if (owner_occurrence != nullptr) {
+                throw std::logic_error {
+                    "class allocation owner process is ambiguous"
+                };
+            }
+            owner_occurrence = &process;
+        }
+        if (owner_occurrence == nullptr) {
+            throw std::logic_error {
+                "class allocation owner process has no design occurrence"
+            };
+        }
+        const auto specialization_id = owner_occurrence->specialization;
+        const auto& specializations = built.design_ir.specializations();
+        if (!specialization_id.valid()
+            || specialization_id.value() >= specializations.size()
+            || specializations[specialization_id.value()].id
+                != specialization_id) {
+            throw std::logic_error {
+                "class allocation owner has no exact specialization"
+            };
+        }
+        const auto& owner_specialization
+            = specializations[specialization_id.value()];
+        if (owner_specialization.language
+                != semantic::Language::system_verilog
+            || !owner_specialization.unit.valid()
+            || !owner_specialization.scope.valid()) {
+            throw std::logic_error {
+                "class allocation owner specialization is not a resolved "
+                "SystemVerilog unit"
+            };
+        }
+        const semantic::sv::Unit* owner_unit = nullptr;
+        for (const auto& unit : built.systemverilog_hir.units()) {
+            if (unit.id != owner_specialization.unit) {
+                continue;
+            }
+            if (owner_unit != nullptr) {
+                throw std::logic_error {
+                    "class allocation owner has ambiguous HIR unit identity"
+                };
+            }
+            owner_unit = &unit;
+        }
+        if (owner_unit == nullptr
+            || owner_unit->scope != owner_specialization.scope) {
+            throw std::logic_error {
+                "class allocation owner has no exact HIR unit scope"
+            };
+        }
+        const auto owner_constant_declaration = [&](
+            const semantic::design::ParameterValue& parameter)
+            -> const semantic::sv::Declaration* {
+            const auto is_owner_declaration = [&](
+                const semantic::DeclarationId declaration_id) {
+                return std::ranges::find(
+                           owner_unit->declarations, declaration_id)
+                    != owner_unit->declarations.end();
+            };
+            if (parameter.declaration) {
+                if (!is_owner_declaration(*parameter.declaration)) {
+                    return nullptr;
+                }
+                const auto declaration = std::ranges::find(
+                    built.systemverilog_hir.declarations(),
+                    *parameter.declaration, &semantic::sv::Declaration::id);
+                if (declaration == built.systemverilog_hir.declarations().end()
+                    || declaration->name != parameter.name) {
+                    throw std::logic_error {
+                        "class allocation owner parameter identity is stale"
+                    };
+                }
+                if (declaration->form
+                        != semantic::sv::DeclarationForm::parameter
+                    && declaration->form
+                        != semantic::sv::DeclarationForm::local_parameter
+                    && declaration->form
+                        != semantic::sv::DeclarationForm::type_parameter) {
+                    return nullptr;
+                }
+                return &*declaration;
+            }
+            const semantic::sv::Declaration* selected = nullptr;
+            for (const auto declaration_id : owner_unit->declarations) {
+                const auto declaration = std::ranges::find(
+                    built.systemverilog_hir.declarations(), declaration_id,
+                    &semantic::sv::Declaration::id);
+                if (declaration == built.systemverilog_hir.declarations().end()
+                    || declaration->name != parameter.name
+                    || (declaration->form
+                            != semantic::sv::DeclarationForm::parameter
+                        && declaration->form
+                            != semantic::sv::DeclarationForm::local_parameter
+                        && declaration->form
+                            != semantic::sv::DeclarationForm::type_parameter)) {
+                    continue;
+                }
+                if (selected != nullptr) {
+                    throw std::logic_error {
+                        "class allocation owner parameter name is ambiguous"
+                    };
+                }
+                selected = &*declaration;
+            }
+            return selected;
+        };
+        const auto packed_parameter_value = [&](
+            const semantic::design::ParameterValue& parameter,
+            const semantic::sv::Declaration& declaration)
+            -> std::optional<runtime::PackedLogic4> {
+            if (const auto decoded
+                = elaboration::decode_hir_systemverilog_constant(
+                    parameter.identity);
+                decoded && decoded->packed.width() > 0U
+                && decoded->packed.width() <= 64U) {
+                return decoded->packed;
+            }
+            if (!declaration.type
+                || !declaration.type->executable_width
+                || *declaration.type->executable_width == 0U
+                || *declaration.type->executable_width > 64U
+                || declaration.type->container_form
+                || !declaration.type->value_form
+                || (*declaration.type->value_form
+                        != semantic::sv::TypeForm::packed_integral
+                    && *declaration.type->value_form
+                        != semantic::sv::TypeForm::enumeration)) {
+                return std::nullopt;
+            }
+            std::int64_t value { };
+            const auto text = std::string_view { parameter.value };
+            const auto parsed = std::from_chars(
+                text.data(), text.data() + text.size(), value);
+            if (parsed.ec != std::errc { }
+                || parsed.ptr != text.data() + text.size()) {
+                return std::nullopt;
+            }
+            return runtime::PackedLogic4::from_aval_bval(
+                static_cast<std::size_t>(
+                    *declaration.type->executable_width),
+                static_cast<std::uint64_t>(value), 0U);
+        };
+        owner_parameters.clear();
+        for (const auto& parameter : owner_specialization.parameters) {
+            const auto* declaration = owner_constant_declaration(parameter);
+            if (declaration == nullptr) {
+                // Specialization records also retain imported package values
+                // and other identity metadata. They are not bindings in the
+                // exact owning module's lexical scope.
+                continue;
+            }
+            const bool module_parameter = declaration->form
+                == semantic::sv::DeclarationForm::parameter;
+            const auto value = packed_parameter_value(parameter, *declaration);
+            if (!module_parameter && !value) {
+                // A localparam can be evaluated from its retained HIR
+                // initializer using this owner's exact parameter bindings.
+                // Leave it absent here so that path is available.
+                continue;
+            }
+            const bool inserted = owner_parameters.emplace(
+                declaration->id, value).second;
+            if (!inserted) {
+                throw std::logic_error {
+                    "class allocation owner has duplicate parameter "
+                    "declaration identities"
+                };
+            }
+        }
+        owner_context_available = true;
+    }
     const auto handle = allocate_class(
         specialization.specialization_identity,
         declared_type,
         allocation_scope);
+    try {
+        if (owner_context_available) {
+            const auto [owner, inserted] = class_owner_parameter_values.emplace(
+                handle, ClassOwnerParameterContext { std::move(owner_parameters), owner_process_context });
+            (void)owner;
+            if (!inserted) {
+                throw std::logic_error {
+                    "class allocation reused a live owner context handle"
+                };
+            }
+        }
+    } catch (...) {
+        (void)class_heap.release(handle);
+        throw;
+    }
     const auto before = packed_class_snapshot();
     const auto component_specialization = is_systemverilog_uvm_type(
         built.compiled_systemverilog_class_specializations,
@@ -638,6 +850,7 @@ Simulation::Impl::static_property_parts(const std::string_view identity)
                 specialization, handle, actuals, string_actuals, actual_names);
         }
     } catch (...) {
+        class_owner_parameter_values.erase(handle);
         if (component_specialization) {
             if (uvm_components.contains(handle)) {
                 try {

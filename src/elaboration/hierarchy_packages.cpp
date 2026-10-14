@@ -11,6 +11,7 @@
 #include "lowerer_internal.hpp"
 #include "vhdl_hir_type_validation.hpp"
 #include "vhdl_callable_legality.hpp"
+#include "fsim/frontend/systemverilog_scalars.hpp"
 #include "fsim/frontend/systemverilog_standard_package.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 
@@ -6132,17 +6133,6 @@ namespace {
             *declaration.initializer);
         if (expression && expression->systemverilog != nullptr) {
             const auto& record = *expression->systemverilog;
-            if (record.kind == semantic::sv::ExpressionKind::call
-                && record.text == "$clog2"
-                && record.operands.size() == 1U) {
-                const auto operand = specialization.evaluate_integral_expression(
-                    record.operands.front());
-                if (operand && *operand < 0) {
-                    return std::string {
-                        "$clog2 requires a nonnegative integral argument"
-                    };
-                }
-            }
             if (record.kind == semantic::sv::ExpressionKind::binary
                 && (record.text == "/" || record.text == "%")
                 && record.operands.size() == 2U) {
@@ -6854,6 +6844,8 @@ namespace {
         bool requires_static_value { };
         std::optional<semantic::SpecializedHirVhdlPackedValue>
             vhdl_packed_value;
+        std::optional<semantic::SpecializedHirVhdlBooleanArrayValue>
+            vhdl_boolean_array_value;
         const auto formal = compiled.find_declaration(binding.formal);
         if (formal && formal->vhdl != nullptr
             && formal->vhdl->form
@@ -6881,6 +6873,10 @@ namespace {
                 && !effective_subtype->type_mark.target.valid()
                 && compiled_vhdl_name_equal(
                     effective_subtype->type_mark.spelling, "bit_vector");
+            const bool boolean_array_formal
+                = effective_subtype
+                && parent.is_vhdl_boolean_array_subtype(
+                    *effective_subtype, formal->vhdl->scope);
             std::optional<std::string> string_value;
             if (effective_subtype
                 && effective_subtype->domain
@@ -6890,7 +6886,14 @@ namespace {
             }
             std::optional<std::int64_t> value;
             std::optional<PackedLogic4> composite;
-            if (logic9_vector_formal || bit_vector_formal) {
+            if (boolean_array_formal) {
+                vhdl_boolean_array_value
+                    = parent.evaluate_vhdl_boolean_array_expression(
+                        *binding.expression, *effective_subtype,
+                        formal->vhdl->scope);
+                requires_static_value
+                    = !vhdl_boolean_array_value.has_value();
+            } else if (logic9_vector_formal || bit_vector_formal) {
                 const auto evaluated
                     = parent.evaluate_vhdl_constant_expression(
                         *binding.expression);
@@ -6981,7 +6984,23 @@ namespace {
                         *formal->vhdl->subtype, formal->vhdl->scope);
                 }
             }
-            if (string_value) {
+            if (vhdl_boolean_array_value) {
+                const auto& array = *vhdl_boolean_array_value;
+                identity = "vhdl-boolean-array-v2;array="
+                    + std::to_string(array.array_type.value())
+                    + ";element="
+                    + std::to_string(array.element_type.value())
+                    + ";left=" + std::to_string(array.left_bound)
+                    + ";right=" + std::to_string(array.right_bound)
+                    + ";descending="
+                    + std::to_string(array.descending ? 1 : 0)
+                    + ";null="
+                    + std::to_string(array.null_range ? 1 : 0)
+                    + ";values=";
+                for (const auto element : array.elements) {
+                    identity.push_back(element == 0U ? '0' : '1');
+                }
+            } else if (string_value) {
                 identity = semantic::systemverilog_string_identity(
                     *string_value);
             } else if (value) {
@@ -7063,7 +7082,8 @@ namespace {
                         }
                     }
                 }
-            } else if (formal->vhdl->subtype) {
+            } else if (!boolean_array_formal
+                && formal->vhdl->subtype) {
                 const auto& subtype = *formal->vhdl->subtype;
                 const auto layout = compiled_vhdl_named_signal_layout(
                     parent, subtype, formal->vhdl->scope);
@@ -7085,6 +7105,8 @@ namespace {
             binding.source,
         };
         actual.vhdl_packed_value = std::move(vhdl_packed_value);
+        actual.vhdl_boolean_array_value
+            = std::move(vhdl_boolean_array_value);
         return { std::move(actual), requires_static_value };
     }
 
@@ -8330,26 +8352,52 @@ namespace {
             }
         }
 
-        std::unordered_set<std::string> referenced_names;
+        struct ReferencedName {
+            std::string spelling;
+            semantic::ScopeId scope;
+            std::uint64_t source_order { };
+            semantic::SourceSpanId source;
+        };
+        std::vector<ReferencedName> referenced_names;
+        const auto remember_name = [&](const std::string_view spelling,
+                                        const semantic::ScopeId scope,
+                                        const std::uint64_t source_order,
+                                        const semantic::SourceSpanId source) {
+            if (spelling.empty() || spelling.find('.') != std::string_view::npos
+                || spelling.find("::") != std::string_view::npos) {
+                return;
+            }
+            if (std::ranges::none_of(referenced_names,
+                    [&](const ReferencedName& existing) {
+                        return existing.spelling == spelling
+                            && existing.scope == scope
+                            && existing.source_order == source_order;
+                    })) {
+                referenced_names.push_back({
+                    std::string { spelling }, scope, source_order, source });
+            }
+        };
         for (const auto& expression : compiled.systemverilog_hir.expressions()) {
             if (!compiled_scope_belongs_to_unit(
                     compiled, expression.scope, unit.id)
                 || (expression.kind != ExpressionKind::name
                     && expression.kind != ExpressionKind::call)
                 || expression.text.empty()
-                || expression.text.starts_with("@sv-")
-                || expression.text.find('.') != std::string::npos
-                || expression.text.find("::") != std::string::npos) {
+                || expression.text.starts_with("@sv-")) {
                 continue;
             }
-            referenced_names.insert(expression.text);
+            remember_name(expression.text, expression.scope,
+                expression.referenced_name
+                    ? expression.referenced_name->source_order
+                    : 0U,
+                expression.referenced_name
+                    ? expression.referenced_name->source
+                    : expression.source);
         }
-        const auto remember_type_name = [&](const semantic::sv::TypeReference& type) {
-            const auto& name = type.target.spelling;
-            if (!name.empty() && name.find('.') == std::string::npos
-                && name.find("::") == std::string::npos) {
-                referenced_names.insert(name);
-            }
+        const auto remember_type_name = [&](const semantic::sv::TypeReference& type,
+                                                const semantic::ScopeId scope) {
+            remember_name(type.target.spelling, scope, type.source_order,
+                type.target.source);
         };
         for (const auto& declaration :
             compiled.systemverilog_hir.declarations()) {
@@ -8358,42 +8406,39 @@ namespace {
                 continue;
             }
             if (declaration.type) {
-                remember_type_name(*declaration.type);
+                remember_type_name(*declaration.type, declaration.scope);
             }
             if (declaration.default_type) {
-                remember_type_name(*declaration.default_type);
+                remember_type_name(*declaration.default_type, declaration.scope);
             }
         }
 
         const semantic::CompiledDesignResolver name_resolver {
             compiled, unit.id
         };
-        std::unordered_set<std::string> ambiguous_types;
-        for (const auto& name : referenced_names) {
-            semantic::SourceSpanId source = unit.source;
-            const auto imported = std::ranges::find_if(
-                unit.imports,
-                [&](const semantic::sv::Import& candidate) {
-                    return candidate.wildcard
-                        || (candidate.member
-                            && candidate.member->spelling == name);
-                });
-            if (imported != unit.imports.end()) {
-                source = imported->source;
-            }
+        for (const auto& reference : referenced_names) {
+            semantic::SourceSpanId source = reference.source.valid()
+                ? reference.source
+                : unit.source;
+            const auto use_scope = reference.scope.valid()
+                ? reference.scope
+                : unit.scope;
             const auto constants = name_resolver.resolve_systemverilog_constant(
-                name, unit.scope, false);
+                reference.spelling, use_scope, false,
+                reference.source_order);
             if (constants.status
                 == semantic::CompiledResolutionStatus::ambiguous) {
                 append("FSIM-ELAB-SVPKG-003",
-                    "SystemVerilog package constant '" + name
+                    "SystemVerilog package constant '" + reference.spelling
                         + "' is imported from multiple packages",
                     source);
             }
             const auto types = name_resolver.resolve_systemverilog_named_type(
-                name, unit.scope, false);
+                reference.spelling, use_scope, false,
+                reference.source_order);
             const auto classes = name_resolver.resolve_systemverilog_class(
-                name, unit.scope, false);
+                reference.spelling, use_scope, false,
+                reference.source_order);
             const auto type_ambiguous
                 = types.status == semantic::CompiledResolutionStatus::ambiguous
                 || classes.status
@@ -8401,9 +8446,8 @@ namespace {
                 || (!types.candidates.empty()
                     && !classes.candidates.empty());
             if (type_ambiguous) {
-                ambiguous_types.insert(name);
                 append("FSIM-ELAB-SVTYPE-002",
-                    "SystemVerilog type '" + name
+                    "SystemVerilog type '" + reference.spelling
                         + "' is imported from multiple packages",
                     source);
             }
@@ -8474,11 +8518,12 @@ namespace {
             return false;
         };
         const auto resolved_type_visible = [&](const std::string_view name,
-                                               const semantic::ScopeId scope) {
+                                               const semantic::ScopeId scope,
+                                               const std::uint64_t source_order) {
             return !name_resolver.resolve_systemverilog_named_type(
-                        name, scope, false).candidates.empty()
+                        name, scope, false, source_order).candidates.empty()
                 || !name_resolver.resolve_systemverilog_class(
-                        name, scope, false).candidates.empty();
+                        name, scope, false, source_order).candidates.empty();
         };
         const auto resolved_equivalent_type_reference = [&](
                                                             const semantic::sv::TypeReference&
@@ -8520,13 +8565,12 @@ namespace {
             if (type.target.target.valid() || name.empty()
                 || name == "constructor"
                 || builtin_type(name) || covergroup || interface_or_program
-                || resolved_type_visible(name, scope)
+                || resolved_type_visible(name, scope, type.source_order)
                 || resolved_equivalent_type_reference(type)
                 || !type.systemverilog_net_type.empty()
                 || !type.interface_type.empty()
                 || type.virtual_interface
-                || !type.class_identity.empty()
-                || ambiguous_types.contains(name)) {
+                || !type.class_identity.empty()) {
                 return;
             }
             append("FSIM-ELAB-SVTYPE-001",
@@ -9393,6 +9437,72 @@ namespace {
                 ? &source_type.callable->return_type
                 : nullptr;
         };
+        const auto expression_has_real_scalar_type
+            = [&](const semantic::ExpressionId root) {
+                  std::vector<semantic::ExpressionId> pending { root };
+                  std::unordered_set<std::uint32_t> visited;
+                  while (!pending.empty()) {
+                      const auto id = pending.back();
+                      pending.pop_back();
+                      if (!visited.insert(id.value()).second) {
+                          continue;
+                      }
+                      const auto expression = compiled.find_expression(id);
+                      if (!expression
+                          || expression->systemverilog == nullptr) {
+                          continue;
+                      }
+                      const auto& value = *expression->systemverilog;
+                      if (value.scalar_kind
+                                  == semantic::sv::ScalarKind::short_real
+                          || value.scalar_kind
+                              == semantic::sv::ScalarKind::real
+                          || value.scalar_kind
+                              == semantic::sv::ScalarKind::realtime
+                          || value.decimal_literal) {
+                          return true;
+                      }
+                      if (const auto* type = expression_type(id)) {
+                          const auto underlying
+                              = semantic::CompiledDesignResolver {
+                                    compiled, unit.id, unit_specialized }
+                                    .underlying_systemverilog_type(
+                                        *type, value.scope);
+                          if (underlying
+                              && frontend::is_real_scalar_kind(
+                                  compiled_systemverilog_scalar_kind(
+                                      underlying->target.spelling))) {
+                              return true;
+                          }
+                      }
+                      const auto append_operand = [&](const std::size_t index) {
+                          if (index < value.operands.size()) {
+                              pending.push_back(value.operands[index]);
+                          }
+                      };
+                      if ((value.kind == ExpressionKind::unary
+                              && (value.text == "+" || value.text == "-"))
+                          || (value.kind == ExpressionKind::update
+                              && (value.text == "++" || value.text == "--"))) {
+                          if (value.operands.size() == 1U) {
+                              append_operand(0U);
+                          }
+                      } else if (value.kind == ExpressionKind::binary
+                          && value.operands.size() == 2U
+                          && (value.text == "+" || value.text == "-"
+                              || value.text == "*" || value.text == "/"
+                              || value.text == "**")) {
+                          append_operand(0U);
+                          append_operand(1U);
+                      } else if (value.kind == ExpressionKind::call
+                          && value.text == "?:"
+                          && value.operands.size() == 3U) {
+                          append_operand(1U);
+                          append_operand(2U);
+                      }
+                  }
+                  return false;
+              };
         std::function<bool(const semantic::sv::TypeReference&,
             semantic::ExpressionId, std::string_view, std::string_view)>
             validate_nominal_value;
@@ -10034,13 +10144,63 @@ namespace {
                     parameter.source);
                 continue;
             }
+            const auto contains_user_call = [&](const auto& self,
+                                                const semantic::ExpressionId id,
+                                                std::unordered_set<std::uint32_t>& seen)
+                -> bool {
+                if (!seen.insert(id.value()).second) {
+                    return false;
+                }
+                const auto view = compiled.find_expression(id);
+                if (!view || view->systemverilog == nullptr) {
+                    return false;
+                }
+                const auto& value = *view->systemverilog;
+                if (value.kind == ExpressionKind::call
+                    && !value.text.starts_with("$")
+                    && !value.text.starts_with("@")) {
+                    return true;
+                }
+                for (const auto operand : value.operands) {
+                    if (self(self, operand, seen)) {
+                        return true;
+                    }
+                }
+                for (const auto& association : value.associations) {
+                    if (self(self, association.value, seen)) {
+                        return true;
+                    }
+                }
+                for (const auto& association : value.call_arguments) {
+                    if (association.actual
+                        && self(self, *association.actual, seen)) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            std::unordered_set<std::uint32_t> call_scan;
+            const bool has_user_call = contains_user_call(
+                contains_user_call, *parameter.initializer, call_scan);
+            const bool explicit_integral
+                = hir_systemverilog_explicit_integral_type(*parameter.type);
             if (unit_specialized != nullptr
-                && hir_systemverilog_explicit_integral_type(
-                    *parameter.type)) {
+                && (explicit_integral || has_user_call)) {
                 std::string error;
                 const auto value = evaluate_hir_systemverilog_constant(
                     *unit_specialized, *parameter.initializer, error);
+                constexpr auto unresolved_call_prefix
+                    = std::string_view {
+                          "unresolved SystemVerilog function call '" };
+                if (!value && error.starts_with(unresolved_call_prefix)) {
+                    append("FSIM-ELAB-SVFUNC-015",
+                        "parameter '" + parameter.name + "' references "
+                            + error,
+                        parameter.source);
+                    continue;
+                }
                 if (value && value->unbounded
+                    && explicit_integral
                     && parameter.type->target.spelling != "int"
                     && parameter.type->target.spelling != "integer") {
                     append("FSIM-ELAB-SVCONST-001",
@@ -10708,6 +10868,16 @@ namespace {
                     || expression.text == "@stream-right"
                     || expression.text == "@stream-target-left"
                     || expression.text == "@stream-target-right");
+            if (expression.kind == ExpressionKind::call
+                && expression.text == "$bits"
+                && expression.operands.size() == 1U
+                && expression_has_real_scalar_type(
+                    expression.operands.front())) {
+                append("FSIM-ELAB-SVQUERY-005",
+                    "$bits requires a bit-stream type; real, shortreal, and "
+                    "realtime values are not bit-stream types",
+                    expression.source);
+            }
             if (streaming) {
                 const auto assignment_target
                     = expression.text == "@stream-target-left"
@@ -10810,7 +10980,10 @@ namespace {
                         <= hir_systemverilog_maximum_constant_width;
                 const auto visible = builtin_type(cast_type)
                     || cast_type.find("::") != std::string_view::npos
-                    || resolved_type_visible(cast_type, expression.scope)
+                    || resolved_type_visible(cast_type, expression.scope,
+                        expression.referenced_name
+                            ? expression.referenced_name->source_order
+                            : 0U)
                     || std::ranges::any_of(
                         types, [&](const semantic::sv::TypeDefinition* type) {
                             return type->name == cast_type;
@@ -11172,8 +11345,22 @@ namespace {
                         declaration_id)) {
                     continue;
                 }
-                const auto initializer = specialized->find_expression(
-                    *declaration->systemverilog->initializer);
+                const auto initializer_id
+                    = *declaration->systemverilog->initializer;
+                // Integral evaluation intentionally returns no int64 value
+                // for a legal four-state constant such as `1 + 'bx`. Accept
+                // it only when both the SV constant-expression classifier
+                // and packed four-state evaluator prove the initializer.
+                if (hir_systemverilog_constant_expression(
+                        *specialized, initializer_id)) {
+                    std::string constant_error;
+                    if (evaluate_hir_systemverilog_constant(
+                            *specialized, initializer_id, constant_error)) {
+                        continue;
+                    }
+                }
+                const auto initializer
+                    = specialized->find_expression(initializer_id);
                 if (initializer
                     && initializer->systemverilog != nullptr
                     && initializer->systemverilog->kind
@@ -13759,6 +13946,83 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
     }
     auto generate_occurrences
         = std::move(generate_collection.occurrences);
+    const auto packed_range_bounds_are_known = [&](
+        const semantic::SpecializedHirUnit& specialization,
+        const std::vector<semantic::DeclarationId>& declarations,
+        const semantic::ScopeId declaration_scope) {
+        for (const auto declaration_id : declarations) {
+            const auto declaration = specialization.find_declaration(
+                declaration_id);
+            if (!declaration || declaration->systemverilog == nullptr
+                || declaration->systemverilog->scope != declaration_scope
+                || !declaration->systemverilog->type) {
+                continue;
+            }
+            const auto& record = *declaration->systemverilog;
+            const auto check_type = [&](const auto& self,
+                                        const semantic::sv::TypeReference& type)
+                -> bool {
+                const auto check_range = [&](
+                    const semantic::sv::PackedRange& range) {
+                    for (const auto bound : {
+                             range.left_expression,
+                             range.right_expression }) {
+                        if (!bound) {
+                            continue;
+                        }
+                        std::string error;
+                        const auto value = evaluate_hir_systemverilog_constant(
+                            specialization, *bound, error);
+                        if (!value || value->unbounded || value->known()) {
+                            continue;
+                        }
+                        const auto source = range.source.valid()
+                            ? range.source : record.source;
+                        report(
+                            "FSIM-ELAB-SVCONST-001",
+                            "packed range bound for SystemVerilog declaration '"
+                                + record.name
+                                + "' contains an unknown X or Z value",
+                            compiled_source_span(*compiled_, source));
+                        return false;
+                    }
+                    return true;
+                };
+                if (!type.packed_dimensions.empty()) {
+                    for (const auto& dimension : type.packed_dimensions) {
+                        if (!check_range(dimension)) {
+                            return false;
+                        }
+                    }
+                } else if (type.packed_range
+                    && !check_range(*type.packed_range)) {
+                    return false;
+                }
+                for (const auto& element : type.container_element_types) {
+                    if (!self(self, element)) {
+                        return false;
+                    }
+                }
+                return true;
+            };
+            if (!check_type(check_type, *record.type)) {
+                return false;
+            }
+        }
+        return true;
+    };
+    if (!packed_range_bounds_are_known(
+            *specialized, unit.declarations, unit.scope)) {
+        return false;
+    }
+    for (const auto& occurrence : generate_occurrences) {
+        if (!packed_range_bounds_are_known(
+                *occurrence.specialization,
+                occurrence.region->declarations,
+                occurrence.region->scope)) {
+            return false;
+        }
+    }
     const auto generated_path = [](const std::string_view parent,
                                    const std::string_view local) {
         if (parent.empty()) {
@@ -13959,6 +14223,8 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
         diagnostics_,
     };
     lowerer.set_specialized_hir_unit(&*specialized);
+    lowerer.set_ancestor_systemverilog_specializations(
+        &root_materialization.type_owner_contexts);
     lowerer.set_package_constant_signal(
         [&](const semantic::DeclarationId declaration) {
             return compiled_systemverilog_package_variable_signal(

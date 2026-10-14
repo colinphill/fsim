@@ -1187,14 +1187,92 @@ bool Lowerer::is_hir_vhdl_physical_expression(
 }
 
 std::optional<Lowerer::HirVhdlPhysicalUnit> Lowerer::hir_vhdl_physical_unit(
-    const std::string_view unit_name, const std::size_t expected_width) const
+    const std::string_view unit_name,
+    const std::size_t expected_width,
+    const semantic::ScopeId source_scope) const
 {
     // The scale of a unit of a physical type in its primary unit, and the
     // type's width (IEEE 1076-2008 5.2.4). Without an expected width the
-    // unit selects its type.
+    // unit selects its type. Resolve the unit in the source expression's
+    // lexical scope before using its type-specific scale.
+    if (!source_scope.valid()) {
+        return std::nullopt;
+    }
+    const auto resolver = semantic::CompiledDesignResolver {
+        *specialized_hir_unit_, hir_generic_binding_frames_
+    };
+    semantic::vhdl::Name name;
+    name.spelling = std::string { unit_name };
+    name.canonical = name.spelling;
+    const auto selected_resolution = resolver.resolve_vhdl(
+        name, source_scope,
+        [&](const semantic::CompiledDeclarationView& candidate) {
+            return candidate.vhdl != nullptr && std::ranges::any_of(
+                specialized_hir_unit_->design().vhdl_hir.types(),
+                [&](const semantic::vhdl::TypeDefinition& stored) {
+                    const auto type = specialized_hir_unit_->find_type(
+                        stored.id);
+                    return type && type->vhdl != nullptr
+                        && type->vhdl->form
+                            == semantic::vhdl::TypeForm::physical
+                        && std::ranges::any_of(
+                            type->vhdl->physical_units,
+                            [&](const semantic::vhdl::PhysicalUnit& unit) {
+                                return unit.declaration == candidate.vhdl->id
+                                    && same_vhdl_name(
+                                        unit.name, unit_name);
+                            });
+            });
+        });
+    const auto selected_unit = selected_resolution.unique();
+    if (!selected_unit) {
+        if (selected_resolution.status
+                != semantic::CompiledResolutionStatus::not_found
+            || resolver.resolve_vhdl(
+                    name, source_scope,
+                    [](const semantic::CompiledDeclarationView&) {
+                        return true;
+                    }).status
+                != semantic::CompiledResolutionStatus::not_found) {
+            return std::nullopt;
+        }
+        const auto builtin_unit = std::ranges::find(
+            elaboration_detail::vhdl_time_units, unit_name,
+            &std::pair<std::string_view, std::uint64_t>::first);
+        if (builtin_unit != elaboration_detail::vhdl_time_units.end()
+            && (expected_width == 0U || expected_width == 64U)) {
+            return HirVhdlPhysicalUnit {
+                64U, static_cast<std::int64_t>(builtin_unit->second) };
+        }
+        return std::nullopt;
+    }
+    std::optional<semantic::TypeId> selected_type;
+    for (const auto& stored :
+        specialized_hir_unit_->design().vhdl_hir.types()) {
+        const auto type = specialized_hir_unit_->find_type(stored.id);
+        if (!type || type->vhdl == nullptr
+            || type->vhdl->form != semantic::vhdl::TypeForm::physical
+            || std::ranges::none_of(
+                type->vhdl->physical_units,
+                [&](const semantic::vhdl::PhysicalUnit& unit) {
+                    return unit.declaration == *selected_unit;
+                })) {
+            continue;
+        }
+        if (selected_type && *selected_type != stored.id) {
+            return std::nullopt;
+        }
+        selected_type = stored.id;
+    }
+    if (!selected_type) {
+        return std::nullopt;
+    }
     std::optional<HirVhdlPhysicalUnit> result;
     for (const auto& stored :
         specialized_hir_unit_->design().vhdl_hir.types()) {
+        if (stored.id != *selected_type) {
+            continue;
+        }
         const auto type = specialized_hir_unit_->find_type(stored.id);
         if (!type || type->vhdl == nullptr
             || type->vhdl->form
@@ -1318,36 +1396,52 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_physical_expression(
     constexpr std::string_view prefix { "@vhdl-physical:" };
     const auto unit = hir_vhdl_physical_unit(
         std::string_view { expression->vhdl->text }.substr(prefix.size()),
-        expected_width);
-    const auto magnitude
-        = specialized_hir_unit_->evaluate_integral_expression(
-            expression->vhdl->operands.front());
-    if (!unit || !magnitude) {
+        expected_width, expression->vhdl->scope);
+    std::optional<std::int64_t> value;
+    const auto magnitude_expression = specialized_hir_unit_->find_expression(
+        expression->vhdl->operands.front());
+    if (unit && unit->scale > 0 && magnitude_expression
+        && magnitude_expression->vhdl != nullptr
+        && magnitude_expression->vhdl->kind
+            == semantic::vhdl::ExpressionKind::real_literal) {
+        const auto rounded = semantic::detail::decimal_physical_magnitude(
+            magnitude_expression->vhdl->text,
+            static_cast<std::uint64_t>(unit->scale));
+        if (rounded
+            && *rounded <= static_cast<std::uint64_t>(
+                std::numeric_limits<std::int64_t>::max())) {
+            // decimal_physical_magnitude already multiplies by the unit's
+            // scale and rounds to the primary unit.
+            value = static_cast<std::int64_t>(*rounded);
+        }
+    } else {
+        const auto magnitude
+            = specialized_hir_unit_->evaluate_integral_expression(
+                expression->vhdl->operands.front());
+        if (unit && magnitude) {
+            const auto scale = unit->scale;
+            if (scale > 0
+                && !(*magnitude > 0
+                    && *magnitude
+                        > std::numeric_limits<std::int64_t>::max() / scale)
+                && !(*magnitude < 0
+                    && *magnitude
+                        < std::numeric_limits<std::int64_t>::min() / scale)) {
+                value = *magnitude * scale;
+            }
+        }
+    }
+    if (!unit || !value) {
         report(
             "FSIM-ELAB-VHPHYSICAL-006",
             "invalid physical literal unit or magnitude",
             hir_source_span(expression->vhdl->source));
         return std::nullopt;
     }
-    const auto scale = unit->scale;
     const auto width = unit->width != 0U ? unit->width : std::size_t { 64U };
-    if (scale <= 0
-        || (*magnitude > 0
-            && *magnitude
-                > std::numeric_limits<std::int64_t>::max() / scale)
-        || (*magnitude < 0
-            && *magnitude
-                < std::numeric_limits<std::int64_t>::min() / scale)) {
-        report(
-            "FSIM-ELAB-VHPHYSICAL-006",
-            "physical literal exceeds its bounded runtime representation",
-            hir_source_span(expression->vhdl->source));
-        return std::nullopt;
-    }
-    const auto value = *magnitude * scale;
     if (width == 32U
-        && (value < std::numeric_limits<std::int32_t>::min()
-            || value > std::numeric_limits<std::int32_t>::max())) {
+        && (*value < std::numeric_limits<std::int32_t>::min()
+            || *value > std::numeric_limits<std::int32_t>::max())) {
         report(
             "FSIM-ELAB-VHPHYSICAL-006",
             "physical literal exceeds its bounded runtime representation",
@@ -1358,7 +1452,7 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_physical_expression(
         width, frontend::ValueDomain::Integer);
     process_.operations.emplace_back(LoadConstant {
         result,
-        unsigned_value(static_cast<std::uint64_t>(value), width),
+        unsigned_value(static_cast<std::uint64_t>(*value), width),
     });
     return result;
 }

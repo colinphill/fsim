@@ -62,7 +62,16 @@ parse_input_format(const std::string_view text) {
     else if (code == 's') conversion.format = InputScanFormat::String;
     else if (code == 'e' || code == 'f' || code == 'g')
       conversion.format = InputScanFormat::Real;
-    else {
+    else if (code == 'm') {
+      // Do not silently ignore a width on this no-input conversion.
+      if (has_width) {
+        result.valid = false;
+        return result;
+      }
+      conversion.format = InputScanFormat::Hierarchy;
+    } else if (code == 't') {
+      conversion.format = InputScanFormat::Time;
+    } else {
       result.valid = false;
       return result;
     }

@@ -43,6 +43,7 @@ begin
     assert to_string(r, 2) = "1.23" report "real digits" severity error;
     assert to_string(r, "%1.1f") = "1.2" report "real format" severity error;
     assert to_string(50 ns, unit => us) = "0.05 us" report "time unit" severity error;
+    assert to_string(now, unit => us) = "0 us" report "current time unit" severity error;
     assert to_string(character'('X')) = "X" report "character" severity error;
     assert (sa and sv) = "101" and (sa xnor sv) = "101" report "scalar and array" severity error;
     assert (sv nor sa) = "000" report "array nor scalar" severity error;

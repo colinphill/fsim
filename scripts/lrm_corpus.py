@@ -443,6 +443,8 @@ ICARUS_NONSTANDARD = {
     "concat3": "expects side effects from a zero replication",
     "cfunc_assign_op_mixed": "expects Icarus's compound assignment result",
     "sv_string6": "expects Icarus's hextoa of a negative value",
+    "scanf4": "expects zero instead of EOF (-1) when whitespace-only %s input "
+        "ends before the first conversion (IEEE 1364-2005 17.2.4.1, 17.2.4.3)",
     # Typedef declarator dimensions precede the nested type's dimensions
     # (IEEE 1800-2017 7.4.5, 20.7). This test expects the reverse order.
     "sv_typedef_nested_array": (
@@ -453,6 +455,14 @@ ICARUS_NONSTANDARD = {
     "signed_a": "expects an out-of-range index to be stripped",
     "br_gh156": "expects Icarus's VCD layout",
     "br_gh889": "expects output that ignores the SDF file",
+    # IEEE 1800-2012 11.5.1 permits, but does not require, a compile-time
+    # error for an out-of-range packed select. This CE expectation is optional.
+    "br_gh840b": "requires an optional compile-time diagnostic for an "
+        "out-of-range packed select (IEEE 1800-2012 7.4.6, 11.5.1 Note 2)",
+    # This CE row is a graceful-failure test for Icarus's missing feature;
+    # unpacked structures are standard SystemVerilog (IEEE 1800-2009 7.2).
+    "br_ml20150315b": "expects rejection of a legal unpacked struct declaration "
+        "because Icarus does not implement it (IEEE 1800-2009 7.2)",
     "sv_packed_port1": "expects z from an undriven variable bit",
     "sv_packed_port2": "expects z from an undriven variable bit",
     # SystemVerilog preprocessor features in Icarus's default Verilog-2005
@@ -991,6 +1001,12 @@ def vests_cases(root: Path) -> list[Case]:
                 case_chain = VESTS_BILLOWITCH_FILE_CHAIN_BY_CASE.get(relative, chain)
             elif directory == "clifton-labs/compliant":
                 case_chain = VESTS_CLIFTON_FILE_CHAIN_BY_CASE.get(relative, chain)
+                if relative == "functional/attributes/type/range/simple-range-attribute.vhdl":
+                    skip = (
+                        "out of scope: applies scalar bound attributes to A'RANGE; "
+                        "RANGE denotes a range, not a scalar type or subtype "
+                        "(IEEE 1076-1993 14.1)"
+                    )
             elif (directory == "billowitch/non_compliant/analyzer_failure"
                   and relative == "tc300.vhd"):
                 skip = (
@@ -1067,6 +1083,10 @@ NVC_NONSTANDARD = {
     "agg7": (
         "expects a descending array-valued range association in an "
         "ascending constrained target (IEEE 1076-2008 9.3.3.3)"
+    ),
+    "attr16": (
+        "applies scalar bound attributes to A'RANGE; RANGE denotes a range, "
+        "not a scalar type or subtype (IEEE 1076-2008 16.2.2/16.2.3)"
     ),
     # `a ~& b` and `a ~| b` are not binary operators in IEEE 1364 or 1800.
     "binary8": "uses ~& and ~| as binary operators",

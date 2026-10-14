@@ -253,6 +253,68 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 58: scoped types, formatted I/O and VHDL array values
+
+SystemVerilog fixes preserve declaration and receiver identity for scoped types,
+class handles, imports and generated callables. They cover array dimensions,
+constant expression sizing, real-to-time assignment, and formatted scanning for
+`%t`, `%u`, `%z` and end-of-file handling. HIR schema 11 retains source order,
+block-import scope and ordered non-ANSI port slots; runtime schema 81 records
+class-allocation owner identity.
+
+VHDL fixes cover rank-two and unconstrained arrays, deferred constants,
+attributes, Boolean and null array operations, generic aggregate context,
+nominal type identity and TIME units. Direct-return function results can supply
+proven rank-one array bounds to unconstrained procedure formals, including the
+IEEE scalar/vector logical operators' `1 to N` result bounds. This inference
+requires one direct return, no additional local declarations and a statically
+proven same-nominal array shape. One-element arrays remain distinct from scalar
+overloads. Scalar logical chains reject inapplicable vector analysis before
+recursive shape queries; the original Ashenden overflow case passes within
+the full ordered prerequisite chain.
+
+The VUnit setup shim now models five notification handshakes with ten delta
+waits. Replaying that shim on frozen Batch57 still produces an incorrect value
+for `tb_array_scalar`, separating the setup correction from the compiler's
+function-result repair. Original corpus sources remain unchanged.
+
+The `m58c` failure-union measurement covers 3,411 unique cases across six suites.
+Combined with the 295-case fast set, it records **61 new passes, five scope
+exclusions and zero observed regressions** against Batch57. All 61 gains pass
+on both interpreter and compiled engines. The table is an overlay: unmeasured
+cases retain their Batch57 status. The next full six-suite checkpoint is due
+in Batch60.
+
+| Suite | Batch57 passes / in scope | Batch58 passes / in scope | Total excluded |
+|---|---:|---:|---:|
+| ivtest | 2427 / 2660 | 2451 / 2657 | 169 |
+| sv-tests | 1420 / 1497 | 1420 / 1497 | 0 |
+| verilator | 1386 / 2216 | 1387 / 2216 | 199 |
+| vests | 3458 / 3647 | 3481 / 3646 | 2 |
+| nvc | 732 / 1264 | 744 / 1263 | 219 |
+| vhdl-compliance | 30 / 72 | 31 / 72 | 0 |
+
+The five new exclusions are separate from passing gains. NVC `attr16` and
+VEST `simple-range-attribute` apply scalar bound attributes to `A'RANGE`;
+ivtest `br_ml20150315b` expects rejection of a legal unpacked struct,
+`br_gh840b` expects an optional out-of-range-select diagnostic, and `scanf4`
+expects zero instead of EOF when whitespace-only input ends before the first
+conversion.
+
+Validation on frozen `wip58ae`: the full build passed, focused checks passed
+145/145, the labelled suite passed 668/679 with exactly the 11 known failures,
+and the fast set passed 295/295. Source-package validation passed for 2,839
+files; runner unit checks passed 30/30. Archive, source, input and exact case
+inventory checks passed. STRING concatenation context and nested record-field
+subtype gaps remain open for Batch59.
+
+The executable SHA-256 is
+`b955fc43ecd0ce246ca398d0c361efad947b615e8a46711c4d0c62b81ce94bbb`.
+Local evidence is in
+`.local-artifacts/lrm-closure/work/batch58/ae-publication-proof.json` and
+`targeted-gains-final-ae.json`, with unique-case overlays under
+`.local-artifacts/lrm-closure/overlays/b58-<suite>/`.
+
 ### Batch 57: array type context, interface types and TextIO
 
 - VHDL aggregates retain the expected type's declaration scope while resolving

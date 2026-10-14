@@ -58,6 +58,7 @@ int main()
     FSIM_RUN_TEST(test_systemverilog_typed_constants);
     FSIM_RUN_TEST(
         test_systemverilog_constant_function_memoization_dependencies);
+    FSIM_RUN_TEST(test_systemverilog_unresolved_constant_function_call);
     FSIM_RUN_TEST(test_systemverilog_2023_utility_system_callables);
     FSIM_RUN_TEST(test_systemverilog_aliases);
     FSIM_RUN_TEST(test_systemverilog_string_constants);

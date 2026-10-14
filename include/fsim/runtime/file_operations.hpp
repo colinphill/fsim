@@ -109,7 +109,9 @@ enum class InputScanFormat : std::uint8_t {
     boolean_value,
     real,
     unformatted2,
-    unformatted4
+    unformatted4,
+    hierarchy,
+    time
 };
 enum class InputScanTargetKind : std::uint8_t {
     packed_register,
@@ -138,6 +140,10 @@ struct FileScan {
     bool require_assignments { };
     std::optional<std::uint32_t> success;
     bool consume_string_source { };
+    std::string hierarchy_path;
+    // The lexical time unit for %t conversions; the active $timeformat is
+    // supplied at execution because $timeformat can change at run time.
+    std::uint64_t time_unit_femtoseconds { };
     FileScan(
         std::uint32_t destination_value = 0,
         std::uint32_t handle_value = 0,
@@ -147,7 +153,8 @@ struct FileScan {
         std::string trailing_value = { },
         bool require_value = false,
         std::optional<std::uint32_t> success_value = std::nullopt,
-        bool consume_value = false)
+        bool consume_value = false,
+        std::uint64_t time_unit_femtoseconds_value = 0U)
         : destination(destination_value)
         , handle(handle_value)
         , source(source_value)
@@ -157,6 +164,7 @@ struct FileScan {
         , require_assignments(require_value)
         , success(success_value)
         , consume_string_source(consume_value)
+        , time_unit_femtoseconds(time_unit_femtoseconds_value)
     {
     }
 };

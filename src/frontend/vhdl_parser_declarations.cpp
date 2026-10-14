@@ -578,7 +578,8 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
         type.integer_range_expression =
             IntegerRangeExpression{std::move(left_expression),
                                    std::move(right_expression), range_span,
-                                   descending};
+                                   descending,
+                                   parsed_range->direction_from_bounds};
       }
       // The declaration is retained like a subtype of its predefined base
       // so ranges, attributes, and arithmetic follow INTEGER or REAL.

@@ -288,21 +288,18 @@ namespace fsim::runtime::simir {
         return text;
     }
     case OutputFormat::unformatted2: {
-        const auto byte_count = (value.width() + 7U) / 8U;
-        std::string text(byte_count, '\0');
-        for (std::size_t byte = 0; byte < byte_count; ++byte) {
-            const auto logical_byte = std::endian::native
-                    == std::endian::little
-                ? byte
-                : byte_count - byte - 1U;
-            unsigned payload { };
+        const auto word_count = (value.width() + 31U) / 32U;
+        std::string text;
+        text.reserve(word_count * 4U);
+        for (std::size_t word = 0; word < word_count; ++word) {
+            std::uint32_t payload { };
             for (std::size_t bit = 0;
-                bit < 8U && logical_byte * 8U + bit < value.width();
+                bit < 32U && word * 32U + bit < value.width();
                 ++bit) {
-                if (value.get(logical_byte * 8U + bit) == Logic4::one)
-                    payload |= 1U << bit;
+                if (value.get(word * 32U + bit) == Logic4::one)
+                    payload |= UINT32_C(1) << bit;
             }
-            text[byte] = static_cast<char>(payload);
+            append_native_word(text, payload);
         }
         return text;
     }

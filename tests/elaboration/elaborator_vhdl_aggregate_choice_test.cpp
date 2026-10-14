@@ -273,6 +273,29 @@ end architecture;
         && found->span.source_name == filename && !found->span.empty());
   };
 
+  const auto unselected_time_leaf = fsim::frontend::parse_text(
+      "vhdl_unselected_time_integer_matrix_leaf.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Matrix_T is array (integer range <>, integer range <>) of integer;
+  constant Values : Matrix_T(1 to 2, 1 to 2) := ((1, 2), (3, 4 ns));
+begin
+  check_selected_cell : process
+  begin
+    assert Values(1, 1) = 1;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008,
+      fsim::frontend::VhdlStandard::Vhdl2008);
+  assert(unselected_time_leaf.ok());
+  const auto rejected_time_matrix = compile_and_elaborate(
+      unselected_time_leaf.design, "vhdl:work.invalid(rtl)");
+  assert(!rejected_time_matrix.ok()
+      && !rejected_time_matrix.diagnostics.empty());
+
   reject(
       "vhdl_record_choice_overlap.vhd",
       R"(
@@ -398,6 +421,21 @@ architecture rtl of invalid is
   signal Value : bit_vector(3 downto 0);
 begin
   Value <= (Open_T'range => '0');
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYATTR-001");
+  reject(
+      "vhdl_ragged_rank2_constant_shape.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Matrix_T is array (natural range <>, natural range <>) of integer;
+  constant Values : Matrix_T := ((1, 2), (3, 4, 5));
+begin
+  process is
+  begin
+    assert Values'length(2) = 3;
+  end process;
 end architecture;
 )",
       "FSIM-ELAB-VHARRAYATTR-001");

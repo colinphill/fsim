@@ -367,7 +367,8 @@ void add_semantic_value(CacheKeyBuilder& builder, const Value& value)
         add_semantic_value(builder, std::tie(value.destination, value.handle,
             value.source, value.string_source, value.conversions,
             value.trailing_text, value.require_assignments, value.success,
-            value.consume_string_source));
+            value.consume_string_source, value.hierarchy_path,
+            value.time_unit_femtoseconds));
     } else if constexpr (requires { typename std::tuple_size<Type>::type; }) {
         add_key_u64(builder, "field-count", std::tuple_size_v<Type>);
         std::apply([&](const auto&... field) {

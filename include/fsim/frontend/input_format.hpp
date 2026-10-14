@@ -10,7 +10,7 @@ namespace fsim::frontend {
 
 enum class InputScanFormat : std::uint8_t {
   Binary, Octal, Decimal, UnsignedDecimal, Hexadecimal, Character, String,
-  Real, Unformatted2, Unformatted4
+  Real, Unformatted2, Unformatted4, Hierarchy, Time
 };
 struct ParsedInputConversion {
   std::string prefix;

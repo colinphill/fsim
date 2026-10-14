@@ -444,15 +444,9 @@ endmodule
     assert(!rejected_parameters.ok());
     assert(has_diagnostic(
         rejected_parameters, "FSIM-ELAB-PARAM-001"));
-    assert(has_diagnostic(
-        rejected_parameters, "FSIM-ELAB-PARAM-005"));
-    assert(std::ranges::any_of(
-        rejected_parameters.diagnostics,
-        [](const auto& diagnostic) {
-            return diagnostic.message.find(
-                       "$clog2 requires a nonnegative")
-                != std::string::npos;
-        }));
+    // IEEE 1800-2017 20.8.1 treats a signed $clog2 argument as unsigned,
+    // so $clog2(-1) is valid. X/Z argument rejection remains covered by
+    // elaborator_sv_constant_test.
     const auto rejected_clog2_arity = fsim::frontend::parse_text(
         "invalid-clog2-arity.sv",
         "module invalid_clog2_arity; localparam int VALUE = $clog2(); endmodule\n",

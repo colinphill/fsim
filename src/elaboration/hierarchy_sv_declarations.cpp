@@ -1838,13 +1838,39 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                         *compiled_, declaration.source));
             }
         } else {
-            report(
-                "FSIM-ELAB-HIR-001",
-                "compiled initializer for '" + declaration.name
-                    + "' is not a bounded integral value",
-                compiled_source_span(
-                    *compiled_, declaration.source));
-            return false;
+            const auto expression
+                = working_specialization.find_expression(
+                    *declaration.initializer);
+            const bool class_handle
+                = declaration.type->value_form
+                        == semantic::sv::TypeForm::class_handle
+                || effective_type.value_form
+                        == semantic::sv::TypeForm::class_handle
+                || !declaration.type->class_identity.empty()
+                || !effective_type.class_identity.empty();
+            const bool package_initializer
+                = unit.kind == semantic::sv::UnitKind::package;
+            if (class_handle && package_initializer && expression
+                && expression->systemverilog != nullptr
+                && (expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::class_allocation
+                    || expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::class_null)) {
+                // Package class handles are initialized before any process
+                // executes. The application setup phase
+                // evaluates `new` after the class heap has been configured;
+                // the signal's elaborated value is the null handle meanwhile.
+                initial_value = PackedLogic4::from_aval_bval(
+                    width, 0U, 0U);
+            } else {
+                report(
+                    "FSIM-ELAB-HIR-001",
+                    "compiled initializer for '" + declaration.name
+                        + "' is not a bounded integral value",
+                    compiled_source_span(
+                        *compiled_, declaration.source));
+                return false;
+            }
         }
     }
     runtime::simir::Signal signal {

@@ -291,7 +291,8 @@ void VerilogParser::parse_procedural_loop_body(
     }
     if (body->kind == StatementKind::Block
         && body->label.empty()
-        && body->declarations.empty()) {
+        && body->declarations.empty()
+        && body->systemverilog_imports.empty()) {
         statement.statements = std::move(body->statements);
         return;
     }

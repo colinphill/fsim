@@ -46,11 +46,11 @@ namespace {
 void ApplicationTestFixture::test_artifact_phase_semantics()
 {
     install_governed_process_address_space_ceiling();
-    static_assert(app::kRuntimeStateSchema == 79);
+    static_assert(app::kRuntimeStateSchema == 81);
     static_assert(app::kSemanticStateSchema == 4);
     static_assert(app::kDesignIrStateSchema == 5);
     static_assert(app::kCompiledHirBundleSchema == 1);
-    static_assert(app::kSystemVerilogConstraintHirStateSchema == 8);
+    static_assert(app::kSystemVerilogConstraintHirStateSchema == 11);
     static_assert(app::kSystemVerilogCoverageStateSchema == 7);
     static_assert(app::kSystemVerilogUvmStateSchema == 3);
     static_assert(app::kVhdlHirStateSchema == 7);

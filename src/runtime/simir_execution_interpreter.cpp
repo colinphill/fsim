@@ -673,6 +673,7 @@ void Interpreter::Impl::execute(ProcessId id)
                                 : std::string { });
                     }
                     const auto handle = class_allocate_hook(
+                        process.cold().design_process,
                         process.program().name(),
                         op.specialization_identity,
                         op.declared_type,

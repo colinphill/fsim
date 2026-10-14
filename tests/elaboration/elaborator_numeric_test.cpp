@@ -832,6 +832,94 @@ end architecture;
                     });
             }));
 
+    const auto ambiguous_vhdl_enum_range = fsim::frontend::parse_text(
+        "vhdl_ambiguous_enum_range_batch58.vhd",
+        R"(
+entity vhdl_ambiguous_enum_range_batch58 is
+end entity;
+architecture invalid of vhdl_ambiguous_enum_range_batch58 is
+  type first_enum is (a, b, c);
+  type second_enum is (a, b, c);
+begin
+  process
+    variable count : integer := 0;
+  begin
+    for item in a to c loop
+      count := count + 1;
+    end loop;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl1993);
+    assert(ambiguous_vhdl_enum_range.ok());
+    const auto rejected_ambiguous_vhdl_enum_range = compile_and_elaborate(
+        ambiguous_vhdl_enum_range.design,
+        "vhdl:work.vhdl_ambiguous_enum_range_batch58(invalid)");
+    assert(
+        !rejected_ambiguous_vhdl_enum_range.ok()
+        && has_diagnostic(
+            rejected_ambiguous_vhdl_enum_range, "FSIM-ELAB-071"));
+
+    const auto wrong_nominal_vhdl_enum_attribute = fsim::frontend::parse_text(
+        "vhdl_enum_attribute_wrong_nominal_batch58.vhd",
+        R"(
+entity vhdl_enum_attribute_wrong_nominal_batch58 is
+end entity;
+architecture invalid of vhdl_enum_attribute_wrong_nominal_batch58 is
+  type first_enum is (red, green, blue);
+  type second_enum is (red, green, blue);
+begin
+  process
+    variable result_value : integer := 0;
+  begin
+    result_value := first_enum'pos(second_enum'high);
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl1993);
+    assert(wrong_nominal_vhdl_enum_attribute.ok());
+    const auto rejected_wrong_nominal_vhdl_enum_attribute =
+        compile_and_elaborate(
+            wrong_nominal_vhdl_enum_attribute.design,
+            "vhdl:work.vhdl_enum_attribute_wrong_nominal_batch58(invalid)");
+    assert(
+        !rejected_wrong_nominal_vhdl_enum_attribute.ok()
+        && has_diagnostic(
+            rejected_wrong_nominal_vhdl_enum_attribute,
+            "FSIM-ELAB-VHENUMATTR-001"));
+
+    const auto wrong_access_enum_attribute = fsim::frontend::parse_text(
+        "vhdl_enum_access_wrong_nominal_batch58.vhd",
+        R"(
+entity vhdl_enum_access_wrong_nominal_batch58 is end entity;
+architecture invalid of vhdl_enum_access_wrong_nominal_batch58 is
+  type first_enum is (red, green, blue);
+  type second_enum is (red, green, blue);
+  type second_pointer is access second_enum;
+begin
+  process
+    variable pointer : second_pointer := new second_enum;
+    variable result_value : integer;
+  begin
+    result_value := first_enum'pos(pointer.all);
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl1993);
+    assert(wrong_access_enum_attribute.ok());
+    const auto rejected_access_enum_attribute = compile_and_elaborate(
+        wrong_access_enum_attribute.design,
+        "vhdl:work.vhdl_enum_access_wrong_nominal_batch58(invalid)");
+    assert(!rejected_access_enum_attribute.ok()
+        && has_diagnostic(rejected_access_enum_attribute,
+            "FSIM-ELAB-VHENUMATTR-001"));
+
     const auto invalid_vhdl_enumerations =
         fsim::frontend::parse_text(
             "invalid_vhdl_enumerations.vhd",

@@ -15,6 +15,7 @@
 #include <fstream>
 #include <iostream>
 #include <iterator>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -747,6 +748,11 @@ extern module hir_external_probe(input logic value);
 module hir_external_probe(input logic value);
 endmodule
 
+module port_slot_roundtrip(a, , b,);
+  input a;
+  output b;
+endmodule
+
 package values;
   import "DPI-C" pure function int c_abs(input int value);
   typedef logic signed [3:0] key_t;
@@ -938,8 +944,381 @@ endconfig : semantic_hir_configuration
         fsim::diagnostic::print_text(std::cerr, diagnostics);
     }
     assert(checked);
+    const auto block_import_source = directory.path / "block_import.sv";
+    {
+        std::ofstream output { block_import_source, std::ios::binary };
+        output << R"(package b58_block_import_pkg;
+  parameter int imported_value = 7;
+  typedef logic [3:0] nibble_t;
+  logic [3:0] imported_data;
+endpackage
+module b58_block_import_top;
+  localparam int imported_value = 100;
+  logic [7:0] imported_signal;
+  logic [7:0] imported_data;
+  always @(imported_signal) begin end
+  initial begin : imported_scope
+    import b58_block_import_pkg::*;
+    nibble_t local_value;
+    local_value = imported_data;
+    local_value = 4'd3;
+    if (imported_value != 7 || $bits(local_value) != 4
+        || $bits(imported_signal) != 8)
+      $fatal(1, "block import HIR test");
+  end
+endmodule
+)";
+        assert(output.good());
+    }
+    auto block_import_config = config;
+    block_import_config.project.name = "systemverilog-block-import-hir";
+    block_import_config.project.top = "sv:work.b58_block_import_top";
+    block_import_config.source_sets.front().files = { block_import_source };
+    fsim::diagnostic::Engine block_import_diagnostics;
+    const auto block_import_checked = fsim::app::check_project(
+        block_import_config, block_import_diagnostics);
+    if (!block_import_checked) {
+        fsim::diagnostic::print_text(
+            std::cerr, block_import_diagnostics);
+    }
+    assert(block_import_checked);
+    const auto block_import_statement = std::ranges::find_if(
+        block_import_checked->systemverilog_hir.statements(),
+        [](const auto& statement) {
+            return !statement.imports.empty();
+        });
+    assert(block_import_statement
+        != block_import_checked->systemverilog_hir.statements().end());
+    assert(block_import_statement->kind
+        == fsim::semantic::sv::StatementKind::block);
+    assert(block_import_statement->nested_scope);
+    assert(block_import_statement->imports.size() == 1U);
+    assert(block_import_statement->imports.front().package.spelling
+        == "work::b58_block_import_pkg");
+    assert(block_import_statement->imports.front().wildcard);
+    assert(!block_import_statement->imports.front().member);
+    assert(block_import_statement->imports.front().source_order != 0U);
+    const auto ordered_block_type = std::ranges::find_if(
+        block_import_checked->systemverilog_hir.declarations(),
+        [](const auto& declaration) {
+            return declaration.name == "local_value" && declaration.type;
+        });
+    assert(ordered_block_type
+        != block_import_checked->systemverilog_hir.declarations().end());
+    assert(ordered_block_type->type->source_order
+        > block_import_statement->imports.front().source_order);
+    const auto imported_data_package = std::ranges::find_if(
+        block_import_checked->systemverilog_hir.units(), [](const auto& unit) {
+            return unit.kind == fsim::semantic::sv::UnitKind::package
+                && unit.name == "b58_block_import_pkg";
+        });
+    assert(imported_data_package
+        != block_import_checked->systemverilog_hir.units().end());
+    const auto imported_data_declaration = std::ranges::find_if(
+        block_import_checked->systemverilog_hir.declarations(),
+        [&](const auto& declaration) {
+            return declaration.name == "imported_data"
+                && declaration.scope == imported_data_package->scope;
+        });
+    assert(imported_data_declaration
+        != block_import_checked->systemverilog_hir.declarations().end());
+    const auto ordered_imported_reference = std::ranges::find_if(
+        block_import_checked->systemverilog_hir.expressions(),
+        [](const auto& expression) {
+            return expression.referenced_name
+                && expression.referenced_name->spelling == "imported_data";
+        });
+    assert(ordered_imported_reference
+        != block_import_checked->systemverilog_hir.expressions().end());
+    assert(ordered_imported_reference->referenced_name->source_order
+        > block_import_statement->imports.front().source_order);
+    assert(ordered_imported_reference->referenced_name->selected
+        == imported_data_declaration->id);
+    const auto block_import_state
+        = fsim::app::serialize_systemverilog_constraint_hir_state(
+            block_import_checked->systemverilog_hir,
+            block_import_checked->semantics,
+            block_import_diagnostics);
+    assert(block_import_state && !block_import_diagnostics.has_error());
+    const auto restored_block_import_state
+        = fsim::app::deserialize_systemverilog_constraint_hir_state(
+            *block_import_state, "block-import-hir-state",
+            block_import_checked->semantics,
+            block_import_diagnostics);
+    assert(restored_block_import_state
+        && !block_import_diagnostics.has_error());
+    const auto restored_block_import_statement = std::ranges::find_if(
+        restored_block_import_state->statements(), [](const auto& statement) {
+            return !statement.imports.empty();
+        });
+    assert(restored_block_import_statement
+        != restored_block_import_state->statements().end());
+    assert(restored_block_import_statement->imports.front().package.spelling
+        == "work::b58_block_import_pkg");
+    assert(restored_block_import_statement->imports.front().wildcard);
+    assert(restored_block_import_statement->imports.front().source
+        == block_import_statement->imports.front().source);
+    assert(restored_block_import_statement->imports.front().source_order
+        == block_import_statement->imports.front().source_order);
+    const auto restored_ordered_reference = std::ranges::find_if(
+        restored_block_import_state->expressions(), [](const auto& expression) {
+            return expression.referenced_name
+                && expression.referenced_name->spelling == "imported_data";
+        });
+    assert(restored_ordered_reference
+        != restored_block_import_state->expressions().end());
+    assert(restored_ordered_reference->referenced_name->source_order
+        == ordered_imported_reference->referenced_name->source_order);
+    assert(restored_ordered_reference->referenced_name->selected
+        == imported_data_declaration->id);
+    const auto restored_ordered_block_type = std::ranges::find_if(
+        restored_block_import_state->declarations(),
+        [](const auto& declaration) {
+            return declaration.name == "local_value" && declaration.type;
+        });
+    assert(restored_ordered_block_type
+        != restored_block_import_state->declarations().end());
+    assert(restored_ordered_block_type->type->source_order
+        == ordered_block_type->type->source_order);
+    const auto ordered_sensitivity_process = std::ranges::find_if(
+        block_import_checked->systemverilog_hir.processes(),
+        [](const auto& process) {
+            return std::ranges::any_of(
+                process.sensitivities, [](const auto& sensitivity) {
+                    return sensitivity.signal == "imported_signal";
+                });
+        });
+    assert(ordered_sensitivity_process
+        != block_import_checked->systemverilog_hir.processes().end());
+    const auto ordered_sensitivity = std::ranges::find_if(
+        ordered_sensitivity_process->sensitivities,
+        [](const auto& sensitivity) {
+            return sensitivity.signal == "imported_signal";
+        });
+    assert(ordered_sensitivity != ordered_sensitivity_process->sensitivities.end());
+    assert(ordered_sensitivity->source_order != 0U);
+    const auto restored_ordered_sensitivity_process = std::ranges::find_if(
+        restored_block_import_state->processes(), [](const auto& process) {
+            return std::ranges::any_of(
+                process.sensitivities, [](const auto& sensitivity) {
+                    return sensitivity.signal == "imported_signal";
+                });
+        });
+    assert(restored_ordered_sensitivity_process
+        != restored_block_import_state->processes().end());
+    const auto restored_ordered_sensitivity = std::ranges::find_if(
+        restored_ordered_sensitivity_process->sensitivities,
+        [](const auto& sensitivity) {
+            return sensitivity.signal == "imported_signal";
+        });
+    assert(restored_ordered_sensitivity
+        != restored_ordered_sensitivity_process->sensitivities.end());
+    assert(restored_ordered_sensitivity->source_order
+        == ordered_sensitivity->source_order);
+    auto malformed_block_import_hir
+        = block_import_checked->systemverilog_hir;
+    const auto malformed_block_import_statement = std::ranges::find_if(
+        malformed_block_import_hir.mutable_statements(),
+        [](const auto& statement) {
+            return !statement.imports.empty();
+        });
+    assert(malformed_block_import_statement
+        != malformed_block_import_hir.mutable_statements().end());
+    malformed_block_import_statement->imports.front().wildcard = false;
+    fsim::diagnostic::Engine malformed_block_import_diagnostics;
+    assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+        malformed_block_import_hir, block_import_checked->semantics,
+        malformed_block_import_diagnostics));
+    assert(malformed_block_import_diagnostics.has_error());
+    const auto missing_block_import_source
+        = directory.path / "missing_block_import.sv";
+    {
+        std::ofstream output {
+            missing_block_import_source, std::ios::binary };
+        output << R"(module missing_block_import;
+  initial begin
+    import package_that_does_not_exist::*;
+  end
+endmodule
+)";
+    }
+    auto missing_block_import_config = block_import_config;
+    missing_block_import_config.project.name
+        = "systemverilog-missing-block-import-hir";
+    missing_block_import_config.project.top
+        = "sv:work.missing_block_import";
+    missing_block_import_config.source_sets.front().files
+        = { missing_block_import_source };
+    fsim::diagnostic::Engine missing_block_import_diagnostics;
+    const auto missing_block_import_checked = fsim::app::check_project(
+        missing_block_import_config, missing_block_import_diagnostics);
+    assert(!missing_block_import_checked);
+    assert(std::ranges::any_of(
+        missing_block_import_diagnostics.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PACKAGE-002";
+        }));
+    const auto preimport_visibility_source
+        = directory.path / "preimport_visibility.sv";
+    {
+        std::ofstream output {
+            preimport_visibility_source, std::ios::binary };
+        output << R"(package b58_preimport_visibility_pkg;
+  typedef logic [3:0] late_type_t;
+endpackage
+module b58_preimport_visibility;
+  initial begin : local_scope
+    late_type_t before_import;
+    import b58_preimport_visibility_pkg::*;
+    late_type_t after_import;
+    after_import = 4'd3;
+  end
+endmodule
+)";
+    }
+    auto preimport_visibility_config = block_import_config;
+    preimport_visibility_config.project.name
+        = "systemverilog-preimport-visibility-hir";
+    preimport_visibility_config.project.top
+        = "sv:work.b58_preimport_visibility";
+    preimport_visibility_config.source_sets.front().files
+        = { preimport_visibility_source };
+    fsim::diagnostic::Engine preimport_visibility_diagnostics;
+    const auto preimport_visibility_checked = fsim::app::check_project(
+        preimport_visibility_config, preimport_visibility_diagnostics);
+    assert(preimport_visibility_checked);
+    const auto preimport_visibility_elaborated
+        = fsim::elaboration::elaborate(
+            *preimport_visibility_checked, "b58_preimport_visibility");
+    assert(!preimport_visibility_elaborated.ok());
+    assert(std::ranges::any_of(
+        preimport_visibility_elaborated.diagnostics,
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ELAB-SVTYPE-001";
+        }));
+
+    const auto explicit_import_collision_source
+        = directory.path / "explicit_import_collision.sv";
+    {
+        std::ofstream output {
+            explicit_import_collision_source, std::ios::binary };
+        output << R"(package b58_import_collision_a;
+  localparam int shared_value = 1;
+endpackage
+package b58_import_collision_b;
+  localparam int shared_value = 2;
+endpackage
+module b58_explicit_import_collision;
+  initial begin : local_scope
+    import b58_import_collision_a::shared_value;
+    import b58_import_collision_b::shared_value;
+    int observed;
+    observed = shared_value;
+  end
+endmodule
+)";
+    }
+    auto explicit_import_collision_config = block_import_config;
+    explicit_import_collision_config.project.name
+        = "systemverilog-explicit-import-collision-hir";
+    explicit_import_collision_config.project.top
+        = "sv:work.b58_explicit_import_collision";
+    explicit_import_collision_config.source_sets.front().files
+        = { explicit_import_collision_source };
+    fsim::diagnostic::Engine explicit_import_collision_diagnostics;
+    const auto explicit_import_collision_checked = fsim::app::check_project(
+        explicit_import_collision_config,
+        explicit_import_collision_diagnostics);
+    assert(!explicit_import_collision_checked);
+    assert(std::ranges::any_of(
+        explicit_import_collision_diagnostics.diagnostics(),
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-PACKAGE-003";
+        }));
+
+    const auto generated_scope_collision_source
+        = directory.path / "generated_scope_collision.sv";
+    {
+        std::ofstream output {
+            generated_scope_collision_source, std::ios::binary };
+        output << R"(module b58_independent_generated_scope_collision;
+  localparam bit FIRST_ACTIVE = 1'b1;
+  localparam bit SECOND_ACTIVE = 1'b1;
+  logic [3:0] observed;
+  generate
+    if (FIRST_ACTIVE) begin : duplicate_route
+      logic [3:0] payload;
+    end
+    if (SECOND_ACTIVE) begin : duplicate_route
+      logic [3:0] payload;
+    end
+  endgenerate
+  initial observed = duplicate_route.payload;
+endmodule
+)";
+        assert(output.good());
+    }
+    auto generated_scope_collision_config = block_import_config;
+    generated_scope_collision_config.project.name
+        = "systemverilog-independent-generated-scope-collision";
+    generated_scope_collision_config.project.top
+        = "sv:work.b58_independent_generated_scope_collision";
+    generated_scope_collision_config.source_sets.front().files
+        = { generated_scope_collision_source };
+    fsim::diagnostic::Engine generated_scope_collision_diagnostics;
+    // Repeated explicit labels are rejected before lookup. The explicit
+    // package-import collision above remains the resolver ambiguity control.
+    const auto generated_scope_collision_checked = fsim::app::check_project(
+        generated_scope_collision_config,
+        generated_scope_collision_diagnostics);
+    assert(!generated_scope_collision_checked);
+    assert(std::ranges::any_of(
+        generated_scope_collision_diagnostics.diagnostics(),
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-SV-SEM-386";
+        }));
+
+    const auto malformed_ports_source
+        = directory.path / "malformed_ports.sv";
+    {
+        std::ofstream output { malformed_ports_source, std::ios::binary };
+        output << R"(module b58_partial_selected_port(data[7:1]);
+  input [7:0] data;
+endmodule
+module b58_duplicate_external_port(a, a);
+  input a;
+endmodule
+)";
+        assert(output.good());
+    }
+    auto malformed_ports_config = config;
+    malformed_ports_config.project.name = "malformed-port-controls";
+    malformed_ports_config.project.top
+        = "sv:work.b58_partial_selected_port";
+    malformed_ports_config.source_sets.front().files
+        = { malformed_ports_source };
+    fsim::diagnostic::Engine malformed_ports_diagnostics;
+    assert(!fsim::app::check_project(
+        malformed_ports_config, malformed_ports_diagnostics));
+    assert(std::ranges::any_of(
+        malformed_ports_diagnostics.diagnostics(), [](const auto& value) {
+            return value.code == "FSIM-SV-UNSUPPORTED-051";
+        }));
+    assert(std::ranges::any_of(
+        malformed_ports_diagnostics.diagnostics(), [](const auto& value) {
+            return value.code == "FSIM-SV-SEM-003";
+        }));
     // check_project() has destroyed its compile-local AST workspace.
     assert_signed_expression_retention(checked->systemverilog_hir);
+    const std::vector<std::optional<std::string>> expected_port_slots {
+        std::string { "a" }, std::nullopt, std::string { "b" },
+        std::nullopt };
+    const auto port_slot_unit = std::ranges::find(
+        checked->systemverilog_hir.units(),
+        std::string { "port_slot_roundtrip" },
+        &fsim::semantic::sv::Unit::name);
+    assert(port_slot_unit != checked->systemverilog_hir.units().end());
+    assert(port_slot_unit->port_slots
+        && *port_slot_unit->port_slots == expected_port_slots);
     const auto external_probe = std::ranges::find_if(
         checked->systemverilog_hir.units(), [](const auto& unit) {
             return unit.name == "hir_external_probe" && unit.external;
@@ -1077,8 +1456,9 @@ endconfig : semantic_hir_configuration
     assert(associative->type->container_form
         == fsim::semantic::sv::TypeForm::associative_array);
     assert(associative->type->associative_index);
+    // Linked package references include their effective library identity.
     assert(associative->type->associative_index->spelling
-        == "values::key_t");
+        == "work::values::key_t");
     assert(static_values->type->container_form
         == fsim::semantic::sv::TypeForm::static_array);
     assert(static_values->type->unpacked_dimensions.size() == 1);
@@ -1569,6 +1949,14 @@ endconfig : semantic_hir_configuration
         *hir_state, "systemverilog-hir-state",
         checked->semantics, hir_state_diagnostics);
     assert(restored_hir && !hir_state_diagnostics.has_error());
+    std::string schema8_hir_state { "FSIMSVCH" };
+    append_u32(schema8_hir_state, 8U);
+    schema8_hir_state.append(hir_state->data() + 12U, hir_state->size() - 12U);
+    fsim::diagnostic::Engine schema8_hir_diagnostics;
+    assert(!fsim::app::deserialize_systemverilog_constraint_hir_state(
+        schema8_hir_state, "systemverilog-hir-schema-8",
+        checked->semantics, schema8_hir_diagnostics));
+    assert(schema8_hir_diagnostics.has_error());
     assert_signed_expression_retention(*restored_hir);
     const auto restored_top = std::ranges::find_if(
         restored_hir->units(), [](const auto& unit) {
@@ -1590,6 +1978,12 @@ endconfig : semantic_hir_configuration
     assert(restored_values != restored_hir->units().end());
     assert(restored_external_probe != restored_hir->units().end());
     assert(restored_configuration != restored_hir->units().end());
+    const auto restored_port_slot_unit = std::ranges::find(
+        restored_hir->units(), std::string { "port_slot_roundtrip" },
+        &fsim::semantic::sv::Unit::name);
+    assert(restored_port_slot_unit != restored_hir->units().end());
+    assert(restored_port_slot_unit->port_slots
+        && *restored_port_slot_unit->port_slots == expected_port_slots);
     assert(restored_configuration->configuration);
     assert(restored_configuration->configuration->designs.front().target
         == configuration->configuration->designs.front().target);
@@ -1919,6 +2313,26 @@ endconfig : semantic_hir_configuration
     assert(restored_bundle && restored_bundle->valid());
     assert_signed_expression_retention(
         restored_bundle->systemverilog_hir);
+    const auto bundled_port_slot_unit = std::ranges::find(
+        restored_bundle->systemverilog_hir.units(),
+        std::string { "port_slot_roundtrip" },
+        &fsim::semantic::sv::Unit::name);
+    assert(bundled_port_slot_unit
+        != restored_bundle->systemverilog_hir.units().end());
+    assert(bundled_port_slot_unit->port_slots
+        && *bundled_port_slot_unit->port_slots == expected_port_slots);
+    auto invalid_port_slots = checked->systemverilog_hir;
+    const auto invalid_port_slot_unit = std::ranges::find(
+        invalid_port_slots.mutable_units(),
+        std::string { "port_slot_roundtrip" },
+        &fsim::semantic::sv::Unit::name);
+    assert(invalid_port_slot_unit != invalid_port_slots.mutable_units().end());
+    invalid_port_slot_unit->port_slots->front() = "missing_port";
+    fsim::diagnostic::Engine invalid_port_slot_diagnostics;
+    assert(!fsim::app::serialize_systemverilog_constraint_hir_state(
+        invalid_port_slots, checked->semantics,
+        invalid_port_slot_diagnostics));
+    assert(invalid_port_slot_diagnostics.has_error());
     assert(std::ranges::any_of(
         restored_bundle->systemverilog_hir.units(), [](const auto& unit) {
             return unit.name == "hir_external_probe" && unit.external;

@@ -1939,6 +1939,7 @@ void Interpreter::Impl::handle_boundary(
                     : std::string { });
         }
         const auto handle = class_allocate_hook(
+            process.cold().design_process,
             process.program().name(),
             class_allocate->specialization_identity,
             class_allocate->declared_type,

@@ -108,7 +108,8 @@ namespace systemverilog_hir_detail {
         const semantic::Model& model,
         const sv::Hir& hir,
         const semantic::ScopeId scope,
-        const std::string_view spelling) noexcept
+        const std::string_view spelling,
+        const std::uint64_t source_order) noexcept
     {
         const auto parent_scope = [&](const semantic::ScopeId candidate)
             -> std::optional<semantic::ScopeId> {
@@ -217,6 +218,10 @@ namespace systemverilog_hir_detail {
         } else if (owner != hir.units().end()) {
             bool explicit_import { };
             for (const auto& imported : owner->imports) {
+                if (source_order != 0U && imported.source_order != 0U
+                    && imported.source_order >= source_order) {
+                    continue;
+                }
                 if (imported.wildcard || !imported.member
                     || imported.member->spelling != simple_name) {
                     continue;
@@ -226,6 +231,10 @@ namespace systemverilog_hir_detail {
             }
             if (!explicit_import) {
                 for (const auto& imported : owner->imports) {
+                    if (source_order != 0U && imported.source_order != 0U
+                        && imported.source_order >= source_order) {
+                        continue;
+                    }
                     if (imported.wildcard) {
                         append_package(imported.package.spelling);
                     }
@@ -451,9 +460,11 @@ namespace systemverilog_hir_detail {
     [[nodiscard]] sv::Name SystemVerilogHirBuilder::name(
         const std::string_view spelling,
         const frontend::SourceSpan& span,
-        const semantic::ScopeId scope)
+        const semantic::ScopeId scope,
+        const std::uint64_t source_order)
     {
         sv::Name result { std::string { spelling }, source(span), std::nullopt, { } };
+        result.source_order = source_order;
         auto visible_scope = std::optional<semantic::ScopeId> { scope };
         while (visible_scope) {
             for (const auto& declaration : hir_.declarations()) {
@@ -552,7 +563,9 @@ namespace systemverilog_hir_detail {
         if (input.kind == frontend::ExpressionKind::Identifier
             || (input.kind == frontend::ExpressionKind::Call
                 && !input.text.starts_with("@sv-"))) {
-            output.referenced_name = name(input.text, input.span, scope);
+            output.referenced_name = name(
+                input.text, input.span, scope,
+                input.systemverilog_source_order);
         }
         output.argument_names = input.call_argument_names;
         const auto omitted = omit_systemverilog_call_arguments(
@@ -701,7 +714,8 @@ namespace systemverilog_hir_detail {
     [[nodiscard]] semantic::TypeId SystemVerilogHirBuilder::find_type(
         const semantic::ScopeId scope,
         const std::string_view type_name,
-        const std::optional<semantic::SourceSpanId> exact_source)
+        const std::optional<semantic::SourceSpanId> exact_source,
+        const std::uint64_t source_order)
         const noexcept
     {
         auto visible_scope = std::optional<semantic::ScopeId> { scope };
@@ -746,11 +760,16 @@ namespace systemverilog_hir_detail {
             return { };
         }
         if (const auto selected = find_systemverilog_hir_type(
-                model_, hir_, scope, type_name);
+                model_, hir_, scope, type_name, source_order);
             selected.valid()) {
             return selected;
         }
         for (const auto& imported : current_imports_) {
+            if (source_order != 0U
+                && imported.systemverilog_source_order != 0U
+                && imported.systemverilog_source_order >= source_order) {
+                continue;
+            }
             if (!imported.name.empty() && imported.name != simple_name) {
                 continue;
             }
@@ -1287,6 +1306,7 @@ namespace systemverilog_hir_detail {
         output.external = input.systemverilog_extern;
         output.library = input.library;
         output.name = input.name;
+        output.port_slots = input.systemverilog_port_slots;
         output.source = common.source;
         output.origin = common.origin;
         output.compilation_unit_identity = input.compilation_unit_identity;
@@ -1369,13 +1389,16 @@ namespace systemverilog_hir_detail {
             output.configuration = std::move(configuration);
         }
         for (const auto& input_import : input.systemverilog_imports) {
-            output.imports.push_back({ name(input_import.package, input_import.span, output.scope),
+            sv::Import imported {
+                name(input_import.package, input_import.span, output.scope),
                 input_import.name.empty()
                     ? std::nullopt
                     : std::optional<sv::Name> { name(
                           input_import.name, input_import.span, output.scope) },
                 input_import.name.empty(),
-                source(input_import.span) });
+                source(input_import.span) };
+            imported.source_order = input_import.systemverilog_source_order;
+            output.imports.push_back(std::move(imported));
         }
         for (const auto& input_export : input.systemverilog_exports) {
             output.exports.push_back({ name(input_export.package, input_export.span, output.scope),

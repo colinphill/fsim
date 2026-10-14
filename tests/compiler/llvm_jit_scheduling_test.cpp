@@ -2528,6 +2528,58 @@ void test_class_service_boundaries_at_level(
       [&] { (void)jit.resume(handle, old_descriptor, frame, result); },
       "require class-property callbacks");
 
+  // With no resumable boundary or debug locals, working registers are
+  // transient. Native property callbacks still require the frame planes for
+  // both their output and the input to a following property write.
+  Process transient;
+  transient.id = 1;
+  transient.name = std::string{symbol} + "_transient_property";
+  transient.register_count = 1;
+  transient.operations = {
+      ClassStaticPropertyRead{0, "work::Item::shared", 130},
+      ClassStaticPropertyWrite{0, "work::Item::shared"},
+      Halt{},
+  };
+  // The enclosing JIT intentionally keeps its default debug instrumentation.
+  // Use a separate JIT with the same optimization/cache settings so this
+  // process exercises the transient-register frame path.
+  LlvmJitOptions transient_options{optimization, {}};
+  transient_options.debug_instrumentation = false;
+  LlvmJit transient_jit{transient_options};
+  transient_jit.add_process(transient.name, transient, widths);
+  const auto transient_handle = transient_jit.lookup(transient.name);
+  const auto transient_layout = transient_jit.frame_layout(transient_handle);
+  std::vector<std::uint64_t> transient_aval(
+      transient_layout.register_word_count);
+  std::vector<std::uint64_t> transient_bval(
+      transient_layout.register_word_count);
+  std::vector<std::uint8_t> transient_initialized(
+      transient_layout.register_count);
+  fsim_jit_frame_v2 transient_frame{};
+  transient_jit.initialize_frame(
+      transient_handle, transient_frame, transient_aval, transient_bval,
+      transient_initialized);
+  TestRuntime transient_runtime;
+  transient_runtime.native_service_word_count
+      = transient_layout.register_word_count;
+  transient_runtime.class_property_reads = {
+      NativeServiceRegister{0U, 0U,
+          transient_layout.register_word_offsets[0], 130U, small_value},
+  };
+  transient_runtime.class_property_writes = {
+      NativeServiceRegister{1U, 0U,
+          transient_layout.register_word_offsets[0], 130U, PackedLogic4{}},
+  };
+  auto transient_descriptor = abi(transient_runtime);
+  auto transient_result = new_resume_result();
+  assert(transient_jit.resume(
+             transient_handle, transient_descriptor, transient_frame,
+             transient_result)
+         == JitResumeStatus::completed);
+  assert(transient_runtime.class_property_operation_calls == 2U);
+  assert(transient_runtime.class_property_write_values.size() == 1U);
+  assert(transient_runtime.class_property_write_values.front() == small_value);
+
   Process malformed;
   malformed.id = 1;
   malformed.name = std::string{symbol} + "_malformed";

@@ -6,6 +6,7 @@ namespace fsim::tests::frontend {
 void test_systemverilog_preprocessor();
 void test_systemverilog_uvm_macro_surface();
 void test_systemverilog_public_conformance_frontend();
+void test_systemverilog_block_wildcard_import_visibility();
 void test_systemverilog_checker_revisions();
 void test_systemverilog_2023_profile_isolation();
 void test_verilog_systemverilog_compatibility_defaults();

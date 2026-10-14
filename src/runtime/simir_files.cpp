@@ -1133,6 +1133,7 @@ void Interpreter::Impl::execute_file(
     try {
         InputScanResult scanned;
         std::string* consumed_source { };
+        const auto active_time_format = time_format;
         const bool vhdl_textio_line = vhdl_textio_read(operation);
         auto effective_operation = operation;
         if (vhdl_textio_line && !vhdl_textio_sread(operation)) {
@@ -1165,7 +1166,7 @@ void Interpreter::Impl::execute_file(
         if (operation.string_source) {
             auto& source = get_string_register(process, operation.source);
             scanned = scan_formatted_string(
-                effective_operation, source);
+                effective_operation, source, active_time_format);
             consumed_source = &source;
             if (operation.consume_string_source && !vhdl_textio_line) {
                 source.erase(0,
@@ -1182,7 +1183,7 @@ void Interpreter::Impl::execute_file(
                 }
             };
             scanned = scan_formatted_input(
-                effective_operation, read, unread);
+                effective_operation, read, unread, active_time_format);
         }
         const auto expected = static_cast<std::int32_t>(std::ranges::count_if(
             operation.conversions,

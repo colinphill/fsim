@@ -13,6 +13,8 @@
 
 namespace fsim::runtime::simir {
 
+struct SystemVerilogTimeFormat;
+
 struct InputScanValue {
     PackedLogic4 packed;
     std::string text;
@@ -30,7 +32,15 @@ struct InputScanResult {
     const FileScan& operation,
     const std::function<std::int32_t()>& read,
     const std::function<void(std::int32_t)>& unread);
+[[nodiscard]] InputScanResult scan_formatted_input(
+    const FileScan& operation,
+    const std::function<std::int32_t()>& read,
+    const std::function<void(std::int32_t)>& unread,
+    const SystemVerilogTimeFormat& time_format);
 [[nodiscard]] InputScanResult scan_formatted_string(
     const FileScan& operation, std::string_view input);
+[[nodiscard]] InputScanResult scan_formatted_string(
+    const FileScan& operation, std::string_view input,
+    const SystemVerilogTimeFormat& time_format);
 
 } // namespace fsim::runtime::simir

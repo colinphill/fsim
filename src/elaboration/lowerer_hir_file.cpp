@@ -26,6 +26,37 @@ namespace {
         || name == "$test$plusargs" || name == "$value$plusargs";
 }
 
+[[nodiscard]] bool hir_sscanf_unknown_integral_format(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::Expression& call)
+{
+    // A variable with an X/Z initializer is not a language constant
+    // expression. Do not fold it here and skip its run-time evaluation.
+    if (call.text != "$sscanf" || call.operands.size() < 2U
+        || !hir_systemverilog_constant_expression(
+            specialization, call.operands[1])) {
+        return false;
+    }
+    const auto bits = specialization.evaluate_systemverilog_bits_expression(
+        call.operands[1]);
+    return bits && bits->find_first_of("xXzZ") != std::string::npos;
+}
+
+[[nodiscard]] bool hir_sscanf_unknown_format_simple_source(
+    const semantic::SpecializedHirUnit& specialization,
+    const semantic::sv::Expression& call)
+{
+    if (call.text != "$sscanf" || call.operands.size() < 2U) {
+        return false;
+    }
+    const auto source = specialization.find_expression(call.operands[0]);
+    return source && source->systemverilog != nullptr
+        && (source->systemverilog->kind
+                == semantic::sv::ExpressionKind::name
+            || source->systemverilog->kind
+                == semantic::sv::ExpressionKind::string_literal);
+}
+
 [[nodiscard]] InputScanFormat runtime_input_format(
     const frontend::InputScanFormat format)
 {
@@ -50,6 +81,10 @@ namespace {
         return InputScanFormat::unformatted2;
     case frontend::InputScanFormat::Unformatted4:
         return InputScanFormat::unformatted4;
+    case frontend::InputScanFormat::Hierarchy:
+        return InputScanFormat::hierarchy;
+    case frontend::InputScanFormat::Time:
+        return InputScanFormat::time;
     }
     throw std::logic_error { "invalid input scan format" };
 }
@@ -58,7 +93,8 @@ namespace {
     const frontend::InputScanFormat format) noexcept
 {
     return format == frontend::InputScanFormat::String
-        || format == frontend::InputScanFormat::Character;
+        || format == frontend::InputScanFormat::Character
+        || format == frontend::InputScanFormat::Hierarchy;
 }
 
 [[nodiscard]] frontend::SystemVerilogScalarKind scalar_kind(
@@ -191,6 +227,130 @@ namespace {
 }
 
 } // namespace
+
+Lowerer::HirSystemVerilogScanValueKind
+Lowerer::hir_systemverilog_scan_value_kind(
+    const semantic::ExpressionId expression_id) const
+{
+    using Kind = HirSystemVerilogScanValueKind;
+    using TypeForm = semantic::sv::TypeForm;
+    if (specialized_hir_unit_ == nullptr) {
+        return Kind::unsupported;
+    }
+    const auto expression = specialized_hir_unit_->find_expression(
+        expression_id);
+    if (!expression || expression->systemverilog == nullptr) {
+        return Kind::unsupported;
+    }
+    const auto& source = *expression->systemverilog;
+    if (hir_expression_is_string(expression_id, source.scope)) {
+        return Kind::string;
+    }
+    if (source.kind != semantic::sv::ExpressionKind::name) {
+        return Kind::unsupported;
+    }
+    const auto declared = hir_systemverilog_value_type(expression_id);
+    if (!declared) {
+        return Kind::unsupported;
+    }
+    const auto invalid_shape = [](const semantic::sv::TypeReference& type) {
+        return type.container_form.has_value()
+            || !type.unpacked_dimensions.empty()
+            || !type.container_element_types.empty()
+            || !type.class_identity.empty()
+            || type.virtual_interface
+            || !type.interface_type.empty()
+            || !type.interface_modport.empty();
+    };
+    if (invalid_shape(*declared)) {
+        return Kind::unsupported;
+    }
+    const auto scalar_kind = hir_systemverilog_scalar_kind(expression_id);
+    if (scalar_kind == frontend::SystemVerilogScalarKind::Chandle) {
+        return Kind::unsupported;
+    }
+    if (frontend::is_real_scalar_kind(scalar_kind)) {
+        const auto width = hir_expression_width(expression_id, source.scope);
+        return width && *width != 0U ? Kind::real : Kind::unsupported;
+    }
+
+    const semantic::CompiledDesignResolver resolver {
+        *specialized_hir_unit_, hir_generic_binding_frames_
+    };
+    auto resolved = resolver.effective_systemverilog_type(
+        *declared, source.scope).value_or(*declared);
+    std::unordered_set<std::uint32_t> visited;
+    std::optional<TypeForm> form;
+    while (true) {
+        if (invalid_shape(resolved)) {
+            return Kind::unsupported;
+        }
+        if (!resolved.target.target.valid()) {
+            form = resolved.value_form;
+            break;
+        }
+        if (!visited.insert(resolved.target.target.value()).second) {
+            return Kind::unsupported;
+        }
+        const auto definition = specialized_hir_unit_->find_type(
+            resolved.target.target);
+        if (!definition || definition->systemverilog == nullptr) {
+            form = resolved.value_form;
+            break;
+        }
+        const auto& definition_form = definition->systemverilog->form;
+        const auto& type_definition = *definition->systemverilog;
+        // The HIR form of a scalar typedef records its value category rather
+        // than an alias marker. Follow that base unless it carries an
+        // aggregate or enumeration payload of its own.
+        const bool transparent_integral_alias
+            = definition_form == TypeForm::packed_integral
+            && type_definition.members.empty()
+            && type_definition.enumeration_literals.empty()
+            && !type_definition.container;
+        if (definition_form != TypeForm::alias
+            && !transparent_integral_alias) {
+            form = definition_form;
+            break;
+        }
+        const auto& base = type_definition.base;
+        resolved = resolver.effective_systemverilog_type(
+            base, source.scope).value_or(base);
+    }
+    if (!form) {
+        return Kind::unsupported;
+    }
+    if (*form == TypeForm::string) {
+        return Kind::string;
+    }
+    const auto width = hir_expression_width(expression_id, source.scope);
+    if (!width || *width == 0U) {
+        return Kind::unsupported;
+    }
+    const bool packed_integral = *form == TypeForm::packed_integral
+        || *form == TypeForm::enumeration
+        || *form == TypeForm::packed_structure
+        || *form == TypeForm::packed_union;
+    if (!packed_integral) {
+        return Kind::unsupported;
+    }
+    // A width/domain alone is not proof of an integral type: event and
+    // handles can have scalar storage too. Once aliases are followed, a
+    // plain packed-integral form must name a standard integral type.
+    if (*form == TypeForm::packed_integral
+        && !frontend::systemverilog_integral_type_descriptor(
+            resolved.target.spelling)) {
+        return Kind::unsupported;
+    }
+    const auto domain = hir_expression_domain(expression_id, source.scope);
+    if (!domain
+        || (*domain != frontend::ValueDomain::Bit2
+            && *domain != frontend::ValueDomain::Logic4
+            && *domain != frontend::ValueDomain::Integer)) {
+        return Kind::unsupported;
+    }
+    return Kind::packed_integral;
+}
 
 bool Lowerer::is_hir_systemverilog_file_call(
     const semantic::ExpressionId expression_id) const
@@ -544,14 +704,21 @@ Lowerer::lower_hir_formatted_string(
     const std::span<const semantic::ExpressionId> arguments,
     const std::optional<frontend::OutputFormat> default_format)
 {
-    if (specialized_hir_unit_ == nullptr || arguments.empty()) {
+    if (specialized_hir_unit_ == nullptr
+        || (arguments.empty() && !default_format)) {
         return std::nullopt;
     }
     frontend::ParsedOutputFormat parsed;
     if (default_format) {
         parsed.conversions.resize(arguments.size());
-        for (auto& conversion : parsed.conversions) {
+        for (std::size_t index = 0; index < parsed.conversions.size(); ++index) {
+            auto& conversion = parsed.conversions[index];
             conversion.format = *default_format;
+            if (*default_format == frontend::OutputFormat::Decimal
+                && hir_expression_is_string(
+                    arguments[index], hir_process_scope_)) {
+                conversion.format = frontend::OutputFormat::String;
+            }
         }
     } else {
         const auto format = specialized_hir_unit_->find_expression(
@@ -813,8 +980,9 @@ Lowerer::HirStringFormatStatus Lowerer::hir_string_format_task_status(
         return HirStringFormatStatus::not_applicable;
     }
     const auto& call = *statement->systemverilog;
-    const auto format_task = call.task.spelling == "$swrite"
-        || call.task.spelling == "$sformat"
+    const bool string_write = call.task.spelling == "$swrite";
+    const bool string_format = call.task.spelling == "$sformat";
+    const auto format_task = string_write || string_format
         || call.task.spelling == "$swriteb"
         || call.task.spelling == "$swriteh"
         || call.task.spelling == "$swriteo";
@@ -826,7 +994,8 @@ Lowerer::HirStringFormatStatus Lowerer::hir_string_format_task_status(
         [](const semantic::sv::TaskAssociation& association) {
             return association.formal && !association.formal->empty();
         });
-    if (named || call.task_arguments.size() < 2U
+    const auto minimum_arguments = string_format ? 2U : 1U;
+    if (named || call.task_arguments.size() < minimum_arguments
         || call.task_arguments.size() > 65U
         || std::ranges::any_of(
             call.task_arguments,
@@ -843,12 +1012,13 @@ Lowerer::HirStringFormatStatus Lowerer::hir_string_format_task_status(
         ? hir_string_binding(*target_declaration, process_scope, false)
         : std::nullopt;
     // The output variable may also be integral (IEEE 1800-2017 21.3.3).
+    const bool packed_target_type
+        = hir_systemverilog_scan_value_kind(target)
+            == HirSystemVerilogScanValueKind::packed_integral;
     const auto packed_target_width = !binding && target_declaration
             && target_expression
             && target_expression->systemverilog != nullptr
-            && !hir_expression_is_string(target, process_scope)
-            && hir_systemverilog_scalar_kind(target)
-                == frontend::SystemVerilogScalarKind::None
+            && packed_target_type
         ? hir_expression_width(target, process_scope)
         : std::nullopt;
     const bool packed_target = packed_target_width
@@ -865,16 +1035,54 @@ Lowerer::HirStringFormatStatus Lowerer::hir_string_format_task_status(
                         *binding->object))))) {
         return HirStringFormatStatus::invalid;
     }
-    const auto default_format = call.task.spelling == "$swriteb"
+    const bool default_radix_format = call.task.spelling == "$swriteb"
         || call.task.spelling == "$swriteh"
         || call.task.spelling == "$swriteo";
-    if (default_format) {
+    const auto first_value = call.task_arguments.size() > 1U
+        ? specialized_hir_unit_->find_expression(
+              *call.task_arguments[1].actual)
+        : std::nullopt;
+    const bool swrite_format_literal = string_write && first_value
+        && first_value->systemverilog != nullptr
+        && first_value->systemverilog->kind
+            == semantic::sv::ExpressionKind::string_literal
+        && first_value->systemverilog->decoded_string.has_value();
+    const bool default_decimal_format = string_write
+        && !swrite_format_literal;
+    // A later string literal can introduce another format segment in the
+    // SystemVerilog output-task argument model. This lowering handles one
+    // leading format string, so reject mixed format segments instead of
+    // treating their conversion text as ordinary string data.
+    const bool unsupported_mixed_format_literal = default_decimal_format
+        && call.task_arguments.size() > 2U
+        && std::ranges::any_of(
+            call.task_arguments.begin() + 2,
+            call.task_arguments.end(),
+            [&](const semantic::sv::TaskAssociation& argument) {
+                const auto expression = specialized_hir_unit_->find_expression(
+                    *argument.actual);
+                return expression && expression->systemverilog != nullptr
+                    && expression->systemverilog->kind
+                        == semantic::sv::ExpressionKind::string_literal
+                    && expression->systemverilog->decoded_string
+                    && expression->systemverilog->decoded_string->find('%')
+                        != std::string::npos;
+            });
+    if (unsupported_mixed_format_literal) {
+        return HirStringFormatStatus::invalid;
+    }
+    if (default_radix_format || default_decimal_format) {
         return std::ranges::all_of(
                    call.task_arguments.begin() + 1,
                    call.task_arguments.end(),
                    [&](const semantic::sv::TaskAssociation& argument) {
+                       const auto value = *argument.actual;
+                       if (default_decimal_format
+                           && hir_expression_is_string(value, process_scope)) {
+                           return true;
+                       }
                        const auto width = hir_expression_width(
-                           *argument.actual, process_scope);
+                           value, process_scope);
                        return width && *width != 0U
                            && *width
                            <= std::numeric_limits<std::uint32_t>::max();
@@ -896,21 +1104,12 @@ Lowerer::HirStringFormatStatus Lowerer::hir_string_format_task_status(
         return output != frontend::OutputFormat::Hierarchy
             && output != frontend::OutputFormat::Time;
     };
-    const auto invalid_conversion = std::ranges::any_of(
-        parsed.conversions,
-        [](const frontend::ParsedOutputConversion& conversion) {
-            return conversion.format
-                == frontend::OutputFormat::Unformatted2
-                || conversion.format
-                == frontend::OutputFormat::Unformatted4;
-        });
     const auto required = static_cast<std::size_t>(
         std::ranges::count_if(parsed.conversions,
             [&](const frontend::ParsedOutputConversion& conversion) {
                 return consumes_value(conversion.format);
             }));
-    if (!parsed.valid || invalid_conversion
-        || parsed.conversions.size() > 64U
+    if (!parsed.valid || parsed.conversions.size() > 64U
         || call.task_arguments.size() - 2U < required) {
         return HirStringFormatStatus::invalid;
     }
@@ -924,8 +1123,27 @@ Lowerer::HirStringFormatStatus Lowerer::hir_string_format_task_status(
         if (conversion.format == frontend::OutputFormat::Pattern) {
             continue;
         }
+        const auto unformatted = conversion.format
+                == frontend::OutputFormat::Unformatted2
+            || conversion.format == frontend::OutputFormat::Unformatted4;
+        const bool string_target
+            = hir_expression_is_string(target, process_scope);
+        const auto value_expression
+            = specialized_hir_unit_->find_expression(value);
+        const bool packed_string_literal = value_expression
+            && value_expression->systemverilog != nullptr
+            && value_expression->systemverilog->kind
+                == semantic::sv::ExpressionKind::string_literal
+            && value_expression->systemverilog->decoded_string.has_value();
+        const bool integral_value
+            = hir_systemverilog_scan_value_kind(value)
+                == HirSystemVerilogScanValueKind::packed_integral
+            || packed_string_literal;
+        const bool unsupported_unformatted = unformatted
+            && ((!packed_target && !string_target) || !integral_value);
         const auto width = hir_expression_width(value, process_scope);
-        if ((conversion.format == frontend::OutputFormat::String
+        if (unsupported_unformatted
+            || (conversion.format == frontend::OutputFormat::String
                 && !hir_expression_is_string(value, process_scope))
             || (conversion.format != frontend::OutputFormat::String
                 && (!width || *width == 0U
@@ -975,6 +1193,18 @@ bool Lowerer::lower_hir_string_format_task(
         default_format = frontend::OutputFormat::Hexadecimal;
     } else if (call.task.spelling == "$swriteo") {
         default_format = frontend::OutputFormat::Octal;
+    } else if (call.task.spelling == "$swrite") {
+        const auto first = arguments.empty()
+            ? std::optional<semantic::CompiledExpressionView> { }
+            : specialized_hir_unit_->find_expression(arguments.front());
+        const bool format_literal = first
+            && first->systemverilog != nullptr
+            && first->systemverilog->kind
+                == semantic::sv::ExpressionKind::string_literal
+            && first->systemverilog->decoded_string.has_value();
+        if (!format_literal) {
+            default_format = frontend::OutputFormat::Decimal;
+        }
     }
     emit_debug_point(
         DebugPointKind::call, hir_source_span(call.source));
@@ -1170,10 +1400,12 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
             const auto real_target
                 = frontend::is_real_scalar_kind(kind);
             if (kind == frontend::SystemVerilogScalarKind::None) {
-                return format != frontend::InputScanFormat::Real;
+                return format != frontend::InputScanFormat::Real
+                    && format != frontend::InputScanFormat::Time;
             }
             if (real_target) {
-                return format == frontend::InputScanFormat::Real;
+                return format == frontend::InputScanFormat::Real
+                    || format == frontend::InputScanFormat::Time;
             }
             if (kind == frontend::SystemVerilogScalarKind::Time) {
                 return format == frontend::InputScanFormat::Decimal
@@ -1318,16 +1550,119 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                             call.text + " requires source, literal format, "
                             "and targets");
                     } else {
+                        const auto source_expression
+                            = specialized_hir_unit_->find_expression(
+                                call.operands[0]);
+                        const auto source_kind
+                            = hir_systemverilog_scan_value_kind(
+                                call.operands[0]);
+                        const bool string_source_value
+                            = source_kind
+                                    == HirSystemVerilogScanValueKind::string
+                            || (source_expression
+                                && source_expression->systemverilog != nullptr
+                                && source_expression->systemverilog->kind
+                                    == semantic::sv::ExpressionKind::string_literal);
+                        const bool integral_source_value
+                            = source_kind
+                                == HirSystemVerilogScanValueKind::packed_integral;
+                        const bool unknown_integral_format = string_source
+                            && (string_source_value || integral_source_value)
+                            && hir_sscanf_unknown_integral_format(
+                                *specialized_hir_unit_, call)
+                            && hir_sscanf_unknown_format_simple_source(
+                                *specialized_hir_unit_, call);
                         const auto format
                             = specialized_hir_unit_->find_expression(
                                 call.operands[1]);
-                        if (!format || format->systemverilog == nullptr
-                            || format->systemverilog->kind
-                                != semantic::sv::ExpressionKind::string_literal
-                            || !format->systemverilog->decoded_string) {
+                        if ((!format || format->systemverilog == nullptr
+                                || format->systemverilog->kind
+                                    != semantic::sv::ExpressionKind::string_literal
+                                || !format->systemverilog->decoded_string)
+                            && !unknown_integral_format) {
                             fail("FSIM-ELAB-SVFILE-011",
                                 call.text
                                     + " format must be a string literal");
+                        } else if (unknown_integral_format) {
+                            const auto writable_unknown_format_target =
+                                [&](const semantic::ExpressionId target_id) {
+                                    const auto target_expression
+                                        = specialized_hir_unit_->find_expression(
+                                            target_id);
+                                    const auto declaration_id
+                                        = hir_target_declaration(target_id);
+                                    const auto declaration = declaration_id
+                                        ? specialized_hir_unit_->find_declaration(
+                                            *declaration_id)
+                                        : std::nullopt;
+                                    if (!target_expression
+                                        || target_expression->systemverilog == nullptr
+                                        || target_expression->systemverilog->kind
+                                            != semantic::sv::ExpressionKind::name
+                                        || !declaration
+                                        || declaration->systemverilog == nullptr) {
+                                        return false;
+                                    }
+                                    const auto form
+                                        = declaration->systemverilog->form;
+                                    const auto direction
+                                        = declaration->systemverilog->direction;
+                                    const auto& target_type
+                                        = declaration->systemverilog->type;
+                                    const bool net_typed_port
+                                        = form
+                                                == semantic::sv::DeclarationForm::port
+                                        && target_type
+                                        && (!target_type->systemverilog_net_type.empty()
+                                            || target_type->target.spelling == "wire"
+                                            || target_type->target.spelling == "tri"
+                                            || target_type->target.spelling == "tri0"
+                                            || target_type->target.spelling == "tri1"
+                                            || target_type->target.spelling == "wand"
+                                            || target_type->target.spelling == "triand"
+                                            || target_type->target.spelling == "wor"
+                                            || target_type->target.spelling == "trior"
+                                            || target_type->target.spelling == "trireg"
+                                            || target_type->target.spelling == "uwire"
+                                            || target_type->target.spelling == "supply0"
+                                            || target_type->target.spelling == "supply1"
+                                            || target_type->target.spelling == "interconnect");
+                                    const bool writable_port_direction
+                                        = direction
+                                                == semantic::sv::Direction::output
+                                        || direction
+                                                == semantic::sv::Direction::ref;
+                                    const bool writable_form
+                                        = form
+                                            == semantic::sv::DeclarationForm::variable
+                                        || (form
+                                                == semantic::sv::DeclarationForm::port
+                                            && writable_port_direction
+                                            && !net_typed_port);
+                                    using ScanValueKind
+                                        = HirSystemVerilogScanValueKind;
+                                    const auto target_kind
+                                        = hir_systemverilog_scan_value_kind(
+                                            target_id);
+                                    const bool supported_target_type
+                                        = target_kind
+                                            == ScanValueKind::packed_integral
+                                        || target_kind
+                                            == ScanValueKind::string
+                                        || target_kind
+                                            == ScanValueKind::real;
+                                    return writable_form
+                                        && supported_target_type
+                                        && writable_text_target(target_id);
+                                };
+                            if (!std::ranges::all_of(
+                                    call.operands.begin() + 2,
+                                    call.operands.end(),
+                                    writable_unknown_format_target)) {
+                                fail("FSIM-ELAB-SVFILE-012",
+                                    "scan target is incompatible, read-only, "
+                                    "or unsupported");
+                            }
                         } else {
                             const auto parsed = frontend::parse_input_format(
                                 *format->systemverilog->decoded_string);
@@ -1609,6 +1944,14 @@ void Lowerer::diagnose_hir_systemverilog_file_process(
                                 fail("FSIM-ELAB-SVCLI-002",
                                     "$value$plusargs does not accept "
                                     "unformatted %u or %z conversions");
+                            } else if (conversion
+                                == frontend::InputScanFormat::Hierarchy) {
+                                fail("FSIM-ELAB-SVCLI-002",
+                                    "$value$plusargs does not accept %m");
+                            } else if (conversion
+                                == frontend::InputScanFormat::Time) {
+                                fail("FSIM-ELAB-SVCLI-002",
+                                    "$value$plusargs does not support %t");
                             } else if (!scan_target_supported(
                                     call.operands[1], conversion)) {
                                 fail("FSIM-ELAB-SVCLI-003",
@@ -1969,6 +2312,16 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
                 "$value$plusargs does not accept unformatted %u or %z "
                 "conversions");
         }
+        if (parsed_conversion.format
+            == frontend::InputScanFormat::Hierarchy) {
+            return fail("FSIM-ELAB-SVCLI-002",
+                "$value$plusargs does not accept %m");
+        }
+        if (parsed_conversion.format
+            == frontend::InputScanFormat::Time) {
+            return fail("FSIM-ELAB-SVCLI-002",
+                "$value$plusargs does not support %t");
+        }
 
         const auto target_id = call.operands[1];
         const auto target_declaration = hir_target_declaration(target_id);
@@ -2085,6 +2438,9 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
             false,
             success,
             false,
+            parsed_conversion.format == frontend::InputScanFormat::Time
+                ? hir_time_unit_femtoseconds()
+                : 0U,
         });
         const auto expanded = resize_register(success, 32U, false);
         return expected_width != 0U && expected_width != 32U
@@ -2242,14 +2598,45 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
             return fail("FSIM-ELAB-SVFILE-011",
                 call.text + " requires source, literal format, and targets");
         }
+        const auto source_expression
+            = specialized_hir_unit_->find_expression(call.operands[0]);
+        const auto source_kind
+            = hir_systemverilog_scan_value_kind(call.operands[0]);
+        const bool packed_integral_source
+            = source_kind
+                == HirSystemVerilogScanValueKind::packed_integral;
+        const bool string_source_value
+            = source_kind == HirSystemVerilogScanValueKind::string
+            || packed_integral_source
+            || (source_expression
+                && source_expression->systemverilog != nullptr
+                && source_expression->systemverilog->kind
+                    == semantic::sv::ExpressionKind::string_literal);
+        const bool unknown_integral_format = string_source
+            && string_source_value
+            && hir_sscanf_unknown_integral_format(
+                *specialized_hir_unit_, call)
+            && hir_sscanf_unknown_format_simple_source(
+                *specialized_hir_unit_, call);
         const auto format = specialized_hir_unit_->find_expression(
             call.operands[1]);
-        if (!format || format->systemverilog == nullptr
-            || format->systemverilog->kind
-                != semantic::sv::ExpressionKind::string_literal
-            || !format->systemverilog->decoded_string) {
+        if ((!format || format->systemverilog == nullptr
+                || format->systemverilog->kind
+                    != semantic::sv::ExpressionKind::string_literal
+                || !format->systemverilog->decoded_string)
+            && !unknown_integral_format) {
             return fail("FSIM-ELAB-SVFILE-011",
                 call.text + " format must be a string literal");
+        }
+        if (unknown_integral_format) {
+            // IEEE 1800-2017 21.3.4.3 requires EOF for an unknown bit in
+            // the format; no scan target is assigned.
+            const auto destination = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(LoadConstant {
+                destination, unsigned_value(
+                    std::numeric_limits<std::uint32_t>::max(), 32U) });
+            return finish(destination);
         }
         const auto parsed = frontend::parse_input_format(
             *format->systemverilog->decoded_string);
@@ -2274,6 +2661,22 @@ std::optional<RegisterId> Lowerer::lower_hir_systemverilog_file_call(
         }
         FileScan operation;
         operation.string_source = string_source;
+        if (std::ranges::any_of(parsed.conversions,
+                [](const auto& conversion) {
+                    return conversion.format
+                        == frontend::InputScanFormat::Time;
+                })) {
+            operation.time_unit_femtoseconds
+                = hir_time_unit_femtoseconds();
+        }
+        if (std::ranges::any_of(
+                parsed.conversions,
+                [](const auto& conversion) {
+                    return conversion.format
+                        == frontend::InputScanFormat::Hierarchy;
+                })) {
+            operation.hierarchy_path = hir_scope_hierarchy();
+        }
         if (string_source) {
             auto source = lower_hir_string_expression(call.operands[0]);
             // Verilog packed strings are integral vectors whose rightmost
@@ -3459,15 +3862,35 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             if (fifth) {
                 const auto expression
                     = specialized_hir_unit_->find_expression(*fifth);
-                auto text = expression && expression->vhdl != nullptr
-                    ? std::string_view { expression->vhdl->text }
-                    : std::string_view { };
-                constexpr auto physical
-                    = std::string_view { "@vhdl-physical:" };
-                if (text.starts_with(physical)) {
-                    text.remove_prefix(physical.size());
+                const auto* vhdl_expression
+                    = expression ? expression->vhdl : nullptr;
+                const bool normalized_time_unit
+                    = vhdl_expression != nullptr
+                    && vhdl_expression->kind
+                        == semantic::vhdl::ExpressionKind::integer_literal
+                    && vhdl_expression->nominal_type == "@builtin:time"
+                    && vhdl_expression->folded
+                    && vhdl_expression->referenced_name
+                    && !vhdl_expression->referenced_name->selected
+                    && vhdl_expression->referenced_name->overloads.empty();
+                if (normalized_time_unit) {
+                    const auto& referenced
+                        = *vhdl_expression->referenced_name;
+                    const auto text = referenced.canonical.empty()
+                        ? std::string_view { referenced.spelling }
+                        : std::string_view { referenced.canonical };
+                    unit_name = std::string { text };
+                } else {
+                    auto text = expression && expression->vhdl != nullptr
+                        ? std::string_view { expression->vhdl->text }
+                        : std::string_view { };
+                    constexpr auto physical
+                        = std::string_view { "@vhdl-physical:" };
+                    if (text.starts_with(physical)) {
+                        text.remove_prefix(physical.size());
+                    }
+                    unit_name = std::string { vhdl_simple_name(text) };
                 }
-                unit_name = std::string { vhdl_simple_name(text) };
                 lowercase_ascii(unit_name);
             }
             const auto unit = std::ranges::find(vhdl_time_units, unit_name,

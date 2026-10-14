@@ -146,18 +146,23 @@ namespace {
         : input.named_type;
     sv::TypeReference output;
     output.target = {
-        !input.named_type.empty() ? find_type(scope, input.named_type)
+        !input.named_type.empty() ? find_type(
+              scope, input.named_type, std::nullopt,
+              input.systemverilog_source_order)
         : !input.enumeration_literals.empty()
                 && !projecting_typedef_base_
             ? find_type(scope,
                   frontend::anonymous_enumeration_type_name(
-                      input.enumeration_literals.front()))
+                      input.enumeration_literals.front()), std::nullopt,
+                  input.systemverilog_source_order)
         : !input.systemverilog_enum_base_type.empty()
-            ? find_type(scope, input.systemverilog_enum_base_type)
+            ? find_type(scope, input.systemverilog_enum_base_type,
+                  std::nullopt, input.systemverilog_source_order)
             : semantic::TypeId { },
         source(input.named_type.empty() ? fallback : input.named_type_span),
         spelling
     };
+    output.source_order = input.systemverilog_source_order;
     output.value_form = type_form(input);
     if (!input.systemverilog_class_declaration.empty()) {
         output.value_form = sv::TypeForm::class_handle;
@@ -642,7 +647,9 @@ template <typename Input>
     const auto port = input.is_port;
     auto net = !port && systemverilog_net(input.type);
     if (!port && !net && !input.type.named_type.empty()) {
-        const auto type_id = find_type(scope, input.type.named_type);
+        const auto type_id = find_type(
+            scope, input.type.named_type, std::nullopt,
+            input.type.systemverilog_source_order);
         const auto type = std::ranges::find(
             hir_.types(), type_id, &sv::TypeDefinition::id);
         if (type != hir_.types().end()) {

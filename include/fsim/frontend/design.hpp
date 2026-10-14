@@ -600,13 +600,6 @@ struct VhdlContextItem {
     SourceSpan span;
 };
 
-struct SystemVerilogImport {
-    std::string package;
-    // Empty means wildcard import.
-    std::string name;
-    SourceSpan span;
-};
-
 enum class SystemVerilogModportMemberKind {
     Signal,
     FunctionImport,
@@ -1659,6 +1652,11 @@ struct DesignUnit {
     // native-cache identity (for example bounded VHDL package constants).
     std::vector<std::string> source_dependencies;
     SourceSpan span;
+    // SystemVerilog and Verilog ordered module-port headers retain empty
+    // positions without inventing a typed declaration for them. A missing
+    // optional value is a port slot with no internal port expression.
+    std::optional<std::vector<std::optional<std::string>>>
+        systemverilog_port_slots;
 };
 
 struct ParsedDesign {

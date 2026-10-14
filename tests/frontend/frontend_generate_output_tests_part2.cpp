@@ -97,6 +97,65 @@ endmodule
           && unit.processes[1].sensitivities.front().signal == "fired",
       "named event trigger and controls");
 
+  const auto qualified_sensitivity = parse_text(
+      "qualified_event_sensitivity.sv",
+      R"(
+package qualified_event_pkg;
+  event changed;
+endpackage
+module qualified_event_wait;
+  logic observed;
+  initial begin
+    @(qualified_event_pkg::changed);
+    observed = 1'b1;
+  end
+endmodule
+module ordinary_implicit_event_wait;
+  logic observed;
+  initial begin
+    @(ordinary_event);
+    observed = 1'b1;
+  end
+endmodule
+)",
+      Language::SystemVerilog2017);
+  require(
+      qualified_sensitivity.ok(),
+      "qualified package event sensitivity and ordinary implicit event must parse");
+  const auto* qualified_package = qualified_sensitivity.design.find(
+      UnitKind::SystemVerilogPackage, "qualified_event_pkg");
+  const auto* qualified_wait = qualified_sensitivity.design.find(
+      UnitKind::VerilogModule, "qualified_event_wait");
+  const auto* ordinary_wait = qualified_sensitivity.design.find(
+      UnitKind::VerilogModule, "ordinary_implicit_event_wait");
+  const auto has_signal = [](const DesignUnit* unit,
+                             const std::string_view name) {
+    return unit != nullptr
+        && std::ranges::any_of(unit->signals, [&](const auto& signal) {
+             return signal.name == name;
+           });
+  };
+  require(
+      qualified_package != nullptr
+          && has_signal(qualified_package, "changed")
+          && qualified_wait != nullptr
+          && has_signal(qualified_wait, "observed")
+          && !has_signal(qualified_wait, "qualified_event_pkg::changed")
+          && !has_signal(qualified_wait, "changed")
+          && qualified_wait->processes.size() == 1
+          && qualified_wait->processes.front().statements.front()
+                 .sensitivities.front().signal
+              == "qualified_event_pkg::changed",
+      "package-qualified wait remains qualified without a synthetic module net");
+  require(
+      ordinary_wait != nullptr
+          && has_signal(ordinary_wait, "ordinary_event")
+          && ordinary_wait->processes.size() == 1
+          && ordinary_wait->processes.front().statements.front()
+                 .sensitivities.front().signal
+              == "ordinary_event",
+      "ordinary undeclared event sensitivity still creates its implicit net");
+
   const auto nonblocking = parse_text(
       "nonblocking_event.sv",
       R"(

@@ -669,9 +669,13 @@ begin
   integer_result <= local_ops.transform(integer_input);
   boolean_result <= local_ops.transform(boolean_input);
   process(integer_input, boolean_input)
+    variable integer_procedure_value : integer;
+    variable boolean_procedure_value : boolean;
   begin
-    local_ops.publish(integer_input, integer_procedure);
-    local_ops.publish(boolean_input, boolean_procedure);
+    local_ops.publish(integer_input, integer_procedure_value);
+    local_ops.publish(boolean_input, boolean_procedure_value);
+    integer_procedure <= integer_procedure_value;
+    boolean_procedure <= boolean_procedure_value;
   end process;
 end architecture;
 )",
@@ -1202,6 +1206,37 @@ end architecture;
       no_match_result, "FSIM-ELAB-VHOVER-002"));
   assert(has_diagnostic(
       no_match_result, "FSIM-ELAB-VHOVER-005"));
+
+  const auto wrong_nominal_boolean_array = frontend::parse_text(
+      "vhdl_callable_wrong_nominal_boolean_array.vhd",
+      R"(
+entity callable_wrong_nominal_boolean_array is
+end entity;
+architecture rtl of callable_wrong_nominal_boolean_array is
+  type boolean_vector_t is array (natural range <>) of boolean;
+  type other_boolean_vector_t is array (natural range <>) of boolean;
+  procedure consume(value : in boolean_vector_t) is
+  begin
+    null;
+  end procedure;
+  signal wrong_actual : other_boolean_vector_t(0 to 3)
+      := (others => true);
+begin
+  process
+  begin
+    consume(wrong_actual);
+    wait;
+  end process;
+end architecture;
+)",
+      frontend::Language::Vhdl2008);
+  assert(wrong_nominal_boolean_array.ok());
+  const auto wrong_nominal_boolean_array_result = compile_and_elaborate(
+      wrong_nominal_boolean_array.design,
+      "vhdl:work.callable_wrong_nominal_boolean_array(rtl)");
+  assert(!wrong_nominal_boolean_array_result.ok());
+  assert(has_diagnostic(
+      wrong_nominal_boolean_array_result, "FSIM-ELAB-VHOVER-005"));
 
   const auto ambiguous_character_array_literal = fsim::frontend::parse_text(
       "vhdl-character-array-literal-ambiguous.vhd",
@@ -1807,6 +1842,50 @@ end architecture;
       static_legality_result, "FSIM-ELAB-VHSTATIC-002"));
   assert(has_diagnostic(
       static_legality_result, "FSIM-ELAB-PKG-006"));
+
+  const auto mutable_string_range = frontend::parse_text(
+      "vhdl_mutable_string_range_is_not_reused.vhd",
+      R"(
+entity mutable_string_range_is_not_reused is
+  port (result : out integer);
+end entity;
+architecture rtl of mutable_string_range_is_not_reused is
+begin
+  process
+    variable bound : integer := 3;
+    variable value : string(1 to bound);
+    variable count : integer := 0;
+  begin
+    bound := 4;
+    for index in value'range loop
+      count := count + 1;
+    end loop;
+    result <= count;
+    wait;
+  end process;
+end architecture;
+)",
+      frontend::Language::Vhdl2008);
+  assert(mutable_string_range.ok());
+  const auto mutable_string_range_result = compile_and_elaborate(
+      mutable_string_range.design,
+      "vhdl:work.mutable_string_range_is_not_reused(rtl)");
+  if (!mutable_string_range_result.ok()) {
+    assert(has_diagnostic(
+        mutable_string_range_result, "FSIM-ELAB-071"));
+  } else {
+    auto mutable_string_range_interpreter
+        = mutable_string_range_result.design->create_interpreter();
+    assert(mutable_string_range_interpreter->run().status
+           == fsim::runtime::RunStatus::completed);
+    const auto observed = mutable_string_range_result.design->find_signal(
+        "result");
+    assert(observed);
+    const auto observed_count = mutable_string_range_interpreter
+                                    ->signal_value(*observed)
+                                    .known_signed_value();
+    assert(observed_count && *observed_count == 3);
+  }
 }
 
 }  // namespace fsim::tests::elaboration

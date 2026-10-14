@@ -120,8 +120,10 @@ inline ElaboratedDesignState make_state()
     independent.name = "top.independent";
     independent.language_standard = "1800-2017";
     independent.compatibility_profile = "none";
-    independent.register_count = 2U;
-    independent.register_value_kinds = { ValueKind::logic4, ValueKind::logic4 };
+    independent.register_count = 4U;
+    independent.string_register_count = 1U;
+    independent.register_value_kinds = { ValueKind::logic4, ValueKind::logic4,
+        ValueKind::logic4, ValueKind::logic4 };
     DebugLocal independent_local;
     independent_local.name = "independent_sample";
     independent_local.type_name = "logic";
@@ -139,6 +141,14 @@ inline ElaboratedDesignState make_state()
         DebugPoint { DebugPointKind::statement,
             runtime::simir::SourceLocation { "direct_rows.sv", 15U, 3U },
             "top.independent_scope" });
+    independent.operations.emplace_back(
+        runtime::simir::LoadStringConstant { 0U, "4.5" });
+    independent.operations.emplace_back(runtime::simir::FileScan {
+        3U, 0U, 0U, true,
+        { { "", runtime::simir::InputScanFormat::time, 0U, false,
+            { runtime::simir::InputScanTargetKind::packed_register,
+                2U, 64U, true, runtime::SystemVerilogScalarKind::Real } } },
+        { }, false, std::nullopt, false, 1'000'000U });
     independent.operations.emplace_back(Halt { });
 
     state.processes.push_back(std::move(first));
@@ -281,7 +291,7 @@ inline void assert_view_rows(const ElaboratedDesign& design)
     assert(second.name() == "top.second");
     assert(independent.name() == "top.independent");
     assert(first.register_count() == 1U && second.register_count() == 1U);
-    assert(independent.register_count() == 2U);
+    assert(independent.register_count() == 4U);
     assert(first.debug_locals().size() == 1U);
     assert(first.debug_locals()[0U].name == "sample");
     assert(independent.debug_locals()[0U].name == "independent_sample");

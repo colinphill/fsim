@@ -250,11 +250,13 @@ Expression VerilogParser::parse_lvalue()
             cover(start.span, previous().span)
         };
     }
+    const auto source_order = systemverilog_source_order();
     const auto name = keyword("this") || keyword("super")
         ? advance()
         : expect_identifier("assignment target");
     Expression expression { ExpressionKind::Identifier, name.text, { },
         name.span };
+    expression.systemverilog_source_order = source_order;
     for (;;) {
         if (at(TokenKind::Dot) || at(TokenKind::Scope)) {
             const auto separator = advance();
@@ -307,7 +309,8 @@ Expression VerilogParser::parse_lvalue()
     }
     if (root->kind == ExpressionKind::Identifier
         && root->text == name.text) {
-        note_implicit_net_reference(name);
+        note_implicit_net_reference(
+            name, expression.kind == ExpressionKind::Call);
     }
     return expression;
 }
@@ -589,6 +592,14 @@ Expression VerilogParser::parse_unary()
 }
 
 Expression VerilogParser::parse_primary()
+{
+    const auto source_order = systemverilog_source_order();
+    auto result = parse_primary_impl();
+    result.systemverilog_source_order = source_order;
+    return result;
+}
+
+Expression VerilogParser::parse_primary_impl()
 {
     if (keyword("tagged")) {
         const auto tagged = advance();
@@ -1016,7 +1027,7 @@ Expression VerilogParser::parse_primary()
         if (match(TokenKind::LeftParen)) {
             std::vector<Expression> arguments;
             std::vector<std::string> argument_names;
-            std::optional<std::uint64_t> builtin_type_bits;
+            std::optional<std::uint64_t> data_type_bits;
             const auto sampled_value_call = canonical == "$sampled"
                 || canonical == "$rose" || canonical == "$fell"
                 || canonical == "$stable" || canonical == "$changed"
@@ -1081,11 +1092,36 @@ Expression VerilogParser::parse_primary()
                         // type's width (IEEE 1800-2017 20.6.2).
                         const auto type_start = current();
                         const auto data_type = parse_parameter_type();
-                        builtin_type_bits = data_type.width().value_or(1U);
+                        data_type_bits = data_type.width().value_or(1U);
                         argument_names.emplace_back();
                         arguments.push_back(Expression {
                             ExpressionKind::IntegerLiteral,
-                            std::to_string(*builtin_type_bits),
+                            std::to_string(*data_type_bits),
+                            { },
+                            cover(type_start.span, previous().span) });
+                    } else if (canonical == "$bits" && arguments.empty()
+                        && (keyword("struct") || keyword("union"))) {
+                        // The keyword makes this a data_type argument rather
+                        // than an expression (IEEE 1800-2017 20.6.2). Reuse
+                        // the ordinary aggregate type parser so its member
+                        // grammar and packed width calculation stay aligned.
+                        const auto type_start = current();
+                        const auto data_type = parse_parameter_type();
+                        // An aggregate with no concrete packed range must not
+                        // inherit Type::width()'s scalar fallback width of one.
+                        const auto width = data_type.packed_range
+                            ? data_type.width()
+                            : std::optional<std::uint64_t> { };
+                        if (!width) {
+                            error(type_start,
+                                "FSIM-SV-UNSUPPORTED-050",
+                                "$bits of this aggregate data type requires a statically known width");
+                        }
+                        data_type_bits = width.value_or(0U);
+                        argument_names.emplace_back();
+                        arguments.push_back(Expression {
+                            ExpressionKind::IntegerLiteral,
+                            std::to_string(*data_type_bits),
                             { },
                             cover(type_start.span, previous().span) });
                     } else {
@@ -1250,9 +1286,9 @@ Expression VerilogParser::parse_primary()
                 expression.call_result_width = 32;
                 expression.call_result_domain = ValueDomain::Bit2;
                 expression.call_result_signed = true;
-                if (canonical == "$bits" && builtin_type_bits) {
+                if (canonical == "$bits" && data_type_bits) {
                     expression = Expression { ExpressionKind::IntegerLiteral,
-                        std::to_string(*builtin_type_bits), { },
+                        std::to_string(*data_type_bits), { },
                         expression.span };
                 }
             } else if (contains_word(
@@ -1537,7 +1573,8 @@ Expression VerilogParser::parse_primary()
         }
         if (root->kind == ExpressionKind::Identifier
             && root->text == name.text) {
-            note_implicit_net_reference(name);
+            note_implicit_net_reference(
+                name, expression.kind == ExpressionKind::Call);
         }
         return expression;
     }

@@ -441,6 +441,18 @@ bool valid_statement_closure(ClassClosure& closure,
         || identity.origin != statement->origin) {
         return false;
     }
+    if (!statement->imports.empty()
+        && (statement->kind != StatementKind::block
+            || !statement->nested_scope
+            || std::ranges::any_of(statement->imports,
+                [](const Import& import) {
+                    return import.package.spelling.empty()
+                        || import.wildcard == import.member.has_value()
+                        || (import.member
+                            && import.member->spelling.empty());
+                }))) {
+        return false;
+    }
     auto child_scope = statement->scope;
     if (statement->nested_scope
         && (!statement->nested_scope->valid()

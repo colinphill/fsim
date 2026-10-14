@@ -5,7 +5,9 @@
 
 #include <algorithm>
 #include <bit>
+#include <boost/multiprecision/cpp_int.hpp>
 #include <cctype>
+#include <cmath>
 #include <limits>
 #include <tuple>
 
@@ -149,6 +151,94 @@ namespace {
         }
     }
 
+    [[nodiscard]] std::optional<std::int64_t> decimal_order_of_magnitude(
+        const std::string_view text) noexcept
+    {
+        std::size_t index { };
+        if (!text.empty() && (text.front() == '+' || text.front() == '-'))
+            ++index;
+        std::size_t integer_digits { };
+        std::size_t significand_digits { };
+        std::optional<std::size_t> first_nonzero;
+        bool fractional = false;
+        while (index < text.size()
+            && text[index] != 'e' && text[index] != 'E') {
+            if (text[index] == '.') {
+                fractional = true;
+                ++index;
+                continue;
+            }
+            if (text[index] < '0' || text[index] > '9')
+                return std::nullopt;
+            if (!fractional)
+                ++integer_digits;
+            if (!first_nonzero && text[index] != '0')
+                first_nonzero = significand_digits;
+            ++significand_digits;
+            ++index;
+        }
+        if (significand_digits == 0U || !first_nonzero)
+            return std::nullopt;
+
+        std::int64_t exponent { };
+        if (index < text.size()) {
+            ++index;
+            bool exponent_negative = false;
+            if (index < text.size()
+                && (text[index] == '+' || text[index] == '-')) {
+                exponent_negative = text[index] == '-';
+                ++index;
+            }
+            if (index == text.size())
+                return std::nullopt;
+            constexpr std::int64_t maximum_exponent = 1'000'000'000;
+            for (; index < text.size(); ++index) {
+                const auto character = text[index];
+                if (character < '0' || character > '9')
+                    return std::nullopt;
+                const auto digit = static_cast<std::int64_t>(character - '0');
+                exponent = std::min(
+                    maximum_exponent, exponent * 10 + digit);
+            }
+            if (exponent_negative)
+                exponent = -exponent;
+        }
+
+        const auto integral_digits
+            = static_cast<std::int64_t>(integer_digits);
+        const auto leading_zeroes
+            = static_cast<std::int64_t>(*first_nonzero);
+        return integral_digits - leading_zeroes - 1 + exponent;
+    }
+
+    [[nodiscard]] std::optional<SystemVerilogScalarValue>
+    real_overflow_infinity(
+        const std::string_view text,
+        const SystemVerilogScalarKind target) noexcept
+    {
+        const auto order = decimal_order_of_magnitude(text);
+        if (!order)
+            return std::nullopt;
+        const auto maximum_exponent = target
+                == SystemVerilogScalarKind::ShortReal
+            ? std::numeric_limits<float>::max_exponent10
+            : std::numeric_limits<double>::max_exponent10;
+        if (*order < maximum_exponent)
+            return std::nullopt;
+        const bool negative = !text.empty() && text.front() == '-';
+        if (target == SystemVerilogScalarKind::ShortReal) {
+            const auto infinity = std::numeric_limits<float>::infinity();
+            return SystemVerilogScalarValue::shortreal(
+                negative ? -infinity : infinity);
+        }
+        const auto infinity = std::numeric_limits<double>::infinity();
+        return target == SystemVerilogScalarKind::Realtime
+            ? SystemVerilogScalarValue::realtime(
+                  negative ? -infinity : infinity)
+            : SystemVerilogScalarValue::real(
+                  negative ? -infinity : infinity);
+    }
+
     [[nodiscard]] std::optional<InputScanValue> finish_packed_scan(
         PackedLogic4 value,
         const bool negative,
@@ -188,9 +278,24 @@ namespace {
             token.erase(std::remove(token.begin(), token.end(), '_'), token.end());
             const auto scalar = scan_systemverilog_scalar(
                 token, target.scalar_kind);
-            if (!scalar)
-                return std::nullopt;
-            auto packed = encode_systemverilog_scalar_payload(scalar.value);
+            auto scalar_value = scalar.value;
+            if (!scalar) {
+                const bool real_target
+                    = target.scalar_kind == SystemVerilogScalarKind::Real
+                    || target.scalar_kind == SystemVerilogScalarKind::Realtime
+                    || target.scalar_kind == SystemVerilogScalarKind::ShortReal;
+                if (format != InputScanFormat::real
+                    || scalar.error != SystemVerilogScalarError::Overflow
+                    || !real_target) {
+                    return std::nullopt;
+                }
+                const auto infinity
+                    = real_overflow_infinity(token, target.scalar_kind);
+                if (!infinity)
+                    return std::nullopt;
+                scalar_value = *infinity;
+            }
+            auto packed = encode_systemverilog_scalar_payload(scalar_value);
             if (!packed)
                 return std::nullopt;
             return InputScanValue { std::move(packed.value), { }, false };
@@ -405,22 +510,19 @@ namespace {
     {
         PackedLogic4 value(target.width, Logic4::zero);
         if (format == InputScanFormat::unformatted2) {
-            const auto expected = (static_cast<std::size_t>(target.width) + 7U)
-                / 8U;
+            const auto words = (static_cast<std::size_t>(target.width) + 31U)
+                / 32U;
+            const auto expected = words * 4U;
             if (bytes.size() != expected)
                 return std::nullopt;
-            for (std::size_t byte = 0; byte < bytes.size(); ++byte) {
-                const auto logical_byte = std::endian::native
-                        == std::endian::little
-                    ? byte
-                    : bytes.size() - byte - 1U;
-                const auto payload = static_cast<unsigned char>(bytes[byte]);
+            for (std::size_t word = 0; word < words; ++word) {
+                const auto payload = native_word(bytes, word * 4U);
                 for (std::size_t bit = 0;
-                    bit < 8U && logical_byte * 8U + bit < value.width();
+                    bit < 32U && word * 32U + bit < value.width();
                     ++bit) {
                     value.set(
-                        logical_byte * 8U + bit,
-                        (payload & (1U << bit)) != 0U
+                        word * 32U + bit,
+                        (payload & (UINT32_C(1) << bit)) != 0U
                             ? Logic4::one
                             : Logic4::zero);
                 }
@@ -451,16 +553,28 @@ namespace {
     [[nodiscard]] bool numeric_character(
         const std::int32_t character,
         const InputScanFormat format,
-        const bool first,
+        const std::string_view text,
         const bool vhdl_textio) noexcept
     {
         if (character < 0)
             return false;
+        const bool first = text.empty();
         if (format == InputScanFormat::boolean_value) {
             return (character >= 'a' && character <= 'z')
                 || (character >= 'A' && character <= 'Z');
         }
-        if (format == InputScanFormat::real) {
+        if (format == InputScanFormat::real
+            || format == InputScanFormat::time) {
+            if (format == InputScanFormat::time) {
+                const bool digit = character >= '0' && character <= '9';
+                const bool decimal_or_exponent
+                    = character == '.' || character == 'e'
+                    || character == 'E';
+                const bool sign = (character == '+' || character == '-')
+                    && (first || (!text.empty()
+                        && (text.back() == 'e' || text.back() == 'E')));
+                return digit || decimal_or_exponent || sign;
+            }
             return (character >= '0' && character <= '9') || character == '.'
                 || character == 'e' || character == 'E'
                 || character == '+' || character == '-' || character == '_';
@@ -473,8 +587,14 @@ namespace {
             return (character >= '0' && character <= '9')
                 || character == '_';
         }
-        if (character == '_' || character == '?' || character == 'x'
-            || character == 'X' || character == 'z' || character == 'Z')
+        if (character == '_') {
+            const bool first_number_character = first
+                || (text.size() == 1U
+                    && (text.front() == '+' || text.front() == '-'));
+            return !first_number_character;
+        }
+        if (character == '?' || character == 'x' || character == 'X'
+            || character == 'z' || character == 'Z')
             return true;
         if (character >= '0' && character <= '9') {
             if (format == InputScanFormat::binary)
@@ -486,6 +606,174 @@ namespace {
         return format == InputScanFormat::hexadecimal
             && ((character >= 'a' && character <= 'f')
                 || (character >= 'A' && character <= 'F'));
+    }
+
+    using boost::multiprecision::cpp_int;
+
+    struct ParsedDecimalTime {
+        cpp_int significand;
+        std::int64_t exponent10 { };
+        bool negative { };
+    };
+
+    [[nodiscard]] std::optional<ParsedDecimalTime> parse_decimal_time(
+        const std::string_view text)
+    {
+        if (text.empty() || text.size() > maximum_string_bytes)
+            return std::nullopt;
+        std::size_t index { };
+        ParsedDecimalTime result;
+        if (text[index] == '+' || text[index] == '-') {
+            result.negative = text[index] == '-';
+            if (++index == text.size())
+                return std::nullopt;
+        }
+
+        bool decimal_point { };
+        bool exponent_seen { };
+        bool digit_seen { };
+        std::uint32_t fractional_digits { };
+        while (index < text.size()) {
+            const auto character = text[index];
+            if (character >= '0' && character <= '9') {
+                digit_seen = true;
+                result.significand *= 10;
+                result.significand += character - '0';
+                if (decimal_point)
+                    ++fractional_digits;
+                ++index;
+                continue;
+            }
+            if (character == '.' && !decimal_point && !exponent_seen) {
+                decimal_point = true;
+                ++index;
+                continue;
+            }
+            if ((character == 'e' || character == 'E')
+                && !exponent_seen && digit_seen) {
+                exponent_seen = true;
+                ++index;
+                bool exponent_negative { };
+                if (index < text.size()
+                    && (text[index] == '+' || text[index] == '-')) {
+                    exponent_negative = text[index] == '-';
+                    ++index;
+                }
+                if (index == text.size())
+                    return std::nullopt;
+                std::int64_t exponent { };
+                bool exponent_digit_seen { };
+                for (; index < text.size(); ++index) {
+                    const auto digit = text[index];
+                    if (digit < '0' || digit > '9')
+                        return std::nullopt;
+                    exponent_digit_seen = true;
+                    if (exponent > 8192)
+                        return std::nullopt;
+                    exponent = exponent * 10 + digit - '0';
+                    if (exponent > 8192)
+                        return std::nullopt;
+                }
+                if (!exponent_digit_seen)
+                    return std::nullopt;
+                result.exponent10 = exponent_negative ? -exponent : exponent;
+                break;
+            }
+            return std::nullopt;
+        }
+        if (!digit_seen)
+            return std::nullopt;
+        result.exponent10 -= fractional_digits;
+        return result;
+    }
+
+    [[nodiscard]] cpp_int power_of_ten(const std::uint32_t exponent)
+    {
+        auto result = cpp_int { 1 };
+        for (std::uint32_t index = 0; index < exponent; ++index)
+            result *= 10;
+        return result;
+    }
+
+    [[nodiscard]] std::optional<InputScanValue> packed_time(
+        const std::string_view text,
+        const InputScanTarget& target,
+        const std::uint64_t time_unit_femtoseconds,
+        const SystemVerilogTimeFormat& time_format)
+    {
+        const bool real_target
+            = target.scalar_kind == SystemVerilogScalarKind::Real
+            || target.scalar_kind == SystemVerilogScalarKind::Realtime
+            || target.scalar_kind == SystemVerilogScalarKind::ShortReal;
+        if (!real_target || target.width == 0U || time_format.units < -15
+            || time_format.units > 0
+            || time_format.precision > maximum_string_bytes
+            || time_format.resolution_femtoseconds == 0U) {
+            return std::nullopt;
+        }
+        const auto module_unit = time_unit_femtoseconds
+                == std::numeric_limits<std::uint64_t>::max()
+            ? time_format.resolution_femtoseconds
+            : time_unit_femtoseconds;
+        if (module_unit == 0U)
+            return std::nullopt;
+        const auto parsed = parse_decimal_time(text);
+        if (!parsed)
+            return std::nullopt;
+
+        // $timeformat precision rounds the scanned real before conversion to
+        // the caller's local time unit. Keep this decimal step exact so ties
+        // do not depend on the host floating-point mode.
+        const auto precision_scale = power_of_ten(time_format.precision);
+        const auto precision_exponent = parsed->exponent10
+            + static_cast<std::int64_t>(time_format.precision);
+        cpp_int rounded_decimal;
+        if (precision_exponent >= 0) {
+            if (precision_exponent > 8192)
+                return std::nullopt;
+            rounded_decimal = parsed->significand
+                * power_of_ten(static_cast<std::uint32_t>(precision_exponent));
+        } else {
+            if (precision_exponent < -8192)
+                rounded_decimal = 0;
+            else {
+                const auto divisor = power_of_ten(
+                    static_cast<std::uint32_t>(-precision_exponent));
+                rounded_decimal = parsed->significand / divisor;
+                const auto remainder = parsed->significand % divisor;
+                if (remainder * 2 >= divisor)
+                    ++rounded_decimal;
+            }
+        }
+
+        const auto timeformat_unit_femtoseconds = power_of_ten(
+            static_cast<std::uint32_t>(time_format.units + 15));
+        const cpp_int numerator = rounded_decimal
+            * timeformat_unit_femtoseconds;
+        const cpp_int denominator = precision_scale * module_unit;
+        if (denominator == 0)
+            return std::nullopt;
+
+        auto value = numerator.convert_to<long double>()
+            / denominator.convert_to<long double>();
+        if (parsed->negative)
+            value = -value;
+        if (!std::isfinite(value)
+            || value > std::numeric_limits<double>::max()
+            || value < -std::numeric_limits<double>::max()) {
+            return std::nullopt;
+        }
+        const auto converted = convert_systemverilog_scalar(
+            SystemVerilogScalarValue::real(static_cast<double>(value)),
+            target.scalar_kind,
+            SystemVerilogScalarRounding::NearestAwayFromZero);
+        if (!converted)
+            return std::nullopt;
+        const auto packed = encode_systemverilog_scalar_payload(
+            converted.value);
+        if (!packed)
+            return std::nullopt;
+        return InputScanValue { packed.value, { }, false };
     }
 
     [[nodiscard]] bool valid_vhdl_numeric_separators(
@@ -555,6 +843,7 @@ namespace {
     [[nodiscard]] std::tuple<std::string, bool, bool> read_conversion_text(
         Scanner& scanner,
         const InputScanConversion& conversion,
+        const std::string_view hierarchy_path,
         const bool vhdl_textio,
         const bool vhdl_textio_2008,
         const bool vhdl_textio_radix_read_2008,
@@ -562,12 +851,17 @@ namespace {
     {
         std::string text;
         bool eof = false;
+        if (conversion.format == InputScanFormat::hierarchy) {
+            return { std::string { hierarchy_path }, true, false };
+        }
         const bool unformatted = conversion.format
                 == InputScanFormat::unformatted2
             || conversion.format == InputScanFormat::unformatted4;
         const auto default_limit = unformatted
             ? conversion.format == InputScanFormat::unformatted2
-                ? (static_cast<std::size_t>(conversion.target.width) + 7U) / 8U
+                ? ((static_cast<std::size_t>(conversion.target.width) + 31U)
+                      / 32U)
+                    * 4U
                 : ((static_cast<std::size_t>(conversion.target.width) + 31U)
                       / 32U)
                     * 8U
@@ -585,6 +879,9 @@ namespace {
         }
         const auto limit = conversion.maximum_characters == 0
             ? default_limit
+            : unformatted
+            ? std::min<std::size_t>(
+                  default_limit, conversion.maximum_characters)
             : conversion.maximum_characters;
         if (vhdl_textio_sread
             && conversion.format == InputScanFormat::string) {
@@ -772,7 +1069,7 @@ namespace {
                 || (conversion.format == InputScanFormat::string
                         ? !space(character)
                         : numeric_character(character, conversion.format,
-                              text.empty(), vhdl_textio));
+                              text, vhdl_textio));
             if (!accepted) {
                 scanner.unread(character);
                 break;
@@ -804,10 +1101,13 @@ PackedLogic4 pack_file_text(
     return value;
 }
 
-InputScanResult scan_formatted_input(
+namespace {
+
+InputScanResult scan_formatted_input_impl(
     const FileScan& operation,
     const std::function<std::int32_t()>& read,
-    const std::function<void(std::int32_t)>& unread)
+    const std::function<void(std::int32_t)>& unread,
+    const SystemVerilogTimeFormat* const time_format)
 {
     Scanner scanner { read, unread };
     const bool vhdl_textio_line = vhdl_textio_read(operation);
@@ -832,28 +1132,44 @@ InputScanResult scan_formatted_input(
             return result;
         }
         auto [text, complete, eof] = read_conversion_text(
-            scanner, conversion, vhdl_textio_line, vhdl_textio_2008,
+            scanner, conversion, operation.hierarchy_path,
+            vhdl_textio_line, vhdl_textio_2008,
             vhdl_textio_radix_read_2008, is_vhdl_textio_sread);
         const bool empty_string_read = vhdl_textio_line
             && conversion.format == InputScanFormat::string
             && conversion.maximum_characters == 0U && complete;
         if ((!is_vhdl_textio_sread && text.empty()
-                && !empty_string_read)
+                && !empty_string_read
+                && conversion.format != InputScanFormat::hierarchy)
             || !complete) {
             if (eof && result.assignments == 0)
                 result.assignments = -1;
             result.consumed = scanner.consumed();
             return result;
         }
-        if (conversion.suppress)
+        if (conversion.suppress) {
+            if (conversion.format == InputScanFormat::time) {
+                if (!parse_decimal_time(text)
+                    || (time_format != nullptr
+                        && (time_format->units < -15
+                            || time_format->units > 0
+                            || time_format->precision > maximum_string_bytes
+                            || time_format->resolution_femtoseconds == 0U
+                            || operation.time_unit_femtoseconds == 0U))) {
+                    result.consumed = scanner.consumed();
+                    return result;
+                }
+            }
             continue;
+        }
         std::optional<InputScanValue> value;
         const auto sread_length = text.size();
         const bool unformatted = conversion.format
                 == InputScanFormat::unformatted2
             || conversion.format == InputScanFormat::unformatted4;
         const bool text_format = conversion.format == InputScanFormat::character
-            || conversion.format == InputScanFormat::string;
+            || conversion.format == InputScanFormat::string
+            || conversion.format == InputScanFormat::hierarchy;
         if (unformatted) {
             value = packed_unformatted(
                 text, conversion.format, conversion.target);
@@ -880,13 +1196,21 @@ InputScanResult scan_formatted_input(
                                 && conversion.format
                                     != InputScanFormat::unsigned_decimal)
                             || valid_vhdl_numeric_separators(text)));
-            value = valid_textio_number
-                ? (vhdl_textio_radix_read_2008
+            if (valid_textio_number
+                && conversion.format == InputScanFormat::time) {
+                value = time_format != nullptr
+                    ? packed_time(text, conversion.target,
+                          operation.time_unit_femtoseconds, *time_format)
+                    : std::nullopt;
+            } else {
+                value = valid_textio_number
+                    ? (vhdl_textio_radix_read_2008
                         ? packed_vhdl_radix_digits(
                               text, conversion.format, conversion.target)
                         : packed_digits(std::move(text), conversion.format,
                               conversion.target))
-                : std::nullopt;
+                    : std::nullopt;
+            }
         }
         if (!value) {
             result.consumed = scanner.consumed();
@@ -904,6 +1228,25 @@ InputScanResult scan_formatted_input(
     return result;
 }
 
+} // namespace
+
+InputScanResult scan_formatted_input(
+    const FileScan& operation,
+    const std::function<std::int32_t()>& read,
+    const std::function<void(std::int32_t)>& unread)
+{
+    return scan_formatted_input_impl(operation, read, unread, nullptr);
+}
+
+InputScanResult scan_formatted_input(
+    const FileScan& operation,
+    const std::function<std::int32_t()>& read,
+    const std::function<void(std::int32_t)>& unread,
+    const SystemVerilogTimeFormat& time_format)
+{
+    return scan_formatted_input_impl(operation, read, unread, &time_format);
+}
+
 InputScanResult scan_formatted_string(
     const FileScan& operation, const std::string_view input)
 {
@@ -918,6 +1261,24 @@ InputScanResult scan_formatted_string(
             --offset;
     };
     return scan_formatted_input(operation, read, unread);
+}
+
+InputScanResult scan_formatted_string(
+    const FileScan& operation,
+    const std::string_view input,
+    const SystemVerilogTimeFormat& time_format)
+{
+    std::size_t offset { };
+    const std::function<std::int32_t()> read = [&]() {
+        return offset < input.size()
+            ? static_cast<std::int32_t>(static_cast<unsigned char>(input[offset++]))
+            : -1;
+    };
+    const std::function<void(std::int32_t)> unread = [&](const std::int32_t value) {
+        if (value >= 0 && offset > 0)
+            --offset;
+    };
+    return scan_formatted_input(operation, read, unread, time_format);
 }
 
 } // namespace fsim::runtime::simir

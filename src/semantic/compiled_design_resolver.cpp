@@ -49,6 +49,35 @@ std::string_view normalized_library(const std::string_view library)
     return library.empty() ? std::string_view { "work" } : library;
 }
 
+const sv::Unit* source_package_for_compilation_unit(
+    const CompiledDesign& design, const sv::Unit& compilation_unit)
+{
+    const auto owner_has_compilation_unit_scope
+        = compilation_unit.kind == sv::UnitKind::compilation_unit
+        || compilation_unit.kind == sv::UnitKind::module
+        || compilation_unit.kind == sv::UnitKind::interface
+        || compilation_unit.kind == sv::UnitKind::program;
+    if (!owner_has_compilation_unit_scope
+        || compilation_unit.compilation_unit_identity.empty()) {
+        return nullptr;
+    }
+    const auto matches = [&](const sv::Unit& candidate) {
+        return candidate.kind == sv::UnitKind::package
+            && candidate.name.starts_with("fsim_unit_")
+            && normalized_library(candidate.library)
+                == normalized_library(compilation_unit.library)
+            && candidate.compilation_unit_identity
+                == compilation_unit.compilation_unit_identity;
+    };
+    const auto units = design.systemverilog_units();
+    const auto found = std::ranges::find_if(units, matches);
+    if (found == units.end()
+        || std::ranges::count_if(units, matches) != 1U) {
+        return nullptr;
+    }
+    return &*found;
+}
+
 bool extended_vhdl_identifier(const std::string_view value)
 {
     return value.size() >= 2U && value.front() == '\\'
@@ -321,6 +350,105 @@ CompiledDeclarationResolution declaration_result(
 {
     sort_unique(candidates);
     return { status_for(candidates.size()), std::move(candidates) };
+}
+
+struct SystemVerilogGenerateBranch {
+    DeclarationId selection;
+    DeclarationId branch;
+};
+
+struct SystemVerilogGenerateCandidate {
+    std::vector<SystemVerilogGenerateBranch> branches;
+};
+
+std::optional<SystemVerilogGenerateCandidate>
+systemverilog_generate_candidate(
+    const sv::Unit& unit, const DeclarationId candidate)
+{
+    std::vector<std::vector<const sv::GenerateRegion*>> paths;
+    std::vector<const sv::GenerateRegion*> path;
+    const auto visit = [&](const auto& self,
+                           const sv::GenerateRegion& region) -> void {
+        path.push_back(&region);
+        if (region.declaration == candidate
+            || std::ranges::find(region.declarations, candidate)
+                != region.declarations.end()) {
+            paths.push_back(path);
+        }
+        for (const auto& nested : region.nested) {
+            self(self, nested);
+        }
+        path.pop_back();
+    };
+    for (const auto& region : unit.generates) {
+        visit(visit, region);
+    }
+    if (paths.size() != 1U) {
+        return std::nullopt;
+    }
+
+    SystemVerilogGenerateCandidate result;
+    const auto& selected_path = paths.front();
+    for (std::size_t index = 0; index < selected_path.size(); ++index) {
+        const auto& region = *selected_path[index];
+        if (region.kind == sv::GenerateKind::conditional) {
+            auto branch = region.declaration;
+            if (index + 1U < selected_path.size()) {
+                const auto& nested = *selected_path[index + 1U];
+                if (nested.alternative_discriminator
+                    != region.alternative_discriminator) {
+                    branch = nested.declaration;
+                }
+            }
+            result.branches.push_back(
+                { region.declaration, branch });
+        } else if (region.kind == sv::GenerateKind::selection) {
+            if (index + 1U >= selected_path.size()) {
+                return std::nullopt;
+            }
+            const auto& nested = *selected_path[index + 1U];
+            const bool is_alternative = std::ranges::any_of(
+                region.alternatives, [&](const sv::GenerateAlternative& alternative) {
+                    return alternative.alternative_discriminator
+                        == nested.alternative_discriminator;
+                });
+            if (!is_alternative) {
+                return std::nullopt;
+            }
+            result.branches.push_back(
+                { region.declaration, nested.declaration });
+        }
+    }
+    return result;
+}
+
+bool systemverilog_generate_candidates_are_exclusive(
+    const std::vector<SystemVerilogGenerateCandidate>& candidates)
+{
+    if (candidates.size() < 2U) {
+        return false;
+    }
+    for (std::size_t left = 0; left < candidates.size(); ++left) {
+        for (std::size_t right = left + 1U;
+             right < candidates.size(); ++right) {
+            const bool exclusive = std::ranges::any_of(
+                candidates[left].branches,
+                [&](const SystemVerilogGenerateBranch& left_branch) {
+                    return std::ranges::any_of(
+                        candidates[right].branches,
+                        [&](const SystemVerilogGenerateBranch& right_branch) {
+                            return left_branch.selection
+                                    == right_branch.selection
+                                && left_branch.branch
+                                    != right_branch.branch;
+                        });
+                });
+            if (!exclusive) {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 std::optional<std::vector<DeclarationId>> rank_systemverilog_constants(
@@ -1366,7 +1494,8 @@ CompiledDesignResolver::resolve_systemverilog_package_class(
 CompiledSystemVerilogClassResolution
 CompiledDesignResolver::resolve_systemverilog_class(
     const std::string_view name, const ScopeId use_scope,
-    const bool same_library_fallback) const
+    const bool same_library_fallback,
+    const std::uint64_t source_order) const
 {
     if (design_ == nullptr) {
         return { CompiledResolutionStatus::invalid, { } };
@@ -1436,7 +1565,9 @@ CompiledDesignResolver::resolve_systemverilog_class(
     }
     std::vector<const sv::ClassDeclaration*> explicit_candidates;
     for (const auto& import : owner->systemverilog->imports) {
-        if (!import.member || import.member->spelling != member) {
+        if ((source_order != 0U && import.source_order != 0U
+                && import.source_order >= source_order)
+            || !import.member || import.member->spelling != member) {
             continue;
         }
         auto tier = package_tier(import.package.spelling);
@@ -1449,7 +1580,9 @@ CompiledDesignResolver::resolve_systemverilog_class(
     }
     std::vector<const sv::ClassDeclaration*> wildcard_candidates;
     for (const auto& import : owner->systemverilog->imports) {
-        if (!import.wildcard) {
+        if ((source_order != 0U && import.source_order != 0U
+                && import.source_order >= source_order)
+            || !import.wildcard) {
             continue;
         }
         auto tier = package_tier(import.package.spelling);
@@ -1458,7 +1591,7 @@ CompiledDesignResolver::resolve_systemverilog_class(
     }
     result = make_result(std::move(wildcard_candidates));
     if (result.status != CompiledResolutionStatus::not_found
-        || !same_library_fallback) {
+        || !same_library_fallback || source_order != 0U) {
         return result;
     }
     std::vector<const sv::ClassDeclaration*> fallback;
@@ -1529,8 +1662,95 @@ CompiledDesignResolver::resolve_systemverilog_name(
     if (design_ == nullptr || name.spelling.empty()) {
         return { CompiledResolutionStatus::invalid, { } };
     }
+    const auto* use_scope_record = find_scope(*design_, use_scope);
+    const auto use_unit = use_scope_record != nullptr
+        ? design_->find_unit(use_scope_record->unit)
+        : std::nullopt;
+    const auto* generate_owner = use_unit
+            && use_unit->systemverilog != nullptr
+        ? use_unit->systemverilog
+        : nullptr;
     const auto simple_name = name.spelling.find('.') == std::string::npos
         && name.spelling.find("::") == std::string::npos;
+    bool lexical_import_has_member { };
+    if (simple_name) {
+        auto scope = std::optional { use_scope };
+        auto owner = design_->find_unit(selected_unit_);
+        if (const auto* record = find_scope(*design_, use_scope)) {
+            if (const auto scoped = design_->find_unit(record->unit);
+                scoped && scoped->systemverilog != nullptr) {
+                owner = scoped;
+            }
+        }
+        while (scope) {
+            if (owner && owner->systemverilog != nullptr) {
+                for (const auto& statement
+                    : design_->systemverilog_hir.statements()) {
+                    if (statement.nested_scope != scope) {
+                        continue;
+                    }
+                    for (const auto& import : statement.imports) {
+                        if (name.source_order != 0U
+                            && import.source_order != 0U
+                            && import.source_order >= name.source_order) {
+                            continue;
+                        }
+                        if (!import.wildcard
+                            && (!import.member
+                                || import.member->spelling != name.spelling)) {
+                            continue;
+                        }
+                        const auto imported
+                            = resolve_systemverilog_package_member(
+                                owner->systemverilog->library,
+                                import.package.spelling,
+                                name.spelling,
+                                predicate);
+                        if (imported.status
+                            != CompiledResolutionStatus::not_found) {
+                            lexical_import_has_member = true;
+                            break;
+                        }
+                    }
+                    if (lexical_import_has_member) {
+                        break;
+                    }
+                }
+            }
+            if (lexical_import_has_member) {
+                break;
+            }
+            const auto* record = find_scope(*design_, *scope);
+            scope = record != nullptr ? record->parent : std::nullopt;
+        }
+    }
+    const auto compilation_unit_name_is_visible = [&] {
+        if (!simple_name) {
+            return false;
+        }
+        const auto* use_record = find_scope(*design_, use_scope);
+        if (use_record == nullptr) {
+            return false;
+        }
+        const auto owner = design_->find_unit(use_record->unit);
+        if (!owner || owner->systemverilog == nullptr) {
+            return false;
+        }
+        const auto* source_unit = source_package_for_compilation_unit(
+            *design_, *owner->systemverilog);
+        if (source_unit == nullptr) {
+            return false;
+        }
+        const auto visible = std::ranges::any_of(source_unit->declarations,
+            [&](const DeclarationId id) {
+                const auto declaration = find_declaration(
+                    *design_, effective_, id);
+                return declaration && declaration->systemverilog != nullptr
+                    && declaration->systemverilog->scope == source_unit->scope
+                    && declaration->systemverilog->name == name.spelling;
+            });
+        return visible;
+    }();
     const auto retained_is_valid = [&](const DeclarationId id) {
         const auto declaration = find_declaration(
             *design_, effective_, id);
@@ -1541,15 +1761,80 @@ CompiledDesignResolver::resolve_systemverilog_name(
         return !simple_name
             || declaration->systemverilog->name == name.spelling;
     };
-    if (name.selected && retained_is_valid(*name.selected)) {
+    const auto generate_candidate = [&](const DeclarationId id) {
+        return generate_owner != nullptr
+            ? systemverilog_generate_candidate(*generate_owner, id)
+            : std::nullopt;
+    };
+    const auto resolve_generated_candidates
+        = [&](CompiledDeclarationResolution result) {
+              if (result.candidates.empty() || generate_owner == nullptr) {
+                  return result;
+              }
+              std::vector<SystemVerilogGenerateCandidate> generated;
+              generated.reserve(result.candidates.size());
+              for (const auto candidate : result.candidates) {
+                  const auto path = generate_candidate(candidate);
+                  if (!path) {
+                      return result;
+                  }
+                  generated.push_back(*path);
+              }
+              if (result.candidates.size() > 1U
+                  && !systemverilog_generate_candidates_are_exclusive(
+                      generated)) {
+                  return result;
+              }
+              if (effective_ == nullptr) {
+                  return result.candidates.size() > 1U
+                      ? CompiledDeclarationResolution {
+                            CompiledResolutionStatus::not_found, { } }
+                      : result;
+              }
+              if (effective_->unit() != generate_owner->id) {
+                  return result;
+              }
+              const auto selected = effective_->selected_generates();
+              std::vector<DeclarationId> active;
+              for (std::size_t index = 0;
+                   index < result.candidates.size(); ++index) {
+                  const bool is_active = std::ranges::all_of(
+                      generated[index].branches,
+                      [&](const SystemVerilogGenerateBranch& branch) {
+                          return std::ranges::find(
+                                     selected, branch.branch)
+                              != selected.end();
+                      });
+                  if (is_active) {
+                      active.push_back(result.candidates[index]);
+                  }
+              }
+              if (active.size() == 1U) {
+                  return CompiledDeclarationResolution {
+                      CompiledResolutionStatus::unique, std::move(active) };
+              }
+              if (result.candidates.size() == 1U && active.empty()) {
+                  return CompiledDeclarationResolution {
+                      CompiledResolutionStatus::not_found, { } };
+              }
+              return result;
+          };
+    if (!lexical_import_has_member && !compilation_unit_name_is_visible
+        && name.selected
+        && retained_is_valid(*name.selected)) {
         const auto declaration = find_declaration(
             *design_, effective_, *name.selected);
-        if (simple_name && declaration
-            && systemverilog_genvar_hides(*design_, use_scope,
-                declaration->systemverilog->scope, name.spelling)) {
-            return { CompiledResolutionStatus::not_found, { } };
+        if (!generate_candidate(*name.selected)) {
+            if (simple_name && declaration
+                && systemverilog_genvar_hides(*design_, use_scope,
+                    declaration->systemverilog->scope, name.spelling)) {
+                return { CompiledResolutionStatus::not_found, { } };
+            }
+            CompiledDeclarationResolution result {
+                CompiledResolutionStatus::unique, { *name.selected }
+            };
+            return resolve_generated_candidates(std::move(result));
         }
-        return { CompiledResolutionStatus::unique, { *name.selected } };
     }
     const auto normalize_synthetic_duplicate
         = [&](CompiledDeclarationResolution result) {
@@ -1565,17 +1850,27 @@ CompiledDesignResolver::resolve_systemverilog_name(
                   : result;
           };
     std::vector<DeclarationId> retained;
-    for (const auto candidate : name.overloads) {
-        if (retained_is_valid(candidate)) {
-            retained.push_back(candidate);
+    if (!lexical_import_has_member && !compilation_unit_name_is_visible) {
+        for (const auto candidate : name.overloads) {
+            if (retained_is_valid(candidate)) {
+                retained.push_back(candidate);
+            }
         }
     }
-    if (!retained.empty()) {
-        return normalize_synthetic_duplicate(
+    const bool retained_generated = std::ranges::any_of(
+        retained, [&](const DeclarationId id) {
+            return generate_candidate(id).has_value();
+        });
+    if (!retained.empty() && !retained_generated) {
+        auto result = normalize_synthetic_duplicate(
             declaration_result(std::move(retained)));
+        return resolve_generated_candidates(std::move(result));
     }
-    return normalize_synthetic_duplicate(resolve_systemverilog(
-        name.spelling, use_scope, predicate, same_library_fallback));
+    auto result = normalize_synthetic_duplicate(resolve_systemverilog(
+        name.spelling, use_scope, predicate,
+        same_library_fallback && name.source_order == 0U,
+        std::nullopt, name.source_order));
+    return resolve_generated_candidates(std::move(result));
 }
 
 CompiledDeclarationResolution
@@ -1583,7 +1878,8 @@ CompiledDesignResolver::resolve_systemverilog(
     const std::string_view name, const ScopeId use_scope,
     const CompiledDeclarationPredicate& predicate,
     const bool same_library_fallback,
-    const std::optional<ScopeId> stop_scope) const
+    const std::optional<ScopeId> stop_scope,
+    const std::uint64_t source_order) const
 {
     if (design_ == nullptr) {
         return { CompiledResolutionStatus::invalid, { } };
@@ -1610,6 +1906,8 @@ CompiledDesignResolver::resolve_systemverilog(
     if (!owner || owner->systemverilog == nullptr) {
         return { CompiledResolutionStatus::invalid, { } };
     }
+    const auto* compilation_unit_source = source_package_for_compilation_unit(
+        *design_, *owner->systemverilog);
 
     const auto declarations_in_scope = [&](const ScopeId scope) {
         std::vector<DeclarationId> candidates;
@@ -1623,7 +1921,45 @@ CompiledDesignResolver::resolve_systemverilog(
                 }
                 candidates.push_back(declaration.id);
             });
-        return declaration_result(std::move(candidates));
+        auto result = declaration_result(std::move(candidates));
+        if (result.status != CompiledResolutionStatus::not_found
+            || compilation_unit_source == nullptr
+            || scope != owner->systemverilog->scope) {
+            return result;
+        }
+        std::vector<DeclarationId> compilation_unit_candidates;
+        for (const auto id : compilation_unit_source->declarations) {
+            const auto declaration = find_declaration(
+                *design_, effective_, id);
+            if (declaration && declaration->systemverilog != nullptr
+                && declaration->systemverilog->scope
+                    == compilation_unit_source->scope
+                && declaration->systemverilog->name == member
+                && (!predicate || predicate(*declaration))) {
+                compilation_unit_candidates.push_back(id);
+            }
+        }
+        auto cu_result = declaration_result(std::move(compilation_unit_candidates));
+        return cu_result;
+    };
+    const auto package_tier = [&](const std::string_view requested) {
+        auto result = resolve_systemverilog_package_member(
+            owner->systemverilog->library, requested, member, predicate);
+        return result;
+    };
+    const auto imports_in_scope = [&](const ScopeId scope)
+        -> const std::vector<sv::Import>* {
+        const sv::Statement* selected { };
+        for (const auto& statement : design_->systemverilog_hir.statements()) {
+            if (statement.nested_scope != scope || statement.imports.empty()) {
+                continue;
+            }
+            if (selected != nullptr) {
+                return nullptr;
+            }
+            selected = &statement;
+        }
+        return selected != nullptr ? &selected->imports : nullptr;
     };
     if (package_name.empty()) {
         auto scope = use_scope;
@@ -1633,6 +1969,46 @@ CompiledDesignResolver::resolve_systemverilog(
             const auto tier = declarations_in_scope(scope);
             if (tier.status != CompiledResolutionStatus::not_found) {
                 return tier;
+            }
+            if (const auto* imports = imports_in_scope(scope)) {
+                std::vector<DeclarationId> explicit_candidates;
+                for (const auto& import : *imports) {
+                    if (source_order != 0U && import.source_order != 0U
+                        && import.source_order >= source_order) {
+                        continue;
+                    }
+                    if (!import.member || import.member->spelling != member) {
+                        continue;
+                    }
+                    const auto imported = package_tier(
+                        import.package.spelling);
+                    explicit_candidates.insert(
+                        explicit_candidates.end(), imported.candidates.begin(),
+                        imported.candidates.end());
+                }
+                auto import_result = declaration_result(
+                    std::move(explicit_candidates));
+                if (import_result.status != CompiledResolutionStatus::not_found) {
+                    return import_result;
+                }
+                std::vector<DeclarationId> wildcard_candidates;
+                for (const auto& import : *imports) {
+                    if ((source_order != 0U && import.source_order != 0U
+                            && import.source_order >= source_order)
+                        || !import.wildcard) {
+                        continue;
+                    }
+                    const auto imported = package_tier(
+                        import.package.spelling);
+                    wildcard_candidates.insert(
+                        wildcard_candidates.end(), imported.candidates.begin(),
+                        imported.candidates.end());
+                }
+                import_result = declaration_result(
+                    std::move(wildcard_candidates));
+                if (import_result.status != CompiledResolutionStatus::not_found) {
+                    return import_result;
+                }
             }
             if (systemverilog_genvar_scope(*design_, scope, member)) {
                 return { CompiledResolutionStatus::not_found, { } };
@@ -1648,10 +2024,6 @@ CompiledDesignResolver::resolve_systemverilog(
         }
     }
 
-    const auto package_tier = [&](const std::string_view requested) {
-        return resolve_systemverilog_package_member(
-            owner->systemverilog->library, requested, member, predicate);
-    };
     if (!package_name.empty()) {
         auto result = package_tier(package_name);
         if (result.status != CompiledResolutionStatus::not_found) {
@@ -1922,7 +2294,8 @@ CompiledDesignResolver::resolve_systemverilog_let(
 CompiledDeclarationResolution
 CompiledDesignResolver::resolve_systemverilog_constant(
     const std::string_view name, const ScopeId use_scope,
-    const bool same_library_fallback) const
+    const bool same_library_fallback,
+    const std::uint64_t source_order) const
 {
     using Form = sv::DeclarationForm;
     const CompiledDeclarationPredicate constant = [](const auto& view) {
@@ -1932,7 +2305,9 @@ CompiledDesignResolver::resolve_systemverilog_constant(
                 || view.systemverilog->form == Form::enumeration_literal);
     };
     auto result = resolve_systemverilog(
-        name, use_scope, constant, same_library_fallback);
+        name, use_scope, constant,
+        same_library_fallback && source_order == 0U,
+        std::nullopt, source_order);
     if (result.candidates.empty()) {
         return result;
     }
@@ -1946,7 +2321,8 @@ CompiledDesignResolver::resolve_systemverilog_constant(
 CompiledDeclarationResolution
 CompiledDesignResolver::resolve_systemverilog_named_type(
     const std::string_view name, const ScopeId use_scope,
-    const bool same_library_fallback) const
+    const bool same_library_fallback,
+    const std::uint64_t source_order) const
 {
     using Form = sv::DeclarationForm;
     const CompiledDeclarationPredicate named_type = [&](const auto& view) {
@@ -1959,7 +2335,9 @@ CompiledDesignResolver::resolve_systemverilog_named_type(
                     *design_, effective_, *view.systemverilog));
     };
     return resolve_systemverilog(
-        name, use_scope, named_type, same_library_fallback);
+        name, use_scope, named_type,
+        same_library_fallback && source_order == 0U, std::nullopt,
+        source_order);
 }
 
 std::optional<TypeId> CompiledDesignResolver::resolve_vhdl_named_type(
@@ -2398,7 +2776,7 @@ CompiledDesignResolver::effective_systemverilog_type(
             return std::nullopt;
         }
         return resolve_systemverilog_named_type(
-            reference.target.spelling, scope, false)
+            reference.target.spelling, scope, false, reference.source_order)
             .unique();
     };
     std::set<DeclarationId> visiting;
@@ -2601,25 +2979,8 @@ CompiledDesignResolver::effective_vhdl_subtype(
                   *residual, make_boundary_binding(active))
             : std::nullopt;
     };
-    const auto materialize_boundaries = [&](
-        vhdl::SubtypeIndication& subtype,
-        const std::span<const CompiledBindingFrame> active) {
-        for (auto& constraint : subtype.constraints) {
-            if (!constraint.left && constraint.left_expression) {
-                constraint.left = evaluate_boundary(
-                    constraint.left, constraint.left_expression, active);
-            }
-            if (!constraint.right && constraint.right_expression) {
-                constraint.right = evaluate_boundary(
-                    constraint.right, constraint.right_expression, active);
-            }
-            if (constraint.direction_from_bounds && constraint.left
-                && constraint.right) {
-                constraint.descending = *constraint.left > *constraint.right;
-                constraint.null = false;
-            }
-        }
-    };
+    std::function<void(vhdl::SubtypeIndication&,
+        std::span<const CompiledBindingFrame>)> materialize_boundaries;
     const auto standard_width = [&]() -> std::uint8_t {
         const auto selected = design_->find_unit(selected_unit_);
         return selected && selected->vhdl != nullptr
@@ -2839,46 +3200,6 @@ CompiledDesignResolver::effective_vhdl_subtype(
             return true;
         }
     };
-    const auto concrete_predefined = [&]() {
-        if (effective_ == nullptr || !binding_frames_.empty()
-            || !effective_->specialization().actual_identities.empty()
-            || !effective_->specialization().hierarchy_identities.empty()
-            || input.type_mark.target.valid()
-            || input.type_mark.spelling.empty()
-            || input.type_mark.spelling.find('.') != std::string::npos
-            || input.predefined_attribute
-            || input.predefined_attribute_dimension
-            || !input.resolution_function.spelling.empty()
-            || !input.resolution_function.canonical.empty()
-            || input.unconstrained
-            || input.unspecified_class
-                != vhdl::UnspecifiedTypeClass::none
-            || !input.unspecified_component_classes.empty()
-            || !input.unspecified_component_type_marks.empty()
-            || input.unspecified_array_index_count != 0U
-            || !input.unspecified_inference_identity.empty()
-            || std::ranges::any_of(input.constraints,
-                [](const vhdl::RangeConstraint& constraint) {
-                    return !constraint.left || !constraint.right
-                        || constraint.left_expression
-                        || constraint.right_expression;
-                })) {
-            return std::optional<vhdl::SubtypeIndication> { };
-        }
-        const auto named_types = design_->vhdl_type_declarations_named(
-            simple_vhdl_name(input.type_mark.spelling));
-        if (!named_types || !named_types->empty()) {
-            return std::optional<vhdl::SubtypeIndication> { };
-        }
-        auto result = input;
-        return complete_predefined(result, binding_frames_, use_scope)
-            ? std::optional<vhdl::SubtypeIndication> { std::move(result) }
-            : std::optional<vhdl::SubtypeIndication> { };
-    }();
-    if (concrete_predefined) {
-        return concrete_predefined;
-    }
-
     auto frames = std::vector<CompiledBindingFrame> {
         binding_frames_.begin(), binding_frames_.end()
     };
@@ -2924,7 +3245,8 @@ CompiledDesignResolver::effective_vhdl_subtype(
     };
     const auto bound_type = [&](const DeclarationId formal,
                                 const std::span<
-                                    const CompiledBindingFrame> active)
+                                    const CompiledBindingFrame> active,
+                                const bool prefer_actual_subtype)
         -> std::optional<vhdl::SubtypeIndication> {
         const auto declaration_type = [&](const DeclarationId id)
             -> std::optional<vhdl::SubtypeIndication> {
@@ -2950,7 +3272,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
             if (binding == frame->end()) {
                 continue;
             }
-            if (binding->vhdl_type) {
+            if (!prefer_actual_subtype && binding->vhdl_type) {
                 return binding->vhdl_type;
             }
             if (binding->actual_declaration) {
@@ -2964,6 +3286,9 @@ CompiledDesignResolver::effective_vhdl_subtype(
                     return declaration_type(*selected);
                 }
             }
+            if (prefer_actual_subtype) {
+                return binding->vhdl_type;
+            }
             return std::nullopt;
         }
         if (effective_ == nullptr) {
@@ -2975,7 +3300,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
         if (actual == actuals.end()) {
             return std::nullopt;
         }
-        if (actual->vhdl_type) {
+        if (!prefer_actual_subtype && actual->vhdl_type) {
             return actual->vhdl_type;
         }
         if (actual->actual_declaration) {
@@ -2989,12 +3314,209 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 return declaration_type(*selected);
             }
         }
+        if (prefer_actual_subtype) {
+            return actual->vhdl_type;
+        }
         return std::nullopt;
     };
 
     std::function<std::optional<vhdl::SubtypeIndication>(
         vhdl::SubtypeIndication, ScopeId,
         std::vector<CompiledBindingFrame>&)> resolve;
+    const auto range_source_direction = [&](
+        const vhdl::RangeConstraint& constraint,
+        const std::span<const CompiledBindingFrame> active)
+        -> std::optional<bool> {
+        if (!constraint.left_expression || !constraint.right_expression) {
+            return std::nullopt;
+        }
+        const auto left_expression = effective_ != nullptr
+            ? effective_->find_expression(*constraint.left_expression)
+            : design_->find_expression(*constraint.left_expression);
+        const auto right_expression = effective_ != nullptr
+            ? effective_->find_expression(*constraint.right_expression)
+            : design_->find_expression(*constraint.right_expression);
+        if (!left_expression || left_expression->vhdl == nullptr
+            || !right_expression || right_expression->vhdl == nullptr
+            || left_expression->vhdl->kind != vhdl::ExpressionKind::call
+            || right_expression->vhdl->kind != vhdl::ExpressionKind::call) {
+            return std::nullopt;
+        }
+        const auto& left_call = *left_expression->vhdl;
+        const auto& right_call = *right_expression->vhdl;
+        const bool reverse_range = left_call.text == "'right"
+            && right_call.text == "'left";
+        if ((!reverse_range
+                && (left_call.text != "'left"
+                    || right_call.text != "'right"))
+            || left_call.operands.size() != 1U
+            || right_call.operands.size() != 1U) {
+            return std::nullopt;
+        }
+        const auto prefix_id = left_call.operands.front();
+        const auto paired_prefix_id = right_call.operands.front();
+        const auto prefix = effective_ != nullptr
+            ? effective_->find_expression(prefix_id)
+            : design_->find_expression(prefix_id);
+        const auto paired_prefix = effective_ != nullptr
+            ? effective_->find_expression(paired_prefix_id)
+            : design_->find_expression(paired_prefix_id);
+        if (!prefix || prefix->vhdl == nullptr
+            || prefix->vhdl->kind != vhdl::ExpressionKind::name
+            || !paired_prefix || paired_prefix->vhdl == nullptr
+            || paired_prefix->vhdl->kind != vhdl::ExpressionKind::name) {
+            return std::nullopt;
+        }
+        const auto resolver = CompiledDesignResolver {
+            *design_, selected_unit_, effective_, active
+        };
+        const auto declaration_id
+            = resolver.resolve_expression_name(prefix_id).unique();
+        const auto paired_declaration_id
+            = resolver.resolve_expression_name(paired_prefix_id).unique();
+        if (!declaration_id || !paired_declaration_id
+            || *declaration_id != *paired_declaration_id) {
+            return std::nullopt;
+        }
+        const auto declaration = find_declaration(
+            *design_, effective_, *declaration_id);
+        if (!declaration || declaration->vhdl == nullptr) {
+            return std::nullopt;
+        }
+        auto source_subtype = declaration->vhdl->subtype;
+        if (declaration->vhdl->form
+                == vhdl::DeclarationForm::generic_constant
+            && declaration_id) {
+            source_subtype = bound_type(*declaration_id, active, true);
+        } else if (!source_subtype && declaration->vhdl->declared_type) {
+            source_subtype.emplace();
+            source_subtype->type_mark.target
+                = *declaration->vhdl->declared_type;
+            source_subtype->type_mark.spelling = declaration->vhdl->name;
+        }
+        if (!source_subtype) {
+            return std::nullopt;
+        }
+
+        std::optional<vhdl::RangeConstraint> source_range;
+        for (const auto& candidate : source_subtype->constraints) {
+            if (candidate.kind != vhdl::RangeKind::array_index) {
+                continue;
+            }
+            if (source_range) {
+                return std::nullopt;
+            }
+            source_range = candidate;
+        }
+        auto type_id = source_subtype->type_mark.target;
+        std::set<TypeId> visited;
+        while (!source_range && type_id.valid()
+            && visited.insert(type_id).second) {
+            const auto type = effective_ != nullptr
+                ? effective_->find_type(type_id)
+                : design_->find_type(type_id);
+            const auto fallback = type ? type : design_->find_type(type_id);
+            if (!fallback || fallback->vhdl == nullptr) {
+                break;
+            }
+            const auto& definition = *fallback->vhdl;
+            if (definition.form == vhdl::TypeForm::array) {
+                if (definition.array_dimensions.size() != 1U
+                    || !definition.array_dimensions.front().constraint) {
+                    return std::nullopt;
+                }
+                source_range = *definition.array_dimensions.front().constraint;
+                break;
+            }
+            if (definition.form != vhdl::TypeForm::subtype
+                && definition.form != vhdl::TypeForm::alias) {
+                break;
+            }
+            for (const auto& candidate : definition.base.constraints) {
+                if (candidate.kind != vhdl::RangeKind::array_index) {
+                    continue;
+                }
+                if (source_range) {
+                    return std::nullopt;
+                }
+                source_range = candidate;
+            }
+            type_id = definition.base.type_mark.target;
+        }
+        if (!source_range || source_range->direction_from_bounds) {
+            return std::nullopt;
+        }
+        return reverse_range
+            ? std::optional<bool> { !source_range->descending }
+            : std::optional<bool> { source_range->descending };
+    };
+    materialize_boundaries = [&](
+        vhdl::SubtypeIndication& subtype,
+        const std::span<const CompiledBindingFrame> active) {
+        for (auto& constraint : subtype.constraints) {
+            if (!constraint.left && constraint.left_expression) {
+                constraint.left = evaluate_boundary(
+                    constraint.left, constraint.left_expression, active);
+            }
+            if (!constraint.right && constraint.right_expression) {
+                constraint.right = evaluate_boundary(
+                    constraint.right, constraint.right_expression, active);
+            }
+            if (constraint.direction_from_bounds && constraint.left
+                && constraint.right) {
+                const auto source_direction
+                    = range_source_direction(constraint, active);
+                constraint.descending = source_direction
+                    ? *source_direction
+                    : *constraint.left > *constraint.right;
+                constraint.null = constraint.descending
+                    ? *constraint.left < *constraint.right
+                    : *constraint.left > *constraint.right;
+                if (source_direction) {
+                    constraint.direction_from_bounds = false;
+                }
+            }
+        }
+    };
+    const auto concrete_predefined = [&]() {
+        if (effective_ == nullptr || !binding_frames_.empty()
+            || !effective_->specialization().actual_identities.empty()
+            || !effective_->specialization().hierarchy_identities.empty()
+            || input.type_mark.target.valid()
+            || input.type_mark.spelling.empty()
+            || input.type_mark.spelling.find('.') != std::string::npos
+            || input.predefined_attribute
+            || input.predefined_attribute_dimension
+            || !input.resolution_function.spelling.empty()
+            || !input.resolution_function.canonical.empty()
+            || input.unconstrained
+            || input.unspecified_class
+                != vhdl::UnspecifiedTypeClass::none
+            || !input.unspecified_component_classes.empty()
+            || !input.unspecified_component_type_marks.empty()
+            || input.unspecified_array_index_count != 0U
+            || !input.unspecified_inference_identity.empty()
+            || std::ranges::any_of(input.constraints,
+                [](const vhdl::RangeConstraint& constraint) {
+                    return !constraint.left || !constraint.right
+                        || constraint.left_expression
+                        || constraint.right_expression;
+                })) {
+            return std::optional<vhdl::SubtypeIndication> { };
+        }
+        const auto named_types = design_->vhdl_type_declarations_named(
+            simple_vhdl_name(input.type_mark.spelling));
+        if (!named_types || !named_types->empty()) {
+            return std::optional<vhdl::SubtypeIndication> { };
+        }
+        auto result = input;
+        return complete_predefined(result, binding_frames_, use_scope)
+            ? std::optional<vhdl::SubtypeIndication> { std::move(result) }
+            : std::optional<vhdl::SubtypeIndication> { };
+    }();
+    if (concrete_predefined) {
+        return concrete_predefined;
+    }
     // Lookups below accept only type, subtype and generic-type
     // declarations, all of which the design indexes by identifier: a name
     // with none (a predefined or IEEE type) cannot resolve.
@@ -3114,7 +3636,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
                     == vhdl::DeclarationForm::generic_type
                 && active_generics.insert(*declaration_id).second) {
                 auto replacement = bound_type(
-                    *declaration_id, active_frames);
+                    *declaration_id, active_frames, false);
                 if (!replacement) {
                     replacement = declaration->vhdl->default_type;
                 }
@@ -3598,9 +4120,253 @@ CompiledDesignResolver::effective_vhdl_subtype(
     return resolve(input, use_scope, frames);
 }
 
+std::optional<vhdl::SubtypeIndication>
+CompiledDesignResolver::effective_vhdl_constant_object_subtype(
+    const DeclarationId declaration_id, const ScopeId use_scope) const
+{
+    if (design_ == nullptr) {
+        return std::nullopt;
+    }
+    const auto declaration = find_declaration(
+        *design_, effective_, declaration_id);
+    if (!declaration || declaration->vhdl == nullptr
+        || declaration->vhdl->form != vhdl::DeclarationForm::constant
+        || !declaration->vhdl->subtype) {
+        return std::nullopt;
+    }
+    auto subtype = effective_vhdl_subtype(
+        *declaration->vhdl->subtype, use_scope);
+    if (!subtype || !declaration->vhdl->initializer
+        || !subtype->constraints.empty()) {
+        return subtype;
+    }
+
+    auto type_id = subtype->type_mark.target;
+    if (!type_id.valid()) {
+        type_id = resolve_vhdl_named_type(
+                      subtype->type_mark.spelling,
+                      declaration->vhdl->scope)
+                      .value_or(TypeId { });
+    }
+    std::unordered_set<std::uint32_t> visited_types;
+    const vhdl::TypeDefinition* array { };
+    while (type_id.valid()
+        && visited_types.insert(type_id.value()).second) {
+        const auto type = effective_ != nullptr
+            ? effective_->find_type(type_id)
+            : design_->find_type(type_id);
+        if (!type || type->vhdl == nullptr) {
+            break;
+        }
+        if (type->vhdl->form == vhdl::TypeForm::array) {
+            array = type->vhdl;
+            break;
+        }
+        if ((type->vhdl->form != vhdl::TypeForm::subtype
+                && type->vhdl->form != vhdl::TypeForm::alias)
+            || !type->vhdl->base.type_mark.target.valid()) {
+            break;
+        }
+        type_id = type->vhdl->base.type_mark.target;
+    }
+    if (array == nullptr || array->array_dimensions.size() != 2U
+        || std::ranges::any_of(
+            array->array_dimensions, [](const vhdl::ArrayDimension& dimension) {
+                return !dimension.unconstrained || dimension.constraint;
+            })) {
+        return subtype;
+    }
+
+    const auto array_declaration = find_declaration(
+        *design_, effective_, array->declaration);
+    const auto array_scope = array_declaration
+            && array_declaration->vhdl != nullptr
+        ? array_declaration->vhdl->scope
+        : declaration->vhdl->scope;
+    const auto standard_natural = [&](const vhdl::ArrayDimension& dimension) {
+        const auto retained_declaration = dimension.index_subtype.selected;
+        auto index_declaration = retained_declaration;
+        bool implicit_standard_natural { };
+        if (!index_declaration) {
+            auto spelling = std::string_view {
+                dimension.index_subtype.spelling
+            };
+            constexpr auto builtin_prefix
+                = std::string_view { "@builtin:" };
+            if (spelling.starts_with(builtin_prefix)) {
+                spelling.remove_prefix(builtin_prefix.size());
+            }
+            const auto resolved = resolve_vhdl_named_type(
+                spelling, array_scope);
+            if (resolved) {
+                const auto type = effective_ != nullptr
+                    ? effective_->find_type(*resolved)
+                    : design_->find_type(*resolved);
+                if (type && type->vhdl != nullptr) {
+                    index_declaration = type->vhdl->declaration;
+                }
+            }
+            if (!index_declaration) {
+                vhdl::Name index_name;
+                index_name.spelling = spelling;
+                index_name.canonical = spelling;
+                const auto visible_type = resolve_vhdl(
+                    index_name, array_scope,
+                    [](const CompiledDeclarationView&) { return true; });
+                const bool standard_spelling
+                    = same_vhdl_identifier(spelling, "natural")
+                    || same_vhdl_identifier(
+                        spelling, "standard.natural")
+                    || same_vhdl_identifier(
+                        spelling, "std.standard.natural");
+                if (visible_type.status
+                    == CompiledResolutionStatus::unique) {
+                    index_declaration = visible_type.unique();
+                } else if (visible_type.status
+                        == CompiledResolutionStatus::not_found
+                    && standard_spelling) {
+                    // STD.STANDARD.NATURAL is implicitly visible. Some
+                    // compiled bundles omit its declaration and TypeDefinition;
+                    // accept that compiler-owned name only after scoped lookup
+                    // has ruled out a local or imported declaration.
+                    implicit_standard_natural = true;
+                }
+            }
+        }
+        const auto index = index_declaration
+            ? find_declaration(*design_, effective_, *index_declaration)
+            : std::nullopt;
+        const auto* scope = index && index->vhdl != nullptr
+            ? find_scope(*design_, index->vhdl->scope)
+            : nullptr;
+        const auto owner = scope != nullptr
+            ? design_->find_unit(scope->unit)
+            : std::nullopt;
+        const bool named_natural = implicit_standard_natural
+            || (index && index->vhdl != nullptr
+            && index->vhdl->form == vhdl::DeclarationForm::subtype
+            && same_vhdl_identifier(index->vhdl->name, "natural"));
+        const bool standard_owner = implicit_standard_natural
+            || (owner && owner->vhdl != nullptr
+                && owner->vhdl->kind == vhdl::UnitKind::package
+                && same_vhdl_identifier(owner->vhdl->library, "std")
+                && same_vhdl_identifier(owner->vhdl->name, "standard"));
+        return named_natural && standard_owner;
+    };
+    bool all_standard_natural = true;
+    for (std::size_t dimension { };
+         dimension < array->array_dimensions.size(); ++dimension) {
+        all_standard_natural = standard_natural(
+            array->array_dimensions[dimension])
+            && all_standard_natural;
+    }
+    if (!all_standard_natural) {
+        return subtype;
+    }
+
+    const auto positional_aggregate = [&](const ExpressionId expression_id)
+        -> std::optional<std::pair<std::size_t, SourceSpanId>> {
+        const auto expression = effective_ != nullptr
+            ? effective_->find_expression(expression_id)
+            : design_->find_expression(expression_id);
+        if (!expression || expression->vhdl == nullptr
+            || expression->vhdl->kind != vhdl::ExpressionKind::aggregate
+            || expression->vhdl->associations.empty()
+            || !std::ranges::all_of(
+                expression->vhdl->associations,
+                [](const vhdl::AggregateAssociation& association) {
+                    return association.choices.empty()
+                        && association.choice_spelling.empty();
+                })
+            || expression->vhdl->associations.size()
+                > static_cast<std::size_t>(
+                    std::numeric_limits<std::int32_t>::max()) + 1U) {
+            return std::nullopt;
+        }
+        return std::pair {
+            expression->vhdl->associations.size(),
+            expression->vhdl->source
+        };
+    };
+    const auto outer = positional_aggregate(
+        *declaration->vhdl->initializer);
+    if (!outer) {
+        return subtype;
+    }
+    std::optional<std::pair<std::size_t, SourceSpanId>> inner;
+    const auto initializer = effective_ != nullptr
+        ? effective_->find_expression(*declaration->vhdl->initializer)
+        : design_->find_expression(*declaration->vhdl->initializer);
+    if (!initializer || initializer->vhdl == nullptr) {
+        return subtype;
+    }
+    for (const auto& association : initializer->vhdl->associations) {
+        const auto row = positional_aggregate(association.value);
+        if (!row || (inner && inner->first != row->first)) {
+            return subtype;
+        }
+        const auto row_expression = effective_ != nullptr
+            ? effective_->find_expression(association.value)
+            : design_->find_expression(association.value);
+        if (!row_expression || row_expression->vhdl == nullptr
+            || !std::ranges::all_of(
+                row_expression->vhdl->associations,
+                [&](const vhdl::AggregateAssociation& element) {
+                    return (effective_ != nullptr
+                            ? effective_->find_expression(element.value)
+                            : design_->find_expression(element.value))
+                        .has_value();
+                })) {
+            return subtype;
+        }
+        if (!inner) {
+            inner = row;
+        }
+    }
+    if (!inner || outer->first == 0U || inner->first == 0U
+        || outer->first - 1U > static_cast<std::size_t>(
+            std::numeric_limits<std::int32_t>::max())
+        || inner->first - 1U > static_cast<std::size_t>(
+            std::numeric_limits<std::int32_t>::max())) {
+        return subtype;
+    }
+
+    std::vector<vhdl::RangeConstraint> constraints(2U);
+    for (std::size_t dimension { }; dimension < constraints.size(); ++dimension) {
+        constraints[dimension].kind = vhdl::RangeKind::array_index;
+        constraints[dimension].left = 0;
+        constraints[dimension].right = static_cast<std::int64_t>(
+            (dimension == 0U ? outer->first : inner->first) - 1U);
+        constraints[dimension].descending = false;
+        constraints[dimension].source
+            = dimension == 0U ? outer->second : inner->second;
+    }
+    subtype->constraints = std::move(constraints);
+    subtype->unconstrained = false;
+    return effective_vhdl_subtype(*subtype, use_scope).value_or(
+        std::move(*subtype));
+}
+
 std::optional<bool> CompiledDesignResolver::vhdl_array_shapes_match(
     const vhdl::SubtypeIndication& left, const ScopeId left_scope,
     const vhdl::SubtypeIndication& right, const ScopeId right_scope) const
+{
+    return vhdl_array_shapes_match(
+        left, left_scope, right, right_scope, false);
+}
+
+std::optional<bool> CompiledDesignResolver::vhdl_array_lengths_match(
+    const vhdl::SubtypeIndication& left, const ScopeId left_scope,
+    const vhdl::SubtypeIndication& right, const ScopeId right_scope) const
+{
+    return vhdl_array_shapes_match(
+        left, left_scope, right, right_scope, true);
+}
+
+std::optional<bool> CompiledDesignResolver::vhdl_array_shapes_match(
+    const vhdl::SubtypeIndication& left, const ScopeId left_scope,
+    const vhdl::SubtypeIndication& right, const ScopeId right_scope,
+    const bool compare_lengths) const
 {
     if (design_ == nullptr) {
         return std::nullopt;
@@ -3687,8 +4453,9 @@ std::optional<bool> CompiledDesignResolver::vhdl_array_shapes_match(
     for (std::size_t index { }; index < left_constraints->size(); ++index) {
         const auto& left_dimension = (*left_constraints)[index];
         const auto& right_dimension = (*right_constraints)[index];
-        if (left_dimension.descending != right_dimension.descending
-            || left_dimension.null != right_dimension.null) {
+        if (!compare_lengths
+            && (left_dimension.descending != right_dimension.descending
+                || left_dimension.null != right_dimension.null)) {
             return false;
         }
         const auto left_first = boundary(left_dimension, true);
@@ -3699,7 +4466,43 @@ std::optional<bool> CompiledDesignResolver::vhdl_array_shapes_match(
             residual = true;
             continue;
         }
-        if (*left_first != *right_first || *left_last != *right_last) {
+        if (compare_lengths) {
+            if ((left_dimension.direction_from_bounds
+                    && *left_first != *left_last)
+                || (right_dimension.direction_from_bounds
+                    && *right_first != *right_last)) {
+                residual = true;
+                continue;
+            }
+            const auto is_null = [](const vhdl::RangeConstraint& range,
+                                     const std::int64_t first,
+                                     const std::int64_t last) {
+                return range.null
+                    || (range.descending ? first < last : first > last);
+            };
+            const bool left_null = is_null(
+                left_dimension, *left_first, *left_last);
+            const bool right_null = is_null(
+                right_dimension, *right_first, *right_last);
+            if (left_null != right_null) {
+                return false;
+            }
+            // Compare inclusive lengths without adding one: a range spanning
+            // the complete int64 domain has an unrepresentable uint64 length.
+            const auto distance = [](const std::int64_t first,
+                                      const std::int64_t last) {
+                return first >= last
+                    ? static_cast<std::uint64_t>(first)
+                        - static_cast<std::uint64_t>(last)
+                    : static_cast<std::uint64_t>(last)
+                        - static_cast<std::uint64_t>(first);
+            };
+            if (!left_null
+                && distance(*left_first, *left_last)
+                    != distance(*right_first, *right_last)) {
+                return false;
+            }
+        } else if (*left_first != *right_first || *left_last != *right_last) {
             return false;
         }
     }

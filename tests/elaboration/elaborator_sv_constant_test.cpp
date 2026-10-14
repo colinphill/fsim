@@ -1004,21 +1004,40 @@ endmodule
         converted_cast.design, "sv:work.two_state_cast_conversion");
     assert(converted_cast_result.ok());
 
-    const auto negative_clog2 = fsim::frontend::parse_text(
-        "negative-wide-clog2.sv",
+    const auto unsigned_clog2 = fsim::frontend::parse_text(
+        "unsigned-clog2-arguments.sv",
         R"(
-module negative_wide_clog2 #(
-  parameter int BAD = $clog2(
-      $signed(128'hffffffffffffffffffffffffffffffff))
+module unsigned_clog2_case #(
+  parameter int NEGATIVE_UNSIZED = $clog2(-1),
+  parameter int NEGATIVE_8 = $clog2($signed(8'hff)),
+  parameter int NEGATIVE_64 = $clog2(-64'sd1),
+  parameter int NEGATIVE_68 = $clog2(-(68'sd2**67)),
+  parameter int POSITIVE_SIGNED = $clog2(8'sd16),
+  parameter int ZERO = $clog2(0),
+  parameter int ONE = $clog2(1)
 ) ();
+endmodule
+module unsigned_clog2_top;
+  unsigned_clog2_case check();
 endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
-    assert(negative_clog2.ok());
-    const auto rejected_clog2 = compile_and_elaborate(
-        negative_clog2.design, "sv:work.negative_wide_clog2");
-    assert(!rejected_clog2.ok());
-    assert(has_diagnostic(rejected_clog2, "FSIM-ELAB-PARAM-005"));
+    assert(unsigned_clog2.ok());
+    const auto elaborated_unsigned_clog2 = compile_and_elaborate(
+        unsigned_clog2.design, "sv:work.unsigned_clog2_top");
+    assert(elaborated_unsigned_clog2.ok());
+    const auto* unsigned_clog2_case = specialization_at(
+        *elaborated_unsigned_clog2.design, "unsigned_clog2_top.check");
+    assert(unsigned_clog2_case != nullptr);
+    assert((parameter_value(
+                *unsigned_clog2_case, "NEGATIVE_UNSIZED")
+        == "32"));
+    assert((parameter_value(*unsigned_clog2_case, "NEGATIVE_8") == "8"));
+    assert((parameter_value(*unsigned_clog2_case, "NEGATIVE_64") == "64"));
+    assert((parameter_value(*unsigned_clog2_case, "NEGATIVE_68") == "67"));
+    assert((parameter_value(*unsigned_clog2_case, "POSITIVE_SIGNED") == "4"));
+    assert((parameter_value(*unsigned_clog2_case, "ZERO") == "0"));
+    assert((parameter_value(*unsigned_clog2_case, "ONE") == "0"));
 
     const auto unknown_clog2 = fsim::frontend::parse_text(
         "unknown-wide-clog2.sv",
@@ -1432,6 +1451,110 @@ endmodule
     assert(!rejected_scalar_operator.ok());
     assert(has_diagnostic(
         rejected_scalar_operator, "FSIM-ELAB-SVSCALAR-002"));
+}
+
+void test_systemverilog_unresolved_constant_function_call()
+{
+    const auto parsed = fsim::frontend::parse_text(
+        "constant-function-unresolved-call.sv",
+        R"(
+module unresolved_constant_function_call;
+  function [31:0] func1 (input [31:0] x);
+    return undef_func(x);
+  endfunction : func1
+
+  localparam X = func1(1);
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(parsed.ok());
+    const auto rejected = compile_and_elaborate(
+        parsed.design, "sv:work.unresolved_constant_function_call");
+    assert(!rejected.ok());
+    assert(has_diagnostic(rejected, "FSIM-ELAB-SVFUNC-015"));
+    assert(std::ranges::any_of(rejected.diagnostics,
+        [](const auto& diagnostic) {
+            return diagnostic.message.find("undef_func")
+                != std::string::npos;
+        }));
+
+    // The integral constant evaluator does not implement real-returning
+    // functions. That generic limitation must not be reported as an
+    // unresolved function name.
+    const auto unsupported_parsed = fsim::frontend::parse_text(
+        "constant-function-unsupported-evaluator-control.sv",
+        R"(
+module unsupported_constant_evaluator_control;
+  function real real_identity(input real value);
+    real_identity = value;
+  endfunction
+
+  localparam real REAL_VALUE = real_identity(1.5);
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(unsupported_parsed.ok());
+    const auto unsupported = compile_and_elaborate(
+        unsupported_parsed.design,
+        "sv:work.unsupported_constant_evaluator_control");
+    assert(std::ranges::none_of(unsupported.diagnostics,
+        [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-ELAB-SVFUNC-015";
+        }));
+
+    // Function names may be resolved forward within their design element
+    // (IEEE 1800-2023 13.7 and 23.8.1), and package functions may be called
+    // through a scope-qualified name. Check the resulting values for both
+    // default and overridden specializations so this is more than a
+    // no-diagnostic control.
+    const auto resolved_parsed = fsim::frontend::parse_text(
+        "constant-function-forward-and-qualified-resolution.sv",
+        R"(
+package constant_call_values;
+  function automatic integer package_bias(input integer value);
+    return value + 10;
+  endfunction
+endpackage
+
+module resolved_constant_function_child #(
+  parameter bit USE_PACKAGE = 1'b0,
+  parameter integer FORWARD_VALUE = later_function(2),
+  parameter integer PACKAGE_VALUE = constant_call_values::package_bias(3),
+  parameter integer SELECTED_VALUE = USE_PACKAGE
+      ? constant_call_values::package_bias(5)
+      : later_function(7)
+) ();
+  function automatic integer later_function(input integer value);
+    return value + 2;
+  endfunction
+endmodule
+
+module resolved_constant_function_top;
+  resolved_constant_function_child default_choice();
+  resolved_constant_function_child #(.USE_PACKAGE(1'b1)) package_choice();
+  resolved_constant_function_child #(
+    .USE_PACKAGE(1'b1), .SELECTED_VALUE(99)
+  ) overridden_choice();
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(resolved_parsed.ok());
+    const auto resolved = compile_and_elaborate(
+        resolved_parsed.design, "sv:work.resolved_constant_function_top");
+    assert(resolved.ok());
+    const auto* default_choice = specialization_at(
+        *resolved.design, "resolved_constant_function_top.default_choice");
+    const auto* package_choice = specialization_at(
+        *resolved.design, "resolved_constant_function_top.package_choice");
+    const auto* overridden_choice = specialization_at(
+        *resolved.design, "resolved_constant_function_top.overridden_choice");
+    assert(default_choice != nullptr && package_choice != nullptr
+        && overridden_choice != nullptr);
+    assert(parameter_value(*default_choice, "FORWARD_VALUE") == "4");
+    assert(parameter_value(*default_choice, "PACKAGE_VALUE") == "13");
+    assert(parameter_value(*default_choice, "SELECTED_VALUE") == "9");
+    assert(parameter_value(*package_choice, "SELECTED_VALUE") == "15");
+    assert(parameter_value(*overridden_choice, "SELECTED_VALUE") == "99");
 }
 
 } // namespace fsim::tests::elaboration

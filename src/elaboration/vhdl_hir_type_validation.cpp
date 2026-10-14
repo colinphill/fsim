@@ -12,7 +12,6 @@
 #include <cctype>
 #include <cstdint>
 #include <functional>
-#include <cstdlib>
 #include <iterator>
 #include <set>
 #include <tuple>
@@ -2398,6 +2397,15 @@ private:
                     *declaration->vhdl->subtype);
                 using Form = semantic::vhdl::DeclarationForm;
                 const auto form = declaration->vhdl->form;
+                if (form == Form::constant) {
+                    if (const auto object_subtype
+                        = semantic::CompiledDesignResolver {
+                              specialization_
+                          }.effective_vhdl_constant_object_subtype(
+                              *selected_object, value.scope)) {
+                        subtype = *object_subtype;
+                    }
+                }
                 const auto object = form == Form::generic_constant
                     || form == Form::port || form == Form::signal
                     || form == Form::constant || form == Form::variable
@@ -8231,20 +8239,141 @@ private:
             }
             const auto declaration = specialization_.find_declaration(
                 selected);
+            // Block generic actuals are bound when the generated occurrence
+            // is elaborated, after this unit-level validation. Like a port,
+            // this interface object obtains its bounds from that actual.
+            if (declaration && declaration->vhdl != nullptr
+                && declaration->vhdl->form
+                    == semantic::vhdl::DeclarationForm::generic_constant) {
+                const auto block_formal = [&](const auto& self,
+                                              const auto& regions) -> bool {
+                    return std::ranges::any_of(regions, [&](const auto& region) {
+                        return (region.kind == semantic::vhdl::GenerateKind::block
+                                   && std::ranges::find(region.declarations, selected)
+                                       != region.declarations.end())
+                            || self(self, region.nested);
+                    });
+                };
+                if (block_formal(block_formal, architecture_.generates)) {
+                    return true;
+                }
+            }
             // A constant with a value takes its index ranges from it
             // (IEEE 1076-2008 5.3.2.2).
-            return declaration && declaration->vhdl != nullptr
-                && (declaration->vhdl->form
-                        == semantic::vhdl::DeclarationForm::port
-                    || (declaration->vhdl->form
-                            == semantic::vhdl::DeclarationForm::constant
-                        && declaration->vhdl->initializer));
+            if (!declaration || declaration->vhdl == nullptr) {
+                return false;
+            }
+            const auto& vhdl_declaration = *declaration->vhdl;
+            if (vhdl_declaration.form
+                == semantic::vhdl::DeclarationForm::port) {
+                return true;
+            }
+            if (vhdl_declaration.form
+                    != semantic::vhdl::DeclarationForm::constant) {
+                return false;
+            }
+            if (vhdl_declaration.initializer) {
+                return true;
+            }
+            // A deferred package constant gets its value from its validated
+            // package-body completion, so it has the same value-bounded
+            // array attributes as an initialized constant declaration.
+            if (!vhdl_declaration.deferred
+                || !vhdl_declaration.completion) {
+                return false;
+            }
+            const auto completion = specialization_.find_declaration(
+                *vhdl_declaration.completion);
+            return completion && completion->vhdl != nullptr
+                && completion->vhdl->form
+                    == semantic::vhdl::DeclarationForm::constant
+                && completion->vhdl->initializer.has_value();
+        };
+        // An entity generic of an unconstrained array type obtains its
+        // bounds from the generic actual.  In particular, a later generic
+        // default may use an earlier generic's 'RANGE in its subtype
+        // indication (IEEE 1076-2008 5.3.2.3).  Accept that context only
+        // when this exact generic has an actual whose constrained subtype
+        // can be resolved in this specialization.
+        const auto entity_generic_actual_prefix = [&] {
+            const auto prefix_expression = specialization_.find_expression(
+                expression.operands.front());
+            if (!prefix_expression || prefix_expression->vhdl == nullptr
+                || prefix_expression->vhdl->kind
+                    != semantic::vhdl::ExpressionKind::name
+                || !prefix_expression->vhdl->referenced_name
+                || !prefix_expression->vhdl->referenced_name->selected) {
+                return false;
+            }
+            const auto formal_id
+                = *prefix_expression->vhdl->referenced_name->selected;
+            const auto formal
+                = specialization_.find_declaration(formal_id);
+            if (!formal || formal->vhdl == nullptr
+                || formal->vhdl->form
+                    != semantic::vhdl::DeclarationForm::generic_constant) {
+                return false;
+            }
+            const auto& actuals
+                = specialization_.specialization().actual_identities;
+            const auto actual = std::ranges::find(
+                actuals, formal_id,
+                &semantic::SpecializedHirActualIdentity::declaration);
+            if (actual == actuals.end()) {
+                return false;
+            }
+            std::optional<SubtypeIndication> actual_subtype;
+            if (actual->actual_expression) {
+                actual_subtype = expression_subtype(
+                    *actual->actual_expression);
+            }
+            if (!actual_subtype && actual->vhdl_type) {
+                actual_subtype = specialized_subtype(*actual->vhdl_type);
+            }
+            if (!actual_subtype && actual->actual_declaration) {
+                const auto actual_declaration
+                    = specialization_.find_declaration(
+                        *actual->actual_declaration);
+                if (actual_declaration && actual_declaration->vhdl != nullptr
+                    && actual_declaration->vhdl->subtype) {
+                    actual_subtype = specialized_subtype(
+                        *actual_declaration->vhdl->subtype);
+                }
+            }
+            if (!actual_subtype) {
+                return false;
+            }
+            const auto formal_type = subtype_type(
+                specialized_subtype(*prefix));
+            const auto actual_type = subtype_type(
+                specialized_subtype(*actual_subtype));
+            const auto formal_root = formal_type
+                ? array_root(*formal_type) : std::nullopt;
+            const auto actual_root = actual_type
+                ? array_root(*actual_type) : std::nullopt;
+            if (!formal_root || !actual_root
+                || *formal_root != *actual_root) {
+                return false;
+            }
+            std::unordered_set<std::uint32_t> actual_visiting;
+            const auto actual_profile = profile(
+                *actual_subtype, actual_visiting);
+            return actual_profile.kind == ProfileKind::array
+                && actual_profile.dimensions.size() == 1U
+                && std::ranges::all_of(
+                    actual_profile.dimensions,
+                    [](const ArrayDimensionProfile& dimension) {
+                        return dimension.constrained
+                            && dimension.minimum.has_value()
+                            && dimension.maximum.has_value();
+                    });
         };
         const auto contextual_result
             = prefix_profile.kind == ProfileKind::array
             && (contextual_result_prefix(
                     expression.operands.front(), *prefix)
-                || interface_prefix());
+                || interface_prefix()
+                || entity_generic_actual_prefix());
         if (prefix_profile.kind == ProfileKind::record
             || std::ranges::any_of(
                 prefix_profile.dimensions,

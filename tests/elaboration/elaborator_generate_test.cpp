@@ -1083,9 +1083,11 @@ begin
       end procedure process_drive;
       variable process_value : local_word_t;
       alias process_alias : local_word_t is process_value;
+      variable mapped_result : local_word_t;
     begin
       process_drive(process_alias, generated_value + local_offset);
-      mapped_drive(observed, process_alias);
+      mapped_drive(mapped_result, process_alias);
+      observed <= mapped_result;
     end process;
   else generate
     observed <= to_unsigned(1, 4);
@@ -1420,6 +1422,18 @@ end architecture;
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
+entity generated_vhdl_bad_block_dynamic_generic is
+end entity;
+architecture rtl of generated_vhdl_bad_block_dynamic_generic is
+  signal live_size : integer;
+begin
+  dynamic_scope: block is
+    generic (size : natural);
+    generic map (size => live_size);
+  begin
+  end block dynamic_scope;
+end architecture;
+
 entity generated_vhdl_bad_block_port is
   port (source_value : in unsigned(7 downto 0));
 end entity;
@@ -2669,6 +2683,12 @@ endmodule
     assert(!bad_block_generic.ok());
     assert(has_diagnostic(
         bad_block_generic, "FSIM-ELAB-VHBLOCK-001"));
+    const auto bad_block_dynamic_generic = compile_and_elaborate(
+        generated_design,
+        "vhdl:work.generated_vhdl_bad_block_dynamic_generic(rtl)");
+    assert(!bad_block_dynamic_generic.ok());
+    assert(has_diagnostic(
+        bad_block_dynamic_generic, "FSIM-ELAB-VHBLOCK-001"));
     const auto bad_block_port = compile_and_elaborate(
         generated_design,
         "vhdl:work.generated_vhdl_bad_block_port(rtl)");
