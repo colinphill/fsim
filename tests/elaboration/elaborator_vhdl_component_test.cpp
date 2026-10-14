@@ -923,6 +923,167 @@ end architecture;
     assert(has_diagnostic(
         nominal_actual_mismatch, "FSIM-ELAB-BIND-057"));
 
+    const auto unconstrained_array_component_ports
+        = elaborate_vhdl_component_text(
+            "unconstrained_array_component_ports.vhd",
+            R"(
+entity array_echo_leaf is
+  port (
+    source : in bit_vector;
+    result : out bit_vector);
+end entity;
+architecture rtl of array_echo_leaf is
+begin
+  result <= source;
+  check_bounds : process
+  begin
+    assert source'left = 4 and source'right = 7
+      report "formal input array did not inherit actual bounds"
+      severity failure;
+    assert result'left = 4 and result'right = 7
+      report "formal output array did not inherit actual bounds"
+      severity failure;
+    wait;
+  end process;
+end architecture;
+entity unconstrained_array_component_top is
+end entity;
+architecture sim of unconstrained_array_component_top is
+  signal input_value : bit_vector(4 to 7) := "1010";
+  signal output_value : bit_vector(4 to 7);
+  component array_echo_leaf is
+    port (
+      source : in bit_vector;
+      result : out bit_vector);
+  end component;
+  for child : array_echo_leaf use entity work.array_echo_leaf(rtl);
+begin
+  child : array_echo_leaf
+    port map (source => input_value, result => output_value);
+  check_values : process
+  begin
+    wait for 1 ns;
+    assert output_value = "1010"
+      report "unconstrained component array port changed its value"
+      severity failure;
+    wait;
+  end process;
+end architecture;
+)",
+            "vhdl:work.unconstrained_array_component_top(sim)");
+    assert(unconstrained_array_component_ports.ok());
+    auto array_port_interpreter
+        = unconstrained_array_component_ports.design->create_interpreter();
+    assert(array_port_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    const auto output_array
+        = unconstrained_array_component_ports.design->find_signal(
+            "unconstrained_array_component_top.output_value");
+    assert(output_array);
+    assert(array_port_interpreter->signal_value(*output_array)
+               .to_msb_string()
+        == "1010");
+
+    const auto unconstrained_array_element_mismatch
+        = elaborate_vhdl_component_text(
+            "unconstrained_array_element_mismatch.vhd",
+            R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity bit_vector_leaf is
+  port (value : in bit_vector);
+end entity;
+architecture rtl of bit_vector_leaf is
+begin
+end architecture;
+entity array_element_mismatch_top is
+end entity;
+architecture rtl of array_element_mismatch_top is
+  signal value : std_logic_vector(3 downto 0);
+begin
+  child : entity work.bit_vector_leaf(rtl) port map (value);
+end architecture;
+)",
+            "vhdl:work.array_element_mismatch_top(rtl)");
+    assert(!unconstrained_array_element_mismatch.ok());
+    assert(has_diagnostic(
+            unconstrained_array_element_mismatch,
+            "FSIM-ELAB-BIND-057"));
+
+    const auto resolved_logic_vector_subtype_actual
+        = elaborate_vhdl_component_text(
+            "resolved_logic_vector_subtype_actual.vhd",
+            R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity unresolved_vector_leaf is
+  port (value : in std_ulogic_vector);
+end entity;
+architecture rtl of unresolved_vector_leaf is
+begin
+end architecture;
+entity resolved_vector_top is
+end entity;
+architecture sim of resolved_vector_top is
+  signal value : std_logic_vector(3 downto 0);
+  component unresolved_vector_leaf is
+    port (value : in std_ulogic_vector);
+  end component;
+begin
+  child : unresolved_vector_leaf port map (value);
+end architecture;
+)",
+            "vhdl:work.resolved_vector_top(sim)");
+    assert(resolved_logic_vector_subtype_actual.ok());
+
+    const auto composite_component_generic_default
+        = elaborate_vhdl_component_text(
+            "composite_component_generic_default.vhd",
+            R"(
+package component_default_array_types is
+  type info is record
+    field_1 : integer;
+    field_2 : real;
+  end record;
+  type stuff is array (integer range 1 to 2) of info;
+end package;
+use work.component_default_array_types.all;
+entity composite_default_array_leaf is
+  generic (gB : stuff := ((99, 9.0), (88, 8.0)));
+end entity;
+use work.component_default_array_types.all;
+architecture rtl of composite_default_array_leaf is
+begin
+  verify_default : process
+  begin
+    assert gB(1).field_1 = 11 and gB(1).field_2 = 1.25
+      and gB(2).field_1 = 22 and gB(2).field_2 = 2.5
+      report "FAIL composite component generic default was not passed"
+      severity failure;
+    report "PASS" severity note;
+    wait;
+  end process;
+end architecture;
+entity composite_default_array_top is
+end entity;
+use work.component_default_array_types.all;
+architecture sim of composite_default_array_top is
+  component composite_default_array_leaf is
+    generic (gB : stuff := ((11, 1.25), (22, 2.5)));
+  end component;
+  for child : composite_default_array_leaf
+    use entity work.composite_default_array_leaf(rtl);
+begin
+  child : composite_default_array_leaf;
+end architecture;
+)",
+            "vhdl:work.composite_default_array_top(sim)");
+    assert(composite_component_generic_default.ok());
+    auto composite_default_interpreter
+        = composite_component_generic_default.design->create_interpreter();
+    assert(composite_default_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+
     const auto composite_default = elaborate_vhdl_component_text(
         "composite_component_default.vhd",
         R"(
@@ -1655,6 +1816,8 @@ end architecture;
     const auto composite_defaults = elaborate_vhdl_component_text(
         "component_composite_defaults.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
 package component_default_types is
   type mode_t is (idle, active);
   type packet_t is record
@@ -1676,6 +1839,8 @@ begin
 end architecture;
 entity composite_default_top is
 end entity;
+library ieee;
+use ieee.std_logic_1164.all;
 use work.component_default_types.all;
 architecture rtl of composite_default_top is
   component composite_default_leaf is

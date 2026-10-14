@@ -12,6 +12,8 @@ namespace {
         = "\x1f" "fsim-vhdl-textio-read";
     constexpr std::string_view vhdl_textio_read_2008_marker
         = "\x1f" "fsim-vhdl-textio-read-2008";
+    constexpr std::string_view vhdl_textio_radix_read_2008_marker
+        = "\x1f" "fsim-vhdl-textio-radix-read-2008";
     constexpr std::string_view vhdl_textio_sread_marker
         = "\x1f" "fsim-vhdl-textio-sread";
 
@@ -180,6 +182,10 @@ namespace {
     return simple == "file_open" || simple == "file_close"
         || simple == "read" || simple == "write" || simple == "swrite"
         || simple == "sread" || simple == "string_read"
+        || simple == "hread" || simple == "hex_read"
+        || simple == "oread" || simple == "octal_read"
+        || simple == "hwrite" || simple == "hex_write"
+        || simple == "owrite" || simple == "octal_write"
         || simple == "readline" || simple == "writeline"
         || simple == "tee" || simple == "flush";
 }
@@ -2554,6 +2560,10 @@ bool Lowerer::lower_hir_vhdl_file_statement(
     // VHDL-2008 SWRITE(L, VALUE) is WRITE of a STRING (16.4).
     const auto name = called == "swrite" ? std::string_view { "write" }
         : called == "string_read" ? std::string_view { "sread" }
+        : called == "hex_read" ? std::string_view { "hread" }
+        : called == "octal_read" ? std::string_view { "oread" }
+        : called == "hex_write" ? std::string_view { "hwrite" }
+        : called == "octal_write" ? std::string_view { "owrite" }
                                    : called;
     const auto span = hir_source_span(call.source);
     const auto fail = [&](std::string code, std::string message) {
@@ -2564,6 +2574,12 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         && vhdl_standard_ < frontend::VhdlStandard::Vhdl2008) {
         return fail("FSIM-ELAB-VHSTD-001",
             "TextIO SREAD and STRING_READ require VHDL-2008");
+    }
+    if ((name == "hread" || name == "oread" || name == "hwrite"
+            || name == "owrite")
+        && vhdl_standard_ < frontend::VhdlStandard::Vhdl2008) {
+        return fail("FSIM-ELAB-VHSTD-001",
+            "TextIO HREAD, OREAD, HWRITE, and OWRITE require VHDL-2008");
     }
     const auto actual = [&](const std::string_view formal,
                             const std::size_t position)
@@ -3019,7 +3035,8 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             return fail("FSIM-ELAB-VHTEXTIO-003",
                 "TextIO read/write requires a value actual");
         }
-        if (name == "read") {
+        if (name == "read" || name == "hread" || name == "oread") {
+            const bool radix_read = name == "hread" || name == "oread";
             if (call.procedure_arguments.size() < 2U
                 || call.procedure_arguments.size() > 3U) {
                 return fail("FSIM-ELAB-VHTEXTIO-003",
@@ -3027,30 +3044,119 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                     "actuals");
             }
             InputScanConversion conversion;
-            conversion.prefix = vhdl_standard_
-                    >= frontend::VhdlStandard::Vhdl2008
-                ? vhdl_textio_read_2008_marker
-                : vhdl_textio_read_marker;
+            conversion.prefix = radix_read
+                ? vhdl_textio_radix_read_2008_marker
+                : vhdl_standard_ >= frontend::VhdlStandard::Vhdl2008
+                    ? vhdl_textio_read_2008_marker
+                    : vhdl_textio_read_marker;
             const auto value_class = textio_scalar_class(*value);
-            if (value_class == TextioScalarClass::string) {
+            std::optional<RegisterId> selection_target;
+            std::optional<RegisterId> selection_scan_target;
+            std::optional<std::uint32_t> selection_offset;
+            if (radix_read) {
+                const auto target = runtime_binding(*value);
+                const auto target_width = hir_expression_width(
+                    *value, hir_process_scope_);
+                const auto target_expression
+                    = specialized_hir_unit_->find_expression(*value);
+                bool selected_target = false;
+                std::optional<HirConstantSelection> target_selection;
+                if (target_expression
+                    && target_expression->vhdl != nullptr) {
+                    const auto& selected = *target_expression->vhdl;
+                    if (selected.kind
+                            == semantic::vhdl::ExpressionKind::index
+                        || selected.kind
+                            == semantic::vhdl::ExpressionKind::slice) {
+                        selected_target = true;
+                        if (!selected.operands.empty()) {
+                            const auto base = selected.operands.front();
+                            const auto base_expression
+                                = specialized_hir_unit_->find_expression(base);
+                            if (base_expression
+                                && base_expression->vhdl != nullptr
+                                && base_expression->vhdl->kind
+                                    == semantic::vhdl::ExpressionKind::name
+                                && hir_target_declaration(base)
+                                    == hir_target_declaration(*value)
+                                && !hir_vhdl_member_selection(base)) {
+                                target_selection = hir_constant_selection(
+                                    *value, hir_process_scope_);
+                            }
+                        }
+                    } else if (hir_vhdl_member_selection(*value)) {
+                        // A record member needs its own range-relative
+                        // storage mapping; do not treat the record register
+                        // as the selected BIT_VECTOR.
+                        selected_target = true;
+                    }
+                }
+                if (value_class != TextioScalarClass::bit_vector
+                    || !target || !target->local || !target_width
+                    || *target_width == 0U
+                    || *target_width
+                        > std::numeric_limits<std::uint32_t>::max()) {
+                    return fail("FSIM-ELAB-VHTEXTIO-004",
+                        "TextIO HREAD and OREAD require a writable bounded "
+                        "BIT_VECTOR value");
+                }
+                if (selected_target
+                    && (!target_selection
+                        || target_selection->width != *target_width
+                        || target_selection->offset
+                            > std::numeric_limits<std::uint32_t>::max()
+                        || target_selection->offset > target->width
+                        || target_selection->width
+                            > target->width - target_selection->offset)) {
+                    return fail("FSIM-ELAB-VHTEXTIO-004",
+                        "TextIO HREAD and OREAD require a statically "
+                        "bounded writable BIT_VECTOR selection");
+                }
+                const auto scan_target = selected_target
+                    ? allocate_register(
+                          static_cast<std::uint32_t>(*target_width),
+                          target->domain)
+                    : *target->local;
+                conversion.format = name == "hread"
+                    ? InputScanFormat::hexadecimal
+                    : InputScanFormat::octal;
+                conversion.target = {
+                    InputScanTargetKind::packed_register,
+                    scan_target,
+                    static_cast<std::uint32_t>(*target_width),
+                    true,
+                };
+                if (selected_target) {
+                    selection_target = *target->local;
+                    selection_scan_target = scan_target;
+                    selection_offset = static_cast<std::uint32_t>(
+                        target_selection->offset);
+                }
+            } else if (value_class == TextioScalarClass::string) {
                 const auto target = string_binding(*value);
                 const auto width = hir_expression_width(
                     *value, hir_process_scope_);
-                if (!target || !target->local || !width || *width == 0U
-                    || *width % 8U != 0U
-                    || *width / 8U
-                        > std::numeric_limits<std::uint32_t>::max()) {
+                if (!target || !target->local
+                    || (width && *width % 8U != 0U)
+                    || (width && *width / 8U
+                        > std::numeric_limits<std::uint32_t>::max())) {
                     return fail("FSIM-ELAB-VHTEXTIO-004",
                         "TextIO string read requires a writable STRING "
-                        "with a bounded length");
+                        "target");
                 }
                 conversion.target = {
                     InputScanTargetKind::string_register,
                     *target->local, 1U, true,
                 };
                 conversion.format = InputScanFormat::string;
-                conversion.maximum_characters
-                    = static_cast<std::uint32_t>(*width / 8U);
+                // Zero asks the runtime to use the target string's
+                // retained bound. This covers dynamically constrained and
+                // null STRING targets without changing the FileScan shape.
+                conversion.maximum_characters = width
+                        && *width / 8U
+                            <= std::numeric_limits<std::uint32_t>::max()
+                    ? static_cast<std::uint32_t>(*width / 8U)
+                    : 0U;
             } else {
                 const auto target = runtime_binding(*value);
                 if (!target || !target->local || target->width == 0U
@@ -3107,6 +3213,33 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                 count, 0U, *line->local, true,
                 { std::move(conversion) }, { }, !success,
                 success, true });
+            if (selection_target && selection_scan_target
+                && selection_offset) {
+                // FileScan writes a full temporary value. Update the
+                // selected part only after a successful conversion so
+                // GOOD failures preserve the original target.
+                const auto update_target = [&] {
+                    process_.operations.emplace_back(Insert {
+                        *selection_target,
+                        *selection_target,
+                        *selection_scan_target,
+                        *selection_offset,
+                    });
+                };
+                if (success) {
+                    const auto branch = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations.emplace_back(Branch {
+                        *success,
+                        branch + 1U,
+                        branch + 2U,
+                        UnknownBranchPolicy::when_false,
+                    });
+                    update_target();
+                } else {
+                    update_target();
+                }
+            }
             if (!actual("good", 2U)
                 && vhdl_standard_ >= frontend::VhdlStandard::Vhdl2019) {
                 const auto branch = static_cast<InstructionIndex>(
@@ -3167,29 +3300,153 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             left_justify = justification == "left";
         }
         std::uint32_t minimum_width { };
-        if (const auto field = actual("field", 3U)) {
-            const auto width = hir_constant_integer(*field);
-            if (!width || *width < 0
-                || *width
+        const auto field_actual = actual("field", 3U);
+        bool dynamic_field { };
+        if (field_actual) {
+            if (const auto width = hir_constant_integer(*field_actual)) {
+                if (*width < 0) {
+                    // WIDTH is a NATURAL formal. Its subtype check belongs to
+                    // the executed call; defer it so a statically false branch
+                    // containing -TIME_WIDTH does not reject the whole unit.
+                    // The dynamic-field operation performs the full-width
+                    // 0..4096 check if this path executes.
+                    dynamic_field = true;
+                } else if (*width
                     > static_cast<std::int64_t>(maximum_string_bytes)) {
-                return fail("FSIM-ELAB-VHTEXTIO-008",
-                    "bounded TextIO field must be a static value in "
-                    "0..4096");
+                    return fail("FSIM-ELAB-VHTEXTIO-008",
+                        "bounded TextIO field must be in 0..4096");
+                } else {
+                    minimum_width = static_cast<std::uint32_t>(*width);
+                }
+            } else {
+                dynamic_field = true;
             }
-            minimum_width = static_cast<std::uint32_t>(*width);
         }
+        std::optional<RegisterId> dynamic_field_register;
+        const auto lower_dynamic_field = [&] {
+            if (!dynamic_field) {
+                return true;
+            }
+            const auto lowered = lower_hir_expression(*field_actual, 64U);
+            if (!lowered) {
+                return false;
+            }
+            const auto width = register_width(*lowered);
+            if (width > 64U) {
+                return false;
+            }
+            dynamic_field_register = width == 64U
+                ? *lowered
+                : resize_register(*lowered, 64U,
+                      hir_expression_signed(*field_actual));
+            return true;
+        };
         const auto append_string = [&](const StringRegisterId source) {
             StringMethod operation;
-            operation.operation = StringMethodOperator::format_string;
+            operation.operation = dynamic_field_register
+                ? StringMethodOperator::format_string_dynamic_field
+                : StringMethodOperator::format_string;
             operation.source = *line->local;
             operation.argument = source;
-            operation.minimum_width = minimum_width;
+            if (dynamic_field_register) {
+                operation.first = *dynamic_field_register;
+            } else {
+                operation.minimum_width = minimum_width;
+            }
             operation.left_justify = left_justify;
             process_.operations.emplace_back(operation);
         };
+        const auto append_radix_string = [&](const RegisterId value_register,
+                                             const std::uint64_t value_width,
+                                             const OutputFormat format) {
+            if (value_width == 0U
+                || value_width
+                    > std::numeric_limits<std::uint32_t>::max()) {
+                return false;
+            }
+            const auto formatted = allocate_string_register();
+            process_.operations.emplace_back(
+                LoadStringConstant { formatted, std::string { } });
+            StringMethod format_operation;
+            format_operation.operation = StringMethodOperator::format_packed;
+            format_operation.source = formatted;
+            format_operation.first = value_register;
+            format_operation.second = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(LoadConstant {
+                format_operation.second,
+                unsigned_value(value_width, 32U) });
+            format_operation.format = format;
+            process_.operations.emplace_back(format_operation);
+
+            // TextIO TO_HSTRING and TO_OSTRING use uppercase digits. The
+            // shared SystemVerilog formatter intentionally emits lowercase.
+            StringMethod uppercase;
+            uppercase.operation = StringMethodOperator::toupper;
+            uppercase.source = formatted;
+            uppercase.string_destination = formatted;
+            process_.operations.emplace_back(uppercase);
+            append_string(formatted);
+            return true;
+        };
+        if (name == "hwrite" || name == "owrite") {
+            // A direct string literal in this context is a context-dependent
+            // BIT_VECTOR actual (IEEE 1076-2008 8.6). Materialize its decoded
+            // bit payload explicitly: generic STRING lowering may choose an
+            // 8-bit CHARACTER representation for the same syntax.
+            std::optional<std::string> literal_bits;
+            if (const auto expression
+                = specialized_hir_unit_->find_expression(*value);
+                expression && expression->vhdl != nullptr
+                && expression->vhdl->kind
+                    == semantic::vhdl::ExpressionKind::string_literal
+                && expression->vhdl->decoded_string) {
+                const auto& decoded = *expression->vhdl->decoded_string;
+                if (std::ranges::all_of(decoded, [](const char bit) {
+                        return bit == '0' || bit == '1';
+                    })) {
+                    literal_bits = decoded;
+                }
+            }
+            const bool is_bit_vector = literal_bits.has_value()
+                || textio_scalar_class(*value)
+                    == TextioScalarClass::bit_vector;
+            const auto width = literal_bits
+                ? std::optional<std::size_t> { literal_bits->size() }
+                : hir_expression_width(*value, hir_process_scope_);
+            if (!is_bit_vector || !width || *width == 0U
+                || *width
+                    > std::numeric_limits<std::uint32_t>::max()) {
+                return fail("FSIM-ELAB-VHTEXTIO-009",
+                    "TextIO HWRITE and OWRITE require a bounded "
+                    "BIT_VECTOR value");
+            }
+            std::optional<RegisterId> lowered;
+            if (literal_bits) {
+                const auto destination = allocate_register(
+                    *width, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(LoadConstant {
+                    destination,
+                    PackedLogic4::from_msb_string(*literal_bits),
+                });
+                lowered = destination;
+            } else {
+                lowered = lower_hir_expression(*value, *width);
+            }
+            if (!lowered || !lower_dynamic_field()) {
+                return false;
+            }
+            return append_radix_string(*lowered, *width,
+                name == "hwrite"
+                    ? OutputFormat::hexadecimal
+                    : OutputFormat::octal);
+        }
         if (hir_expression_is_string(*value, hir_process_scope_)) {
             const auto lowered = lower_hir_string_expression(*value);
             if (!lowered) {
+                return false;
+            }
+            if (!lower_dynamic_field()) {
                 return false;
             }
             append_string(*lowered);
@@ -3226,6 +3483,9 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                     static_cast<std::uint32_t>(unit - vhdl_time_units.begin()))) {
                 return false;
             }
+            if (!lower_dynamic_field()) {
+                return false;
+            }
             append_string(text);
             return true;
         }
@@ -3242,19 +3502,30 @@ bool Lowerer::lower_hir_vhdl_file_statement(
                 if (!lowered) {
                     return false;
                 }
+                if (!lower_dynamic_field()) {
+                    return false;
+                }
                 StringMethod operation;
-                operation.operation = StringMethodOperator::format_packed;
+                operation.operation = dynamic_field_register
+                    ? StringMethodOperator::format_packed_dynamic_field
+                    : StringMethodOperator::format_packed;
                 operation.source = *line->local;
                 operation.first = *lowered;
-                operation.second = allocate_register(
-                    32U, frontend::ValueDomain::Bit2);
-                process_.operations.emplace_back(LoadConstant {
-                    operation.second, unsigned_value(64U, 32U) });
+                if (dynamic_field_register) {
+                    operation.second = *dynamic_field_register;
+                } else {
+                    operation.second = allocate_register(
+                        32U, frontend::ValueDomain::Bit2);
+                    process_.operations.emplace_back(LoadConstant {
+                        operation.second, unsigned_value(64U, 32U) });
+                }
                 operation.format = OutputFormat::real_fixed;
                 operation.scalar_kind
                     = frontend::SystemVerilogScalarKind::Real;
                 operation.precision = static_cast<std::uint32_t>(*digits);
-                operation.minimum_width = minimum_width;
+                if (!dynamic_field_register) {
+                    operation.minimum_width = minimum_width;
+                }
                 operation.left_justify = left_justify;
                 process_.operations.emplace_back(operation);
                 return true;
@@ -3274,21 +3545,32 @@ bool Lowerer::lower_hir_vhdl_file_statement(
             if (!lowered) {
                 return false;
             }
+            if (!lower_dynamic_field()) {
+                return false;
+            }
             StringMethod operation;
-            operation.operation = StringMethodOperator::format_packed;
+            operation.operation = dynamic_field_register
+                ? StringMethodOperator::format_packed_dynamic_field
+                : StringMethodOperator::format_packed;
             operation.source = *line->local;
             operation.first = *lowered;
-            operation.second = allocate_register(
-                32U, frontend::ValueDomain::Bit2);
-            process_.operations.emplace_back(LoadConstant {
-                operation.second, unsigned_value(*width, 32U) });
+            if (dynamic_field_register) {
+                operation.second = *dynamic_field_register;
+            } else {
+                operation.second = allocate_register(
+                    32U, frontend::ValueDomain::Bit2);
+                process_.operations.emplace_back(LoadConstant {
+                    operation.second, unsigned_value(*width, 32U) });
+            }
             operation.format
                 = value_class == TextioScalarClass::integer
                 ? OutputFormat::decimal
                 : OutputFormat::binary;
             operation.signed_decimal
                 = value_class == TextioScalarClass::integer;
-            operation.minimum_width = minimum_width;
+            if (!dynamic_field_register) {
+                operation.minimum_width = minimum_width;
+            }
             operation.left_justify = left_justify;
             process_.operations.emplace_back(operation);
             return true;
@@ -3296,6 +3578,9 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         if (value_class == TextioScalarClass::boolean) {
             const auto condition = lower_hir_expression(*value, 1U);
             if (!condition) {
+                return false;
+            }
+            if (!lower_dynamic_field()) {
                 return false;
             }
             const auto branch = static_cast<InstructionIndex>(
@@ -3374,6 +3659,9 @@ bool Lowerer::lower_hir_vhdl_file_statement(
         }
         if (const auto image = lower_hir_vhdl_runtime_image(*value,
                 std::nullopt, OutputFormat::binary, false)) {
+            if (!lower_dynamic_field()) {
+                return false;
+            }
             append_string(*image);
             return true;
         }

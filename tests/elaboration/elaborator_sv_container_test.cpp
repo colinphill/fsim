@@ -31,6 +31,8 @@ module container_lowering #(
   logic [7:0] fixed_down[STATIC_LEFT:1];
   bit [3:0] fixed_up[-1:1];
   logic [7:0] shadowed[0:2];
+  logic branch_state = 1'b0;
+  logic branch_result;
 
   function automatic int count(input byte source[$:2]);
     byte copy[$:2];
@@ -104,12 +106,25 @@ module container_lowering #(
     key_t key;
     int located[$];
     int locations[$];
+    int query_result;
     int preserved[];
     logic [7:0] fresh[];
     fill_shadowed(shadowed);
     assert (shadowed[0] == 8'h12);
     assert (shadowed[1] == 8'h34);
     assert (shadowed[2] == 8'h56);
+    branch_state = 1'b1;
+    if (branch_state)
+      branch_result = 1'b1;
+    else
+      branch_result = 1'b0;
+    assert (branch_result == 1'b1);
+    branch_state = 1'b0;
+    if (branch_state)
+      branch_result = 1'b1;
+    else
+      branch_result = 1'b0;
+    assert (branch_result == 1'b0);
     preserved = '{4, 5};
     preserved = new[4](preserved);
     assert (preserved.size() == 4);
@@ -120,6 +135,19 @@ module container_lowering #(
     assert ($isunknown(fresh[1]));
     values = '{};
     assert ($size(values) == 0);
+    values = new[1];
+    if ($size(values) == 1)
+      query_result = 1;
+    else
+      query_result = 0;
+    assert (query_result == 1);
+    values = new[2];
+    if ($size(values) == 2)
+      query_result = 2;
+    else
+      query_result = 0;
+    assert (query_result == 2);
+    values = '{};
     assert (values.sum() == 0);
     assert (values.product() == 1);
     assert (values.and() == -1);
@@ -373,7 +401,12 @@ endmodule
     }
     assert(elaborated.ok());
     assert(elaborated.design->container_objects().size() == 6);
-    const auto& process = elaborated.design->processes().front();
+    const auto body = std::ranges::find_if(
+        elaborated.design->processes(), [](const auto& candidate) {
+            return candidate.container_register_count != 0;
+        });
+    assert(body != elaborated.design->processes().end());
+    const auto& process = *body;
     assert(process.container_register_count != 0);
     assert(!process.debug_container_locals.empty());
     assert(std::ranges::any_of(

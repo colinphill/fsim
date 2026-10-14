@@ -4,9 +4,64 @@
 namespace fsim::tests::elaboration {
 
 void test_vhdl_dynamic_slices() {
+  // Qualified predefined enumeration values remain discrete array indices.
+  const auto bit_index = fsim::frontend::parse_text(
+      "qualified_bit_index.vhd",
+      R"(
+entity Qualified_Bit_Index is end entity;
+architecture Rtl of Qualified_Bit_Index is
+begin
+  process
+    type Values is array (bit'('0') to bit'('0')) of integer;
+    variable Table_Value : Values;
+  begin
+    Table_Value := (bit'('0') => 37);
+    assert Table_Value(bit'('0')) = 37 severity failure;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(bit_index.ok());
+  const auto bit_index_design = compile_and_elaborate(
+      bit_index.design, "vhdl:work.qualified_bit_index(rtl)");
+  assert(bit_index_design.ok());
+  auto bit_index_interpreter = bit_index_design.design->create_interpreter();
+  assert(bit_index_interpreter->run().status
+      == fsim::runtime::RunStatus::completed);
+
+  const auto wrong_index = fsim::frontend::parse_text(
+      "wrong_qualified_index.vhd",
+      R"(
+entity Wrong_Qualified_Index is end entity;
+architecture Rtl of Wrong_Qualified_Index is
+begin
+  process
+    type Values is array (bit'('0') to bit'('0')) of integer;
+    variable Table_Value : Values;
+    variable Result : integer;
+  begin
+    Result := Table_Value(boolean'(false));
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(wrong_index.ok());
+  const auto wrong_index_design = compile_and_elaborate(
+      wrong_index.design, "vhdl:work.wrong_qualified_index(rtl)");
+  assert(!wrong_index_design.ok());
+  assert(std::ranges::any_of(wrong_index_design.diagnostics,
+      [](const auto& diagnostic) {
+        return diagnostic.code == "FSIM-ELAB-VHARRAYSEL-006";
+      }));
+
   const auto source = fsim::frontend::parse_text(
       "dynamic_slices.vhd",
       R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity Dynamic_Slices is
   port (
     Descending_Read : out std_logic_vector(3 downto 0);

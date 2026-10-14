@@ -40,6 +40,41 @@ endmodule
         self.assertEqual(lrm_corpus.sv_root_modules([source]), [r'\top"name'])
 
 
+
+class IvtestSourceLocationTests(unittest.TestCase):
+    def test_known_source_and_include_paths_keep_line_numbers(self):
+        root = "objects/" + "a" * 64
+        actual = [
+            f"File {root}/sources/roots/root/00000000/br_gh782a.v line 4",
+            f"Included file {root}/includes/roots/00000001/br_gh782a.vi line 1",
+            f"File {root}/sources/roots/root/00000000/br_gh782a.v line 6",
+        ]
+        expected = ["File ./ivltests/br_gh782a.v line 4",
+                    "Included file ./ivltests/br_gh782a.vi line 1",
+                    "File ./ivltests/br_gh782a.v line 6"]
+        normalize = lrm_corpus.ivtest_source_location_lines
+        self.assertEqual(normalize("br_gh782a", actual), expected)
+        for broken in [actual[0].replace("line 4", "line 5"),
+                       actual[0].replace("br_gh782a.v", "wrong.v"),
+                       actual[0].replace("sources/roots/root", "includes/roots"),
+                       actual[0].replace("File ", "Included file ")]:
+            with self.subTest(broken=broken):
+                self.assertNotEqual(normalize("br_gh782a", [broken]), expected[:1])
+
+    def test_timescale_and_unrelated_output_remain_exact(self):
+        root = "objects/" + "b" * 64
+        actual = [f"File {root}/sources/roots/root/00000000/br_gh782b.v line 10",
+                  "Time scale of (t1) is 1s / 100ms"]
+        normalize = lrm_corpus.ivtest_source_location_lines
+        self.assertEqual(normalize("br_gh782b", actual),
+                         ["File ./ivltests/br_gh782b.v line 10", actual[1]])
+        self.assertEqual(normalize("unrelated", actual), actual)
+        wrong_scale = actual.copy()
+        wrong_scale[1] = "Time scale of (t1) is 1s / 10ms"
+        self.assertNotEqual(normalize("br_gh782b", wrong_scale),
+                            normalize("br_gh782b", actual))
+
+
 class VestsFileRoundtripTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -400,6 +435,107 @@ class VunitParentStatusTests(unittest.TestCase):
         )
         self.assertEqual(status, "fail")
         self.assertTrue(any(child["status"] == "fail" for child in children))
+
+
+class NvcExpectedRuntimeErrorTests(unittest.TestCase):
+    expected = ("FSIM-RUN-0001", "VHDL integer subtype range check failed", 1)
+
+    def make_case(self) -> lrm_corpus.Case:
+        return lrm_corpus.Case(
+            suite="nvc", id="issue502", group="vhdl-93", commands=[],
+            expect="fail", checker="vhdl_clean", expected_runtime_error=self.expected,
+        )
+
+    @staticmethod
+    def step(stage: str, returncode: int | None, output: str = "",
+             timed_out: bool = False) -> lrm_corpus.StepResult:
+        return lrm_corpus.StepResult(stage, returncode, 0.0, timed_out, output)
+
+    def test_only_issue502_gets_typed_runtime_failure_expectation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            regress = root / "sources/nvc/test/regress"
+            regress.mkdir(parents=True)
+            (regress / "testlist.txt").write_text(
+                "issue502 normal\nissue503 normal\n", encoding="utf-8")
+            for name in ("issue502", "issue503"):
+                (regress / f"{name}.vhd").write_text(
+                    f"entity {name} is end entity;\n"
+                    f"architecture test of {name} is begin end architecture;\n",
+                    encoding="utf-8",
+                )
+
+            cases = {case.id: case for case in lrm_corpus.nvc_cases(root)}
+
+        self.assertEqual(cases["issue502"].group, "vhdl-93")
+        self.assertEqual(cases["issue502"].expect, "fail")
+        self.assertEqual(cases["issue502"].expected_runtime_error, self.expected)
+        self.assertEqual(cases["issue503"].expect, "pass")
+        self.assertIsNone(cases["issue503"].expected_runtime_error)
+
+    def test_expected_integer_subtype_error_requires_successful_frontend(self) -> None:
+        status, detail = lrm_corpus.check_outcome(
+            self.make_case(),
+            [self.step("compile", 0), self.step("elaborate", 0),
+             self.step("simulate", 1,
+                       "error[FSIM-RUN-0001]: SimIR process 0, instruction 29: "
+                       "VHDL integer subtype range check failed; "
+                       "process 'issue502.g[1].u.p1'")],
+            Path("."),
+        )
+        self.assertEqual(status, "pass")
+        self.assertIn("expected runtime diagnostic FSIM-RUN-0001", detail)
+
+        for failed_stage, failed_steps in (
+            ("compile", [self.step(
+                "compile", 1,
+                "error[FSIM-RUN-0001]: VHDL integer subtype range check failed")]),
+            ("elaborate", [self.step("compile", 0), self.step(
+                "elaborate", 1,
+                "error[FSIM-RUN-0001]: VHDL integer subtype range check failed")]),
+        ):
+            with self.subTest(failed_stage=failed_stage):
+                status, detail = lrm_corpus.check_outcome(
+                    self.make_case(), failed_steps, Path("."))
+                self.assertEqual(status, "fail")
+                self.assertIn(f"{failed_stage} did not pass", detail)
+
+    def test_unrelated_runtime_failure_or_success_does_not_satisfy_expectation(self) -> None:
+        frontend = [self.step("compile", 0), self.step("elaborate", 0)]
+        for output, returncode in (
+            ("error[FSIM-RUN-0002]: unsupported operation", 1),
+            ("error[FSIM-RUN-0001]: VHDL array index check failed", 1),
+            ("error[FSIM-RUN-0001]: VHDL integer subtype range check failed", 0),
+        ):
+            with self.subTest(output=output, returncode=returncode):
+                status, _ = lrm_corpus.check_outcome(
+                    self.make_case(),
+                    frontend + [self.step("simulate", returncode, output)],
+                    Path("."),
+                )
+                self.assertEqual(status, "fail")
+
+    def test_diagnostic_does_not_mask_timeout_crash_or_unexpected_exit(self) -> None:
+        frontend = [self.step("compile", 0), self.step("elaborate", 0)]
+        diagnostic = (
+            "error[FSIM-RUN-0001]: SimIR process 0, instruction 29: "
+            "VHDL integer subtype range check failed; "
+            "process 'issue502.g[1].u.p1'"
+        )
+        cases = (
+            (self.step("simulate", 1, diagnostic, timed_out=True), "timeout"),
+            (self.step("simulate", -11, diagnostic), "crash"),
+            (self.step("simulate", 127, diagnostic), "crash"),
+            (self.step("simulate", 2, diagnostic), "fail"),
+        )
+        for simulate, expected_status in cases:
+            with self.subTest(returncode=simulate.returncode,
+                              timed_out=simulate.timed_out):
+                status, detail = lrm_corpus.check_outcome(
+                    self.make_case(), frontend + [simulate], Path("."))
+                self.assertEqual(status, expected_status)
+                if simulate.returncode == 2:
+                    self.assertIn("expected normal runtime-failure status 1", detail)
 
 
 if __name__ == "__main__":

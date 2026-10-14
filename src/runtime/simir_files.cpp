@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <limits>
 #include <system_error>
 
 namespace fsim::runtime::simir {
@@ -19,6 +20,8 @@ namespace {
                                                          "fsim-vhdl-textio-read";
     constexpr std::string_view vhdl_textio_read_2008_marker = "\x1f"
                                                              "fsim-vhdl-textio-read-2008";
+    constexpr std::string_view vhdl_textio_radix_read_2008_marker = "\x1f"
+                                                                 "fsim-vhdl-textio-radix-read-2008";
     constexpr std::string_view vhdl_textio_sread_marker = "\x1f"
                                                           "fsim-vhdl-textio-sread";
     constexpr FileHandle file_descriptor_flag = UINT32_C(0x80000000);
@@ -32,6 +35,8 @@ namespace {
                     == vhdl_textio_read_marker
                 || operation.conversions.front().prefix
                     == vhdl_textio_read_2008_marker
+                || operation.conversions.front().prefix
+                    == vhdl_textio_radix_read_2008_marker
                 || operation.conversions.front().prefix
                     == vhdl_textio_sread_marker);
     }
@@ -1129,10 +1134,38 @@ void Interpreter::Impl::execute_file(
         InputScanResult scanned;
         std::string* consumed_source { };
         const bool vhdl_textio_line = vhdl_textio_read(operation);
+        auto effective_operation = operation;
+        if (vhdl_textio_line && !vhdl_textio_sread(operation)) {
+            for (auto& conversion : effective_operation.conversions) {
+                if (conversion.maximum_characters != 0U
+                    || conversion.format != InputScanFormat::string) {
+                    continue;
+                }
+                std::size_t length { };
+                if (conversion.target.kind
+                    == InputScanTargetKind::string_register) {
+                    length = get_string_register(
+                        process, conversion.target.id).size();
+                } else if (conversion.target.kind
+                    == InputScanTargetKind::string_object) {
+                    length = get_string_object(
+                        conversion.target.id).initial_value.size();
+                } else {
+                    continue;
+                }
+                if (length > std::numeric_limits<std::uint32_t>::max()) {
+                    throw std::length_error {
+                        "VHDL TextIO STRING target exceeds scan limit"
+                    };
+                }
+                conversion.maximum_characters
+                    = static_cast<std::uint32_t>(length);
+            }
+        }
         if (operation.string_source) {
             auto& source = get_string_register(process, operation.source);
             scanned = scan_formatted_string(
-                operation, source);
+                effective_operation, source);
             consumed_source = &source;
             if (operation.consume_string_source && !vhdl_textio_line) {
                 source.erase(0,
@@ -1148,7 +1181,8 @@ void Interpreter::Impl::execute_file(
                     throw std::runtime_error { "failed to preserve file scan lookahead" };
                 }
             };
-            scanned = scan_formatted_input(operation, read, unread);
+            scanned = scan_formatted_input(
+                effective_operation, read, unread);
         }
         const auto expected = static_cast<std::int32_t>(std::ranges::count_if(
             operation.conversions,
@@ -1162,17 +1196,18 @@ void Interpreter::Impl::execute_file(
         if (operation.success) {
             get_register(process, *operation.success) = PackedLogic4::from_aval_bval(1, complete ? 1U : 0U, 0);
         }
+        // TextIO removes each accepted character from LINE as it forms the
+        // representation. A later conversion failure does not restore that
+        // valid prefix; an invalid next character remains on the line.
+        if (operation.consume_string_source && vhdl_textio_line
+            && consumed_source != nullptr) {
+            consumed_source->erase(0,
+                std::min(consumed_source->size(), scanned.consumed));
+        }
         if (operation.require_assignments && !complete) {
             throw std::runtime_error {
                 "VHDL file read did not convert the requested element"
             };
-        }
-        // TextIO READ with GOOD leaves LINE unchanged on failure (IEEE
-        // 1076-2019 16.4); consume the scanned prefix only on success.
-        if (operation.consume_string_source && vhdl_textio_line && complete
-            && consumed_source != nullptr) {
-            consumed_source->erase(0,
-                std::min(consumed_source->size(), scanned.consumed));
         }
         for (std::size_t index = 0; index < scanned.values.size(); ++index) {
             if (!scanned.values[index])

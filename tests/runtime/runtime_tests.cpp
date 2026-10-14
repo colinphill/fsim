@@ -20,6 +20,10 @@ int main(const int argc, const char* const* argv)
             }
             if (selection == "region_graph") {
                 test_region_graph();
+            } else if (selection == "byte_strings") {
+                test_systemverilog_byte_strings();
+            } else if (selection == "vhdl_matching_equality") {
+                test_simir_vhdl_matching_equality();
             } else if (selection == "a4_signal_state") {
                 test_a4_signal_state();
             } else if (selection == "executor_provenance_contract") {

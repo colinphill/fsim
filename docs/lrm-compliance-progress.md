@@ -253,6 +253,75 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 57: array type context, interface types and TextIO
+
+- VHDL aggregates retain the expected type's declaration scope while resolving
+  their operands in the use scope. Qualified and nested array-valued segments
+  preserve nominal type identity, element widths, cardinality and index bounds.
+  Local types that shadow predefined or package names remain distinct.
+- Unconstrained array formals recover bounds from matching actual subtypes and
+  supported function results. INTEGER_VECTOR qualifications and formals use
+  scoped predefined-type checks. CHARACTER arrays retain their element width;
+  constrained STRING values preserve NUL bytes and enforce length constraints.
+- VHDL component bindings retain composite generic defaults, unconstrained array
+  port shapes and operator actuals. STRING port adapters preserve the value and
+  bounds separately. Access-object initialization rejects a designated record
+  value without an allocator while accepting allocation, null and access copies.
+- TextIO handles dynamic field widths, hexadecimal and octal codecs, and
+  dynamically constrained STRING reads. Focused fixtures cover successful reads,
+  failure flags, LINE consumption and unchanged targets after failed radix reads.
+- SystemVerilog interface type actuals preserve packed dimensions and declaration
+  context across specialization and nested ports. Array queries, streaming slice
+  types, constant shift counts and preprocessor source locations have focused
+  regression coverage. Mutable conditions are not treated as constant guards.
+- Runner fixes preserve source-location expectations without changing corpus
+  files, maintain ordered VEST prerequisites, and recognize the expected runtime
+  range failure in nvc issue502. Two __FILE__ cases are runner corrections and
+  must be reported separately from compiler/runtime gains.
+
+Scope exclusions are separate from passes: ivtest pr1787423, pr1787423b and
+pr2834340 use multiple output terminals in one pullup/pulldown instance;
+sv_typedef_nested_array expects Icarus dimension ordering; nvc agg7 expects a
+descending array-valued association in an ascending constrained target.
+
+Validation on frozen wip57af: Build53 passed; all 109 focused checks and all 33
+analysis-error checks passed. The labelled suite passed 574/585, with exactly
+the 11 recorded baseline nonpasses. The fast set passed 294/295 with no
+regressions; tb_array_scalar remains a known failure. Source-package validation
+passed for 2791 files. The live tracked patch and all 40 registered new files
+matched the frozen source evidence.
+
+The full six-suite checkpoint (`m57final-af`) records **77 new passes and five
+scope exclusions, with zero regressions** against the corrected Batch56
+baseline. The passes comprise 75 compiler/runtime gains and two runner
+corrections. All 77 passed on both interpreter and compiled engines. The
+original tc2552 negative case also passed on both engines with the expected
+VHASSIGN-001 diagnostic. Archive, input, corpus revision and exact inventory
+checks passed before and after qualification.
+
+| Suite | Corrected Batch56 passes / in scope | Batch57 passes / in scope | Excluded |
+|---|---:|---:|---:|
+| ivtest | 2416 / 2664 | 2427 / 2660 | 166 |
+| sv-tests | 1418 / 1497 | 1420 / 1497 | 0 |
+| verilator | 1369 / 2216 | 1386 / 2216 | 199 |
+| vests | 3434 / 3647 | 3458 / 3647 | 1 |
+| nvc | 712 / 1265 | 732 / 1264 | 218 |
+| vhdl-compliance | 27 / 72 | 30 / 72 | 0 |
+
+The comparison uses a corrected Batch56 baseline. Exact checks on frozen
+wip56u disproved 29 inherited overlay passes: four Icarus, four Verilator,
+six nvc and fifteen VEST cases. The original records remain unchanged; a
+hash-backed derived baseline records those corrections. This is a bounded
+baseline repair, not a new full Batch56 run. The final Batch57 checkpoint is
+a full six-suite interpreter run, with 3648 unique VEST cases and 3665 records
+because the ordered prerequisite chain repeats 17 cases.
+
+The final executable SHA-256 is
+`876bfbec00ffbede40a62bbee2a0bc5529a54e9cbc5aa162063b4e79f3a3d81b`.
+The local final ledger is
+`.local-artifacts/lrm-closure/work/batch57/targeted-gains-final-af.json`;
+its result references retain both-engine verification and the full checkpoint.
+
 ### Batch 56: array values, casts, VHDL aggregates and bindings
 
 - SystemVerilog dynamic arrays and queues copy values, including empty sources;
@@ -3177,7 +3246,10 @@ error, and each exposes an existing gap:
   value.
 - nvc force3: the length check on a forced value.
 
-## Known gaps queue (ranked by blocked corpus cases; refreshed per run)
+## Known gaps and historical leads
+
+This queue includes historical routing leads. Recheck each case against the
+latest batch checkpoint before treating it as an open gap or estimating impact.
 
 Out of scope (owner, 2026-10-11): extensions and behaviour of other
 simulators that the LRMs do not define, such as Verilator `$c`/`$cpure`,
@@ -3205,7 +3277,7 @@ them are not counted as gaps.
 | VHDL: VHDL-2008 element constraints of arrays and records (`t(1 to 2)(7 downto 0)`, `t(open)(7 downto 0)`, `rec(f(1 to 3))`); needs element constraints in the HIR subtype and in every array and record layout | about 50 nvc cases (`FSIM-VHDL-PARSE-009`, `-018`, `-135`) |
 | VHDL: individual association in procedure calls with a conversion function in the formal part (`f(b) => x`) or a signal-class formal; plain subelement association done in batch 38 | VESTs tc146, tc154; nvc signal25, signal27, signal30 |
 | VHDL: external names (`<<signal .a.b : t>>`) | 9 nvc cases |
-| VHDL: the predefined VHDL-2008 vectors (`integer_vector`, `real_vector`) in qualified expressions (`integer_vector'(1, 2)`) and as formals; variables of them work since batch 39 | nvc agg7 and others |
+| VHDL: broader predefined-vector qualification and formal coverage beyond the scoped INTEGER_VECTOR paths closed in batch 57 | Recheck REAL_VECTOR cases against the latest baseline; nvc agg7 is excluded for its direction assumption |
 | SV: nonblocking whole-object writes of unpacked aggregates (`out <= buffer[i]`) and continuous assignment to unpacked structure members | Verilator |
 | SV: `randomize` and constraint blocks | 36 sv-tests cases (`FSIM-SV-CLASS-005`) |
 | VHDL: chained signal attributes (`clk'delayed'last_event`) | 16 VESTs cases (`FSIM-VHDL-PARSE-046`) |
@@ -3235,7 +3307,6 @@ them are not counted as gaps.
 | VHDL: `'subtype` of an object as a subtype indication (VHDL-2008) | 14 nvc cases |
 | VHDL: a `for` loop over `'RANGE` of a runtime-sized STRING, and element writes to it | 5 VESTs cases (`FSIM-ELAB-071`) |
 | VHDL: signal initializers that do not fold at elaboration (function calls, composite constants of records and nested arrays, arrays of CHARACTER other than STRING filled from named constants). Most of the VESTs cases are static values the elaboration evaluators do not cover; a run-time initializer would need a SimIR deposit operation that runs before the first process | ~21 VESTs/nvc cases (`FSIM-ELAB-HIR-001` "not a bounded integral value") |
-| VHDL: TEXTIO `SREAD`, `JUSTIFY`, and READ of STRING values from a line | nvc textio5, textio6 |
 | SV: pure virtual tasks called through a base handle, and string-returning class methods called from inside another class method (string results elsewhere done in batch 38) | Verilator/sv-tests class cases |
 | SV: a class declared in `$unit` uses the caller's time unit for `$time` and `$printtimescale` (packages and `$unit` subroutines done in batch 38) | ivtest br1003a |
 | SV: a format held in a string variable (`$display(fmt, ...)`, `$sformatf(fmt, ...)`, `$sformat`): formatting needs a run-time format parser over lowered arguments (21.2.1, 21.3.3) | ~8 ivtest/Verilator cases (`FSIM-ELAB-SVSTRING-019`) |

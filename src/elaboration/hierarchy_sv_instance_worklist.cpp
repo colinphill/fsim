@@ -268,6 +268,9 @@ HierarchyBuilder::collect_compiled_systemverilog_instance_materializations(
                                      const bool bound) {
         if (const auto instance
             = working_specialization.find_instance(id)) {
+            auto type_owner_contexts
+                = root_materialization.type_owner_contexts;
+            type_owner_contexts.push_back(&working_specialization);
             const auto array_indices = instance->systemverilog != nullptr
                 ? compiled_instance_array_indices(
                       *instance->systemverilog, working_specialization)
@@ -294,6 +297,7 @@ HierarchyBuilder::collect_compiled_systemverilog_instance_materializations(
                         false,
                         index,
                         outer,
+                        type_owner_contexts,
                     });
                 }
                 }
@@ -312,6 +316,8 @@ HierarchyBuilder::collect_compiled_systemverilog_instance_materializations(
                     bound,
                     false,
                     std::nullopt,
+                    { },
+                    type_owner_contexts,
                 });
             }
         }
@@ -356,6 +362,9 @@ HierarchyBuilder::collect_compiled_systemverilog_instance_materializations(
         return result;
     }
     for (const auto& bound : bound_instances.instances) {
+        auto type_owner_contexts
+            = root_materialization.type_owner_contexts;
+        type_owner_contexts.push_back(&specialization);
         // A bound instance array has one occurrence per element (23.11).
         const auto array_indices = bound.instance.systemverilog != nullptr
             ? compiled_instance_array_indices(
@@ -383,6 +392,8 @@ HierarchyBuilder::collect_compiled_systemverilog_instance_materializations(
                 true,
                 bound.systemverilog_2023_bound,
                 occurrence,
+                { },
+                type_owner_contexts,
             });
         }
     }

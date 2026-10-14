@@ -1662,9 +1662,16 @@ Expression VerilogParser::parse_primary()
                     || keyword("int") || keyword("longint")
                     || keyword("integer") || keyword("time")) {
                     const auto type = advance();
+                    // A simple integral type supplies its bit width, not
+                    // a value to resolve as an identifier (IEEE 1800-2017
+                    // 11.4.14.1).
+                    const auto width = type.text == "byte" ? "8"
+                        : type.text == "shortint" ? "16"
+                        : type.text == "longint" || type.text == "time" ? "64"
+                        : "32";
                     slice_size = Expression {
-                        ExpressionKind::Identifier,
-                        type.text,
+                        ExpressionKind::IntegerLiteral,
+                        width,
                         { },
                         type.span
                     };

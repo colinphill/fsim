@@ -51,7 +51,7 @@ void test_systemverilog_preprocessor()
 {
     require(
         verilog_preprocessor_cache_version
-            == "fsim-verilog-preprocessor-v10-escaped-macro-identity",
+            == "fsim-verilog-preprocessor-v11-rescan-before-token-paste",
         "the preprocessor cache identity must invalidate old macro identities");
     const auto directory = make_test_directory("verilog-preprocessor");
     const auto include_directory = directory / "include";
@@ -765,6 +765,157 @@ endmodule
         punctuation_paste.ok() && punctuation_paste.lexed.tokens.size() == 4 && punctuation_paste.lexed.tokens[0].text == "resource_queue" && punctuation_paste.lexed.tokens[1].kind == TokenKind::Dot && punctuation_paste.lexed.tokens[2].text == "value",
         "a paste marker may delimit a macro argument before punctuation without "
         "forming one lexical token");
+
+    const auto macro_name_paste = preprocess_verilog(SourceText {
+        "macro-name-paste.sv",
+        "`define PREFIX my_prefix\n"
+        "`define SUFFIX my_suffix\n"
+        "`define NAME `PREFIX``_```SUFFIX\n"
+        "`define JOIN_NAME(prefix, suffix) prefix``_``suffix\n"
+        "`define STRINGIFY(text) `\"text`\"\n"
+        "module macro_name_paste;\n"
+        "  initial begin\n"
+        "    $display(`STRINGIFY(`NAME));\n"
+        "    $display(`STRINGIFY(`JOIN_NAME(`PREFIX, `SUFFIX)));\n"
+        "  end\n"
+        "endmodule\n" }, Language::SystemVerilog2017);
+    const auto has_string = [&](const auto& result, const std::string_view spelling) {
+        return std::ranges::any_of(result.lexed.tokens,
+            [&](const Token& token) {
+                return token.kind == TokenKind::StringLiteral
+                    && token.text == spelling;
+            });
+    };
+    require(macro_name_paste.ok()
+            && has_string(macro_name_paste, "\"my_prefix_my_suffix\"")
+            && std::ranges::count_if(macro_name_paste.lexed.tokens,
+                   [](const Token& token) {
+                       return token.kind == TokenKind::StringLiteral
+                           && token.text == "\"my_prefix_my_suffix\"";
+                   }) == 2,
+        "known macro operands expand before paste and stringification sees the "
+        "joined identifier");
+
+    const auto competing_defined_name = preprocess_verilog(SourceText {
+        "competing-defined-macro-name.sv",
+        "`define PREFIX selected\n"
+        "`define PREFIX_ competing_\n"
+        "`define SUFFIX result\n"
+        "`define NAME `PREFIX``_```SUFFIX\n"
+        "`define STRINGIFY(text) `\"text`\"\n"
+        "module competing_defined_macro_name;\n"
+        "  initial $display(`STRINGIFY(`NAME));\n"
+        "endmodule\n" }, Language::SystemVerilog2017);
+    require(competing_defined_name.ok()
+            && has_string(competing_defined_name,
+                   "\"selected_result\""),
+        "a defined macro before token concatenation expands before the pasted "
+        "name can select a competing macro");
+
+    const auto pasted_function_invocation = preprocess_verilog(SourceText {
+        "pasted-function-macro-invocation.sv",
+        "`define PREFIX_(value) value\n"
+        "`define CALL `PREFIX``_(29)\n"
+        "module pasted_function_macro_invocation;\n"
+        "  localparam integer VALUE = `CALL;\n"
+        "endmodule\n" }, Language::SystemVerilog2017);
+    require(pasted_function_invocation.ok()
+            && std::ranges::any_of(
+                pasted_function_invocation.lexed.tokens,
+                [](const Token& token) {
+                    return token.kind == TokenKind::Number
+                        && token.text == "29";
+                }),
+        "the argument list following a pasted function-macro name remains "
+        "available to the rescan");
+
+    const auto pasted_right_operand_arguments = preprocess_verilog(SourceText {
+        "pasted-right-operand-function-macro.sv",
+        "`define PREFIX selected\n"
+        "`define SUFFIX(value) value\n"
+        "`define NAME `PREFIX``_```SUFFIX(37)\n"
+        "module pasted_right_operand_function_macro;\n"
+        "  initial $display(`NAME);\n"
+        "endmodule\n" }, Language::SystemVerilog2017);
+    const auto has_identifier = [](const auto& result,
+                                   const std::string_view spelling) {
+        return std::ranges::any_of(result.lexed.tokens,
+            [&](const Token& token) {
+                return token.kind == TokenKind::Identifier
+                    && token.text == spelling;
+            });
+    };
+    require(pasted_right_operand_arguments.ok()
+            && has_identifier(pasted_right_operand_arguments, "selected_37")
+            && !has_identifier(pasted_right_operand_arguments, "selected_")
+            && std::ranges::none_of(
+                pasted_right_operand_arguments.lexed.tokens,
+                [](const Token& token) {
+                    return token.kind == TokenKind::Number
+                        && token.text == "37";
+                }),
+        "a known function-like macro on the right of a paste expands before "
+        "the joined text is lexed");
+
+    const auto formal_argument_identifier_paste = preprocess_verilog(
+        SourceText {
+            "formal-argument-identifier-paste.sv",
+            "`define JOIN_FORMAL(prefix, suffix) prefix``suffix\n"
+            "module formal_argument_identifier_paste;\n"
+            "  initial $display(`JOIN_FORMAL(PREFIX, _suffix));\n"
+            "endmodule\n" },
+        Language::SystemVerilog2017);
+    require(formal_argument_identifier_paste.ok()
+            && std::ranges::any_of(
+                formal_argument_identifier_paste.lexed.tokens,
+                [](const Token& token) {
+                    return token.kind == TokenKind::Identifier
+                        && token.text == "PREFIX_suffix";
+                }),
+        "token joining of formal argument identifiers remains supported");
+
+    const auto unresolved_nested_macro = preprocess_verilog(SourceText {
+        "unresolved-nested-macro.sv",
+        "`define BAD_BODY `MISSING_BODY\n"
+        "module unresolved_nested_macro;\n"
+        "  initial $display(`BAD_BODY);\n"
+        "endmodule\n" }, Language::SystemVerilog2017);
+    require(!unresolved_nested_macro.ok()
+            && std::ranges::any_of(
+                unresolved_nested_macro.lexed.diagnostics,
+                [](const Diagnostic& diagnostic) {
+                    return diagnostic.code == "FSIM-SV-PP-028"
+                        && diagnostic.message.find("`MISSING_BODY")
+                            != std::string::npos;
+                }),
+        "an unrelated undefined macro in replacement text still diagnoses");
+
+    const auto unresolved_pasted_macro = preprocess_verilog(SourceText {
+        "unresolved-pasted-macro.sv",
+        "`define BAD_PASTE `MISSING_PREFIX``_suffix\n"
+        "module unresolved_pasted_macro;\n"
+        "  initial $display(`BAD_PASTE);\n"
+        "endmodule\n" }, Language::SystemVerilog2017);
+    require(!unresolved_pasted_macro.ok()
+            && std::ranges::any_of(
+                unresolved_pasted_macro.lexed.diagnostics,
+                [](const Diagnostic& diagnostic) {
+                    return diagnostic.code == "FSIM-SV-PP-028"
+                        && diagnostic.message.find("`MISSING_PREFIX_suffix")
+                            != std::string::npos;
+                }),
+        "a paste defers an undefined macro only until its complete name can "
+        "be resolved");
+
+    const auto ordinary_string = preprocess_verilog(SourceText {
+        "macro-paste-ordinary-string.sv",
+        "`define PREFIX should_not_expand\n"
+        "`define KEEP \"literal `PREFIX``_ text\"\n"
+        "module preserve_string; initial $display(`KEEP); endmodule\n" },
+        Language::SystemVerilog2017);
+    require(ordinary_string.ok()
+            && has_string(ordinary_string, "\"literal `PREFIX``_ text\""),
+        "macro rescanning and token delimiters do not rewrite ordinary strings");
 
     const auto malformed = preprocess_verilog(SourceText { "uvm-macro-errors.sv",
                                                   R"(`define BAD_CONDITIONAL \

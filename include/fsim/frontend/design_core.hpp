@@ -351,9 +351,9 @@ struct PackedMember {
     // packed aggregate. Filled once every member width is concrete.
     std::uint64_t lsb_offset { };
     SourceSpan span;
-    // Empty for a scalar leaf and exactly one element for a nested packed
-    // aggregate or enum member. Vector-backed recursion keeps Type value-copy
-    // semantics without embedding another Type in every member.
+    // Empty for an unconstrained scalar leaf and exactly one element for a
+    // constrained scalar, nested packed aggregate, or enum member. Recursion
+    // keeps Type value-copy semantics without embedding Type in every member.
     std::vector<Type> nested_types;
     // Optional SystemVerilog member default. Parameter substitution retains a
     // normalized contextual packed constant before runtime default construction.

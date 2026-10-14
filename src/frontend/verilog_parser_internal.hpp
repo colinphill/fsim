@@ -857,8 +857,8 @@ class VerilogParser final : private detail::ParserBase {
   std::unordered_set<std::string> unit_string_names_;
   // Index types of the unit's associative arrays, for foreach.
   std::unordered_map<std::string, Type> unit_associative_index_types_;
-  // Types of the unit's unpacked container variables, for foreach.
-  std::unordered_map<std::string, Type> unit_container_types_;
+  // Types of unit-level variables used to validate foreach array rank.
+  std::unordered_map<std::string, Type> unit_foreach_types_;
   // Nonzero while parsing a constraint block or a delay value, where `->`
   // is not the logical implication operator.
   std::size_t constraint_parse_depth_ { };

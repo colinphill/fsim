@@ -5,8 +5,10 @@
 #include "fsim/runtime/string_methods.hpp"
 #include "fsim/runtime/systemverilog_string.hpp"
 
+#include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <limits>
 
@@ -32,6 +34,22 @@ void require_throws(Callback&& callback, const char* message) {
 void test_systemverilog_byte_strings() {
   using namespace fsim::runtime;
   using namespace fsim::runtime::simir;
+
+  const auto valid_field = PackedLogic4::from_aval_bval(64U, 4096U, 0U);
+  require(checked_vhdl_textio_field_width(valid_field) == 4096U,
+      "the full-width field check accepts its upper bound");
+  for (const auto value : { std::uint64_t { 4097U },
+           UINT64_C(1) << 32U, UINT64_C(1) << 63U }) {
+    const auto invalid_field = PackedLogic4::from_aval_bval(64U, value, 0U);
+    require_throws<std::length_error>(
+        [&] { (void)checked_vhdl_textio_field_width(invalid_field); },
+        "the full-width field check rejects negative and oversized values");
+  }
+  const auto unknown_high_field = PackedLogic4::from_aval_bval(
+      64U, 0U, UINT64_C(1) << 32U);
+  require_throws<std::invalid_argument>(
+      [&] { (void)checked_vhdl_textio_field_width(unknown_high_field); },
+      "the full-width field check sees unknown high bits");
 
   const std::string original{"A\xcf\x80\xf0\x9f\x98\x80"};
   require(
@@ -91,6 +109,39 @@ void test_systemverilog_byte_strings() {
       byte_interpreter.run().status == RunStatus::completed
           && byte_interpreter.read_debug_string_local(0, 0) == "\xc0\x80",
       "interpreter string ingress preserves arbitrary bytes");
+
+  Interpreter negative_field_interpreter;
+  Process negative_field_process;
+  negative_field_process.id = 0;
+  negative_field_process.name = "negative_vhdl_textio_field";
+  negative_field_process.register_count = 1;
+  negative_field_process.string_register_count = 2;
+  StringMethod invalid_field;
+  invalid_field.operation
+      = StringMethodOperator::format_string_dynamic_field;
+  invalid_field.source = 0;
+  invalid_field.argument = 1;
+  invalid_field.first = 0;
+  negative_field_process.operations = {
+      LoadStringConstant { 0, "" },
+      LoadStringConstant { 1, "value" },
+      LoadConstant {
+          0, PackedLogic4::from_aval_bval(64U, UINT64_MAX, 0U) },
+      invalid_field,
+      Halt { },
+  };
+  (void)negative_field_interpreter.add_process(
+      std::move(negative_field_process));
+  try {
+    (void)negative_field_interpreter.run();
+    throw std::runtime_error {
+        "executing a negative dynamic TextIO field was accepted" };
+  } catch (const std::length_error& error) {
+    require(
+        std::string_view { error.what() }.find("4096-byte limit")
+            != std::string_view::npos,
+        "the executed TextIO field operation validates negative widths");
+  }
 
   auto methods = original;
   require(

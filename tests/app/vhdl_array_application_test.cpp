@@ -13,6 +13,7 @@
 #include <iostream>
 #include <optional>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -61,6 +62,7 @@ struct Capture {
   std::string callable_matrix_input;
   std::string callable_package_result;
   std::string callable_generated_result;
+  std::string callable_sliding_equal;
   std::string callable_cells_input;
   std::string callable_local_result;
   std::string callable_procedure_result;
@@ -433,6 +435,8 @@ Capture run_once(
       read("array_top.callable_package_result");
   capture.callable_generated_result =
       read("array_top.callable_generated_result");
+  capture.callable_sliding_equal =
+      read("array_top.callable_sliding_equal");
   capture.callable_cells_input =
       read("array_top.callable_cells_input");
   capture.callable_local_result =
@@ -589,6 +593,7 @@ void verify_capture(const Capture& capture) {
   assert(
       capture.callable_generated_result
       == capture.callable_matrix_input);
+  assert(capture.callable_sliding_equal == "1");
   assert(capture.callable_cells_input == "11111111");
   assert(
       capture.callable_local_result
@@ -695,23 +700,53 @@ void verify_capture(const Capture& capture) {
 std::string run_expected_dynamic_failure(
     const fsim::project::Config& config,
     const fsim::app::SimulationEngine engine,
-    const std::string_view expected_message) {
+    const std::string_view expected_message,
+    const std::string_view unexpected_report = {}) {
   fsim::diagnostic::Engine diagnostics;
   auto project = fsim::app::build_project(config, diagnostics);
   assert(project);
   fsim::app::Simulation simulation{
       std::move(*project), config.run.max_deltas, engine};
-  try {
-    (void)simulation.run();
-    assert(false && "dynamic packed-index failure was not reported");
-  } catch (const fsim::runtime::simir::InterpreterError& error) {
-    const auto message = std::string{error.what()};
+  std::vector<std::string> report_messages;
+  if (!unexpected_report.empty()) {
+    simulation.set_trusted_text_report_hook(
+        [&report_messages](
+            const fsim::runtime::simir::ProcessId,
+            const std::string_view message,
+            const fsim::runtime::simir::AssertionSeverity,
+            const fsim::runtime::simir::SourceLocation&,
+            const fsim::runtime::SimulationTick,
+            const std::uint64_t) {
+          report_messages.emplace_back(message);
+        });
+  }
+  const auto validate_failure = [&](const std::string_view message) {
     if (message.find(expected_message) == std::string::npos) {
       std::cerr << "expected dynamic failure containing '"
                 << expected_message << "', got '" << message << "'\n";
     }
     assert(message.find(expected_message) != std::string::npos);
-    return message;
+    if (!unexpected_report.empty()) {
+      const auto expected_report = std::string { expected_message };
+      const auto unexpected = std::string { unexpected_report };
+      assert(
+          std::ranges::find(report_messages, expected_report)
+          != report_messages.end());
+      assert(
+          std::ranges::find(report_messages, unexpected)
+          == report_messages.end());
+    }
+    return std::string { message };
+  };
+  try {
+    (void)simulation.run();
+    if (!unexpected_report.empty()) {
+      throw std::runtime_error(
+          "wrong-length STRING assignment returned successfully");
+    }
+    assert(false && "dynamic packed-index failure was not reported");
+  } catch (const fsim::runtime::simir::InterpreterError& error) {
+    return validate_failure(error.what());
   }
   return {};
 }
@@ -772,6 +807,14 @@ int main() {
       directory.path / "array_top.vhd";
   const auto failure_source =
       directory.path / "dynamic_failure.vhd";
+  const auto string_length_failure_source =
+      directory.path / "string_length_failure.vhd";
+  const auto string_slice_length_failure_source =
+      directory.path / "string_slice_length_failure.vhd";
+  const auto null_string_index_failure_source =
+      directory.path / "null_string_index_failure.vhd";
+  const auto dead_arm_type_failure_source =
+      directory.path / "dead_arm_type_failure.vhd";
   const auto slice_failure_source =
       directory.path / "dynamic_slice_failure.vhd";
   const auto multidimensional_failure_source =
@@ -969,6 +1012,12 @@ architecture rtl of Array_Top is
     Second := First;
     return Second;
   end function;
+  function Directional_Matrix_Copy(
+    Value : Boundary_Matrix_T(0 to 1, 3 downto 1))
+    return Boundary_Matrix_T(0 to 1, 3 downto 1) is
+  begin
+    return Value;
+  end function;
   type Matrix_T is array (0 to 1, 3 downto 1) of bit;
   type Nibble_Array_T is array (3 downto 0) of bit;
   type Nibble_Memory_T is array (0 to 1) of Nibble_Array_T;
@@ -1052,6 +1101,11 @@ architecture rtl of Array_Top is
   signal Callable_Matrix_Input : Callable_Matrix_T;
   signal Callable_Package_Result : Callable_Matrix_T;
   signal Callable_Generated_Result : Callable_Matrix_T;
+  signal Callable_Sliding_Input :
+    Boundary_Matrix_T(1 downto 0, 1 to 3);
+  signal Callable_Sliding_Result :
+    Boundary_Matrix_T(0 to 1, 3 downto 1);
+  signal Callable_Sliding_Equal : boolean;
   signal Callable_Cells_Input : Callable_Cells_T;
   signal Callable_Local_Result : Callable_Cells_T;
   signal Callable_Procedure_Result : Callable_Cells_T;
@@ -1214,6 +1268,11 @@ begin
         Detail => (Mode => Run, Data => "11")));
 
   Callable_Matrix_Input <= (others => (others => '1'));
+  Callable_Sliding_Input <= ("101", "010");
+  Callable_Sliding_Result <=
+    Directional_Matrix_Copy(Callable_Sliding_Input);
+  Callable_Sliding_Equal <=
+    Callable_Sliding_Result = ("101", "010");
   Callable_Package_Result <=
     Package_Matrix_Copy(Callable_Matrix_Input);
   Callable_Cells_Input <=
@@ -1481,6 +1540,207 @@ end architecture;
     // the reference interpreter may append operand-specific detail.
     assert(reference.starts_with(compiled));
   }
+
+  {
+    std::ofstream output{string_length_failure_source};
+    output << R"(
+entity String_Length_Failure is
+end entity;
+
+architecture rtl of String_Length_Failure is
+  procedure assign_short(source_value : string) is
+    variable Value : string(3 downto 1) := "abc";
+  begin
+    Value := source_value;
+  end procedure;
+begin
+  fail : process
+  begin
+    assign_short("xy");
+    report "UNEXPECTED SUCCESS" severity note;
+    wait;
+  end process;
+end architecture;
+)";
+    assert(output.good());
+  }
+  for (const auto optimization : {
+           fsim::project::Optimization::o0,
+           fsim::project::Optimization::o2}) {
+    fsim::project::Config config;
+    config.base_directory = directory.path;
+    config.project.name = "vhdl-string-assignment-length-failure";
+    config.project.top = "vhdl:work.string_length_failure(rtl)";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path =
+        directory.path
+        / (optimization == fsim::project::Optimization::o0
+               ? "string-length-failure-cache-o0"
+               : "string-length-failure-cache-o2");
+    config.run.max_deltas = 1000;
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::vhdl;
+    sources.standard = "2008";
+    sources.library = "work";
+    sources.compilation_unit = "file";
+    sources.files = {string_length_failure_source};
+    config.source_sets.push_back(std::move(sources));
+    const auto expected_message
+        = "VHDL STRING assignment length does not match the constrained target";
+    static_cast<void>(run_expected_dynamic_failure(
+        config,
+        fsim::app::SimulationEngine::interpreter,
+        expected_message,
+        "UNEXPECTED SUCCESS"));
+    static_cast<void>(run_expected_dynamic_failure(
+        config,
+        fsim::app::SimulationEngine::compiled,
+        expected_message,
+        "UNEXPECTED SUCCESS"));
+  }
+
+  {
+    std::ofstream output{string_slice_length_failure_source};
+    output << R"(
+entity String_Slice_Length_Failure is
+end entity;
+
+architecture rtl of String_Slice_Length_Failure is
+begin
+  fail : process
+    variable Value : string(1 to 6) := "ABCDEF";
+  begin
+    Value(3 to 5) := "Hi";
+    report "UNEXPECTED SUCCESS" severity note;
+    wait;
+  end process;
+end architecture;
+)";
+    assert(output.good());
+  }
+  for (const auto optimization : {
+           fsim::project::Optimization::o0,
+           fsim::project::Optimization::o2}) {
+    fsim::project::Config config;
+    config.base_directory = directory.path;
+    config.project.name = "vhdl-string-slice-assignment-length-failure";
+    config.project.top = "vhdl:work.string_slice_length_failure(rtl)";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path =
+        directory.path
+        / (optimization == fsim::project::Optimization::o0
+               ? "string-slice-length-failure-cache-o0"
+               : "string-slice-length-failure-cache-o2");
+    config.run.max_deltas = 1000;
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::vhdl;
+    sources.standard = "1993";
+    sources.library = "work";
+    sources.compilation_unit = "file";
+    sources.files = {string_slice_length_failure_source};
+    config.source_sets.push_back(std::move(sources));
+    // The compiler rejects this statically known slice-length mismatch
+    // during analysis.
+    expect_build_failure(config, "FSIM-ELAB-VHASSIGN-004");
+  }
+
+  {
+    std::ofstream output{null_string_index_failure_source};
+    output << R"(
+entity Null_String_Index_Child is
+  port (Value : in string);
+end entity;
+
+architecture rtl of Null_String_Index_Child is
+begin
+  fail : process
+  begin
+    assert Value(3) = character'val(0)
+      report "index unexpectedly succeeded" severity failure;
+    report "UNEXPECTED SUCCESS" severity note;
+    wait;
+  end process;
+end architecture;
+
+entity Null_String_Index_Failure is
+end entity;
+
+architecture rtl of Null_String_Index_Failure is
+  signal Value : string(3 to 2);
+begin
+  child : entity work.Null_String_Index_Child(rtl)
+    port map (Value => Value);
+end architecture;
+)";
+    assert(output.good());
+  }
+  for (const auto optimization : {
+           fsim::project::Optimization::o0,
+           fsim::project::Optimization::o2}) {
+    fsim::project::Config config;
+    config.base_directory = directory.path;
+    config.project.name = "vhdl-null-string-index-failure";
+    config.project.top = "vhdl:work.null_string_index_failure(rtl)";
+    config.project.time_resolution = "1ns";
+    config.build.optimization = optimization;
+    config.build.cache_path = directory.path
+        / (optimization == fsim::project::Optimization::o0
+               ? "null-string-index-cache-o0"
+               : "null-string-index-cache-o2");
+    config.run.max_deltas = 1000;
+    fsim::project::SourceSet sources;
+    sources.language = fsim::project::Language::vhdl;
+    sources.standard = "2008";
+    sources.library = "work";
+    sources.compilation_unit = "file";
+    sources.files = {null_string_index_failure_source};
+    config.source_sets.push_back(std::move(sources));
+    constexpr std::string_view expected_message
+        = "index outside of the index range of a STRING";
+    static_cast<void>(run_expected_dynamic_failure(
+        config,
+        fsim::app::SimulationEngine::interpreter,
+        expected_message,
+        "UNEXPECTED SUCCESS"));
+    static_cast<void>(run_expected_dynamic_failure(
+        config,
+        fsim::app::SimulationEngine::compiled,
+        expected_message,
+        "UNEXPECTED SUCCESS"));
+  }
+
+  {
+    std::ofstream output{dead_arm_type_failure_source};
+    output << R"(
+entity Dead_Arm_Type_Failure is
+end entity;
+
+architecture rtl of Dead_Arm_Type_Failure is
+  type First_T is array (0 to 1) of bit;
+  type Second_T is array (0 to 1) of bit;
+  signal First : First_T;
+  signal Second : Second_T;
+begin
+  check : process
+  begin
+    if false then
+      First <= Second;
+    end if;
+    wait;
+  end process;
+end architecture;
+)";
+    assert(output.good());
+  }
+  expect_build_failure(
+      make_failure_config(
+          directory.path,
+          dead_arm_type_failure_source,
+          "vhdl-dead-arm-type-failure",
+          "vhdl:work.dead_arm_type_failure(rtl)"),
+      "FSIM-ELAB-VHARRAY-006");
 
   {
     std::ofstream output{slice_failure_source};
@@ -1793,7 +2053,7 @@ architecture rtl of Callable_Shape_Top is
   begin
     return Value;
   end function;
-  signal Source : Matrix_T(1 downto 0, 1 to 3);
+  signal Source : Matrix_T(1 downto 0, 1 to 2);
   signal Result : Matrix_T(0 to 1, 3 downto 1);
 begin
   Result <= Copy_Matrix(Source);

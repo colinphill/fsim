@@ -38,6 +38,8 @@ void string_putc(
     std::string_view value, unsigned radix);
 [[nodiscard]] std::string string_from_integer(
     std::int32_t value, unsigned radix);
+[[nodiscard]] std::uint32_t checked_vhdl_textio_field_width(
+    const PackedLogic4& value);
 [[nodiscard]] StringMethodResult execute_string_method(
     StringMethodOperator operation,
     std::string& source,

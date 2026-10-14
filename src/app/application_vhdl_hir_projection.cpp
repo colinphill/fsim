@@ -303,28 +303,46 @@ void VhdlHirBuilder::add_disconnection_specifications(
 {
     const auto canonical = canonical_vhdl_name(
         std::string { name_value });
-    auto visible_scope = std::optional<semantic::ScopeId> { scope };
-    while (visible_scope) {
-        for (const auto& type : model_.types()) {
-            if (type.scope == *visible_scope
-                && canonical_vhdl_name(type.name) == canonical
-                && (!exact_source || type.source == *exact_source)) {
-                return type.id;
-            }
-        }
-        if (exact_source || !visible_scope->valid()
-            || visible_scope->value() >= model_.scopes().size()) {
-            break;
-        }
-        visible_scope = model_.scopes()[visible_scope->value()].parent;
-    }
-
     const auto separator = name_value.find_last_of(".:");
     const auto simple = separator == std::string_view::npos
         ? name_value
         : name_value.substr(separator + 1U);
     const auto simple_canonical = canonical_vhdl_name(
         std::string { simple });
+
+    // ensure_type passes an exact declaration span while assigning a fresh
+    // identity. Resolve that identity before ordinary visible-name fallbacks:
+    // a same-named package type is visible in a package body, but must not
+    // steal the ID for a nested declaration that shadows it.
+    if (exact_source) {
+        semantic::TypeId selected;
+        for (const auto& type : model_.types()) {
+            if (type.source != *exact_source
+                || canonical_vhdl_name(type.name) != simple_canonical) {
+                continue;
+            }
+            if (selected.valid() && selected != type.id) {
+                return { };
+            }
+            selected = type.id;
+        }
+        return selected;
+    }
+
+    auto visible_scope = std::optional<semantic::ScopeId> { scope };
+    while (visible_scope) {
+        for (const auto& type : model_.types()) {
+            if (type.scope == *visible_scope
+                && canonical_vhdl_name(type.name) == canonical) {
+                return type.id;
+            }
+        }
+        if (!visible_scope->valid()
+            || visible_scope->value() >= model_.scopes().size()) {
+            break;
+        }
+        visible_scope = model_.scopes()[visible_scope->value()].parent;
+    }
 
     const auto current_library = canonical_vhdl_name(
         current_unit_ == nullptr || current_unit_->library.empty()
@@ -457,24 +475,6 @@ void VhdlHirBuilder::add_disconnection_specifications(
             return selected;
         }
     }
-    if (exact_source) {
-        semantic::TypeId selected;
-        for (const auto& type : model_.types()) {
-            if (type.source != *exact_source
-                || canonical_vhdl_name(type.name)
-                    != simple_canonical) {
-                continue;
-            }
-            if (selected.valid() && selected != type.id) {
-                return { };
-            }
-            selected = type.id;
-        }
-        if (selected.valid()) {
-            return selected;
-        }
-    }
-
     // A frontend type may retain only its simple spelling after resolution
     // through a use clause.  The unit under construction is not yet present
     // in hir_, so resolve its converted context against the complete semantic

@@ -157,6 +157,27 @@ std::string string_from_integer(
         : std::string { };
 }
 
+std::uint32_t checked_vhdl_textio_field_width(
+    const PackedLogic4& value)
+{
+    if (value.width() == 0U || value.is_logic9()
+        || std::ranges::any_of(
+            value.bval_words(), [](const auto word) { return word != 0U; })) {
+        throw std::invalid_argument {
+            "VHDL TextIO field contains unknown bits"
+        };
+    }
+    const auto aval = value.aval_words();
+    if (std::ranges::any_of(
+            aval.subspan(1U), [](const auto word) { return word != 0U; })
+        || aval.front() > maximum_string_bytes) {
+        throw std::length_error {
+            "VHDL TextIO field exceeds the 4096-byte limit"
+        };
+    }
+    return static_cast<std::uint32_t>(aval.front());
+}
+
 // An integer literal with optional leading and trailing whitespace, sign,
 // base (`16#FF#`), underscores and exponent (IEEE 1076-2008 15.5).
 [[nodiscard]] std::int64_t vhdl_integer_value(const std::string_view text)
@@ -568,9 +589,32 @@ void Interpreter::Impl::execute_string(
     const StringMethod& operation)
 {
     auto& source = get_string_register(process, operation.source);
-    if (operation.operation >= StringMethodOperator::format_packed
-        && operation.operation <= StringMethodOperator::format_vhdl_time) {
-        const auto packed = operation.operation == StringMethodOperator::format_packed
+    const bool dynamic_string_field = operation.operation
+        == StringMethodOperator::format_string_dynamic_field;
+    const bool dynamic_packed_field = operation.operation
+        == StringMethodOperator::format_packed_dynamic_field;
+    const bool string_format = operation.operation
+            == StringMethodOperator::format_string
+        || dynamic_string_field;
+    const bool packed_format = operation.operation
+            == StringMethodOperator::format_packed
+        || dynamic_packed_field;
+    const bool format = packed_format || string_format
+        || operation.operation == StringMethodOperator::format_time
+        || operation.operation == StringMethodOperator::format_vhdl_time;
+    if (format) {
+        auto normalized = operation;
+        if (dynamic_string_field || dynamic_packed_field) {
+            const auto width_register = dynamic_string_field
+                ? operation.first : operation.second;
+            const auto width = get_register(process, width_register);
+            normalized.minimum_width
+                = checked_vhdl_textio_field_width(width);
+            normalized.operation = dynamic_string_field
+                ? StringMethodOperator::format_string
+                : StringMethodOperator::format_packed;
+        }
+        const auto packed = packed_format
                 || operation.operation
                     == StringMethodOperator::format_vhdl_time
                 || (operation.operation == StringMethodOperator::format_time
@@ -578,8 +622,8 @@ void Interpreter::Impl::execute_string(
             ? get_register(process, operation.first)
             : PackedLogic4 { 1, Logic4::zero };
         execute_string_format(
-            operation, source, packed,
-            operation.operation == StringMethodOperator::format_string
+            normalized, source, packed,
+            string_format
                 ? std::string_view { get_string_register(
                       process, operation.argument) }
                 : std::string_view { },

@@ -3,6 +3,7 @@
 
 #include "fsim/semantic/compiled_design.hpp"
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -320,6 +321,11 @@ public:
     [[nodiscard]] std::optional<std::string>
     evaluate_systemverilog_bits_expression(
         ExpressionId expression) const;
+
+    /// Evaluate the packed bit width of a type in this specialization.
+    /// Parameterized ranges and packed members use this unit's actuals.
+    [[nodiscard]] std::optional<std::size_t>
+    evaluate_systemverilog_type_width(const sv::TypeReference& type) const;
 
     /// Evaluate an integral expression and retain ordered severity-system-task
     /// effects from every constant-callable invocation. Cached calls replay

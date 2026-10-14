@@ -248,6 +248,8 @@ int main() {
       [&](const std::string_view revision) {
         std::ofstream output{package_source};
         output << "-- " << revision << R"(
+library ieee;
+use ieee.std_logic_1164.all;
 package Packet_Types is
   type Packet_T is record
     Data : std_logic_vector(3 downto 0);

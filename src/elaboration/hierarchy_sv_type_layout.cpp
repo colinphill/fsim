@@ -43,14 +43,120 @@ std::optional<std::size_t> systemverilog_declaration_width(
     const semantic::CompiledDesignResolver type_resolver {
         working_specialization
     };
+    // Use a width stamped on the actual for its exact type-parameter formal
+    // before resolver expansion replaces that formal with its base type.
+    const auto specialized_type_parameter_actual_width =
+        [&working_specialization, &type_resolver, &declaration, &boundary](
+            const semantic::sv::TypeReference& reference)
+        -> std::optional<std::size_t> {
+        if (reference.container_form
+            || !reference.unpacked_dimensions.empty()) {
+            return std::nullopt;
+        }
+
+        std::optional<semantic::DeclarationId> formal_id;
+        if (reference.target.target.valid()) {
+            for (const auto& actual :
+                working_specialization.specialization().actual_identities) {
+                const auto formal = working_specialization.find_declaration(
+                    actual.declaration);
+                if (!formal || formal->systemverilog == nullptr
+                    || formal->systemverilog->form
+                        != semantic::sv::DeclarationForm::type_parameter
+                    || !formal->systemverilog->declared_type
+                    || *formal->systemverilog->declared_type
+                        != reference.target.target) {
+                    continue;
+                }
+                if (formal_id && *formal_id != actual.declaration) {
+                    return std::nullopt;
+                }
+                formal_id = actual.declaration;
+            }
+        }
+        if (!formal_id && !reference.target.spelling.empty()) {
+            const auto named = type_resolver
+                .resolve_systemverilog_named_type(
+                    reference.target.spelling, declaration.scope, false)
+                .unique();
+            const auto formal = named
+                ? working_specialization.find_declaration(*named)
+                : std::nullopt;
+            if (formal && formal->systemverilog != nullptr
+                && formal->systemverilog->form
+                    == semantic::sv::DeclarationForm::type_parameter) {
+                formal_id = *named;
+            }
+        }
+        if (!formal_id) {
+            return std::nullopt;
+        }
+
+        const auto& actuals
+            = working_specialization.specialization().actual_identities;
+        const auto actual = std::ranges::find(actuals, *formal_id,
+            &semantic::SpecializedHirActualIdentity::declaration);
+        if (actual == actuals.end() || !actual->systemverilog_type
+            || actual->systemverilog_type->container_form
+            || !actual->systemverilog_type->unpacked_dimensions.empty()
+            || !actual->systemverilog_type->executable_width
+            || *actual->systemverilog_type->executable_width == 0U
+            || *actual->systemverilog_type->executable_width
+                > std::numeric_limits<std::size_t>::max()) {
+            return std::nullopt;
+        }
+        auto width = static_cast<std::size_t>(
+            *actual->systemverilog_type->executable_width);
+        std::size_t extent { 1U };
+        const auto include_range =
+            [&](const semantic::sv::PackedRange& range) {
+                const auto left = boundary(
+                    range.left, range.left_expression);
+                const auto right = boundary(
+                    range.right, range.right_expression);
+                if (!left || !right) {
+                    return false;
+                }
+                const auto distance = elaboration_detail::index_distance(
+                    *left, *right);
+                if (distance >= std::numeric_limits<std::size_t>::max()) {
+                    return false;
+                }
+                const auto dimension_extent
+                    = static_cast<std::size_t>(distance + 1U);
+                if (dimension_extent == 0U
+                    || dimension_extent
+                        > std::numeric_limits<std::size_t>::max() / extent) {
+                    return false;
+                }
+                extent *= dimension_extent;
+                return true;
+            };
+        for (const auto& dimension : reference.packed_dimensions) {
+            if (!include_range(dimension)) {
+                return std::nullopt;
+            }
+        }
+        if (reference.packed_dimensions.empty()
+            && reference.packed_range
+            && !include_range(*reference.packed_range)) {
+            return std::nullopt;
+        }
+        if (extent > std::numeric_limits<std::size_t>::max() / width) {
+            return std::nullopt;
+        }
+        width *= extent;
+        return width;
+    };
     const auto resolve = [&](const auto& self,
                              const semantic::sv::TypeReference& reference)
         -> std::optional<std::size_t> {
         if (reference.virtual_interface) {
             return 64U;
         }
-        std::optional<std::size_t> width;
-        if (reference.packed_range) {
+        std::optional<std::size_t> width
+            = specialized_type_parameter_actual_width(reference);
+        if (!width && reference.packed_range) {
             const auto& range = *reference.packed_range;
             const auto left = boundary(
                 range.left, range.left_expression);
@@ -234,6 +340,77 @@ std::optional<ContainerType> systemverilog_container_type(
                 leaf.unpacked_dimensions.clear();
                 leaf.container_element_types.clear();
             }
+            const auto specialized_type_parameter_width = [&]()
+                -> std::optional<std::size_t> {
+                if (leaf.container_form
+                    || !leaf.unpacked_dimensions.empty()) {
+                    return std::nullopt;
+                }
+                std::optional<semantic::DeclarationId> formal_id;
+                if (leaf.target.target.valid()) {
+                    for (const auto& actual :
+                        working_specialization.specialization()
+                            .actual_identities) {
+                        const auto formal
+                            = working_specialization.find_declaration(
+                                actual.declaration);
+                        if (!formal || formal->systemverilog == nullptr
+                            || formal->systemverilog->form
+                                != semantic::sv::DeclarationForm::
+                                    type_parameter
+                            || !formal->systemverilog->declared_type
+                            || *formal->systemverilog->declared_type
+                                != leaf.target.target) {
+                            continue;
+                        }
+                        if (formal_id && *formal_id != actual.declaration) {
+                            return std::nullopt;
+                        }
+                        formal_id = actual.declaration;
+                    }
+                }
+                const semantic::CompiledDesignResolver resolver {
+                    working_specialization
+                };
+                if (!formal_id && !leaf.target.target.valid()
+                    && !leaf.target.spelling.empty()) {
+                    const auto named = resolver
+                        .resolve_systemverilog_named_type(
+                            leaf.target.spelling,
+                            working_specialization.scope(), false)
+                        .unique();
+                    const auto formal = named
+                        ? working_specialization.find_declaration(*named)
+                        : std::nullopt;
+                    if (formal && formal->systemverilog != nullptr
+                        && formal->systemverilog->form
+                            == semantic::sv::DeclarationForm::type_parameter) {
+                        formal_id = *named;
+                    }
+                }
+                if (!formal_id) {
+                    return std::nullopt;
+                }
+                const auto& actuals
+                    = working_specialization.specialization()
+                          .actual_identities;
+                const auto actual = std::ranges::find(
+                    actuals, *formal_id,
+                    &semantic::SpecializedHirActualIdentity::declaration);
+                if (actual == actuals.end() || !actual->systemverilog_type) {
+                    return std::nullopt;
+                }
+                const auto formal
+                    = working_specialization.find_declaration(*formal_id);
+                if (!formal || formal->systemverilog == nullptr) {
+                    return std::nullopt;
+                }
+                semantic::sv::Declaration width_declaration;
+                width_declaration.scope = formal->systemverilog->scope;
+                width_declaration.type = leaf;
+                return systemverilog_declaration_width(
+                    working_specialization, width_declaration);
+            }();
             const semantic::CompiledDesignResolver type_resolver {
                 working_specialization
             };
@@ -243,6 +420,24 @@ std::optional<ContainerType> systemverilog_container_type(
             auto element = self(self, leaf, false);
             if (!element) {
                 return std::nullopt;
+            }
+            if (specialized_type_parameter_width
+                && !element->fixed && !element->queue
+                && !element->associative
+                && (element->element_kind == ContainerElementKind::Packed
+                    || element->element_kind
+                        == ContainerElementKind::Scalar)) {
+                if (*specialized_type_parameter_width == 0U
+                    || *specialized_type_parameter_width
+                        > std::numeric_limits<std::uint32_t>::max()) {
+                    return std::nullopt;
+                }
+                // The resolved type parameter may expand a typedef using its
+                // unspecialized declaration body. Keep the exact packed width
+                // retained for this owner specialization on the container
+                // element that runtime indexing exposes.
+                element->element_width = static_cast<std::uint32_t>(
+                    *specialized_type_parameter_width);
             }
             ContainerType result;
             // A dynamic array has no dedicated ContainerType flag: it is

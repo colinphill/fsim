@@ -389,6 +389,10 @@ private:
         std::optional<semantic::InstanceId> source_instance;
         std::optional<semantic::SpecializedHirUnit>
             prepared_specialization;
+        // Borrowed parent-unit specializations let a type actual retain the
+        // parameter context that owns a referenced typedef's member ranges.
+        std::vector<const semantic::SpecializedHirUnit*>
+            type_owner_contexts;
     };
 
     struct CompiledSystemVerilogParameterDiagnostic {
@@ -450,6 +454,10 @@ private:
         // The indices of a multidimensional instance array's leading
         // dimensions, outermost first.
         std::vector<std::int64_t> outer_array_indices { };
+        // Parent specializations are borrowed through synchronous child
+        // instantiation and are matched to type declarations by owner unit.
+        std::vector<const semantic::SpecializedHirUnit*>
+            type_owner_contexts;
     };
 
     struct CompiledSystemVerilogInstanceWorklistResult {
@@ -1320,6 +1328,10 @@ private:
         // Overlay pointers in this map are borrowed from the owning root or
         // generated specialization for the synchronous lowering pass.
         ContainerDeclarationBindings container_declaration_bindings;
+        // Parent specializations remain alive while this unit's children are
+        // materialized; owner identity is checked before using any context.
+        std::vector<const semantic::SpecializedHirUnit*>
+            type_owner_contexts;
     };
 
     // Specialization pointers borrow root/generated owners and are drained

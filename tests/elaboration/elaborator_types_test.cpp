@@ -512,6 +512,8 @@ endmodule
 entity record_execution is
 end entity;
 
+library ieee;
+use ieee.std_logic_1164.all;
 architecture rtl of record_execution is
   type Packet_T is record
     Upper : std_logic_vector(3 downto 0);
@@ -608,6 +610,8 @@ end architecture;
 entity record_aggregate_execution is
 end entity;
 
+library ieee;
+use ieee.std_logic_1164.all;
 architecture rtl of record_aggregate_execution is
   type Packet_T is record
     Data : std_logic_vector(3 downto 0);
@@ -722,6 +726,8 @@ end architecture;
 entity invalid_record_aggregate_execution is
 end entity;
 
+library ieee;
+use ieee.std_logic_1164.all;
 architecture rtl of invalid_record_aggregate_execution is
   type Packet_T is record
     Data : std_logic_vector(3 downto 0);
@@ -820,6 +826,8 @@ end architecture;
     const auto package_record_source = fsim::frontend::parse_text(
         "package_record_hierarchy.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
 package Packet_Types is
   type Packet_T is record
     Data : std_logic_vector(3 downto 0);
@@ -1387,6 +1395,8 @@ end architecture;
 use work.invalid_array_types.all;
 entity Invalid_Arrays is
 end entity;
+library ieee;
+use ieee.std_logic_1164.all;
 use work.invalid_array_types.all;
 architecture rtl of Invalid_Arrays is
   subtype Bad_Reconstraint_T is Fixed_T(1 downto 0);
@@ -1679,10 +1689,14 @@ end architecture;
         has_diagnostic(
             invalid_array_design,
             "FSIM-ELAB-VHARRAYAGG-005"));
+    // Wide_Element_Aggregate supplies a string where one scalar BIT is
+    // required, so it is an exact element-type mismatch (VHARRAYAGG-009).
+    // A real constrained-array-element width mismatch remains covered by
+    // vhdl_nonempty_null_string_array_element in the aggregate-choice tests.
     assert(
         has_diagnostic(
             invalid_array_design,
-            "FSIM-ELAB-VHARRAYAGG-006"));
+            "FSIM-ELAB-VHARRAYAGG-009"));
     assert(
         has_diagnostic(
             invalid_array_design,

@@ -2259,19 +2259,82 @@ namespace {
     std::optional<PackedTypeMetadata> compiled_systemverilog_packed_type(
         const semantic::CompiledDesign& compiled,
         const semantic::SpecializedHirUnit& working_specialization,
-        const semantic::sv::TypeReference& reference)
+        const semantic::sv::TypeReference& reference,
+        const std::vector<const semantic::SpecializedHirUnit*>&
+            type_owner_contexts)
     {
         std::unordered_set<std::uint32_t> visiting;
         std::unordered_set<std::string> substituting;
-        const semantic::CompiledDesignResolver type_resolver {
-            working_specialization
+        const auto owner_specialization = [&] (
+            const semantic::TypeId type_id,
+            const semantic::SpecializedHirUnit& fallback)
+            -> const semantic::SpecializedHirUnit* {
+            if (!type_id.valid()) {
+                return &fallback;
+            }
+            const auto definition = fallback.find_type(type_id);
+            if (!definition || definition->systemverilog == nullptr
+                || !definition->systemverilog->declaration.valid()) {
+                return &fallback;
+            }
+            const auto declaration = fallback.find_declaration(
+                definition->systemverilog->declaration);
+            if (!declaration || declaration->systemverilog == nullptr
+                || !declaration->systemverilog->scope.valid()) {
+                return &fallback;
+            }
+            const auto& scopes = compiled.semantics.scopes();
+            const auto owner_scope = std::ranges::find(
+                scopes,
+                declaration->systemverilog->scope,
+                &semantic::Scope::id);
+            if (owner_scope == scopes.end()) {
+                return &fallback;
+            }
+            const auto owner_unit = owner_scope->unit;
+            if (fallback.unit() == owner_unit) {
+                // The current unit is the lexical owner. If another
+                // occurrence of that same unit is an ancestor, the HIR
+                // reference alone cannot distinguish which specialization
+                // owns the actual; do not silently choose one.
+                for (const auto* candidate : type_owner_contexts) {
+                    if (candidate != nullptr
+                        && candidate != &fallback
+                        && candidate->unit() == owner_unit) {
+                        return nullptr;
+                    }
+                }
+                return &fallback;
+            }
+            const semantic::SpecializedHirUnit* owner { };
+            for (const auto* candidate : type_owner_contexts) {
+                if (candidate == nullptr
+                    || candidate->unit() != owner_unit) {
+                    continue;
+                }
+                if (owner != nullptr && owner != candidate) {
+                    // Same-unit ancestor occurrences have no unique owner
+                    // without a retained occurrence identity in the type
+                    // reference, so reject this metadata projection.
+                    return nullptr;
+                }
+                owner = candidate;
+            }
+            return owner != nullptr ? owner : &fallback;
         };
         const auto materialize = [&](const auto& self,
-                                     const semantic::sv::TypeReference& candidate)
+                                     const semantic::sv::TypeReference& candidate,
+                                     const semantic::SpecializedHirUnit& preferred_owner)
             -> std::optional<PackedTypeMetadata> {
+            const auto* const owner = owner_specialization(
+                candidate.target.target, preferred_owner);
+            if (owner == nullptr) {
+                return std::nullopt;
+            }
+            const semantic::CompiledDesignResolver type_resolver { *owner };
             const auto effective
                 = type_resolver.effective_systemverilog_type(
-                    candidate, working_specialization.scope());
+                    candidate, owner->scope());
             if (effective && *effective != candidate) {
                 const auto substitution_identity
                     = candidate.target.target.valid()
@@ -2282,7 +2345,7 @@ namespace {
                 if (!substituting.insert(substitution_identity).second) {
                     return std::nullopt;
                 }
-                auto result = self(self, *effective);
+                auto result = self(self, *effective, *owner);
                 substituting.erase(substitution_identity);
                 return result;
             }
@@ -2293,8 +2356,7 @@ namespace {
                 return std::nullopt;
             }
             const auto type_id = candidate.target.target;
-            const auto definition = working_specialization.find_type(
-                type_id);
+            const auto definition = owner->find_type(type_id);
             if (!definition
                 || definition->systemverilog == nullptr) {
                 visiting.erase(type_id.value());
@@ -2307,7 +2369,7 @@ namespace {
                     != semantic::sv::TypeForm::packed_union
                 && aggregate.form
                     != semantic::sv::TypeForm::tagged_union) {
-                auto result = self(self, aggregate.base);
+                auto result = self(self, aggregate.base, *owner);
                 visiting.erase(type_id.value());
                 return result;
             }
@@ -2318,7 +2380,7 @@ namespace {
                 semantic::sv::Declaration width_declaration;
                 width_declaration.type = member.type;
                 const auto width = hierarchy_sv_type_layout_detail::systemverilog_declaration_width(
-                    working_specialization, width_declaration);
+                    *owner, width_declaration);
                 if (!width || *width == 0U
                     || (aggregate.form
                             == semantic::sv::TypeForm::
@@ -2402,7 +2464,7 @@ namespace {
                 const auto& member = aggregate.members[index];
                 const auto member_type
                     = type_resolver.underlying_systemverilog_type(
-                                       member.type, working_specialization.scope())
+                                       member.type, owner->scope())
                           .value_or(member.type);
                 PackedMemberMetadata materialized;
                 materialized.name = member.name;
@@ -2429,14 +2491,12 @@ namespace {
                 if (member_type.packed_range) {
                     const auto& range = *member_type.packed_range;
                     const auto left = range.left_expression
-                        ? working_specialization
-                              .evaluate_integral_expression(
-                                  *range.left_expression)
+                        ? owner->evaluate_integral_expression(
+                              *range.left_expression)
                         : range.left;
                     const auto right = range.right_expression
-                        ? working_specialization
-                              .evaluate_integral_expression(
-                                  *range.right_expression)
+                        ? owner->evaluate_integral_expression(
+                              *range.right_expression)
                         : range.right;
                     if (left && right) {
                         materialized.packed_range
@@ -2445,7 +2505,7 @@ namespace {
                               };
                     }
                 }
-                if (auto nested = self(self, member.type)) {
+                if (auto nested = self(self, member.type, *owner)) {
                     materialized.nested_types.push_back(
                         std::move(*nested));
                 }
@@ -2455,7 +2515,8 @@ namespace {
             visiting.erase(type_id.value());
             return result;
         };
-        return materialize(materialize, reference);
+        return materialize(
+            materialize, reference, working_specialization);
     }
 
     std::optional<PackedLogic4> compiled_systemverilog_packed_default(
@@ -2729,8 +2790,8 @@ namespace {
         type_default = [&](const semantic::sv::TypeReference& type,
                            const std::size_t type_width)
             -> std::optional<PackedLogic4> {
-            const auto metadata = compiled_systemverilog_packed_type(compiled,
-                working_specialization, type);
+            const auto metadata = compiled_systemverilog_packed_type(
+                compiled, working_specialization, type, { });
             auto result = metadata
                 ? default_compiled_packed_value(*metadata, type_width)
                 : PackedLogic4 {
@@ -3106,7 +3167,14 @@ namespace {
                     auto array = std::make_shared<VhdlArrayMetadata>();
                     array->unconstrained = subtype.unconstrained
                         || subtype.constraints.empty();
-                    array->element_domain = result.domain;
+                    // STRING is represented as packed CHARACTER elements,
+                    // whose executable domain is BIT2 even when an
+                    // unconstrained STRING subtype retains the whole-value
+                    // STRING domain.
+                    array->element_domain
+                        = compiled_vhdl_name_equal(name, "string")
+                        ? frontend::ValueDomain::Bit2
+                        : result.domain;
                     array->element_spelling
                         = compiled_vhdl_name_equal(name, "string")
                         ? "character"
@@ -3169,6 +3237,16 @@ namespace {
                             element.domain = frontend::ValueDomain::Boolean;
                             element.packed_range
                                 = frontend::PackedRange { 0, 0, true };
+                        } else if (compiled_vhdl_name_equal(name, "string")) {
+                            // Keep the CHARACTER element layout on the
+                            // compiler-owned STRING array as well. Static
+                            // aggregate materialization then handles named
+                            // choices and CHARACTER'VAL values without
+                            // treating STRING as a whole integral scalar.
+                            element.spelling = "character";
+                            element.domain = frontend::ValueDomain::Bit2;
+                            element.packed_range
+                                = frontend::PackedRange { 7, 0, true };
                         } else {
                             return std::nullopt;
                         }
@@ -6482,6 +6560,16 @@ namespace {
         if (!effective || !layout || layout->width == 0U) {
             return std::nullopt;
         }
+        const auto type = compiled_vhdl_signal_type(
+            specialization, *effective, scope);
+        if (type && type->vhdl_array) {
+            if (const auto composite
+                = compiled_vhdl_static_composite_initializer(
+                    specialization, expression, *effective, scope,
+                    *type, layout->width)) {
+                return composite;
+            }
+        }
         return compiled_vhdl_static_port_value(
             specialization,
             expression,
@@ -6793,6 +6881,13 @@ namespace {
                 && !effective_subtype->type_mark.target.valid()
                 && compiled_vhdl_name_equal(
                     effective_subtype->type_mark.spelling, "bit_vector");
+            std::optional<std::string> string_value;
+            if (effective_subtype
+                && effective_subtype->domain
+                    == semantic::vhdl::ValueDomain::string) {
+                string_value = parent.evaluate_string_expression(
+                    *binding.expression);
+            }
             std::optional<std::int64_t> value;
             std::optional<PackedLogic4> composite;
             if (logic9_vector_formal || bit_vector_formal) {
@@ -6886,7 +6981,10 @@ namespace {
                         *formal->vhdl->subtype, formal->vhdl->scope);
                 }
             }
-            if (value) {
+            if (string_value) {
+                identity = semantic::systemverilog_string_identity(
+                    *string_value);
+            } else if (value) {
                 identity = compiled_vhdl_integral_identity(
                     *formal->vhdl, *value);
             } else if (composite) {
@@ -12591,7 +12689,7 @@ void HierarchyBuilder::add_root(
         static_cast<void>(instantiate_compiled_systemverilog_unit(
             CompiledSystemVerilogInstantiationContext {
                 *selected, active_root_, { }, { }, { }, { },
-                std::nullopt, std::nullopt }));
+                std::nullopt, std::nullopt, { } }));
         active_compiled_systemverilog_configuration_
             = saved_configuration;
         active_compiled_systemverilog_configuration_root_
@@ -12601,7 +12699,7 @@ void HierarchyBuilder::add_root(
     static_cast<void>(instantiate_compiled_systemverilog_unit(
         CompiledSystemVerilogInstantiationContext {
             root, active_root_, { }, { }, { }, { },
-            std::nullopt, std::nullopt }));
+            std::nullopt, std::nullopt, { } }));
 }
 
 std::optional<HierarchyBuilder::SystemVerilogAliasPlan>
@@ -13718,7 +13816,8 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
         const semantic::SpecializedHirUnit& working_specialization,
         const semantic::sv::TypeReference& reference) {
         return compiled_systemverilog_packed_type(
-            *compiled_, working_specialization, reference);
+            *compiled_, working_specialization, reference,
+            context.type_owner_contexts);
     };
     const auto systemverilog_packed_default = [&](
         const semantic::SpecializedHirUnit& working_specialization,
@@ -13757,6 +13856,7 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_unit(
         { },
         std::move(*root_alias_plan),
         { },
+        context.type_owner_contexts,
     };
     std::vector<PendingVirtualInterfaceInitializer>
         pending_virtual_interface_initializers;
@@ -14127,6 +14227,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_generated_scopes(
             ContainerDeclarationBindings {
                 &parent->container_declaration_bindings
             },
+            root_materialization.type_owner_contexts,
         };
         for (const auto declaration_id :
             occurrence.region->declarations) {
@@ -14896,6 +14997,8 @@ bool HierarchyBuilder::instantiate_compiled_systemverilog_instance_worklist(
                 .source_instance = dispatch.source_instance,
                 .prepared_specialization
                 = std::move(child_interface_specialization),
+                .type_owner_contexts
+                = materialization.type_owner_contexts,
             });
         active_compiled_systemverilog_configuration_
             = saved_configuration;
@@ -16184,6 +16287,7 @@ HierarchyBuilder::compiled_systemverilog_package_variable_signal(
         { },
         std::move(*alias_plan),
         { },
+        { },
     };
     std::vector<PendingVirtualInterfaceInitializer> pending;
     if (!materialize_compiled_systemverilog_declaration(
@@ -16885,9 +16989,28 @@ bool HierarchyBuilder::materialize_compiled_vhdl_declaration(
                 && declared_type->domain != frontend::ValueDomain::Unknown
             ? declared_type->domain
             : domain;
+        const auto unconstrained_array_alias = [&] {
+            if (alias_info == nullptr
+                || declaration.form != Form::port
+                || !declaration.subtype) {
+                return false;
+            }
+            const auto formal_type = compiled_vhdl_signal_type(
+                working_specialization, *declaration.subtype,
+                declaration.scope);
+            return formal_type && formal_type->vhdl_array
+                && !formal_type->vhdl_array->dimensions.empty()
+                && std::ranges::all_of(
+                    formal_type->vhdl_array->dimensions,
+                    [](const VhdlArrayDimensionMetadata& dimension) {
+                        return dimension.unconstrained
+                            && !dimension.range;
+                    });
+        }();
         const auto layout_mismatch = alias_info != nullptr
             && !inferred_port_subtype
-            && (alias_info->width != width
+            && ((alias_info->width != width
+                    && !unconstrained_array_alias)
                 || (alias_info->source_domain != domain
                     && alias_info->source_domain != declared_domain
                     && !state_domain_alias_provenance));
@@ -18551,13 +18674,11 @@ HierarchyBuilder::materialize_compiled_vhdl_generic_actuals(
                                    .evaluate_integral_expression(
                                        *binding.expression);
             auto static_value = layout && layout->width != 0U
-                ? compiled_vhdl_static_port_value(
+                ? compiled_vhdl_static_composite_value(
                       working_specialization,
                       *binding.expression,
                       *formal->vhdl->subtype,
-                      formal->vhdl->scope,
-                      layout->domain,
-                      layout->width)
+                      formal->vhdl->scope)
                 : std::nullopt;
             // A static REAL actual (IEEE 1076-2008 9.4.2).
             if (!value && !static_value && layout && layout->width == 64U) {
@@ -20712,18 +20833,6 @@ bool HierarchyBuilder::validate_compiled_vhdl_port_actual_compatibility(
             = actual_info.packed_members;
     }
     bool incompatible_alias { };
-    if (formal_layout
-        && formal_layout->width != actual_info.width) {
-        report(
-            "FSIM-ELAB-BIND-020",
-            "width mismatch on '" + child_path + "."
-                + formal_declaration.name + "': "
-                + std::to_string(formal_layout->width)
-                + " versus "
-                + std::to_string(actual_info.width),
-            connection_source);
-        incompatible_alias = true;
-    }
     const auto formal_type = compiled_vhdl_signal_type(
         *child_interface_specialization,
         *formal_declaration.subtype,
@@ -20774,19 +20883,98 @@ bool HierarchyBuilder::validate_compiled_vhdl_port_actual_compatibility(
             connection_source);
         return false;
     }
-    if (formal_type && actual_hir_type
+
+    const bool unconstrained_array_formal
+        = formal_type && unconstrained_array(*formal_type);
+    if (formal_layout
+        && formal_layout->width != actual_info.width
+        && !unconstrained_array_formal) {
+        report(
+            "FSIM-ELAB-BIND-020",
+            "width mismatch on '" + child_path + "."
+                + formal_declaration.name + "': "
+                + std::to_string(formal_layout->width)
+                + " versus "
+                + std::to_string(actual_info.width),
+            connection_source);
+        incompatible_alias = true;
+    }
+
+    const auto array_type_mismatch = [&] {
+        if (!formal_type || !actual_hir_type
+            || !array_type(*formal_type)
+            || !array_type(*actual_hir_type)) {
+            return false;
+        }
+        if (!formal_type->nominal_type.empty()
+            && !actual_hir_type->nominal_type.empty()) {
+            return formal_type->nominal_type
+                != actual_hir_type->nominal_type;
+        }
+        if (!formal_type->nominal_type.empty()
+            || !actual_hir_type->nominal_type.empty()) {
+            return false;
+        }
+        const auto builtin_array_identity = [](const std::string_view spelling)
+            -> std::optional<std::string_view> {
+            const auto name = simple_name_of(spelling);
+            if (compiled_vhdl_name_equal(name, "bit_vector")) {
+                return "bit_vector";
+            }
+            if (compiled_vhdl_name_equal(name, "boolean_vector")) {
+                return "boolean_vector";
+            }
+            if (compiled_vhdl_name_equal(name, "integer_vector")) {
+                return "integer_vector";
+            }
+            if (compiled_vhdl_name_equal(name, "real_vector")) {
+                return "real_vector";
+            }
+            if (compiled_vhdl_name_equal(name, "time_vector")) {
+                return "time_vector";
+            }
+            if (compiled_vhdl_name_equal(name, "string")) {
+                return "string";
+            }
+            if (compiled_vhdl_name_equal(name, "std_logic_vector")
+                || compiled_vhdl_name_equal(name, "std_ulogic_vector")) {
+                // IEEE 1164 declares STD_LOGIC_VECTOR as a resolved subtype
+                // of STD_ULOGIC_VECTOR, so both spellings have one base type.
+                return "std_ulogic_vector";
+            }
+            if (compiled_vhdl_name_equal(name, "signed")) {
+                return "signed";
+            }
+            if (compiled_vhdl_name_equal(name, "unsigned")) {
+                return "unsigned";
+            }
+            return std::nullopt;
+        };
+        const auto formal_builtin
+            = builtin_array_identity(formal_type->spelling);
+        const auto actual_builtin
+            = builtin_array_identity(actual_hir_type->spelling);
+        return formal_builtin && actual_builtin
+            && *formal_builtin != *actual_builtin;
+    }();
+    const bool nominal_type_mismatch = formal_type && actual_hir_type
         && !formal_type->nominal_type.empty()
         && !actual_hir_type->nominal_type.empty()
         && formal_type->nominal_type
-            != actual_hir_type->nominal_type) {
+            != actual_hir_type->nominal_type;
+    const bool enumeration_type_mismatch
+        = !array_type_mismatch && formal_type && actual_hir_type
+        && (!formal_type->enumeration_literals.empty()
+            || !actual_hir_type->enumeration_literals.empty());
+    if (nominal_type_mismatch || array_type_mismatch) {
         report(
-            !formal_type->enumeration_literals.empty()
-                    || !actual_hir_type
-                        ->enumeration_literals.empty()
-                ? "FSIM-ELAB-BIND-053"
-                : "FSIM-ELAB-BIND-057",
-            "nominal VHDL type mismatch on '" + child_path
-                + "." + formal_declaration.name + "'",
+            enumeration_type_mismatch
+                ? "FSIM-ELAB-BIND-053" : "FSIM-ELAB-BIND-057",
+            array_type_mismatch
+                ? "VHDL array type mismatch on '"
+                    + child_path + "." + formal_declaration.name + "'"
+                : "nominal VHDL type mismatch on '" + child_path
+                    + "." + formal_declaration.name + "'",
             connection_source);
         incompatible_alias = true;
     }
@@ -20822,6 +21010,12 @@ bool HierarchyBuilder::validate_compiled_vhdl_port_actual_compatibility(
         }
     }
     const auto formal_domain = formal_type
+            && formal_type->domain == frontend::ValueDomain::String
+            && formal_type->vhdl_array
+            && formal_type->vhdl_array->element_domain
+                != frontend::ValueDomain::Unknown
+        ? formal_type->vhdl_array->element_domain
+        : formal_type
         ? formal_type->domain
         : formal_layout
         ? formal_layout->domain
@@ -20853,7 +21047,13 @@ bool HierarchyBuilder::validate_compiled_vhdl_port_actual_compatibility(
     // A VHDL actual may share a signal that crossed a
     // state-domain boundary higher in the hierarchy. Keep its
     // selected HIR domain only when that alias is recorded.
-    const auto actual_domain = has_semantic_actual_domain
+    const auto actual_domain = actual_hir_type
+            && actual_hir_type->domain == frontend::ValueDomain::String
+            && actual_hir_type->vhdl_array
+            && actual_hir_type->vhdl_array->element_domain
+                != frontend::ValueDomain::Unknown
+        ? actual_hir_type->vhdl_array->element_domain
+        : has_semantic_actual_domain
         ? actual_hir_type->domain
         : actual_info.source_domain;
     const bool actual_domain_is_supported
@@ -23492,6 +23692,7 @@ bool HierarchyBuilder::instantiate_compiled_vhdl_unit(
                         .source_instance = record.id,
                         .prepared_specialization
                         = std::move(child_specialization),
+                        .type_owner_contexts = { },
                     })) {
                 return false;
             }

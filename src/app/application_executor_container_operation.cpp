@@ -8,6 +8,7 @@
 #include "fsim/runtime/string_methods.hpp"
 
 #include <algorithm>
+#include <limits>
 
 namespace fsim::app::application_detail {
 
@@ -19,6 +20,8 @@ namespace {
         = "\x1f" "fsim-vhdl-textio-read";
     constexpr std::string_view vhdl_textio_read_2008_marker
         = "\x1f" "fsim-vhdl-textio-read-2008";
+    constexpr std::string_view vhdl_textio_radix_read_2008_marker
+        = "\x1f" "fsim-vhdl-textio-radix-read-2008";
     constexpr std::string_view vhdl_textio_sread_marker
         = "\x1f" "fsim-vhdl-textio-sread";
 
@@ -31,6 +34,8 @@ namespace {
                     == vhdl_textio_read_marker
                 || operation.conversions.front().prefix
                     == vhdl_textio_read_2008_marker
+                || operation.conversions.front().prefix
+                    == vhdl_textio_radix_read_2008_marker
                 || operation.conversions.front().prefix
                     == vhdl_textio_sread_marker);
     }
@@ -294,13 +299,36 @@ std::uint32_t LlvmProcessExecutor::container_operation(
             return 0;
         } else if (const auto* method = fsim::runtime::simir::operation_get_if<runtime::simir::StringMethod>(&operation)) {
             auto& source = state.executor->string_registers_.at(method->source);
-            if (method->operation
-                    >= runtime::simir::StringMethodOperator::format_packed
-                && method->operation
-                    <= runtime::simir::StringMethodOperator::
-                        format_vhdl_time) {
-                const auto packed = method->operation
-                            == runtime::simir::StringMethodOperator::format_packed
+            const bool dynamic_string_field = method->operation
+                == runtime::simir::StringMethodOperator::format_string_dynamic_field;
+            const bool dynamic_packed_field = method->operation
+                == runtime::simir::StringMethodOperator::format_packed_dynamic_field;
+            const bool string_format = method->operation
+                    == runtime::simir::StringMethodOperator::format_string
+                || dynamic_string_field;
+            const bool packed_format = method->operation
+                    == runtime::simir::StringMethodOperator::format_packed
+                || dynamic_packed_field;
+            if (string_format || packed_format
+                || method->operation
+                    == runtime::simir::StringMethodOperator::format_time
+                || method->operation
+                    == runtime::simir::StringMethodOperator::format_vhdl_time) {
+                auto normalized = *method;
+                if (dynamic_string_field || dynamic_packed_field) {
+                    const auto width_register = dynamic_string_field
+                        ? method->first : method->second;
+                    const auto width = state.executor->read_register(
+                        width_register,
+                        runtime::simir::ProcessExecutor::native_register_width);
+                    normalized.minimum_width
+                        = runtime::simir::checked_vhdl_textio_field_width(
+                            width);
+                    normalized.operation = dynamic_string_field
+                        ? runtime::simir::StringMethodOperator::format_string
+                        : runtime::simir::StringMethodOperator::format_packed;
+                }
+                const auto packed = packed_format
                         || method->operation
                             == runtime::simir::StringMethodOperator::
                                 format_vhdl_time
@@ -313,9 +341,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                           runtime::simir::ProcessExecutor::native_register_width)
                     : runtime::PackedLogic4 { 1, runtime::Logic4::zero };
                 runtime::simir::execute_string_format(
-                    *method, source, packed,
-                    method->operation
-                            == runtime::simir::StringMethodOperator::format_string
+                    normalized, source, packed,
+                    string_format
                         ? std::string_view {
                               state.executor->string_registers_.at(method->argument) }
                         : std::string_view { },
@@ -427,11 +454,41 @@ std::uint32_t LlvmProcessExecutor::container_operation(
         if (const auto* scan = fsim::runtime::simir::operation_get_if<runtime::simir::FileScan>(&operation)) {
             runtime::simir::InputScanResult scanned;
             const bool vhdl_textio_line = vhdl_textio_read(*scan);
+            auto effective_scan = *scan;
+            if (vhdl_textio_line && !vhdl_textio_sread(*scan)) {
+                for (auto& conversion : effective_scan.conversions) {
+                    if (conversion.maximum_characters != 0U
+                        || conversion.format
+                            != runtime::simir::InputScanFormat::string) {
+                        continue;
+                    }
+                    std::size_t length { };
+                    if (conversion.target.kind
+                        == runtime::simir::InputScanTargetKind::string_register) {
+                        length = state.executor->read_string_register(
+                            conversion.target.id).size();
+                    } else if (conversion.target.kind
+                        == runtime::simir::InputScanTargetKind::string_object) {
+                        length = state.context->read_string_object(
+                            conversion.target.id).size();
+                    } else {
+                        continue;
+                    }
+                    if (length
+                        > std::numeric_limits<std::uint32_t>::max()) {
+                        throw compiler::LlvmJitError {
+                            "VHDL TextIO STRING target exceeds scan limit"
+                        };
+                    }
+                    conversion.maximum_characters
+                        = static_cast<std::uint32_t>(length);
+                }
+            }
             std::string* consumed_source { };
             if (scan->string_source) {
                 auto& source = state.executor->string_registers_.at(scan->source);
                 scanned = runtime::simir::scan_formatted_string(
-                    *scan, source);
+                    effective_scan, source);
                 consumed_source = &source;
                 if (scan->consume_string_source && !vhdl_textio_line) {
                     source.erase(0, std::min(source.size(), scanned.consumed));
@@ -448,7 +505,8 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                         };
                     }
                 };
-                scanned = runtime::simir::scan_formatted_input(*scan, read, unread);
+                scanned = runtime::simir::scan_formatted_input(
+                    effective_scan, read, unread);
             }
             const auto expected = static_cast<std::int32_t>(
                 std::ranges::count_if(
@@ -466,17 +524,18 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                     runtime::PackedLogic4::from_aval_bval(
                         1, complete ? 1U : 0U, 0));
             }
+            // TextIO removes each accepted character from LINE as it forms
+            // the representation. A later conversion failure does not
+            // restore that valid prefix; an invalid next character remains.
+            if (scan->consume_string_source && vhdl_textio_line
+                && consumed_source != nullptr) {
+                consumed_source->erase(0,
+                    std::min(consumed_source->size(), scanned.consumed));
+            }
             if (scan->require_assignments && !complete) {
                 throw compiler::LlvmJitError {
                     "VHDL file read did not convert the requested element"
                 };
-            }
-            // TextIO READ with GOOD leaves LINE unchanged on failure (IEEE
-            // 1076-2019 16.4); consume the parsed prefix only on success.
-            if (scan->consume_string_source && vhdl_textio_line && complete
-                && consumed_source != nullptr) {
-                consumed_source->erase(0,
-                    std::min(consumed_source->size(), scanned.consumed));
             }
             for (std::size_t index = 0; index < scanned.values.size(); ++index) {
                 if (!scanned.values[index])

@@ -1623,6 +1623,56 @@ namespace {
             return result;
         }
 
+        [[nodiscard]] bool is_known_macro_invocation(
+            const std::string_view name) const
+        {
+            return macros_.contains(std::string { name })
+                || name == "include" || name == "__FILE__"
+                || name == "__LINE__"
+                || systemverilog_coverage_constant(name).has_value();
+        }
+
+        // Rescan known macro calls after outer-argument substitution and
+        // before token concatenation. Keep unknown calls in the stream so a
+        // paste can form their name before the normal rescan.
+        [[nodiscard]] std::vector<Token>
+        expand_known_invocations_before_concatenation(
+            const std::vector<Token>& tokens,
+            const std::size_t depth,
+            const std::vector<std::string>& expansion_stack)
+        {
+            std::vector<Token> result;
+            std::size_t index = 0;
+            while (index < tokens.size()) {
+                if (index + 1 < tokens.size()
+                    && tokens[index].kind == TokenKind::Backtick
+                    && tokens[index + 1].kind == TokenKind::Backtick) {
+                    result.push_back(tokens[index++]);
+                    result.push_back(tokens[index++]);
+                    continue;
+                }
+                if (tokens[index].kind == TokenKind::Backtick
+                    && index + 1 < tokens.size()
+                    && tokens[index + 1].kind == TokenKind::Identifier) {
+                    const auto name = macro_identifier(tokens[index + 1].text);
+                    if (!is_known_macro_invocation(name)) {
+                        result.push_back(tokens[index++]);
+                        result.push_back(tokens[index++]);
+                        continue;
+                    }
+                    auto expanded = expand_invocation(
+                        tokens, index, depth, expansion_stack);
+                    result.insert(
+                        result.end(),
+                        std::make_move_iterator(expanded.begin()),
+                        std::make_move_iterator(expanded.end()));
+                    continue;
+                }
+                result.push_back(tokens[index++]);
+            }
+            return result;
+        }
+
         [[nodiscard]] std::vector<Token> select_replacement_conditionals(
             const Macro& macro,
             const SourceSpan& invocation,
@@ -1853,11 +1903,13 @@ namespace {
                     std::distance(macro.parameters->begin(), found));
             };
             const auto append_argument = [&](const std::size_t parameter) {
+                const auto expanded_argument = expand_sequence(
+                    arguments[parameter], depth + 1, expansion_stack);
                 for (std::size_t index = 0;
-                    index < arguments[parameter].size(); ++index) {
+                    index < expanded_argument.size(); ++index) {
                     // Tokens adjacent in their source stay adjacent in the
                     // string (IEEE 1800-2017 22.5.1).
-                    const auto& token = arguments[parameter][index];
+                    const auto& token = expanded_argument[index];
                     const auto word = [](const std::string_view text) {
                         return !text.empty()
                             && (std::isalnum(
@@ -1873,7 +1925,7 @@ namespace {
                                 || text.front() == '_' || text.front() == '$');
                     };
                     const auto* previous_token = index != 0
-                        ? &arguments[parameter][index - 1]
+                        ? &expanded_argument[index - 1]
                         : nullptr;
                     // Tokens expanded from a macro body share their
                     // invocation's span; separate only two words there.
@@ -1895,8 +1947,8 @@ namespace {
                     if (index != 0 && !adjacent) {
                         result.push_back(' ');
                     }
-                    append_escaped(arguments[parameter][index].text);
-                    retain_generated_text(arguments[parameter][index]);
+                    append_escaped(expanded_argument[index].text);
+                    retain_generated_text(expanded_argument[index]);
                 }
             };
 
@@ -2109,10 +2161,6 @@ namespace {
                 + location_text(macro.definition) + ", expanded at "
                 + location_text(invocation_span));
             expanding_.insert(macro.name);
-            auto expanded_arguments = arguments;
-            for (auto& argument : expanded_arguments) {
-                argument = expand_sequence(argument, depth + 1, expansion_stack);
-            }
             const auto replacement_tokens = select_replacement_conditionals(
                 macro, invocation_span, expansion_stack, arguments);
             std::vector<Token> substituted;
@@ -2131,7 +2179,7 @@ namespace {
                         if (auto stringified = stringify_replacement(
                                 std::string_view { string_token.text }.substr(
                                     1, string_token.text.size() - 3),
-                                macro, expanded_arguments, invocation_span, depth,
+                                macro, arguments, invocation_span, depth,
                                 expansion_stack)) {
                             substituted.push_back({ TokenKind::StringLiteral,
                                 std::move(stringified->first),
@@ -2158,7 +2206,7 @@ namespace {
                     }
                 }
                 if (parameter) {
-                    for (auto argument : expanded_arguments[*parameter]) {
+                    for (auto argument : arguments[*parameter]) {
                         argument.expansion_stack = expansion_stack;
                         substituted.push_back(std::move(argument));
                     }
@@ -2169,6 +2217,8 @@ namespace {
                     substituted.push_back(std::move(token));
                 }
             }
+            substituted = expand_known_invocations_before_concatenation(
+                substituted, depth + 1, expansion_stack);
             substituted = concatenate_tokens(
                 std::move(substituted), name_token, expansion_stack);
             auto expanded = expand_sequence(substituted, depth + 1, expansion_stack);

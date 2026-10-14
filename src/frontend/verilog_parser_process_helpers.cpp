@@ -2,6 +2,7 @@
 #include "verilog_parser_internal.hpp"
 
 #include <functional>
+#include <limits>
 
 namespace fsim::frontend {
 
@@ -856,14 +857,6 @@ Statement VerilogParser::parse_procedural_foreach_statement(
         }
     }
     statement.span = span_from(start, previous());
-    // With every loop variable omitted (`foreach (a[])`) no dimension is
-    // iterated, so the body never runs (12.7.3).
-    if (index_names.empty() && diagnostics_.size() == saved_diagnostics) {
-        Statement nothing;
-        nothing.kind = StatementKind::Null;
-        nothing.span = statement.span;
-        return nothing;
-    }
     // An array foreach runs as nested loops over each dimension's bounds
     // ($left to $right, IEEE 1800-2017 12.7.3 and 20.7); an associative
     // array iterates with first() and next(). A string collection keeps
@@ -889,6 +882,122 @@ Statement VerilogParser::parse_procedural_foreach_statement(
         ? collection_type->systemverilog_container.has_value()
         : statement.target.kind == ExpressionKind::Identifier
             && unit_container_names_.contains(statement.target.text);
+    const auto container_type = [&]() -> std::optional<Type> {
+        if (collection_type) {
+            return collection_type;
+        }
+        if (statement.target.kind == ExpressionKind::Identifier) {
+            if (const auto found = unit_foreach_types_.find(
+                    statement.target.text);
+                found != unit_foreach_types_.end()) {
+                return found->second;
+            }
+        }
+        return std::nullopt;
+    }();
+    const auto declared_array_rank = [](const auto& self, const Type& type,
+                                        const std::size_t depth)
+        -> std::optional<std::size_t> {
+        if (depth >= 64U) {
+            return std::nullopt;
+        }
+        std::size_t rank { };
+        const auto add_dimensions = [&rank](const std::size_t count) {
+            if (count > std::numeric_limits<std::size_t>::max() - rank) {
+                return false;
+            }
+            rank += count;
+            return true;
+        };
+        if (!add_dimensions(type.systemverilog_interface_array_dimensions.size())) {
+            return std::nullopt;
+        }
+        if (type.systemverilog_container) {
+            // The wrapper and its element Type both carry the element's packed
+            // shape. Count it once at the recursive leaf, after unpacked dims.
+            const auto& container = *type.systemverilog_container;
+            if (container.kind == SystemVerilogContainerKind::StaticArray) {
+                if (container.static_range_expressions.empty()
+                    || !add_dimensions(container.static_range_expressions.size())) {
+                    return std::nullopt;
+                }
+            } else if (!add_dimensions(1U)) {
+                return std::nullopt;
+            }
+            if (container.element_types.size() != 1U) {
+                return std::nullopt;
+            }
+            const auto nested_rank = self(
+                self, container.element_types.front(), depth + 1U);
+            if (!nested_rank || !add_dimensions(*nested_rank)) {
+                return std::nullopt;
+            }
+            return rank;
+        }
+        // Enum base/range shapes are not separately normalized here; keep the
+        // rank unknown until the parser preserves that distinction explicitly.
+        if (!type.enumeration_literals.empty()) {
+            return std::nullopt;
+        }
+        if (!type.systemverilog_packed_dimensions.empty()) {
+            if (!add_dimensions(type.systemverilog_packed_dimensions.size())) {
+                return std::nullopt;
+            }
+        } else if (type.packed_range_expression) {
+            if (!add_dimensions(1U)) {
+                return std::nullopt;
+            }
+        }
+        if (rank != 0U) {
+            return rank;
+        }
+        // Scalar bit/logic/reg declarations have no explicit packed range;
+        // unlike integer atoms, the parser's flexible-width descriptors do
+        // not attach a default packed storage range to them.
+        if (const auto descriptor =
+                systemverilog_integral_type_descriptor(type.spelling);
+            descriptor && descriptor->fixed_width) {
+            return std::nullopt;
+        }
+        // A user type with no retained range is unresolved here, not a known
+        // zero-dimensional scalar; don't reject loop positions from spelling
+        // or storage width alone.
+        if (!type.named_type.empty() || depth == 0U) {
+            return std::nullopt;
+        }
+        if (type.domain == ValueDomain::String
+            || type.systemverilog_scalar != SystemVerilogScalarKind::None
+            || !type.systemverilog_class_declaration.empty()
+            || type.systemverilog_virtual_interface
+            || !type.systemverilog_interface_type.empty()) {
+            return std::size_t { 0U };
+        }
+        if (type.domain == ValueDomain::Unknown
+            && type.packed_aggregate == PackedAggregateKind::None) {
+            return std::nullopt;
+        }
+        return std::size_t { 0U };
+    };
+    if (container_type && !string_collection) {
+        const auto rank = declared_array_rank(
+            declared_array_rank, *container_type, 0U);
+        if (rank && dimension_names.size() > *rank) {
+            error(start, "FSIM-SV-SEM-420",
+                "a foreach loop has " + std::to_string(dimension_names.size())
+                    + " loop-variable positions, but its array has "
+                    + std::to_string(*rank) + " dimensions");
+            return statement;
+        }
+    }
+    // With every loop variable omitted (`foreach (a[])`) no dimension is
+    // iterated, so the body never runs (12.7.3). Empty positions above still
+    // count toward the maximum number of array dimensions.
+    if (index_names.empty() && diagnostics_.size() == saved_diagnostics) {
+        Statement nothing;
+        nothing.kind = StatementKind::Null;
+        nothing.span = statement.span;
+        return nothing;
+    }
     if (language_ != Language::SystemVerilog2017 || string_collection
         || (standard_revision_ == StandardRevision::SystemVerilog2023
             && !known_container)
@@ -931,19 +1040,6 @@ Statement VerilogParser::parse_procedural_foreach_statement(
     // A collection whose dimensions all have fixed bounds is queried by
     // dimension number (unpacked dimensions first, then packed); others are
     // queried through the element selected by the outer indices.
-    const auto container_type = [&]() -> std::optional<Type> {
-        if (collection_type) {
-            return collection_type;
-        }
-        if (statement.target.kind == ExpressionKind::Identifier) {
-            if (const auto found = unit_container_types_.find(
-                    statement.target.text);
-                found != unit_container_types_.end()) {
-                return found->second;
-            }
-        }
-        return std::nullopt;
-    }();
     const auto fixed_bounds = [](const auto& self, const Type& type) -> bool {
         if (!type.systemverilog_container) {
             return true;

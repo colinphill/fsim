@@ -42,7 +42,7 @@ begin
 
     write(l, string'("TRUEsuffix"));
     read(l, boolean_value, good);
-    if good or l.all /= "TRUEsuffix" then
+    if good or l.all /= "" then
       failures := failures + 1;
     end if;
     deallocate(l);
@@ -57,7 +57,14 @@ begin
     b := "0000";
     write(l, string'("1x"));
     read(l, b, good);
-    if good or l.all /= "1x" then
+    if good or l.all /= "x" then
+      failures := failures + 1;
+    end if;
+    deallocate(l);
+
+    write(l, string'("10"));
+    read(l, b, good);
+    if good or l.all /= "" then
       failures := failures + 1;
     end if;
     deallocate(l);
@@ -78,14 +85,21 @@ begin
 
     write(l, string'("12"));
     read(l, r, good);
-    if good or l.all /= "12" then
+    if good or l.all /= "" then
       failures := failures + 1;
     end if;
     deallocate(l);
 
     write(l, string'("1.2E+"));
     read(l, r, good);
-    if good or l.all /= "1.2E+" then
+    if good or l.all /= "" then
+      failures := failures + 1;
+    end if;
+    deallocate(l);
+
+    write(l, string'("ABC"));
+    read(l, integer_value, good);
+    if good or l.all /= "ABC" then
       failures := failures + 1;
     end if;
     deallocate(l);

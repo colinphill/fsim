@@ -1045,10 +1045,9 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-PP-030` | error | A function-like macro receives the wrong number of arguments. |
 | `FSIM-SV-PP-031` | error | A Verilog preprocessing compilation unit contains no root files. |
 | `FSIM-SV-PP-032` | error | A no-argument state directive has trailing tokens. |
-| `FSIM-SV-PP-033` | error | `` `endcelldefine`` has no active `` `celldefine`` state. |
-| `FSIM-SV-PP-034` | error | `` `default_nettype`` has a missing, invalid, or trailing value. |
-| `FSIM-SV-PP-035` | error | `` `unconnected_drive`` does not contain exactly `pull0` or `pull1`. |
-| `FSIM-SV-PP-036` | error | `` `begin_keywords`` has a missing, unsupported, or trailing IEEE version string. |
+| `FSIM-SV-PP-034` | error | `` `default_nettype`` has a missing or invalid net-type value. |
+| `FSIM-SV-PP-035` | error | `` `unconnected_drive`` does not contain a valid `pull0` or `pull1` argument. |
+| `FSIM-SV-PP-036` | error | `` `begin_keywords`` has a missing, unsupported, or malformed IEEE version string. |
 | `FSIM-SV-PP-037` | error | `` `end_keywords`` has no matching `` `begin_keywords``. |
 | `FSIM-SV-PP-038` | error | A `` `begin_keywords`` region is unterminated. |
 | `FSIM-SV-PP-039` | error | A `` `line`` directive does not contain exactly a line number, quoted file name, and level. |
@@ -1059,7 +1058,6 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-SV-PP-044` | error | A macro is redefined with a different parameter list, defaults, or replacement. |
 | `FSIM-SV-PP-045` | error | Reserved legacy diagnostic; textual include semantics no longer emit an include-end conditional restriction. |
 | `FSIM-SV-PP-046` | error | Reserved legacy diagnostic; textual include semantics no longer emit a cross-file conditional restriction. |
-| `FSIM-SV-PP-047` | error | `` `celldefine`` is nested or repeated while already active. |
 | `FSIM-SV-PP-048` | error | `` `nounconnected_drive`` appears without active `` `unconnected_drive`` state. |
 | `FSIM-SV-PP-049` | error | A conditional directive embedded in a macro replacement is malformed or unmatched. |
 | `FSIM-SV-PP-050` | error | A macro replacement contains an unterminated conditional directive. |
@@ -1836,6 +1834,7 @@ scheduler.
 | `FSIM-SV-SEM-417` | error | An attribute value names something other than a parameter or genvar; it must be a constant expression (IEEE 1364-2005 3.8). |
 | `FSIM-SV-SEM-418` | error | A compilation-unit type declaration names an undeclared type, or a forward type declaration is never completed (IEEE 1800-2017 6.18). |
 | `FSIM-SV-SEM-419` | error | An overridable parameter's value names a specparam (IEEE 1800-2017 6.20.5). |
+| `FSIM-SV-SEM-420` | error | A foreach loop has more loop-variable positions than dimensions in its array (IEEE 1800-2017 12.7.3). |
 | `FSIM-SV-SEM-073` | error | A module or package declares the same bounded task name more than once. |
 | `FSIM-SV-SEM-075` | error | A bounded text-file system function has the wrong argument count. |
 | `FSIM-SV-SEM-076` | error | `$fdisplay` or `$fwrite` has a nonliteral, malformed, unsupported, or multi-value format. |
@@ -2451,6 +2450,8 @@ scheduler.
 | `FSIM-ELAB-VHARRAYAGG-007` | error | A VHDL array aggregate would implicitly lose four- or nine-state information in a two-state element. |
 | `FSIM-ELAB-VHARRAYAGG-008` | error | A VHDL array aggregate combines `others` with another choice in the same association. |
 | `FSIM-ELAB-VHARRAYAGG-009` | error | A VHDL array aggregate element value has an incompatible contextual subtype or state domain. |
+| `FSIM-ELAB-VHARRAYAGG-010` | error | An array-valued range choice has a direction different from the context-determined aggregate direction (IEEE 1076-2008 9.3.3.3). |
+| `FSIM-ELAB-VHARRAYAGG-011` | error | A VHDL array aggregate choice that is a null range is not its sole association with one choice (IEEE 1076-2008 9.3.3.3). |
 | `FSIM-ELAB-VHARRAYSEL-001` | error | A multidimensional or composite VHDL array selection has no concrete executable packed layout or representable shape. |
 | `FSIM-ELAB-VHARRAYSEL-002` | error | A runtime multidimensional VHDL array index is not an integer-family signed 32-bit value with representable bounds. |
 | `FSIM-ELAB-VHARRAYSEL-003` | error | A multidimensional VHDL array read or target index is outside its selected source dimension. |

@@ -283,12 +283,18 @@ template <typename Integer>
     if (logic9) {
         packed = packed.promoted_to_logic9();
     }
-    if (width > value.width && value.signed_value) {
+    if (width > value.width && value.width != 0U) {
         const auto sign = value.packed.get_logic9(value.width - 1U);
-        if (logic9) {
-            packed.fill(sign);
-        } else {
-            packed.fill(runtime::to_logic4(sign));
+        const auto sign_logic4 = runtime::to_logic4(sign);
+        const bool unsized_unknown_extension
+            = value.unsized
+            && (sign_logic4 == Logic4::x || sign_logic4 == Logic4::z);
+        if (unsized_unknown_extension || value.signed_value) {
+            if (logic9) {
+                packed.fill(sign);
+            } else {
+                packed.fill(sign_logic4);
+            }
         }
     }
     const auto copied = std::min(width, value.width);
@@ -1274,6 +1280,15 @@ private:
                 || record.text == "&&" || record.text == "||") {
                 return finish(1U);
             }
+            // Shift and exponentiation results have the left operand's
+            // expression width; the right operand never widens the result
+            // (IEEE 1800-2017 11.6.1).
+            if (record.text == "**" || record.text == "<<"
+                || record.text == "<<<" || record.text == ">>"
+                || record.text == ">>>") {
+                return finish(expression_width(
+                    record.operands.front(), visiting));
+            }
             const auto left = expression_width(
                 record.operands.front(), visiting);
             const auto right = expression_width(
@@ -1554,6 +1569,12 @@ private:
             return std::nullopt;
         }
         auto result = value_for_declaration(*selected);
+        // A declaration reference uses the value parameter's resolved or
+        // inferred type. Do not carry an unbased-unsized literal's contextual
+        // fill behavior across that declaration boundary (5.7.1, 6.20.2).
+        if (result) {
+            result->unsized = false;
+        }
         // A member of a structure parameter (`P.m`, IEEE 1800-2017 7.2.1).
         if (const auto dot = record.text.find('.');
             result && dot != std::string::npos) {
@@ -1748,6 +1769,14 @@ private:
             return std::optional<Value> { std::move(result) };
         }
         const auto width = std::max(left.width, right.width);
+        // Keep an unequal-width unbased fill on the common-operand path,
+        // which expands `'0`, `'1`, `'x`, or `'z` across the wider operand.
+        // This fast path's plain sign/zero extension would change that value.
+        if ((left.unsized && left.width == 1U && left.width < width)
+            || (right.unsized && right.width == 1U
+                && right.width < width)) {
+            return std::nullopt;
+        }
         // Operands extend as the expression's type: unsigned when either
         // is unsigned (IEEE 1800-2017 11.8.2).
         const auto signed_value = left.signed_value && right.signed_value;
@@ -1951,7 +1980,12 @@ private:
                     if (!both_signed && !negated) {
                         value.signed_value = false;
                     }
-                    if (value.width < *target) {
+                    // Leave one-bit unsized fill literals at their
+                    // self-determined width until common_operand() applies
+                    // their context-specific all-bit fill semantics.
+                    const bool unsized_fill
+                        = value.unsized && value.width == 1U;
+                    if (value.width < *target && !unsized_fill) {
                         value = resized(std::move(value), *target);
                     }
                     if (!both_signed) {
@@ -2057,12 +2091,9 @@ private:
             if (!right->known()) {
                 return make_unknown(left->width, left->signed_value);
             }
-            const auto count = right->signed_value
-                ? numeric_integer(*right) : unsigned_integer(*right);
-            if (count < 0) {
-                error_ = "constant shift count must be nonnegative";
-                return std::nullopt;
-            }
+            // The self-determined shift operand is unsigned, even when its
+            // declaration or literal is signed (IEEE 1800-2017 11.4.10).
+            const auto count = unsigned_integer(*right);
             auto result = *left;
             auto packed = PackedLogic4 { result.width, Logic4::zero };
             const auto amount = count >= result.width
@@ -2595,6 +2626,17 @@ private:
                             frontend::ValueDomain::Integer);
                     }
                 }
+            }
+        }
+        // $bits is determined by the expression's type, not by the width
+        // of the value produced while evaluating it. This matters for enum
+        // literal declarations whose initializer has a different width from
+        // the literal's enum subtype (IEEE 1800-2017 20.6.2).
+        if (record.text == "$bits" && record.operands.size() == 1U) {
+            if (const auto width = expression_width(record.operands.front());
+                width && *width != 0U) {
+                return make_known(*width, 32U, true, false,
+                    frontend::ValueDomain::Integer);
             }
         }
         const auto operand = evaluate(record.operands.front());

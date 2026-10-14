@@ -614,6 +614,49 @@ endmodule
         "foreach over a string stays a runtime loop; an array foreach is "
         "rewritten into nested loops");
 
+    const auto packed_foreach = parse_verilog(
+        SourceText { "foreach_packed_dimensions.sv",
+        R"(
+module foreach_packed_dimensions;
+  logic matrix[1:0][1:0];
+  logic [3:0][2:1] packed_dimensions;
+  initial begin
+    foreach (matrix[, column])
+      matrix[0][column] = column;
+    foreach (packed_dimensions[packed_i, packed_j]) begin end
+  end
+endmodule
+)" },
+        StandardRevision::SystemVerilog2017);
+    require(
+        packed_foreach.ok(),
+        "foreach counts omitted positions and explicit packed dimensions");
+
+    const auto excess_foreach = parse_verilog(
+        SourceText { "foreach_excess_dimensions.sv",
+        R"(
+module foreach_excess_dimensions;
+  logic one_dimension[10];
+  logic [3:0][2:1] packed_dimensions;
+  logic [3:0] packed_vector;
+  initial begin
+    foreach (one_dimension[i, j]) begin end
+    foreach (one_dimension[, k]) begin end
+    foreach (packed_dimensions[packed_i, packed_j]) begin end
+    foreach (packed_vector[packed_i, packed_j]) begin end
+  end
+endmodule
+)" },
+        StandardRevision::SystemVerilog2017);
+    require(
+        !excess_foreach.ok()
+            && std::ranges::count_if(
+                excess_foreach.diagnostics,
+                [](const Diagnostic& diagnostic) {
+                    return diagnostic.code == "FSIM-SV-SEM-420";
+                }) == 3,
+        "foreach rejects excess positions for explicit unpacked and packed arrays");
+
     const auto selected_foreach = parse_verilog(
         SourceText { "selected_foreach.sv",
         R"(

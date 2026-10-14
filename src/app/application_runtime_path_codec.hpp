@@ -68,7 +68,7 @@ deserialize_runtime_path_state(
     const semantic::HierarchyPathTable* external_paths,
     diagnostic::Engine& diagnostics);
 
-/// Decode the schema-72 runtime form without constructing public Process
+/// Decode the runtime form without constructing public Process
 /// facades. The artifact loader validates and installs these rows directly.
 [[nodiscard]] std::optional<DecodedRuntimeProgramState>
 deserialize_runtime_program_state(

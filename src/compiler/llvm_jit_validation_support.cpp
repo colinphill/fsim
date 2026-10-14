@@ -380,13 +380,17 @@ std::optional<std::string> validate_string_method_metadata(
     const auto kind = operation.operation;
     if (!string_register(operation.source))
         return "StringMethod source string register is out of range";
-    if (kind > StringMethodOperator::vhdl_enumeration_value)
+    if (kind > StringMethodOperator::format_string_dynamic_field)
         return "StringMethod kind is invalid";
+    const bool packed_format = kind == StringMethodOperator::format_packed
+        || kind == StringMethodOperator::format_packed_dynamic_field;
+    const bool string_format = kind == StringMethodOperator::format_string
+        || kind == StringMethodOperator::format_string_dynamic_field;
     const auto formatted_width = formatted_value_width(
         operation.format, operation.scalar_kind);
-    if (kind == StringMethodOperator::format_packed && !formatted_width)
+    if (packed_format && !formatted_width)
         return "StringMethod format metadata is inconsistent";
-    if (kind != StringMethodOperator::format_packed
+    if (!packed_format
         && operation.scalar_kind != runtime::SystemVerilogScalarKind::None)
         return "StringMethod scalar metadata is unexpected";
     const bool string_result = kind == StringMethodOperator::toupper
@@ -407,12 +411,12 @@ std::optional<std::string> validate_string_method_metadata(
         registers.push_back({ operation.destination, 64U, true });
     if (kind == StringMethodOperator::getc || kind == StringMethodOperator::putc
         || kind == StringMethodOperator::substr
-        || kind == StringMethodOperator::format_packed
+        || packed_format
         || kind == StringMethodOperator::format_vhdl_time
         || (kind >= StringMethodOperator::itoa
             && kind <= StringMethodOperator::realtoa))
         registers.push_back({ operation.first,
-            kind == StringMethodOperator::format_packed
+            packed_format
                 ? *formatted_width
                 : kind == StringMethodOperator::realtoa
                     || kind == StringMethodOperator::format_vhdl_time
@@ -422,13 +426,19 @@ std::optional<std::string> validate_string_method_metadata(
     if (kind == StringMethodOperator::compare
         || kind == StringMethodOperator::icompare
         || kind == StringMethodOperator::vhdl_enumeration_value
-        || kind == StringMethodOperator::format_string) {
+        || string_format) {
         if (!string_register(operation.argument))
             return "StringMethod argument string register is out of range";
     }
     if (kind == StringMethodOperator::putc || kind == StringMethodOperator::substr
-        || kind == StringMethodOperator::format_packed)
-        registers.push_back({ operation.second, 32U, false });
+        || packed_format)
+        registers.push_back({ operation.second,
+            kind == StringMethodOperator::format_packed_dynamic_field
+                ? 64U
+                : 32U,
+            false });
+    if (kind == StringMethodOperator::format_string_dynamic_field)
+        registers.push_back({ operation.first, 64U, false });
     return std::nullopt;
 }
 

@@ -252,6 +252,9 @@ int main() {
       [&](const std::string_view revision) {
         std::ofstream output{package_source};
         output << "-- " << revision << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 package Subtype_Types is
   subtype Word_T is std_logic_vector(3 downto 0);
   subtype Signed_Word_T is signed(3 downto 0);
@@ -273,6 +276,8 @@ end package;
   {
     std::ofstream output{child_source};
     output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
 use work.subtype_types.all;
 entity Subtype_Child is
   generic (
@@ -310,10 +315,11 @@ use work.subtype_types.all;
 entity Subtype_Top is
 end entity;
 
+library ieee;
 use work.subtype_types.all;
 architecture rtl of subtype_top is
   subtype Actual_Count_T is Count_T range 4 to 7;
-  subtype Wide_Word_T is std_logic_vector(5 downto 0);
+  subtype Wide_Word_T is ieee.std_logic_1164.std_logic_vector(5 downto 0);
   subtype Local_Packet_T is Packet_Alias_T;
   signal source : Word_T;
   signal result : Word_T;

@@ -13,6 +13,38 @@ architecture sim of vhdl_aggregate_assignment_targets is
   subtype word_t is bit_vector(1 downto 0);
   subtype char_pair_t is string(1 to 2);
   signal output_word : word_t := "00";
+  constant descending_input : bit_vector(9 downto 7) := "110";
+  constant ascending_input : bit_vector(4 to 6) := "100";
+
+  function split_descending(value : bit_vector) return bit is
+    variable prefix : bit_vector(9 downto 8);
+    variable final_bit : bit;
+  begin
+    (prefix, final_bit) := value;
+    assert prefix = "11" and final_bit = '0'
+      report "FAIL descending mixed-width aggregate target" severity failure;
+    return final_bit;
+  end function;
+
+  function split_ascending(value : bit_vector) return bit is
+    variable prefix : bit_vector(8 to 9);
+    variable final_bit : bit;
+  begin
+    (prefix, final_bit) := value;
+    assert prefix = "10" and final_bit = '0'
+      report "FAIL ascending mixed-width aggregate target" severity failure;
+    return final_bit;
+  end function;
+
+  function split_aliased_target return bit is
+    variable value : bit_vector(5 downto 3) := "110";
+  begin
+    (value(4 downto 3), value(5)) := value;
+    assert value = "011"
+      report "FAIL mixed-width aggregate target snapshots aliased RHS"
+      severity failure;
+    return value(5);
+  end function;
 begin
   process
     variable calls : natural := 0;
@@ -30,6 +62,13 @@ begin
       return word_t'("10");
     end function;
   begin
+    assert split_descending(descending_input) = '0'
+      report "FAIL descending mixed-width aggregate result" severity error;
+    assert split_ascending(ascending_input) = '0'
+      report "FAIL ascending mixed-width aggregate result" severity error;
+    assert split_aliased_target = '0'
+      report "FAIL mixed-width aggregate target alias result" severity error;
+
     (first_value, second_value) := word_t'('0', '1');
     assert first_value = '0' and second_value = '1'
       report "FAIL qualified positional tuple" severity error;

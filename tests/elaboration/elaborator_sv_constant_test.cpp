@@ -288,6 +288,36 @@ module typed_constant_top import wide_constant_values::*; #(
   parameter logic WIDE_CASE_DIFFERENT =
       128'h8000000000000000000000000000000x
       === 128'h8000000000000000000000000000000z,
+  parameter logic FILL_ZERO_4 = (4'h0 === '0),
+  parameter logic FILL_ONE_4 = (4'hf === '1),
+  parameter logic FILL_ONE_NOT_EQUAL_4 = (4'hf !== '1),
+  parameter logic FILL_ONE_MISMATCH_4 = (4'he !== '1),
+  parameter logic FILL_X_4 = (4'hx === 'x),
+  parameter logic FILL_Z_4 = (4'hz === 'z),
+  parameter logic FILL_X_MISMATCH_4 = (4'bxxx0 !== 'x),
+  parameter logic FILL_SIGNED_4 = ($signed(4'hf) === '1),
+  parameter logic FILL_ZERO_64 = ({64{1'b0}} === '0),
+  parameter logic FILL_ONE_64 = ({64{1'b1}} === '1),
+  parameter logic FILL_X_64 = ({64{1'bx}} === 'x),
+  parameter logic FILL_Z_64 = ({64{1'bz}} === 'z),
+  parameter logic FILL_ZERO_128 = ({128{1'b0}} === '0),
+  parameter logic FILL_ONE_128 = ({128{1'b1}} === '1),
+  parameter logic FILL_X_128 = ({128{1'bx}} === 'x),
+  parameter logic FILL_Z_128 = ({128{1'bz}} === 'z),
+  parameter logic SIGNED_UNSIGNED_CASE_CONTROL =
+      ($signed(8'hff) === $unsigned(8'hff)),
+  parameter logic UNSIGNED_SHIFT_COUNT_CONTROL =
+      ((8'h01 << 8'shff) === 8'h00),
+  parameter logic [4:0] SIGNED_LOGICAL_SHIFT_VALUE = 5'sb10110 >> 2,
+  parameter int SIGNED_LOGICAL_SHIFT_BITS = $bits(5'sb10110 >> 2),
+  parameter logic SIGNED_LOGICAL_SHIFT_MATCH =
+      ((5'sb10110 >> 2) === 5'b00101),
+  parameter logic [67:0] UNSIZED_DECIMAL_X = 'dX,
+  parameter logic [67:0] UNSIZED_DECIMAL_Z = 'dZ,
+  parameter logic UNSIZED_DECIMAL_X_MATCH =
+      (68'hx_xxxxxxxxxxxxxxxx === 'dX),
+  parameter logic UNSIZED_DECIMAL_Z_MATCH =
+      (68'hz_zzzzzzzzzzzzzzzz === 'dZ),
   parameter logic WIDE_WILDCARD_EQUAL =
       128'h8000000000000000000000000000000x
       ==? 128'h8???????????????????????????????,
@@ -388,6 +418,9 @@ module typed_constant_top import wide_constant_values::*; #(
   parameter int CAST_WIDTH = 3
 ) ();
   typedef logic [127:0] local_wide_t;
+  typedef enum logic [2:0] { enum_state[8] } enum_state_t;
+  localparam int ENUM_LITERAL_BITS = $bits(enum_state0);
+  localparam bit ENUM_LITERAL_BITS_MATCH = ($bits(enum_state0) == 3);
   localparam local_wide_t WIDE_NAMED_CAST =
       local_wide_t'(64'h0123456789abcdef);
   localparam logic [63:0] WIDE_NAMED_CAST_HIGH =
@@ -582,6 +615,51 @@ endmodule
     assert(parameter_value(*top, "WIDE_EQUAL") == "1");
     assert(parameter_value(*top, "WIDE_CASE_EQUAL") == "1");
     assert(parameter_value(*top, "WIDE_CASE_DIFFERENT") == "0");
+    assert(parameter_value(*top, "FILL_ZERO_4") == "1");
+    assert(parameter_value(*top, "FILL_ONE_4") == "1");
+    assert(parameter_value(*top, "FILL_ONE_NOT_EQUAL_4") == "0");
+    assert(parameter_value(*top, "FILL_ONE_MISMATCH_4") == "1");
+    assert(parameter_value(*top, "FILL_X_4") == "1");
+    assert(parameter_value(*top, "FILL_Z_4") == "1");
+    assert(parameter_value(*top, "FILL_X_MISMATCH_4") == "1");
+    assert(parameter_value(*top, "FILL_SIGNED_4") == "1");
+    assert(parameter_value(*top, "FILL_ZERO_64") == "1");
+    assert(parameter_value(*top, "FILL_ONE_64") == "1");
+    assert(parameter_value(*top, "FILL_X_64") == "1");
+    assert(parameter_value(*top, "FILL_Z_64") == "1");
+    assert(parameter_value(*top, "FILL_ZERO_128") == "1");
+    assert(parameter_value(*top, "FILL_ONE_128") == "1");
+    assert(parameter_value(*top, "FILL_X_128") == "1");
+    assert(parameter_value(*top, "FILL_Z_128") == "1");
+    assert(parameter_value(*top, "SIGNED_UNSIGNED_CASE_CONTROL") == "1");
+    assert(parameter_value(*top, "UNSIGNED_SHIFT_COUNT_CONTROL") == "1");
+    assert(parameter_value(*top, "SIGNED_LOGICAL_SHIFT_VALUE") == "5");
+    const auto signed_shift_identity
+        = parameter_identity(*top, "SIGNED_LOGICAL_SHIFT_VALUE");
+    assert(signed_shift_identity.find(":w=5:") != std::string::npos);
+    assert(signed_shift_identity.ends_with(":v=00101"));
+    assert(parameter_value(*top, "SIGNED_LOGICAL_SHIFT_BITS") == "5");
+    assert(parameter_value(*top, "SIGNED_LOGICAL_SHIFT_MATCH") == "1");
+    const auto unsized_decimal_x
+        = std::string { "68'b" } + std::string(68, 'x');
+    const auto unsized_decimal_z
+        = std::string { "68'b" } + std::string(68, 'z');
+    assert(parameter_value(*top, "UNSIZED_DECIMAL_X") == unsized_decimal_x);
+    assert(parameter_value(*top, "UNSIZED_DECIMAL_Z") == unsized_decimal_z);
+    for (const auto name : { "UNSIZED_DECIMAL_X", "UNSIZED_DECIMAL_Z" }) {
+        assert(parameter_identity(*top, name).find(":w=68:")
+            != std::string::npos);
+    }
+    assert(parameter_value(*top, "UNSIZED_DECIMAL_X_MATCH") == "1");
+    assert(parameter_value(*top, "UNSIZED_DECIMAL_Z_MATCH") == "1");
+    assert(parameter_value(*top, "ENUM_LITERAL_BITS") == "3");
+    const auto enum_literal_bits_identity
+        = parameter_identity(*top, "ENUM_LITERAL_BITS");
+    assert(enum_literal_bits_identity.find(":w=32:s=1:")
+        != std::string::npos);
+    assert(enum_literal_bits_identity.ends_with(
+        std::string { ":v=" } + std::string(30, '0') + "11"));
+    assert(parameter_value(*top, "ENUM_LITERAL_BITS_MATCH") == "1");
     assert(parameter_value(*top, "WIDE_WILDCARD_EQUAL") == "1");
     assert(parameter_value(*top, "WIDE_WILDCARD_NOT_EQUAL") == "0");
     assert(parameter_value(*top, "WIDE_WILDCARD_UNKNOWN") == "1'bx");

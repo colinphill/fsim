@@ -1037,8 +1037,10 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
           member_type.packed_range, member_type.is_signed,
           member_type.packed_range_expression, 0,
           cover(member_start.span, previous().span),
-          member_type.named_type.empty() ? std::vector<Type>{}
-                                         : std::vector<Type>{member_type},
+          member_type.named_type.empty() && !member_type.integer_range
+                  && !member_type.integer_range_expression
+              ? std::vector<Type>{}
+              : std::vector<Type>{member_type},
           std::nullopt});
       if (member_type.domain == ValueDomain::Logic9) {
         type.domain = ValueDomain::Logic9;

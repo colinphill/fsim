@@ -2103,6 +2103,30 @@ std::optional<TypeId> CompiledDesignResolver::resolve_vhdl_named_type(
     std::optional<TypeId> selected;
     int selected_score = std::numeric_limits<int>::min();
     bool ambiguous { };
+    std::optional<std::size_t> selected_lexical_distance;
+    const auto lexical_distance_for = [&](const ScopeId declaration_scope)
+        -> std::optional<std::size_t> {
+        if (!owner_scope) {
+            return std::nullopt;
+        }
+        auto active = *owner_scope;
+        std::size_t distance { };
+        for (std::size_t depth { };
+             active.valid()
+                 && depth <= design_->semantics.scopes().size();
+             ++depth) {
+            if (active == declaration_scope) {
+                return distance;
+            }
+            const auto* active_scope = find_scope(*design_, active);
+            if (active_scope == nullptr || !active_scope->parent) {
+                break;
+            }
+            active = *active_scope->parent;
+            ++distance;
+        }
+        return std::nullopt;
+    };
     for (const auto& stored : design_->vhdl_hir.types()) {
         const auto type = find_type(stored.id);
         if (!type || type->vhdl == nullptr
@@ -2128,6 +2152,21 @@ std::optional<TypeId> CompiledDesignResolver::resolve_vhdl_named_type(
         }
         const auto same_unit = owner != nullptr && scope != nullptr
             && owner->unit == scope->unit;
+        std::optional<std::size_t> ancestor_distance;
+        if (owner_scope && same_unit) {
+            ancestor_distance = lexical_distance_for(
+                declaration->vhdl->scope);
+            // Declarations in a nested sibling or descendant region are not
+            // visible at this use site, even when they belong to the same
+            // design unit.
+            if (!ancestor_distance) {
+                continue;
+            }
+        }
+        const auto lexical_rank_distance
+            = owner_scope && qualifier.empty() && same_unit
+            ? ancestor_distance
+            : std::optional<std::size_t> { };
         const auto visible_package = qualifier.empty()
             && owner_vhdl != nullptr && candidate_vhdl != nullptr
             && vhdl_package_member_visible(
@@ -2193,13 +2232,33 @@ std::optional<TypeId> CompiledDesignResolver::resolve_vhdl_named_type(
         if (definition.form != vhdl::TypeForm::protected_body) {
             score += 10;
         }
-        if (score > selected_score) {
-            selected = definition.id;
-            selected_score = score;
-            ambiguous = false;
-        } else if (score == selected_score
-            && selected != definition.id) {
-            ambiguous = true;
+        if (lexical_rank_distance) {
+            if (!selected_lexical_distance
+                || *lexical_rank_distance < *selected_lexical_distance) {
+                selected = definition.id;
+                selected_score = score;
+                selected_lexical_distance = lexical_rank_distance;
+                ambiguous = false;
+            } else if (*lexical_rank_distance
+                    == *selected_lexical_distance) {
+                if (score > selected_score) {
+                    selected = definition.id;
+                    selected_score = score;
+                    ambiguous = false;
+                } else if (score == selected_score
+                    && selected != definition.id) {
+                    ambiguous = true;
+                }
+            }
+        } else if (!selected_lexical_distance) {
+            if (score > selected_score) {
+                selected = definition.id;
+                selected_score = score;
+                ambiguous = false;
+            } else if (score == selected_score
+                && selected != definition.id) {
+                ambiguous = true;
+            }
         }
     }
     return ambiguous ? std::nullopt : selected;

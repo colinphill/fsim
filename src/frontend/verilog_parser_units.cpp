@@ -23,7 +23,7 @@ DesignUnit VerilogParser::parse_package(const Token& start) {
     unit_container_names_.clear();
     unit_string_names_.clear();
     unit_associative_index_types_.clear();
-    unit_container_types_.clear();
+    unit_foreach_types_.clear();
   port_type_refinements_.clear();
   implicit_net_references_.clear();
   container_iterator_names_.clear();

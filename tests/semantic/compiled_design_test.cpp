@@ -9198,6 +9198,106 @@ void test_compiled_vhdl_predefined_subtype_fast_path()
     auto unknown = scalar;
     unknown.type_mark.spelling = "user_defined";
     assert_equivalent(unknown);
+
+    // The resolver's fallback domain can inherit the spelling of a local
+    // array named STRING. The constant string evaluator must still inspect
+    // the retained declaration owner before treating a qualification as the
+    // predefined STD.STANDARD.STRING type.
+    LinkBundleBuilder shadow_builder {
+        "resolver-string-shadow.vhd"
+    };
+    const auto shadow_unit = shadow_builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity,
+        "string_shadow");
+    const auto shadow_scope
+        = shadow_builder.model.units()[shadow_unit.value()].scope;
+    const auto shadow_declaration = shadow_builder.model.add_declaration(
+        shadow_scope, DeclarationKind::type, "string",
+        shadow_builder.source, shadow_builder.origin);
+    TypeReference shadow_base;
+    shadow_base.source = shadow_builder.source;
+    shadow_base.spelling = "string";
+    const auto shadow_type = shadow_builder.model.add_type(
+        shadow_scope, TypeKind::declaration, "string", shadow_base,
+        shadow_builder.source, shadow_builder.origin);
+    vhdl::Declaration shadow_type_declaration;
+    shadow_type_declaration.id = shadow_declaration;
+    shadow_type_declaration.scope = shadow_scope;
+    shadow_type_declaration.form = vhdl::DeclarationForm::type;
+    shadow_type_declaration.name = "string";
+    shadow_type_declaration.declared_type = shadow_type;
+    shadow_type_declaration.source = shadow_builder.source;
+    shadow_type_declaration.origin = shadow_builder.origin;
+    shadow_builder.vhdl_hir.mutable_declarations().push_back(
+        std::move(shadow_type_declaration));
+    shadow_builder.vhdl_unit(shadow_unit).declarations.push_back(
+        shadow_declaration);
+    vhdl::TypeDefinition shadow_definition;
+    shadow_definition.id = shadow_type;
+    shadow_definition.declaration = shadow_declaration;
+    shadow_definition.form = vhdl::TypeForm::array;
+    shadow_definition.name = "string";
+    shadow_definition.source = shadow_builder.source;
+    shadow_definition.origin = shadow_builder.origin;
+    shadow_definition.element_subtype.emplace();
+    shadow_definition.element_subtype->type_mark.spelling = "bit";
+    shadow_definition.element_subtype->type_mark.source
+        = shadow_builder.source;
+    shadow_definition.element_subtype->domain = vhdl::ValueDomain::bit2;
+    shadow_definition.element_subtype->executable_width = 1U;
+    vhdl::ArrayDimension shadow_dimension;
+    shadow_dimension.index_subtype.spelling = "natural";
+    shadow_dimension.unconstrained = true;
+    shadow_dimension.source = shadow_builder.source;
+    shadow_definition.array_dimensions.push_back(shadow_dimension);
+    shadow_builder.vhdl_hir.mutable_types().push_back(
+        std::move(shadow_definition));
+
+    const auto shadow_literal_id
+        = shadow_builder.model.add_expression_identity(
+            shadow_scope, shadow_builder.source, shadow_builder.origin);
+    vhdl::Expression shadow_literal;
+    shadow_literal.id = shadow_literal_id;
+    shadow_literal.scope = shadow_scope;
+    shadow_literal.kind = vhdl::ExpressionKind::string_literal;
+    shadow_literal.text = "\"not-a-predefined-string\"";
+    shadow_literal.decoded_string = "not-a-predefined-string";
+    shadow_literal.source = shadow_builder.source;
+    shadow_literal.origin = shadow_builder.origin;
+    shadow_builder.vhdl_hir.mutable_expressions().push_back(
+        std::move(shadow_literal));
+    const auto shadow_qualified_id
+        = shadow_builder.model.add_expression_identity(
+            shadow_scope, shadow_builder.source, shadow_builder.origin);
+    vhdl::Expression shadow_qualified;
+    shadow_qualified.id = shadow_qualified_id;
+    shadow_qualified.scope = shadow_scope;
+    shadow_qualified.kind = vhdl::ExpressionKind::call;
+    shadow_qualified.text = "@vhdl-qualified:string";
+    shadow_qualified.operands = { shadow_literal_id };
+    shadow_qualified.source = shadow_builder.source;
+    shadow_qualified.origin = shadow_builder.origin;
+    shadow_builder.vhdl_hir.mutable_expressions().push_back(
+        std::move(shadow_qualified));
+
+    auto shadow_design = shadow_builder.finish();
+    assert(shadow_design.valid());
+    const CompiledDesignResolver shadow_resolver {
+        shadow_design, shadow_unit
+    };
+    vhdl::SubtypeIndication shadow_mark;
+    shadow_mark.type_mark.spelling = "string";
+    const auto effective_shadow = shadow_resolver.effective_vhdl_subtype(
+        shadow_mark, shadow_scope);
+    assert(effective_shadow
+        && effective_shadow->type_mark.target == shadow_type
+        && effective_shadow->domain == vhdl::ValueDomain::string);
+    const std::array<SpecializedHirActualIdentity, 0> shadow_actuals { };
+    const auto specialized_shadow = make_specialized_hir_unit(
+        shadow_design, shadow_unit, shadow_actuals);
+    assert(specialized_shadow
+        && !specialized_shadow->evaluate_string_expression(
+            shadow_qualified_id));
 }
 
 void test_vhdl_builtin_std_logic_1164_provenance()
@@ -10052,6 +10152,80 @@ void test_compiled_vhdl_scope_name_index_resolution()
     assert(stale_original.unique() == second_overload);
 }
 
+void test_compiled_vhdl_named_type_lexical_visibility()
+{
+    LinkBundleBuilder builder { "resolver-vhdl-named-type-visibility.vhd" };
+    const auto unit = builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity, "Named_Type_Scopes");
+    const auto root_scope = builder.model.units()[unit.value()].scope;
+    const auto outer_scope = builder.model.add_scope(
+        unit, root_scope, "outer", builder.source, builder.origin);
+    const auto inner_scope = builder.model.add_scope(
+        unit, outer_scope, "inner", builder.source, builder.origin);
+    const auto sibling_scope = builder.model.add_scope(
+        unit, outer_scope, "sibling", builder.source, builder.origin);
+    const auto add_type = [&](const ScopeId scope,
+                              const std::string_view name) {
+        const auto declaration = builder.model.add_declaration(
+            scope, DeclarationKind::type, std::string { name },
+            builder.source, builder.origin);
+        TypeReference model_base;
+        model_base.source = builder.source;
+        model_base.spelling = "integer";
+        const auto type = builder.model.add_type(
+            scope, TypeKind::declaration, std::string { name },
+            std::move(model_base), builder.source, builder.origin);
+        vhdl::Declaration declaration_record;
+        declaration_record.id = declaration;
+        declaration_record.scope = scope;
+        declaration_record.form = vhdl::DeclarationForm::type;
+        declaration_record.name = name;
+        declaration_record.declared_type = type;
+        declaration_record.source = builder.source;
+        declaration_record.origin = builder.origin;
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(declaration_record));
+        vhdl::TypeDefinition type_record;
+        type_record.id = type;
+        type_record.declaration = declaration;
+        type_record.form = vhdl::TypeForm::scalar;
+        type_record.name = name;
+        type_record.base.type_mark.source = builder.source;
+        type_record.base.type_mark.spelling = "integer";
+        type_record.source = builder.source;
+        type_record.origin = builder.origin;
+        builder.vhdl_hir.mutable_types().push_back(std::move(type_record));
+        if (scope == root_scope) {
+            builder.vhdl_unit(unit).declarations.push_back(declaration);
+        }
+        return type;
+    };
+    const auto root_shadow = add_type(root_scope, "Shadowed_Type");
+    const auto outer_shadow = add_type(outer_scope, "shadowed_type");
+    const auto sibling_shadow = add_type(sibling_scope, "SHADOWED_TYPE");
+    (void)add_type(inner_scope, "Nested_Only_Type");
+
+    const auto design = builder.finish();
+    const CompiledDesignResolver resolver { design, unit };
+    assert(resolver.resolve_vhdl_named_type(
+               "shadowed_type", root_scope) == root_shadow);
+    assert(resolver.resolve_vhdl_named_type(
+               "shadowed_type", outer_scope) == outer_shadow);
+    // The closest visible ancestor wins; the same-named sibling declaration
+    // is not visible from this nested scope.
+    assert(resolver.resolve_vhdl_named_type(
+               "shadowed_type", inner_scope) == outer_shadow);
+    assert(resolver.resolve_vhdl_named_type(
+               "shadowed_type", sibling_scope) == sibling_shadow);
+    // A nested declaration is not visible from an ancestor or sibling scope.
+    assert(!resolver.resolve_vhdl_named_type(
+        "nested_only_type", root_scope));
+    assert(!resolver.resolve_vhdl_named_type(
+        "nested_only_type", outer_scope));
+    assert(!resolver.resolve_vhdl_named_type(
+        "nested_only_type", sibling_scope));
+}
+
 void test_vhdl_architecture_compatibility_profile_pairing()
 {
     constexpr std::string_view strict_profile {
@@ -10225,4 +10399,5 @@ void run_compiled_design_tests()
     test_vhdl_primary_unit_index_contract();
     test_vhdl_package_member_index_contract();
     test_compiled_vhdl_scope_name_index_resolution();
+    test_compiled_vhdl_named_type_lexical_visibility();
 }

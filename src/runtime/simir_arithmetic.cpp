@@ -314,23 +314,34 @@ namespace fsim::runtime::simir {
       if (value == Logic9::one || value == Logic9::h) {
         return 1;
       }
+      if (value == Logic9::u) {
+        return 3;
+      }
       return 2;
     };
-    // Each element pair matches as '1', '0', or 'X' when either holds a
-    // metavalue other than '-'; the array result is their AND (IEEE
-    // 1076-2008 9.2.3).
+    // Preserve U separately from X. The array result is the Logic9 AND
+    // of its element matches, so a known mismatch still decides zero
+    // (IEEE 1076-2008 9.2.3).
     bool unknown{};
+    bool uninitialized{};
     for (std::size_t index = 0; index < lhs.width(); ++index) {
       const auto left = match_class(lhs.get_logic9(index));
       const auto right = match_class(rhs.get_logic9(index));
       if (left == -1 || right == -1) {
         continue;
       }
-      if (left == 2 || right == 2) {
+      if (left == 3 || right == 3) {
+        uninitialized = true;
+      } else if (left == 2 || right == 2) {
         unknown = true;
       } else if (left != right) {
         return PackedLogic4(1, Logic4::zero);
       }
+    }
+    if (uninitialized) {
+      auto result = PackedLogic4(1);
+      result.set_logic9(0, Logic9::u);
+      return result;
     }
     return PackedLogic4(1, unknown ? Logic4::x : Logic4::one);
   }

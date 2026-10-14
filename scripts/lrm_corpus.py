@@ -89,6 +89,10 @@ class Case:
     timeout: float | None = None
     # Governed UVM release whose precompiled library the case maps (sv-tests).
     uvm_release: str | None = None
+    # Require this specific diagnostic from a failed simulation after compile
+    # and elaboration succeeded. Tuple is (diagnostic code, message substring,
+    # normal process exit status).
+    expected_runtime_error: tuple[str, str, int] | None = None
 
 
 STAGE_ORDER = {"compile": 0, "elaborate": 1, "simulate": 2}
@@ -439,6 +443,12 @@ ICARUS_NONSTANDARD = {
     "concat3": "expects side effects from a zero replication",
     "cfunc_assign_op_mixed": "expects Icarus's compound assignment result",
     "sv_string6": "expects Icarus's hextoa of a negative value",
+    # Typedef declarator dimensions precede the nested type's dimensions
+    # (IEEE 1800-2017 7.4.5, 20.7). This test expects the reverse order.
+    "sv_typedef_nested_array": (
+        "expects nested typedef array dimensions in Icarus order instead of "
+        "outermost-first order (IEEE 1800-2017 7.4.5, 20.7)"
+    ),
     "module_port_shortreal": "compares a shortreal with a double literal",
     "signed_a": "expects an out-of-range index to be stripped",
     "br_gh156": "expects Icarus's VCD layout",
@@ -458,6 +468,11 @@ ICARUS_NONSTANDARD = {
     "pr1716276": "omits a positional parameter override (`#( , 4)`)",
     **{name: "calls $urandom_range in Verilog-2005 mode" for name in (
         "urand_r", "urand_r2", "urand_r3")},
+    # IEEE 1364-2005 / IEEE 1800-2017 Annex A.3.1 permits exactly
+    # one output terminal per pull_gate_instance, unlike buf/not.
+    **{name: "uses multiple output terminals in one pullup/pulldown instance "
+        "(non-standard; Annex A.3.1)" for name in (
+        "pr1787423", "pr1787423b", "pr2834340")},
     # IEEE 1800-2017 7.5.1: the new[] initializer is an array.
     "sv_darray_args3": "initializes new[] with a scalar",
     "sv_darray_args4": "initializes new[] with a scalar",
@@ -1047,8 +1062,12 @@ def vests_group(directory: str, relative: str) -> str:
     return "ashenden/" + (match.group(1) if match else "misc")
 
 
-# nvc cases that need nvc's own extensions.
+# nvc cases that need extensions or expect behavior contrary to the LRM.
 NVC_NONSTANDARD = {
+    "agg7": (
+        "expects a descending array-valued range association in an "
+        "ascending constrained target (IEEE 1076-2008 9.3.3.3)"
+    ),
     # `a ~& b` and `a ~| b` are not binary operators in IEEE 1364 or 1800.
     "binary8": "uses ~& and ~| as binary operators",
     "wide7": "uses ~& and ~| as binary operators",
@@ -1057,6 +1076,14 @@ NVC_NONSTANDARD = {
 NVC_SKIP_FLAGS = {
     "vhpi", "wave", "cover", "tcl", "shell", "plugin", "gtkw", "relaxed", "relax",
     "dump-arrays", "export", "define", "H", "exit", "mixed",
+}
+
+# This source is legal VHDL-93, but its function returns a record aggregate
+# whose `f` value is outside `integer range 1 to n`. IEEE 1076 requires the
+# record-element subtype check during aggregate evaluation, so this one NVC
+# regression case is expected to report the runtime constraint failure.
+NVC_EXPECTED_RUNTIME_ERRORS = {
+    "issue502": ("FSIM-RUN-0001", "VHDL integer subtype range check failed", 1),
 }
 
 
@@ -1133,7 +1160,10 @@ def nvc_cases(root: Path) -> list[Case]:
             group=("verilog" if verilog else f"vhdl-{standard}"),
             commands=[Command("compile", compile_args), Command("elaborate", elab),
                       Command("simulate", sim)],
-            expect="fail" if "fail" in kinds else "pass",
+            expect="fail" if (
+                "fail" in kinds or name in NVC_EXPECTED_RUNTIME_ERRORS
+            ) else "pass",
+            expected_runtime_error=NVC_EXPECTED_RUNTIME_ERRORS.get(name),
             checker="vhdl_clean",
             checker_data={"nvc_gold": str(gold) if "gold" in kinds and gold.exists() else None},
             skip=skip,
@@ -1301,6 +1331,29 @@ def simulation_lines(output: str) -> list[str]:
     return [line for line in output.splitlines() if not TRAILER_RE.match(line)]
 
 
+
+def ivtest_source_location_lines(case_id: str, lines: list[str]) -> list[str]:
+    """Map only known __FILE__ transport paths in the two location probes."""
+    # IEEE 1800-2017 22.13 permits implementation-dependent path formatting.
+    # These gold files use Icarus's ./ivltests paths; fsim opens archived
+    # sources. Keep every filename, line number, label and other output exact.
+    files = {
+        "br_gh782a": {"br_gh782a.v": "sources/roots/root",
+                       "br_gh782a.vi": "includes/roots"},
+        "br_gh782b": {"br_gh782b.v": "sources/roots/root"},
+    }.get(case_id, {})
+    result = []
+    for line in lines:
+        match = re.fullmatch(
+            r"(File|Included file) objects/[0-9a-f]{64}/"
+            r"(sources/roots/root|includes/roots)/[0-9]{8}/"
+            r"([^/ ]+) line ([0-9]+)", line)
+        if match and files.get(match[3]) == match[2]:
+            line = f"{match[1]} ./ivltests/{match[3]} line {match[4]}"
+        result.append(line)
+    return result
+
+
 def evaluate_assert(expression: str) -> bool:
     expression = expression.strip()
     if not re.fullmatch(r"[\sA-Za-z0-9_()=!<>.+\-*/%&|^~'\"]*", expression):
@@ -1346,12 +1399,38 @@ def check_outcome(case: Case, steps: list[StepResult], workdir: Path) -> tuple[s
     if any(s.timed_out for s in steps):
         return "timeout", f"{last.stage} timed out"
     if crashed:
-        bad = next(s for s in steps if s.returncode < 0 or s.returncode >= 126)
+        bad = next(s for s in steps if s.returncode is not None
+                   and (s.returncode < 0 or s.returncode >= 126))
         return "crash", f"{bad.stage} exited with {bad.returncode}"
     failed_step = next((s for s in steps if s.returncode != 0), None)
     sim = next((s for s in steps if s.stage == "simulate"), None)
     sim_output = sim.output if sim else ""
     hdl_errors = [line for line in sim_output.splitlines() if HDL_ERROR_RE.search(line)]
+
+    expected_runtime_error = getattr(case, "expected_runtime_error", None)
+    if expected_runtime_error is not None:
+        if case.expect != "fail":
+            return "fail", "expected runtime diagnostic configured for a passing case"
+        by_stage = {step.stage: step for step in steps}
+        for stage in ("compile", "elaborate"):
+            prerequisite = by_stage.get(stage)
+            if prerequisite is None or prerequisite.returncode != 0:
+                return "fail", f"{stage} did not pass before expected runtime error"
+        if sim is None:
+            return "fail", "simulation did not run for expected runtime error"
+        if sim.returncode is None or sim.returncode == 0:
+            return "fail", "simulation did not fail with the expected runtime error"
+        expected_code, expected_message, expected_exit_code = expected_runtime_error
+        if sim.returncode != expected_exit_code:
+            return "fail", (f"simulation exited with {sim.returncode}, expected "
+                             f"normal runtime-failure status {expected_exit_code}")
+        for line in sim_output.splitlines():
+            match = DIAGNOSTIC_RE.search(line)
+            if (match and match.group(2) == expected_code
+                    and expected_message in match.group(3)):
+                return "pass", f"expected runtime diagnostic {expected_code} reported"
+        return "fail", (f"simulation failed without expected runtime diagnostic "
+                         f"{expected_code}: {expected_message}")
 
     if case.expect == "fail":
         if failed_step is not None:
@@ -1405,6 +1484,7 @@ def check_outcome(case: Case, steps: list[StepResult], workdir: Path) -> tuple[s
             expected = [l.rstrip() for l in read_text(Path(gold)).splitlines()
                         if not re.match(r"^(VCD info:|.*\$finish called|.*: warning)", l)]
             actual = [l.rstrip() for l in lines if not l.startswith("objects/")]
+            actual = ivtest_source_location_lines(case.id, actual)
             if expected != actual:
                 return "fail", "output differs from gold"
             return "pass", ""

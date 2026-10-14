@@ -37,24 +37,36 @@ runtime::SystemVerilogClassPropertyDescriptor class_property_descriptor(
     container.maximum_elements = addressable_elements;
     if (*container_form == semantic::sv::TypeForm::static_array) {
       container.kind = runtime::SystemVerilogClassContainerKind::FixedArray;
-      if (property.type.unpacked_dimensions.empty()
-          || !property.type.unpacked_dimensions.front().left
-          || !property.type.unpacked_dimensions.front().right) {
+      if (property.type.unpacked_dimensions.empty()) {
         throw std::invalid_argument {
             "class handle static-array property requires a resolved range"
         };
       }
-      const auto& range = property.type.unpacked_dimensions.front();
-      const auto width = static_cast<std::uint64_t>(
-          *range.left >= *range.right
-              ? *range.left - *range.right + 1
-              : *range.right - *range.left + 1);
-      if (width > addressable_elements) {
-        throw std::length_error {
-            "class handle static-array property exceeds addressable storage"
-        };
+      std::size_t total_elements { 1U };
+      for (const auto& range : property.type.unpacked_dimensions) {
+        if (!range.left || !range.right) {
+          throw std::invalid_argument {
+              "class handle static-array property requires resolved ranges"
+          };
+        }
+        const auto low = std::min(*range.left, *range.right);
+        const auto high = std::max(*range.left, *range.right);
+        const auto distance = static_cast<std::uint64_t>(high)
+            - static_cast<std::uint64_t>(low);
+        if (distance == std::numeric_limits<std::uint64_t>::max()) {
+          throw std::length_error {
+              "class handle static-array property exceeds addressable storage"
+          };
+        }
+        const auto width = distance + 1U;
+        if (width > addressable_elements / total_elements) {
+          throw std::length_error {
+              "class handle static-array property exceeds addressable storage"
+          };
+        }
+        total_elements *= static_cast<std::size_t>(width);
       }
-      container.maximum_elements = static_cast<std::size_t>(width);
+      container.maximum_elements = total_elements;
       container.initial_elements = container.maximum_elements;
     } else if (*container_form == semantic::sv::TypeForm::dynamic_array) {
       container.kind = runtime::SystemVerilogClassContainerKind::DynamicArray;

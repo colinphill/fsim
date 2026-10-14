@@ -637,6 +637,8 @@ module invalid_gate;
   and symbolic[a:0] (y, a, a);
   and (strong1, pull1) (y, a, a);
   nmos wrong_terminal_count(y, a);
+  pulldown multiple_pull_down(y, a);
+  pullup multiple_pull_up(y, a);
 endmodule
 )",
         Language::SystemVerilog2017);
@@ -686,12 +688,12 @@ endmodule
                 }),
         "gate-array bounds and terminal widths are checked");
     require(
-        std::ranges::any_of(
+        std::ranges::count_if(
             invalid.diagnostics,
             [](const Diagnostic& diagnostic) {
                 return diagnostic.code == "FSIM-SV-SEM-153";
-            }),
-        "switch primitive terminal counts are targeted");
+            }) == 3,
+        "switch and single-output pull primitive terminal counts are targeted");
 }
 
 void test_systemverilog_select_and_concatenation_expressions()

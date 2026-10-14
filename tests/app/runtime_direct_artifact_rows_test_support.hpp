@@ -162,7 +162,7 @@ inline std::optional<std::string> encode_source_design()
     return bytes;
 }
 
-// Read and rewrite the schema-72 envelope by semantic fields so corruption
+// Read and rewrite the runtime envelope by semantic fields so corruption
 // tests can preserve its hierarchy binding without depending on row offsets.
 struct RuntimeWirePayload {
     std::uint32_t schema { };

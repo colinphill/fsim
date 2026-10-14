@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace fsim::elaboration {
 
@@ -225,9 +226,57 @@ bool HierarchyBuilder::forward_compiled_systemverilog_interface_port(
     };
 
     if (view.empty()) {
+        // Forward nested interface instances along with the root interface.
+        // Otherwise a later `port(root.nested)` cannot resolve its nested
+        // handle and may be mistaken for a modport of `root`.
+        const auto source_prefix = source_path + ".";
+        std::vector<std::string> nested_interfaces;
+        for (const auto& [nested_path, nested_handle]
+            : systemverilog_interface_handles_) {
+            (void)nested_handle;
+            if (nested_path.starts_with(source_prefix)) {
+                nested_interfaces.push_back(nested_path);
+            }
+        }
         record_forwarded_interface();
+        const auto target_prefix
+            = child_path + "." + formal.name + ".";
+        const auto copy_path_metadata = [](
+                                            auto& values,
+                                            const std::string& source,
+                                            const std::string& target) {
+            if (const auto selected = values.find(source);
+                selected != values.end()) {
+                auto value = selected->second;
+                values.insert_or_assign(target, std::move(value));
+            }
+        };
+        for (const auto& nested_path : nested_interfaces) {
+            const auto handle_value
+                = systemverilog_interface_handles_.find(nested_path);
+            if (handle_value == systemverilog_interface_handles_.end()) {
+                continue;
+            }
+            const auto target_path = target_prefix
+                + nested_path.substr(source_prefix.size());
+            const auto handle_id = handle_value->second;
+            systemverilog_interface_handles_.insert_or_assign(
+                target_path, handle_id);
+            copy_path_metadata(systemverilog_interface_types_,
+                nested_path, target_path);
+            copy_path_metadata(
+                systemverilog_interface_parameter_identities_,
+                nested_path, target_path);
+            copy_path_metadata(systemverilog_interface_modport_views_,
+                nested_path, target_path);
+            copy_path_metadata(systemverilog_interface_array_indices_,
+                nested_path, target_path);
+            if (systemverilog_interface_port_paths_.contains(nested_path)) {
+                systemverilog_interface_port_paths_.insert(target_path);
+            }
+        }
         std::vector<std::pair<std::string, SignalId>> members;
-        const auto prefix = source_path + ".";
+        const auto& prefix = source_prefix;
         for (const auto& [name, signal_id] : design_.signal_by_name_) {
             if (name.starts_with(prefix)) {
                 members.emplace_back(name.substr(prefix.size()), signal_id);

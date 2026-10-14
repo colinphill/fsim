@@ -248,9 +248,11 @@ end architecture;
   const auto reject = [](
       const std::string_view filename,
       const std::string_view source,
-      const std::string_view code) {
+      const std::string_view code,
+      const fsim::frontend::VhdlStandard standard
+          = fsim::frontend::VhdlStandard::Vhdl2008) {
     const auto invalid = fsim::frontend::parse_text(
-        filename, source, fsim::frontend::Language::Vhdl2008);
+        filename, source, fsim::frontend::Language::Vhdl2008, standard);
     assert(invalid.ok());
     const auto result = compile_and_elaborate(
         invalid.design, "vhdl:work.invalid(rtl)");
@@ -426,6 +428,387 @@ begin
 end architecture;
 )",
       "FSIM-ELAB-VHARRAYAGG-009");
+
+  reject(
+      "vhdl_mixed_aggregate_target_nominal_array.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Other_Bit_Vector_T is array (natural range <>) of bit;
+  signal Source : bit_vector(2 downto 0);
+  signal Prefix : Other_Bit_Vector_T(1 downto 0);
+  signal Tail : bit;
+begin
+  assign_values : process
+  begin
+    (Prefix, Tail) <= Source;
+    wait;
+  end process;
+end architecture;
+)",
+      "FSIM-ELAB-HIR-001");
+  reject(
+      "vhdl_mixed_aggregate_target_character_split.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  signal Source : string(1 to 2);
+  signal A, B, C, D : bit_vector(3 downto 0);
+begin
+  assign_values : process
+  begin
+    (A, B, C, D) <= Source;
+    wait;
+  end process;
+end architecture;
+)",
+      "FSIM-ELAB-HIR-001");
+  reject(
+      "vhdl_array_segment_nominal_mismatch.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Values_T is array (natural range <>) of integer;
+  type Other_Values_T is array (natural range <>) of integer;
+  signal Prefix : Other_Values_T(1 to 2);
+  signal Value : Values_T(1 to 3);
+begin
+  Value <= (Prefix, 7);
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-009");
+  reject(
+      "vhdl_qualified_array_segment_nominal_mismatch.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Source_Vector is array (integer range <>) of integer;
+  type Target_Vector is array (integer range <>) of integer;
+  signal Value : Target_Vector(1 to 4);
+begin
+  assign_values : process
+  begin
+    Value <= (Source_Vector'(1, 2), Source_Vector'(3, 4));
+    wait;
+  end process;
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-005");
+  reject(
+      "vhdl_array_segment_pre2008.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Values_T is array (natural range <>) of integer;
+  signal Prefix : Values_T(1 to 2);
+  signal Value : Values_T(1 to 3);
+begin
+  Value <= (Prefix, 7);
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-009",
+      fsim::frontend::VhdlStandard::Vhdl1993);
+
+  reject(
+      "vhdl_array_value_choice_direction.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  signal Source : integer_vector(4 downto 1);
+  signal Value : integer_vector(1 to 4);
+begin
+  Value <= (4 downto 1 => Source);
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-010");
+  reject(
+      "vhdl_bit_vector_literal_choice_direction.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  signal Value : bit_vector(1 to 2);
+begin
+  Value <= (2 downto 1 => "01");
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-010");
+  reject(
+      "vhdl_user_character_array_literal_choice_direction.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Character_Vector_T is array (natural range <>) of character;
+  signal Value : Character_Vector_T(1 to 2);
+begin
+  Value <= (2 downto 1 => "AB");
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-010");
+  reject(
+      "vhdl_shadow_character_enum_literal_choice_direction.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type character is ('0', '1');
+  type Character_Vector_T is array (natural range <>) of character;
+  signal Value : Character_Vector_T(1 to 2);
+begin
+  Value <= (2 downto 1 => "10");
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-010");
+
+  reject(
+      "vhdl_shadowed_std_logic_vector_rejects_ieee_characters.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Glyph_T is ('A', 'B');
+  type std_logic_vector is array (natural range <>) of Glyph_T;
+  type Packet_T is record Data : std_logic_vector(1 to 2); end record;
+  signal Value : Packet_T;
+begin
+  Value <= (Data => "01");
+end architecture;
+)",
+      "FSIM-ELAB-VHAGG-014");
+
+  reject(
+      "vhdl_shadowed_numeric_std_unsigned_rejects_logic_characters.vhd",
+      R"(
+library ieee;
+use ieee.numeric_std.all;
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Glyph_T is ('A', 'B');
+  type unsigned is array (natural range <>) of Glyph_T;
+  type Packet_T is record Data : unsigned(1 to 2); end record;
+  signal Value : Packet_T;
+begin
+  Value <= (Data => "01");
+end architecture;
+)",
+      "FSIM-ELAB-VHAGG-014");
+
+  reject(
+      "vhdl_contextual_string_array_element_membership.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Glyph_T is ('a', 'b');
+  type Row_T is array (1 to 2) of Glyph_T;
+  type Rows_T is array (1 to 2) of Row_T;
+  signal Value : Rows_T;
+begin
+  Value <= (1 => "01", 2 => "ab");
+end architecture;
+)",
+      "FSIM-ELAB-VHAGG-014");
+
+  const auto contextual_string_array_control = fsim::frontend::parse_text(
+      "vhdl_contextual_string_array_choice_control.vhd",
+      R"(
+entity Control is end entity;
+architecture rtl of control is
+  type Character_Vector_T is array (natural range <>) of character;
+  type Row_T is array (1 to 2) of character;
+  type Rows_T is array (1 to 2) of Row_T;
+  signal Bits : bit_vector(0 to 1);
+  signal Characters : Character_Vector_T(0 to 1);
+  signal Rows : Rows_T;
+begin
+  Bits <= (0 to 1 => "01");
+  Characters <= (0 to 1 => "AB");
+  -- Here the string literal has Row_T, the array element type. The range
+  -- choice selects outer Rows_T elements and must not be treated as a slice.
+  Rows <= (2 downto 1 => "CD");
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(contextual_string_array_control.ok());
+  const auto contextual_string_array_design = compile_and_elaborate(
+      contextual_string_array_control.design,
+      "vhdl:work.control(rtl)");
+  if (!contextual_string_array_design.ok()) {
+    for (const auto& diagnostic : contextual_string_array_design.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message
+                << " at " << diagnostic.span.begin.line << ':'
+                << diagnostic.span.begin.column << '\n';
+    }
+  }
+  assert(contextual_string_array_design.ok());
+
+  const auto shadowed_logic_vector = fsim::frontend::parse_text(
+      "vhdl_shadowed_std_logic_vector_string_context.vhd",
+      R"(
+entity Shadowed is end entity;
+architecture rtl of shadowed is
+  type Glyph_T is ('A', 'B');
+  type std_logic_vector is array (natural range <>) of Glyph_T;
+  type Packet_T is record Data : std_logic_vector(1 to 2); end record;
+  signal Value : Packet_T;
+begin
+  Value <= (Data => "AB");
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(shadowed_logic_vector.ok());
+  const auto shadowed_logic_vector_design = compile_and_elaborate(
+      shadowed_logic_vector.design, "vhdl:work.shadowed(rtl)");
+  assert(shadowed_logic_vector_design.ok());
+
+  const auto apostrophe_enum_control = fsim::frontend::parse_text(
+      "vhdl_contextual_apostrophe_enum_control.vhd",
+      R"(
+entity Control is end entity;
+architecture rtl of control is
+  type Glyph_T is ('a', ''');
+  type Glyph_Vector_T is array (1 to 2) of Glyph_T;
+  signal Value : Glyph_Vector_T;
+begin
+  Value <= "a'";
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(apostrophe_enum_control.ok());
+  const auto apostrophe_enum_design = compile_and_elaborate(
+      apostrophe_enum_control.design, "vhdl:work.control(rtl)");
+  assert(apostrophe_enum_design.ok());
+
+  const auto empty_array_element_control = fsim::frontend::parse_text(
+      "vhdl_null_string_array_element_control.vhd",
+      R"(
+entity Control is end entity;
+architecture rtl of control is
+  type Empty_String_T is array (1 to 0) of character;
+  type Empty_Rows_T is array (1 to 1) of Empty_String_T;
+  signal Value : Empty_Rows_T;
+begin
+  Value <= (1 => "");
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(empty_array_element_control.ok());
+  const auto empty_array_element_design = compile_and_elaborate(
+      empty_array_element_control.design, "vhdl:work.control(rtl)");
+  if (!empty_array_element_design.ok()) {
+    for (const auto& diagnostic : empty_array_element_design.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(empty_array_element_design.ok());
+  reject(
+      "vhdl_null_array_range_wrong_element_type.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Left_T is (left_a, left_b);
+  type Right_T is (right_a, right_b);
+  type Left_Vector_T is array (natural range <>) of Left_T;
+  signal Value : Left_Vector_T(2 to 1);
+begin
+  Value <= (2 to 1 => right_a);
+end architecture;
+)",
+      "FSIM-ELAB-VHAGG-014");
+  const auto null_array_segment_control = fsim::frontend::parse_text(
+      "vhdl_null_array_range_empty_segment.vhd",
+      R"(
+entity Control is end entity;
+architecture rtl of control is
+  type Bits_T is array (integer range <>) of bit;
+  signal Empty_Segment : Bits_T(1 to 0);
+  signal Value : Bits_T(2 to 1);
+begin
+  Value <= (2 to 1 => Empty_Segment);
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(null_array_segment_control.ok());
+  const auto null_array_segment_design = compile_and_elaborate(
+      null_array_segment_control.design, "vhdl:work.control(rtl)");
+  if (!null_array_segment_design.ok()) {
+    for (const auto& diagnostic : null_array_segment_design.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(null_array_segment_design.ok());
+  reject(
+      "vhdl_null_array_range_nonempty_segment.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Bits_T is array (integer range <>) of bit;
+  signal Nonempty_Segment : Bits_T(0 to 1);
+  signal Value : Bits_T(2 to 1);
+begin
+  Value <= (2 to 1 => Nonempty_Segment);
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-006");
+  reject(
+      "vhdl_null_range_with_others.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Bits_T is array (integer range <>) of bit;
+  signal Value : Bits_T(2 to 1);
+begin
+  Value <= (2 to 1 => '0', others => '1');
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-011");
+  reject(
+      "vhdl_null_range_with_multiple_choices.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Bits_T is array (integer range <>) of bit;
+  signal Value : Bits_T(2 to 1);
+begin
+  Value <= (2 to 1 | 4 to 3 => '0');
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-011");
+  reject(
+      "vhdl_nonempty_null_string_array_element.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Empty_String_T is array (1 to 0) of character;
+  type Empty_Rows_T is array (1 to 1) of Empty_String_T;
+  signal Value : Empty_Rows_T;
+begin
+  Value <= (1 => "x");
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-006");
+
+  const auto nested_array_element_control = fsim::frontend::parse_text(
+      "vhdl_array_value_choice_element_direction.vhd",
+      R"(
+entity Control is end entity;
+architecture rtl of control is
+  type Row_T is array (1 to 2) of character;
+  type Rows_T is array (1 to 4) of Row_T;
+  signal Source : Row_T;
+  signal Value : Rows_T;
+begin
+  Value <= (4 downto 3 => Source, others => Source);
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(nested_array_element_control.ok());
+  const auto nested_array_element_design = compile_and_elaborate(
+      nested_array_element_control.design, "vhdl:work.control(rtl)");
+  if (!nested_array_element_design.ok()) {
+    for (const auto& diagnostic : nested_array_element_design.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message
+                << " at " << diagnostic.span.begin.line << ':'
+                << diagnostic.span.begin.column << '\n';
+    }
+  }
+  assert(nested_array_element_design.ok());
 
   const auto runtime_reject = fsim::frontend::parse_text(
       "vhdl_aggregate_subtype_constraint.vhd",

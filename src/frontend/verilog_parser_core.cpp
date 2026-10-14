@@ -1170,21 +1170,11 @@ void VerilogParser::parse_directive(const bool design_element) {
     reset_compiler_directives();
     reject_directive_arguments(tick, directive);
   } else if (directive.text == "celldefine") {
-    if (current_cell_define_) {
-      error(
-          directive,
-          "FSIM-SV-PP-047",
-          "nested or duplicate `celldefine is not legal");
-    }
+    // IEEE 1800-2017 22.10 makes the most recent directive control the
+    // state; repeated and unpaired directives are well-defined state updates.
     current_cell_define_ = true;
     reject_directive_arguments(tick, directive);
   } else if (directive.text == "endcelldefine") {
-    if (!current_cell_define_) {
-      error(
-          directive,
-          "FSIM-SV-PP-033",
-          "`endcelldefine without an active `celldefine");
-    }
     current_cell_define_ = false;
     reject_directive_arguments(tick, directive);
   } else if (directive.text == "unconnected_drive") {
@@ -1217,20 +1207,32 @@ void VerilogParser::parse_directive(const bool design_element) {
           "preprocessor directive `" + directive.text +
               " reached the parser without preprocessing");
   }
-  const auto source_name = tick.span.source_name;
-  const auto line = tick.span.begin.line;
-  while (!at_end()
-         && current().span.source_name == source_name
-         && current().span.begin.line == line) {
-    advance();
+  const bool argument_directive =
+      directive.text == "default_nettype"
+      || directive.text == "unconnected_drive"
+      || directive.text == "begin_keywords";
+  if (!argument_directive) {
+    const auto source_name = tick.span.source_name;
+    const auto line = tick.span.begin.line;
+    while (!at_end()
+           && current().span.source_name == source_name
+           && current().span.begin.line == line) {
+      advance();
+    }
   }
 }
 
 void VerilogParser::parse_default_nettype(
   const Token& tick,
   const Token& directive) {
-  if (!on_directive_line(tick)
-      || current().kind != TokenKind::Identifier) {
+  constexpr std::string_view legal[] = {
+      "wire", "tri", "tri0", "tri1", "wand", "triand",
+      "wor", "trior", "trireg", "uwire", "none"};
+  if (current().kind != TokenKind::Identifier
+      || (!on_directive_line(tick)
+          && std::find(
+                 std::begin(legal), std::end(legal), current().text)
+              == std::end(legal))) {
     error(
         directive,
         "FSIM-SV-PP-034",
@@ -1238,9 +1240,6 @@ void VerilogParser::parse_default_nettype(
     return;
   }
   const auto net_type = advance();
-  constexpr std::string_view legal[] = {
-      "wire", "tri", "tri0", "tri1", "wand", "triand",
-      "wor", "trior", "trireg", "uwire", "none"};
   if (std::find(
           std::begin(legal), std::end(legal), net_type.text)
       == std::end(legal)) {
@@ -1251,19 +1250,15 @@ void VerilogParser::parse_default_nettype(
   } else {
     current_default_nettype_ = net_type.text;
   }
-  if (on_directive_line(tick)) {
-    error(
-        current(),
-        "FSIM-SV-PP-034",
-        "unexpected tokens after `default_nettype value");
-  }
 }
 
 void VerilogParser::parse_unconnected_drive(
   const Token& tick,
   const Token& directive) {
-  if (!on_directive_line(tick)
-      || current().kind != TokenKind::Identifier) {
+  if (current().kind != TokenKind::Identifier
+      || (!on_directive_line(tick)
+          && current().text != "pull0"
+          && current().text != "pull1")) {
     error(
         directive,
         "FSIM-SV-PP-035",
@@ -1281,19 +1276,12 @@ void VerilogParser::parse_unconnected_drive(
         "FSIM-SV-PP-035",
         "`unconnected_drive requires pull0 or pull1");
   }
-  if (on_directive_line(tick)) {
-    error(
-        current(),
-        "FSIM-SV-PP-035",
-        "unexpected tokens after `unconnected_drive value");
-  }
 }
 
 void VerilogParser::parse_begin_keywords(
-  const Token& tick,
+  const Token&,
   const Token& directive) {
-  if (!on_directive_line(tick)
-      || current().kind != TokenKind::StringLiteral) {
+  if (current().kind != TokenKind::StringLiteral) {
     error(
         directive,
         "FSIM-SV-PP-036",
@@ -1321,12 +1309,6 @@ void VerilogParser::parse_begin_keywords(
   } else {
     keyword_stack_.push_back(keyword_set_);
     keyword_set_ = *parsed;
-  }
-  if (on_directive_line(tick)) {
-    error(
-        current(),
-        "FSIM-SV-PP-036",
-        "unexpected tokens after `begin_keywords version");
   }
 }
 

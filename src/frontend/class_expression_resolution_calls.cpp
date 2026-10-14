@@ -850,6 +850,27 @@ std::optional<Type> Resolver::resolve_expression(
       remaining.static_range_expressions.erase(
           remaining.static_range_expressions.begin());
     }
+    constexpr std::string_view indexed_property_prefix {
+        "@sv-container-index:" };
+    auto& base_expression = expression.operands.front();
+    if (base_expression.kind == ExpressionKind::Call
+        && base_expression.text.starts_with(indexed_property_prefix)
+        && base_expression.operands.size() >= 2U
+        && container->systemverilog_container->kind
+            == SystemVerilogContainerKind::StaticArray
+        && !container->systemverilog_container->element_types.empty()
+        && !container->systemverilog_container->element_types.front()
+                .systemverilog_class_declaration.empty()) {
+      auto text = std::move(base_expression.text);
+      auto operands = std::move(base_expression.operands);
+      operands.push_back(std::move(expression.operands[1]));
+      expression.kind = ExpressionKind::Call;
+      expression.text = std::move(text);
+      expression.operands = std::move(operands);
+      retain_result_type(expression, element);
+      expression.nominal_type = element.systemverilog_class_declaration;
+      return element;
+    }
     constexpr std::string_view property_prefix{
         "@sv-container-property:"};
     if (expression.operands[0].kind != ExpressionKind::Call

@@ -139,6 +139,24 @@ end architecture;
     assert(!result.ok() && has_diagnostic(result, code));
   };
 
+  const auto constrained_string = fsim::frontend::parse_text(
+      "vhdl_qualified_string_extent.vhd",
+      R"(
+entity Valid_String_Extent is end entity;
+architecture rtl of valid_string_extent is
+  subtype Three_Characters_T is string(1 to 3);
+  signal Value : Three_Characters_T;
+begin
+  Value <= Three_Characters_T'("abc");
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(constrained_string.ok());
+  const auto constrained_string_result = compile_and_elaborate(
+      constrained_string.design,
+      "vhdl:work.valid_string_extent(rtl)");
+  assert(constrained_string_result.ok());
+
   reject(
       "vhdl_qualified_invisible.vhd",
       R"(
@@ -184,6 +202,18 @@ architecture rtl of invalid is
   signal Value : bit;
 begin
   Value <= bit'("1010");
+end architecture;
+)",
+      "FSIM-ELAB-VHQUAL-003");
+  reject(
+      "vhdl_qualified_string_extent.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  subtype Three_Characters_T is string(1 to 3);
+  signal Value : Three_Characters_T;
+begin
+  Value <= Three_Characters_T'("ab");
 end architecture;
 )",
       "FSIM-ELAB-VHQUAL-003");

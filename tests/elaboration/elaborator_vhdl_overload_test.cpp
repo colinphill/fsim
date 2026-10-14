@@ -1203,6 +1203,117 @@ end architecture;
   assert(has_diagnostic(
       no_match_result, "FSIM-ELAB-VHOVER-005"));
 
+  const auto ambiguous_character_array_literal = fsim::frontend::parse_text(
+      "vhdl-character-array-literal-ambiguous.vhd",
+      R"(
+entity character_array_literal_ambiguous is
+end entity;
+architecture rtl of character_array_literal_ambiguous is
+  type first_array is array (natural range <>) of character;
+  type second_array is array (natural range <>) of character;
+  function classify(value : first_array) return integer is
+  begin
+    return 1;
+  end function;
+  function classify(value : second_array) return integer is
+  begin
+    return 2;
+  end function;
+  signal result : integer;
+begin
+  result <= classify("abc");
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(ambiguous_character_array_literal.ok());
+  const auto ambiguous_character_array_literal_result = compile_and_elaborate(
+      ambiguous_character_array_literal.design,
+      "vhdl:work.character_array_literal_ambiguous(rtl)");
+  assert(!ambiguous_character_array_literal_result.ok());
+  assert(has_diagnostic(ambiguous_character_array_literal_result,
+      "FSIM-ELAB-VHOVER-001"));
+
+  const auto wrong_character_array_function_profile = fsim::frontend::parse_text(
+      "vhdl-character-array-function-profile.vhd",
+      R"(
+entity character_array_function_profile is
+end entity;
+architecture rtl of character_array_function_profile is
+  type first_array is array (natural range <>) of character;
+  type second_array is array (natural range <>) of character;
+  subtype second_triple is second_array(0 to 2);
+  function classify(value : first_array) return integer is
+  begin
+    return 1;
+  end function;
+  function make_other return second_triple is
+  begin
+    return "abc";
+  end function;
+  signal result : integer;
+begin
+  result <= classify(make_other);
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(wrong_character_array_function_profile.ok());
+  const auto wrong_character_array_function_profile_result
+      = compile_and_elaborate(wrong_character_array_function_profile.design,
+          "vhdl:work.character_array_function_profile(rtl)");
+  assert(!wrong_character_array_function_profile_result.ok());
+  assert(has_diagnostic(wrong_character_array_function_profile_result,
+      "FSIM-ELAB-VHOVER-002"));
+
+  const auto wrong_character_array_literal_length = fsim::frontend::parse_text(
+      "vhdl-character-array-literal-length.vhd",
+      R"(
+entity character_array_literal_length is
+end entity;
+architecture rtl of character_array_literal_length is
+  type character_array is array (natural range <>) of character;
+  function classify(value : character_array(0 to 2)) return integer is
+  begin
+    return 1;
+  end function;
+  signal result : integer;
+begin
+  result <= classify("ab");
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(wrong_character_array_literal_length.ok());
+  const auto wrong_character_array_literal_length_result
+      = compile_and_elaborate(wrong_character_array_literal_length.design,
+          "vhdl:work.character_array_literal_length(rtl)");
+  assert(!wrong_character_array_literal_length_result.ok());
+  assert(has_diagnostic(wrong_character_array_literal_length_result,
+      "FSIM-ELAB-VHOVER-002"));
+
+  const auto nonempty_actual_for_null_array_formal = fsim::frontend::parse_text(
+      "vhdl-nonempty-actual-for-null-array-formal.vhd",
+      R"(
+entity nonempty_actual_for_null_array_formal is
+end entity;
+architecture rtl of nonempty_actual_for_null_array_formal is
+  type character_array is array (natural range <>) of character;
+  function classify(value : character_array(1 to 0)) return integer is
+  begin
+    return 0;
+  end function;
+  signal result : integer;
+begin
+  result <= classify("a");
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(nonempty_actual_for_null_array_formal.ok());
+  const auto nonempty_actual_for_null_array_formal_result
+      = compile_and_elaborate(nonempty_actual_for_null_array_formal.design,
+          "vhdl:work.nonempty_actual_for_null_array_formal(rtl)");
+  assert(!nonempty_actual_for_null_array_formal_result.ok());
+  assert(has_diagnostic(nonempty_actual_for_null_array_formal_result,
+      "FSIM-ELAB-VHOVER-002"));
+
   const auto wrong_arity = fsim::frontend::parse_text(
       "vhdl-callable-wrong-arity.vhd",
       R"(
@@ -1334,6 +1445,104 @@ end architecture;
       ambiguous_result, "FSIM-ELAB-VHOVER-001"));
   assert(has_diagnostic(
       ambiguous_result, "FSIM-ELAB-VHOVER-004"));
+
+  const auto fixed_result_profile = frontend::parse_text(
+      "vhdl-callable-fixed-result-profile.vhd",
+      R"(
+entity callable_fixed_result_profile is
+end entity;
+architecture rtl of callable_fixed_result_profile is
+  type character_array is array (natural range <>) of character;
+  subtype character_triple is character_array(0 to 2);
+  function make_characters return character_triple is
+  begin
+    return "abc";
+  end function;
+  function classify(value : character_array) return integer is
+  begin
+    return value'length;
+  end function;
+  function classify(value : bit_vector) return integer is
+  begin
+    return 100 + value'length;
+  end function;
+  signal result_length : integer;
+begin
+  result_length <= classify(make_characters);
+end architecture;
+)",
+      frontend::Language::Vhdl2008);
+  assert(fixed_result_profile.ok());
+  const auto fixed_result_profile_result = compile_and_elaborate(
+      fixed_result_profile.design,
+      "vhdl:work.callable_fixed_result_profile(rtl)");
+  if (!fixed_result_profile_result.ok()) {
+      for (const auto& diagnostic : fixed_result_profile_result.diagnostics) {
+          std::cerr << diagnostic.code << ": "
+                    << diagnostic.message << '\n';
+      }
+  }
+  assert(fixed_result_profile_result.ok());
+  auto fixed_result_profile_interpreter = fixed_result_profile_result.design->create_interpreter();
+  assert(fixed_result_profile_interpreter->run().status
+      == fsim::runtime::RunStatus::completed);
+  const auto fixed_result_length
+      = fixed_result_profile_result.design->find_signal("result_length");
+  assert(fixed_result_length);
+  const auto fixed_result_value = fixed_result_profile_interpreter
+                                      ->signal_value(*fixed_result_length)
+                                      .known_signed_value();
+  assert(fixed_result_value && *fixed_result_value == 3);
+
+  const auto result_only_ambiguous = fsim::frontend::parse_text(
+      "vhdl-callable-result-only-ambiguous.vhd",
+      R"(
+entity callable_result_only_ambiguous is
+end entity;
+architecture rtl of callable_result_only_ambiguous is
+  type first_array is array (natural range <>) of bit;
+  type second_array is array (natural range <>) of bit;
+  subtype first_fixed is first_array(0 to 1);
+  subtype second_fixed is second_array(0 to 1);
+  constant first_value : first_fixed := (others => '0');
+  constant second_value : second_fixed := (others => '1');
+  function inspect return first_fixed is
+  begin
+    return first_value;
+  end function;
+  function inspect return second_fixed is
+  begin
+    return second_value;
+  end function;
+  function classify(value : first_array) return integer is
+  begin
+    return 1;
+  end function;
+  function classify(value : second_array) return integer is
+  begin
+    return 2;
+  end function;
+  signal result_length : integer;
+begin
+  result_length <= classify(inspect);
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(result_only_ambiguous.ok());
+  const auto result_only_ambiguous_result = compile_and_elaborate(
+      result_only_ambiguous.design,
+      "vhdl:work.callable_result_only_ambiguous(rtl)");
+  if (result_only_ambiguous_result.ok()
+      || !has_diagnostic(
+          result_only_ambiguous_result, "FSIM-ELAB-VHOVER-001")) {
+    for (const auto& diagnostic : result_only_ambiguous_result.diagnostics) {
+      std::cerr << diagnostic.code << ": "
+                << diagnostic.message << '\n';
+    }
+  }
+  assert(!result_only_ambiguous_result.ok());
+  assert(has_diagnostic(
+      result_only_ambiguous_result, "FSIM-ELAB-VHOVER-001"));
 
   const auto duplicate = fsim::frontend::parse_text(
       "vhdl-callable-overload-duplicate.vhd",

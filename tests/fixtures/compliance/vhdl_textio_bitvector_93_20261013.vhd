@@ -15,7 +15,7 @@ begin
   begin
     write(l, string'("10_01tail"));
     read(l, bits, good);
-    if good or l.all /= "10_01tail" then
+    if good or l.all /= "_01tail" then
       report "FAIL" severity error;
     else
       report "PASS";

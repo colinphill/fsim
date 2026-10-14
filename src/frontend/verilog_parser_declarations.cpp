@@ -1197,6 +1197,7 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     const auto name = expect_identifier("declared name");
     auto declaration_type = spec.type;
     (void)parse_optional_container_dimension(declaration_type);
+    unit_foreach_types_.insert_or_assign(name.text, declaration_type);
     if (!declaration_type.systemverilog_container
         && (declaration_type.domain == ValueDomain::String
             || declaration_type.spelling == "string")) {
@@ -1204,7 +1205,6 @@ void VerilogParser::parse_declaration(DesignUnit& unit) {
     }
     if (declaration_type.systemverilog_container) {
       unit_container_names_.insert(name.text);
-      unit_container_types_.insert_or_assign(name.text, declaration_type);
       if (declaration_type.systemverilog_container->associative_index_type) {
         unit_associative_index_types_.insert_or_assign(name.text,
             *declaration_type.systemverilog_container->associative_index_type);

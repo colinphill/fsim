@@ -93,6 +93,24 @@ PortActualResult normalize_port_actual(
                 *actual_expression.referenced_name->selected);
             if (declaration && declaration->systemverilog != nullptr) {
                 actual_name = declaration->systemverilog->name;
+                if (interface_formal) {
+                    // Retain selected nested-interface members after the
+                    // declaration chosen for the root name. An escaped root
+                    // keeps the full written path because its identifier can
+                    // contain the same punctuation as a path separator.
+                    const auto suffix_start
+                        = actual_expression.text.find_first_of(".[");
+                    const auto escaped_start
+                        = actual_expression.text.find('\\');
+                    if (escaped_start != std::string::npos
+                        && (suffix_start == std::string::npos
+                            || escaped_start < suffix_start)) {
+                        actual_name = actual_expression.text;
+                    } else if (suffix_start != std::string::npos) {
+                        actual_name += actual_expression.text.substr(
+                            suffix_start);
+                    }
+                }
             }
         }
     } else if (binding.actual_declaration) {
@@ -1402,7 +1420,7 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
             }
         }
         const auto parent_signal = working_signals.find(actual_name);
-        if (variable_output_actual_net
+        if (!interface_port && variable_output_actual_net
             && parent_signal != working_signals.end()
             && parent_signal->second == *variable_output_actual_net) {
             note_boundary_driver(
@@ -1410,7 +1428,8 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 external_binding,
                 child_path + "." + formal_declaration.name,
                 compiled_source_span(*compiled_, binding.source));
-        } else if ((direction == frontend::PortDirection::Output
+        } else if (!interface_port
+            && (direction == frontend::PortDirection::Output
                 || direction == frontend::PortDirection::Inout)
             && parent_signal != working_signals.end()
             && parent_signal->second == *actual_signal) {

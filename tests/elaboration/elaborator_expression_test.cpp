@@ -1179,12 +1179,19 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(invalid_packed_query.ok());
-    const auto rejected_packed_query = compile_and_elaborate(
+    const auto elaborated_invalid_query = compile_and_elaborate(
         invalid_packed_query.design,
         "sv:work.invalid_packed_query");
-    assert(!rejected_packed_query.ok());
-    assert(has_diagnostic(
-        rejected_packed_query, "FSIM-ELAB-086"));
+    assert(elaborated_invalid_query.ok());
+    const auto invalid_query_output
+        = elaborated_invalid_query.design->find_signal("result");
+    assert(invalid_query_output);
+    auto invalid_query_interpreter
+        = elaborated_invalid_query.design->create_interpreter();
+    (void)invalid_query_interpreter->run();
+    // IEEE 1800-2017 20.7: an out-of-range dimension returns integer 'x.
+    assert(invalid_query_interpreter->signal_value(*invalid_query_output)
+               .to_msb_string() == std::string(32U, 'X'));
 
     const auto invalid_dimensions = fsim::frontend::parse_text(
         "invalid_dimensions.sv",

@@ -1124,8 +1124,214 @@ bool Lowerer::initialize_hir_declarations(
             string_locals_.insert_or_assign(
                 string_binding->name, destination);
             if (!retained_static) {
-                process_.operations.emplace_back(LoadStringConstant {
-                    destination, { } });
+                bool default_value_initialized { };
+                if (declaration->vhdl != nullptr
+                    && declaration->vhdl->subtype) {
+                    const auto effective = hir_effective_vhdl_subtype(
+                        *declaration->vhdl->subtype);
+                    if (effective
+                        && hir_vhdl_predefined_string_type(*effective)) {
+                        std::optional<std::uint64_t> byte_count;
+                        if (effective->constraints.size() == 1U) {
+                            const auto& range
+                                = effective->constraints.front();
+                            if (range.kind
+                                != semantic::vhdl::RangeKind::array_index) {
+                                return false;
+                            }
+                            const auto left = hir_range_left(range);
+                            const auto right = hir_range_right(range);
+                            const bool null_range = range.null
+                                || (left && right
+                                    && (range.descending
+                                            ? *left < *right
+                                            : *left > *right));
+                            if (null_range) {
+                                byte_count = 0U;
+                            } else if (left && right) {
+                                const auto distance = *left >= *right
+                                    ? static_cast<std::uint64_t>(*left)
+                                        - static_cast<std::uint64_t>(*right)
+                                    : static_cast<std::uint64_t>(*right)
+                                        - static_cast<std::uint64_t>(*left);
+                                if (distance
+                                    == std::numeric_limits<
+                                        std::uint64_t>::max()) {
+                                    return false;
+                                }
+                                byte_count = distance + 1U;
+                            } else {
+                                const auto lower_bound = [&](
+                                                             const std::optional<std::int64_t> value,
+                                                             const std::optional<
+                                                                 semantic::ExpressionId>
+                                                                 expression)
+                                    -> std::optional<RegisterId> {
+                                    if (value) {
+                                        const auto result = allocate_register(
+                                            64U,
+                                            frontend::ValueDomain::Integer);
+                                        process_.operations.emplace_back(
+                                            LoadConstant { result,
+                                                integer_value(*value, 64U) });
+                                        return result;
+                                    }
+                                    if (!expression) {
+                                        return std::nullopt;
+                                    }
+                                    auto result = lower_hir_expression(
+                                        *expression, 64U);
+                                    if (!result) {
+                                        return std::nullopt;
+                                    }
+                                    if (register_width(*result) != 64U) {
+                                        result = resize_register(*result, 64U,
+                                            hir_expression_signed(
+                                                *expression));
+                                    }
+                                    return result;
+                                };
+                                const auto left_register = lower_bound(
+                                    left, range.left_expression);
+                                const auto right_register = lower_bound(
+                                    right, range.right_expression);
+                                if (!left_register || !right_register) {
+                                    return false;
+                                }
+                                const auto non_null = allocate_register(
+                                    1U, frontend::ValueDomain::Bit2);
+                                process_.operations.emplace_back(Binary {
+                                    range.descending
+                                        ? BinaryOperator::greater_equal_signed
+                                        : BinaryOperator::less_equal_signed,
+                                    non_null,
+                                    *left_register,
+                                    *right_register,
+                                });
+                                process_.operations.emplace_back(
+                                    LoadStringConstant { destination, { } });
+                                const auto branch
+                                    = static_cast<InstructionIndex>(
+                                        process_.operations.size());
+                                process_.operations.emplace_back(Branch {
+                                    non_null,
+                                    static_cast<InstructionIndex>(branch + 1U),
+                                    0U,
+                                    UnknownBranchPolicy::when_false,
+                                });
+                                const auto difference = allocate_register(
+                                    64U, frontend::ValueDomain::Integer);
+                                process_.operations.emplace_back(
+                                    IntegerBinary {
+                                        IntegerBinaryOperator::subtract,
+                                        difference,
+                                        range.descending
+                                            ? *left_register
+                                            : *right_register,
+                                        range.descending
+                                            ? *right_register
+                                            : *left_register,
+                                    });
+                                const auto one = allocate_register(
+                                    64U, frontend::ValueDomain::Integer);
+                                process_.operations.emplace_back(
+                                    LoadConstant { one,
+                                        integer_value(1, 64U) });
+                                const auto raw_extent = allocate_register(
+                                    64U, frontend::ValueDomain::Integer);
+                                process_.operations.emplace_back(
+                                    IntegerBinary {
+                                        IntegerBinaryOperator::add,
+                                        raw_extent,
+                                        difference,
+                                        one,
+                                    });
+                                process_.operations.emplace_back(
+                                    IntegerCheck {
+                                        raw_extent,
+                                        0,
+                                        static_cast<std::int64_t>(
+                                            runtime::simir::
+                                                maximum_string_bytes),
+                                    });
+                                const auto extent32 = resize_register(
+                                    raw_extent, 32U, false);
+                                const auto one32 = allocate_register(
+                                    32U, frontend::ValueDomain::Integer);
+                                process_.operations.emplace_back(
+                                    LoadConstant { one32,
+                                        integer_value(1, 32U) });
+                                const auto last = allocate_register(
+                                    32U, frontend::ValueDomain::Integer);
+                                process_.operations.emplace_back(
+                                    IntegerBinary {
+                                        IntegerBinaryOperator::subtract,
+                                        last,
+                                        extent32,
+                                        one32,
+                                    });
+                                const auto seed = allocate_string_register();
+                                process_.operations.emplace_back(
+                                    LoadStringConstant {
+                                        seed,
+                                        std::string(
+                                            runtime::simir::
+                                                maximum_string_bytes,
+                                            '\0'),
+                                    });
+                                const auto first32 = allocate_register(
+                                    32U, frontend::ValueDomain::Integer);
+                                process_.operations.emplace_back(
+                                    LoadConstant { first32,
+                                        integer_value(0, 32U) });
+                                StringMethod default_string;
+                                default_string.operation
+                                    = StringMethodOperator::substr;
+                                default_string.source = seed;
+                                default_string.string_destination
+                                    = destination;
+                                default_string.first = first32;
+                                default_string.second = last;
+                                process_.operations.emplace_back(
+                                    default_string);
+                                const auto end
+                                    = static_cast<InstructionIndex>(
+                                        process_.operations.size());
+                                process_.operations[branch] = Branch {
+                                    non_null,
+                                    static_cast<InstructionIndex>(branch + 1U),
+                                    end,
+                                    UnknownBranchPolicy::when_false,
+                                };
+                                default_value_initialized = true;
+                            }
+                        } else if (effective->constraints.empty()
+                            && effective->executable_width
+                            && *effective->executable_width % 8U == 0U) {
+                            byte_count = *effective->executable_width / 8U;
+                        } else if (!effective->constraints.empty()) {
+                            return false;
+                        }
+                        if (byte_count) {
+                            if (*byte_count
+                                > runtime::simir::maximum_string_bytes) {
+                                return false;
+                            }
+                            process_.operations.emplace_back(
+                                LoadStringConstant {
+                                    destination,
+                                    std::string(
+                                        static_cast<std::size_t>(*byte_count),
+                                        '\0'),
+                                });
+                            default_value_initialized = true;
+                        }
+                    }
+                }
+                if (!default_value_initialized) {
+                    process_.operations.emplace_back(LoadStringConstant {
+                        destination, { } });
+                }
             }
             if (initializer && !retained_static) {
                 const auto initial = lower_hir_string_expression(
@@ -1136,6 +1342,20 @@ bool Lowerer::initialize_hir_declarations(
                         : nullptr);
                 if (!initial) {
                     return false;
+                }
+                if (declaration->vhdl != nullptr
+                    && declaration->vhdl->subtype) {
+                    const auto effective = hir_effective_vhdl_subtype(
+                        *declaration->vhdl->subtype);
+                    if (effective
+                        && effective->domain
+                            == semantic::vhdl::ValueDomain::string
+                        && hir_vhdl_predefined_string_type(*effective)
+                        && !effective->constraints.empty()) {
+                        emit_hir_vhdl_string_length_check(
+                            destination, *initial,
+                            hir_source_span(declaration->vhdl->source));
+                    }
                 }
                 process_.operations.emplace_back(CopyStringRegister {
                     destination, *initial });

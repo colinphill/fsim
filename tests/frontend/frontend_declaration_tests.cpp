@@ -177,6 +177,148 @@ endmodule
               }),
       "1800-2012 keyword scope rejects soft as an identifier");
 
+  const auto wrapped_operands = parse_text(
+      "wrapped-directive-operands.sv",
+      R"(`default_nettype /* directive comment */
+  // operand on the next line after comments
+  tri0 module wrapped_nettype;
+  assign created = 1'b0;
+endmodule
+`begin_keywords
+  /* a quoted legacy version may also follow a newline */
+  "1364-2005" module logic;
+endmodule
+`end_keywords
+`unconnected_drive
+  /* comments separate the operand from its directive */
+  pull0 module wrapped_child;
+endmodule
+module wrapped_parent;
+  wrapped_child child_instance();
+endmodule
+`nounconnected_drive
+)",
+      Language::SystemVerilog2017);
+  require(wrapped_operands.ok(),
+          "directive operands may follow comments and newlines");
+  const auto* wrapped_net =
+      wrapped_operands.design.find(
+          UnitKind::VerilogModule, "wrapped_nettype");
+  require(
+      wrapped_net != nullptr && wrapped_net->default_nettype == "tri0"
+          && wrapped_net->signals.size() == 1
+          && wrapped_net->signals.front().type.spelling == "tri0",
+      "multiline default_nettype operand controls implicit-net type");
+  require(
+      wrapped_operands.design.find(UnitKind::VerilogModule, "logic")
+          != nullptr,
+      "multiline begin_keywords operand applies its keyword set");
+  const auto* wrapped_parent =
+      wrapped_operands.design.find(
+          UnitKind::VerilogModule, "wrapped_parent");
+  require(
+      wrapped_parent != nullptr && wrapped_parent->instances.size() == 1
+          && wrapped_parent->instances.front().unconnected_drive
+              == VerilogUnconnectedDrive::Pull0,
+      "multiline unconnected_drive operand applies to following instance");
+
+  const auto missing_operands = parse_text(
+      "missing-directive-operands.sv",
+      R"(`default_nettype
+module after_missing_nettype;
+endmodule
+`unconnected_drive
+module after_missing_drive;
+endmodule
+`begin_keywords
+module after_missing_keywords;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto missing_has_code = [&](const std::string_view code) {
+    return std::any_of(
+        missing_operands.diagnostics.begin(),
+        missing_operands.diagnostics.end(),
+        [&](const Diagnostic& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  require(
+      !missing_operands.ok()
+          && missing_has_code("FSIM-SV-PP-034")
+          && missing_has_code("FSIM-SV-PP-035")
+          && missing_has_code("FSIM-SV-PP-036")
+          && missing_operands.design.find(
+                 UnitKind::VerilogModule, "after_missing_nettype")
+          && missing_operands.design.find(
+                 UnitKind::VerilogModule, "after_missing_drive")
+          && missing_operands.design.find(
+                 UnitKind::VerilogModule, "after_missing_keywords"),
+      "missing multiline operands diagnose without consuming the next module");
+
+  const auto invalid_wrapped_operands = parse_text(
+      "invalid-wrapped-directive-operands.sv",
+      R"(`default_nettype
+tri2
+module after_invalid_nettype;
+endmodule
+`unconnected_drive
+highz
+module after_invalid_drive;
+endmodule
+`begin_keywords
+"1364-2099"
+module after_invalid_keywords;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto invalid_has_code = [&](const std::string_view code) {
+    return std::any_of(
+        invalid_wrapped_operands.diagnostics.begin(),
+        invalid_wrapped_operands.diagnostics.end(),
+        [&](const Diagnostic& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+  require(
+      !invalid_wrapped_operands.ok()
+          && invalid_has_code("FSIM-SV-PP-034")
+          && invalid_has_code("FSIM-SV-PP-035")
+          && invalid_has_code("FSIM-SV-PP-036")
+          && invalid_wrapped_operands.design.find(
+                 UnitKind::VerilogModule, "after_invalid_nettype")
+          && invalid_wrapped_operands.design.find(
+                 UnitKind::VerilogModule, "after_invalid_drive")
+          && invalid_wrapped_operands.design.find(
+                 UnitKind::VerilogModule, "after_invalid_keywords"),
+      "invalid multiline operands diagnose without eating following modules");
+
+  const auto idempotent_cell_state = parse_text(
+      "idempotent-celldefine.sv",
+      R"(`endcelldefine
+`endcelldefine
+`celldefine
+`celldefine
+module repeated_cell;
+endmodule
+`endcelldefine
+`endcelldefine
+module ordinary_after_cell;
+endmodule
+)",
+      Language::SystemVerilog2017);
+  const auto* repeated_cell =
+      idempotent_cell_state.design.find(
+          UnitKind::VerilogModule, "repeated_cell");
+  const auto* ordinary_after_cell =
+      idempotent_cell_state.design.find(
+          UnitKind::VerilogModule, "ordinary_after_cell");
+  require(
+      idempotent_cell_state.ok() && repeated_cell != nullptr
+          && repeated_cell->is_cell && ordinary_after_cell != nullptr
+          && !ordinary_after_cell->is_cell,
+      "celldefine state follows the most recent directive idempotently");
+
   const auto malformed = parse_text(
       "malformed-directives.sv",
       R"(`default_nettype banana
@@ -208,7 +350,6 @@ endmodule
           && has_code("FSIM-SV-PP-036")
           && has_code("FSIM-SV-PP-037")
           && has_code("FSIM-SV-PP-038")
-          && has_code("FSIM-SV-PP-047")
           && has_code("FSIM-SV-PP-048"),
       "malformed directive forms have stable targeted diagnostics");
 }

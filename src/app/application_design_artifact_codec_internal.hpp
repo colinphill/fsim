@@ -537,6 +537,11 @@ namespace codec_detail {
             return value >= runtime::simir::OutputFormat::binary
                 && value <= runtime::simir::OutputFormat::unformatted4;
         } else if constexpr (
+            std::same_as<T, runtime::simir::StringMethodOperator>) {
+            return value >= runtime::simir::StringMethodOperator::getc
+                && value
+                    <= runtime::simir::StringMethodOperator::format_string_dynamic_field;
+        } else if constexpr (
             std::same_as<T, runtime::simir::VhdlReflectionClass>) {
             return value >= runtime::simir::VhdlReflectionClass::enumeration
                 && value

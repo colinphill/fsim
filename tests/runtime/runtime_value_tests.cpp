@@ -4645,7 +4645,13 @@ void test_simir_vhdl_matching_equality() {
       Comparison{"10LH", "10--", "1"},
       Comparison{"----", "UXZW", "1"},
       Comparison{"UXZW", "----", "1"},
-      Comparison{"UXZW", "UXZW", "0"},
+      Comparison{"UXZW", "UXZW", "U"},
+      Comparison{"U", "1", "U"},
+      Comparison{"1", "U", "U"},
+      Comparison{"U0", "X1", "0"},
+      Comparison{"U0", "X0", "U"},
+      Comparison{"U0", "-0", "1"},
+      Comparison{"X", "1", "X"},
       Comparison{"10LH", "1010", "0"},
       Comparison{"01", "01", "1"},
       Comparison{"01", "11", "0"},
@@ -4657,11 +4663,12 @@ void test_simir_vhdl_matching_equality() {
   process.name = "vhdl_matching_equality";
   process.register_count = 3;
   process.register_value_kinds = {
-      ValueKind::logic9, ValueKind::logic9, ValueKind::logic4};
+      ValueKind::logic9, ValueKind::logic9, ValueKind::logic9};
   for (std::size_t index = 0; index < comparisons.size(); ++index) {
     results[index] = interpreter.add_signal(
         {"top.vhdl_match_" + std::to_string(index),
-         PackedLogic4::from_msb_string("X")});
+         PackedLogic4::from_logic9_msb_string("X"),
+         ResolutionKind::none, ValueKind::logic9});
     process.operations.emplace_back(LoadConstant{
         0,
         PackedLogic4::from_logic9_msb_string(comparisons[index].lhs)});

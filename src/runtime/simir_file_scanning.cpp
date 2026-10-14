@@ -16,6 +16,8 @@ namespace {
         = "\x1f" "fsim-vhdl-textio-read";
     constexpr std::string_view vhdl_textio_read_2008_marker
         = "\x1f" "fsim-vhdl-textio-read-2008";
+    constexpr std::string_view vhdl_textio_radix_read_2008_marker
+        = "\x1f" "fsim-vhdl-textio-radix-read-2008";
     constexpr std::string_view vhdl_textio_sread_marker
         = "\x1f" "fsim-vhdl-textio-sread";
 
@@ -29,6 +31,8 @@ namespace {
                 || operation.conversions.front().prefix
                     == vhdl_textio_read_2008_marker
                 || operation.conversions.front().prefix
+                    == vhdl_textio_radix_read_2008_marker
+                || operation.conversions.front().prefix
                     == vhdl_textio_sread_marker);
     }
 
@@ -37,8 +41,10 @@ namespace {
     {
         return operation.string_source && operation.consume_string_source
             && operation.conversions.size() == 1U
-            && operation.conversions.front().prefix
-                == vhdl_textio_read_2008_marker;
+            && (operation.conversions.front().prefix
+                    == vhdl_textio_read_2008_marker
+                || operation.conversions.front().prefix
+                    == vhdl_textio_radix_read_2008_marker);
     }
 
     [[nodiscard]] bool vhdl_textio_sread(
@@ -308,6 +314,69 @@ namespace {
             std::move(value), negative, target);
     }
 
+    [[nodiscard]] std::optional<InputScanValue> packed_vhdl_radix_digits(
+        std::string_view token,
+        const InputScanFormat format,
+        const InputScanTarget& target)
+    {
+        const auto bits_per_digit = format == InputScanFormat::octal
+            ? 3U
+            : format == InputScanFormat::hexadecimal ? 4U : 0U;
+        if (bits_per_digit == 0U || target.width == 0U) {
+            return std::nullopt;
+        }
+        const auto expected_digits
+            = (static_cast<std::size_t>(target.width)
+                  + bits_per_digit - 1U)
+            / bits_per_digit;
+        std::string digits;
+        digits.reserve(token.size());
+        for (const auto character : token) {
+            if (character != '_') {
+                digits.push_back(character);
+            }
+        }
+        if (digits.size() != expected_digits) {
+            return std::nullopt;
+        }
+
+        PackedLogic4 value(target.width, Logic4::zero);
+        std::size_t bit_offset { };
+        for (auto iterator = digits.rbegin(); iterator != digits.rend();
+            ++iterator) {
+            const auto character = *iterator;
+            unsigned digit { };
+            if (character >= '0' && character <= '9') {
+                digit = static_cast<unsigned>(character - '0');
+            } else if (format == InputScanFormat::hexadecimal
+                && character >= 'a' && character <= 'f') {
+                digit = 10U + static_cast<unsigned>(character - 'a');
+            } else if (format == InputScanFormat::hexadecimal
+                && character >= 'A' && character <= 'F') {
+                digit = 10U + static_cast<unsigned>(character - 'A');
+            } else {
+                return std::nullopt;
+            }
+            const auto maximum_digit = (1U << bits_per_digit) - 1U;
+            if (digit > maximum_digit) {
+                return std::nullopt;
+            }
+            for (unsigned bit = 0; bit < bits_per_digit; ++bit) {
+                const auto set = (digit & (1U << bit)) != 0U;
+                if (bit_offset + bit >= value.width()) {
+                    if (set) {
+                        return std::nullopt;
+                    }
+                    continue;
+                }
+                value.set(bit_offset + bit,
+                    set ? Logic4::one : Logic4::zero);
+            }
+            bit_offset += bits_per_digit;
+        }
+        return InputScanValue { std::move(value), { }, false };
+    }
+
     [[nodiscard]] InputScanValue packed_text(
         const std::string_view text, const InputScanTarget& target)
     {
@@ -488,6 +557,7 @@ namespace {
         const InputScanConversion& conversion,
         const bool vhdl_textio,
         const bool vhdl_textio_2008,
+        const bool vhdl_textio_radix_read_2008,
         const bool vhdl_textio_sread)
     {
         std::string text;
@@ -504,6 +574,15 @@ namespace {
             : conversion.format == InputScanFormat::character
             ? 1U
             : static_cast<std::uint32_t>(maximum_string_bytes);
+        // The executor resolves this sentinel from the destination
+        // STRING's retained constraint. A null STRING completes without
+        // consuming any LINE characters.
+        if (vhdl_textio
+            && conversion.format == InputScanFormat::string
+            && conversion.maximum_characters == 0U
+            && !vhdl_textio_sread) {
+            return { std::move(text), true, false };
+        }
         const auto limit = conversion.maximum_characters == 0
             ? default_limit
             : conversion.maximum_characters;
@@ -574,6 +653,48 @@ namespace {
             }
             const bool complete = bit_count == conversion.target.width;
             return { std::move(text), complete, eof };
+        }
+        if (vhdl_textio_radix_read_2008
+            && (conversion.format == InputScanFormat::octal
+                || conversion.format == InputScanFormat::hexadecimal)) {
+            (void)scanner.skip_space(true);
+            const auto bits_per_digit = conversion.format
+                    == InputScanFormat::octal
+                ? 3U
+                : 4U;
+            const auto expected_digits
+                = (static_cast<std::size_t>(conversion.target.width)
+                      + bits_per_digit - 1U)
+                / bits_per_digit;
+            std::size_t digit_count { };
+            bool previous_underline { };
+            while (digit_count < expected_digits
+                && text.size() < maximum_string_bytes) {
+                const auto character = scanner.read();
+                if (character < 0) {
+                    eof = true;
+                    break;
+                }
+                const bool digit = conversion.format == InputScanFormat::octal
+                    ? character >= '0' && character <= '7'
+                    : (character >= '0' && character <= '9')
+                        || (character >= 'a' && character <= 'f')
+                        || (character >= 'A' && character <= 'F');
+                if (digit) {
+                    text.push_back(static_cast<char>(character));
+                    ++digit_count;
+                    previous_underline = false;
+                } else if (character == '_' && digit_count != 0U
+                    && !previous_underline) {
+                    text.push_back('_');
+                    previous_underline = true;
+                } else {
+                    scanner.unread(character);
+                    break;
+                }
+            }
+            return { std::move(text),
+                digit_count == expected_digits, eof };
         }
         if (vhdl_textio
             && conversion.format == InputScanFormat::boolean_value) {
@@ -691,6 +812,11 @@ InputScanResult scan_formatted_input(
     Scanner scanner { read, unread };
     const bool vhdl_textio_line = vhdl_textio_read(operation);
     const bool vhdl_textio_2008 = vhdl_textio_read_2008(operation);
+    const bool vhdl_textio_radix_read_2008
+        = operation.string_source && operation.consume_string_source
+        && operation.conversions.size() == 1U
+        && operation.conversions.front().prefix
+            == vhdl_textio_radix_read_2008_marker;
     const bool is_vhdl_textio_sread = vhdl_textio_sread(operation);
     InputScanResult result;
     result.values.resize(operation.conversions.size());
@@ -707,8 +833,13 @@ InputScanResult scan_formatted_input(
         }
         auto [text, complete, eof] = read_conversion_text(
             scanner, conversion, vhdl_textio_line, vhdl_textio_2008,
-            is_vhdl_textio_sread);
-        if ((!is_vhdl_textio_sread && text.empty()) || !complete) {
+            vhdl_textio_radix_read_2008, is_vhdl_textio_sread);
+        const bool empty_string_read = vhdl_textio_line
+            && conversion.format == InputScanFormat::string
+            && conversion.maximum_characters == 0U && complete;
+        if ((!is_vhdl_textio_sread && text.empty()
+                && !empty_string_read)
+            || !complete) {
             if (eof && result.assignments == 0)
                 result.assignments = -1;
             result.consumed = scanner.consumed();
@@ -742,6 +873,7 @@ InputScanResult scan_formatted_input(
         } else {
             const bool valid_textio_number
                 = !vhdl_textio_line
+                || vhdl_textio_radix_read_2008
                 || (conversion.format == InputScanFormat::real
                         ? valid_vhdl_real_literal(text)
                         : ((conversion.format != InputScanFormat::decimal
@@ -749,8 +881,11 @@ InputScanResult scan_formatted_input(
                                     != InputScanFormat::unsigned_decimal)
                             || valid_vhdl_numeric_separators(text)));
             value = valid_textio_number
-                ? packed_digits(std::move(text), conversion.format,
-                      conversion.target)
+                ? (vhdl_textio_radix_read_2008
+                        ? packed_vhdl_radix_digits(
+                              text, conversion.format, conversion.target)
+                        : packed_digits(std::move(text), conversion.format,
+                              conversion.target))
                 : std::nullopt;
         }
         if (!value) {

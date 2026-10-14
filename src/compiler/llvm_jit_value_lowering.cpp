@@ -921,8 +921,8 @@ void store_register(llvm::IRBuilder<>& builder,
                 builder.CreateOr(
                     builder.CreateAnd(left_zero, right_zero),
                     builder.CreateAnd(left_one, right_one)));
-            // A known differing pair gives '0'; otherwise a metavalue
-            // other than '-' gives 'X' (IEEE 1076-2008 9.2.3).
+            // A known differing pair gives zero. Otherwise U takes
+            // precedence over X in the Logic9 AND of element matches.
             auto* known_differ = builder.CreateAnd(
                 builder.CreateOr(
                     builder.CreateAnd(left_zero, right_one),
@@ -935,10 +935,24 @@ void store_register(llvm::IRBuilder<>& builder,
             auto* same = builder.CreateICmpEQ(known_differ, zero);
             auto* unknown = builder.CreateAnd(
                 same, builder.CreateICmpNE(unknown_bits, zero));
+            auto* uninitialized_bits = builder.CreateAnd(
+                builder.CreateOr(
+                    logic9_state_mask(builder, lhs,
+                        static_cast<std::uint8_t>(Logic9::u)),
+                    logic9_state_mask(builder, rhs,
+                        static_cast<std::uint8_t>(Logic9::u))),
+                builder.CreateAnd(mask,
+                    builder.CreateNot(builder.CreateOr(left_dash, right_dash))));
+            auto* uninitialized = builder.CreateAnd(
+                same, builder.CreateICmpNE(uninitialized_bits, zero));
+            auto* scalar_zero = constant_i64(context, 0);
             return {
-                builder.CreateZExt(same, llvm::Type::getInt64Ty(context)),
-                builder.CreateZExt(unknown, llvm::Type::getInt64Ty(context)),
-                1
+                builder.CreateZExt(
+                    builder.CreateAnd(same, builder.CreateNot(uninitialized)),
+                    llvm::Type::getInt64Ty(context)),
+                builder.CreateZExt(builder.CreateNot(unknown),
+                    llvm::Type::getInt64Ty(context)),
+                1, scalar_zero, scalar_zero, ValueKind::logic9
             };
         }
         auto* unknown_bits = builder.CreateAnd(

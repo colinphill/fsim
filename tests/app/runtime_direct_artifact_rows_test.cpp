@@ -3,6 +3,7 @@
 
 #include <cassert>
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <utility>
 
@@ -10,9 +11,31 @@ namespace {
 
 using namespace fsim::app::direct_artifact_rows_test;
 
+void test_string_method_archive_enum_range()
+{
+    using Operator = fsim::runtime::simir::StringMethodOperator;
+
+    fsim::app::codec_detail::Writer valid_writer;
+    valid_writer.write(static_cast<std::uint8_t>(
+        Operator::format_string_dynamic_field));
+    const auto valid_bytes = std::move(valid_writer).finish();
+    fsim::app::codec_detail::Reader valid_reader { valid_bytes };
+    Operator decoded { };
+    assert(valid_reader.read(decoded));
+    assert(decoded == Operator::format_string_dynamic_field);
+
+    fsim::app::codec_detail::Writer invalid_writer;
+    invalid_writer.write(std::uint8_t { 0xffU });
+    const auto invalid_bytes = std::move(invalid_writer).finish();
+    fsim::app::codec_detail::Reader invalid_reader { invalid_bytes };
+    assert(!invalid_reader.read(decoded));
+    assert(invalid_reader.failure().find("invalid scalar enumeration")
+        != std::string::npos);
+}
+
 void test_schema_and_direct_row_roundtrip()
 {
-    assert(fsim::app::kRuntimeStateSchema == 78U);
+    assert(fsim::app::kRuntimeStateSchema == 79U);
     const auto source_bytes = encode_source_design();
     assert(source_bytes.has_value());
 
@@ -201,6 +224,7 @@ void test_restored_interpreter_keeps_public_facades_lazy()
 
 int main()
 {
+    test_string_method_archive_enum_range();
     test_schema_and_direct_row_roundtrip();
     test_decoder_rejects_noncanonical_process_rows();
     test_lazy_materialization_copy_move_and_state();

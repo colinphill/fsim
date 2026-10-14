@@ -39,6 +39,11 @@ vhdl_logic_string_function_name(std::string_view spelling) noexcept;
     const semantic::SpecializedHirUnit&,
     const semantic::vhdl::SubtypeIndication&,
     semantic::ScopeId use_scope);
+[[nodiscard]] bool hir_vhdl_unshadowed_integer_vector(
+    const semantic::SpecializedHirUnit&,
+    const semantic::vhdl::SubtypeIndication&,
+    semantic::ScopeId use_scope,
+    std::span<const semantic::CompiledBindingFrame> binding_frames = {});
 
 [[nodiscard]] constexpr bool use_systemverilog_timeformat_width(
     const std::uint32_t minimum_width,
@@ -490,6 +495,10 @@ private:
     // BIT_VECTOR are distinct (IEEE 1076-2008 4.5.2). Nullopt when unknown.
     [[nodiscard]] std::optional<std::string> hir_vhdl_array_type_family(
         const semantic::vhdl::SubtypeIndication& subtype) const;
+    [[nodiscard]] bool hir_vhdl_same_nominal_array_type(
+        const semantic::vhdl::SubtypeIndication& left,
+        const semantic::vhdl::SubtypeIndication& right,
+        semantic::ScopeId scope) const;
     // The enumeration type a VHDL for-loop parameter iterates over, when the
     // value names one; the parameter's runtime value is the ordinal.
     [[nodiscard]] std::optional<semantic::TypeId>
@@ -543,7 +552,11 @@ private:
     [[nodiscard]] std::optional<RegisterId> lower_hir_virtual_interface_handle(
         semantic::DeclarationId receiver);
     [[nodiscard]] std::optional<RegisterId> lower_hir_string_to_packed(
-        semantic::ExpressionId operand, std::size_t width);
+        semantic::ExpressionId operand, std::size_t width,
+        const semantic::vhdl::SubtypeIndication* contextual_subtype = nullptr);
+    void emit_hir_vhdl_string_length_check(
+        StringRegisterId target, StringRegisterId value,
+        const frontend::SourceSpan& span);
     [[nodiscard]] bool hir_process_handle_expression(
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<std::int64_t> hir_vhdl_subtype_name_bound(
@@ -587,7 +600,8 @@ private:
         semantic::StatementId statement) const;
     [[nodiscard]] std::optional<std::size_t> hir_expression_width(
         semantic::ExpressionId expression,
-        semantic::ScopeId process_scope) const;
+        semantic::ScopeId process_scope,
+        const semantic::vhdl::SubtypeIndication* vhdl_array_context = nullptr) const;
     // The target expression of a name that denotes an object alias of an
     // element or slice (`alias a : t is s(1 to 4)`).
     [[nodiscard]] std::optional<semantic::ExpressionId> hir_vhdl_alias_target_expression(
@@ -597,6 +611,13 @@ private:
     // `s'length`, `s'left`, `s'right`, `s'low` or `s'high` of a STRING
     // held as a runtime string: a signed 32-bit integer.
     [[nodiscard]] bool hir_vhdl_runtime_string_bound(
+        semantic::ExpressionId expression) const;
+    // Whether a VHDL STRING subtype resolves through aliases/subtypes to the
+    // predefined STD.STANDARD.STRING declaration (or an unshadowed builtin).
+    [[nodiscard]] bool hir_vhdl_predefined_string_type(
+        const semantic::vhdl::SubtypeIndication& subtype) const;
+    [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
+    hir_vhdl_qualified_integer_vector_subtype(
         semantic::ExpressionId expression) const;
     [[nodiscard]] bool hir_vhdl_runtime_string_prefix(
         semantic::ExpressionId prefix) const;
@@ -650,6 +671,10 @@ private:
     // Whether a VHDL expression has the predefined CHARACTER type.
     [[nodiscard]] bool hir_vhdl_character_typed(
         semantic::ExpressionId expression) const;
+    // Whether a VHDL subtype resolves to predefined CHARACTER.
+    [[nodiscard]] bool hir_vhdl_predefined_character_subtype(
+        const semantic::vhdl::SubtypeIndication& subtype,
+        semantic::ScopeId use_scope) const;
     // Collects the logic character literals of the current unit whose
     // context (assignment target, initialized object, comparison operand,
     // case selector, or attribute prefix) is CHARACTER.
@@ -888,6 +913,11 @@ private:
         std::size_t element_width { };
         bool access_object_root { };
     };
+    struct HirVhdlAggregateTargetSegments {
+        std::vector<semantic::ExpressionId> targets;
+        std::vector<std::size_t> widths;
+        std::vector<semantic::vhdl::SubtypeIndication> subtypes;
+    };
     [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
     hir_vhdl_expression_subtype(
         semantic::ExpressionId expression) const;
@@ -1065,6 +1095,11 @@ private:
         semantic::ExpressionId expression,
         std::size_t expected_width,
         const semantic::vhdl::SubtypeIndication* contextual_subtype = nullptr);
+    [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
+    hir_vhdl_concat_aggregate_context(
+        const semantic::vhdl::SubtypeIndication& result_context,
+        semantic::ExpressionId aggregate,
+        std::size_t expected_width) const;
     [[nodiscard]] std::optional<std::size_t>
     hir_vhdl_positional_aggregate_width(
         semantic::ExpressionId aggregate,
@@ -1077,6 +1112,11 @@ private:
         semantic::ExpressionId aggregate,
         RegisterId source,
         const semantic::vhdl::SubtypeIndication& subtype);
+    [[nodiscard]] std::optional<HirVhdlAggregateTargetSegments>
+    hir_vhdl_mixed_aggregate_target_segments(
+        semantic::ExpressionId aggregate,
+        const semantic::vhdl::SubtypeIndication& source_subtype,
+        std::size_t source_width) const;
     [[nodiscard]] bool hir_vhdl_aggregate_is_writable(
         semantic::ExpressionId aggregate) const;
     [[nodiscard]] bool can_lower_hir_expression(
@@ -1087,15 +1127,18 @@ private:
         semantic::ExpressionId expression,
         std::size_t expected_width,
         frontend::SystemVerilogScalarKind scalar_context
-        = frontend::SystemVerilogScalarKind::None);
+        = frontend::SystemVerilogScalarKind::None,
+        const semantic::vhdl::SubtypeIndication* vhdl_array_context = nullptr);
     [[nodiscard]] std::optional<RegisterId> lower_hir_expression_untraced(
         semantic::ExpressionId expression,
         std::size_t expected_width,
-        frontend::SystemVerilogScalarKind scalar_context);
+        frontend::SystemVerilogScalarKind scalar_context,
+        const semantic::vhdl::SubtypeIndication* vhdl_array_context);
     [[nodiscard]] std::optional<RegisterId> lower_hir_expression_impl(
         semantic::ExpressionId expression,
         std::size_t expected_width,
-        frontend::SystemVerilogScalarKind scalar_context);
+        frontend::SystemVerilogScalarKind scalar_context,
+        const semantic::vhdl::SubtypeIndication* vhdl_array_context);
     // The innermost expression that failed to lower without its own
     // diagnostic while the current statement was lowered; named in the
     // statement's FSIM-ELAB-HIR-001 report.
@@ -1584,6 +1627,13 @@ private:
     [[nodiscard]] std::optional<std::uint64_t>
     hir_systemverilog_container_bit_width(
         const runtime::simir::ContainerType& type) const;
+    struct HirArrayQueryShape {
+        std::vector<HirPackedRange> dimensions;
+        std::size_t unpacked_dimensions { };
+    };
+    [[nodiscard]] std::optional<HirArrayQueryShape>
+    hir_systemverilog_array_query_shape(
+        semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<std::int64_t>
     hir_systemverilog_container_query(
         semantic::ExpressionId expression) const;
@@ -1666,6 +1716,11 @@ private:
         const HirStaticContainerSelection& selection,
         std::vector<runtime::simir::InstructionIndex>* skip_branches
         = nullptr);
+    [[nodiscard]] std::optional<runtime::simir::RegisterId>
+    lower_hir_class_handle_array_index(
+        std::string_view identity,
+        const std::vector<semantic::ExpressionId>& indices,
+        runtime::simir::RegisterId& validity);
     [[nodiscard]] std::optional<HirStaticContainerValue>
     lower_hir_static_container_value(semantic::ExpressionId expression);
     enum class HirContainerExpressionPurpose : std::uint8_t {
@@ -2212,6 +2267,10 @@ private:
         std::uint64_t width { };
         bool signed_value { };
     };
+    [[nodiscard]] bool hir_is_interface_hierarchical_path(
+        std::string_view name) const;
+    [[nodiscard]] bool hir_interface_path_has_lexical_root_binding(
+        semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<HirHierarchicalSignalMember>
     hir_hierarchical_signal_member(semantic::ExpressionId expression) const;
     // A parameter or local parameter of a selected, non-loop generate block

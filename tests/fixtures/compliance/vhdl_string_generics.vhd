@@ -18,6 +18,18 @@ begin
   length_out <= name'length;
 end architecture;
 
+entity string_forwarder is
+  generic (name : string := "unnamed");
+  port (length_out : out natural);
+end entity;
+
+architecture rtl of string_forwarder is
+begin
+  leaf : entity work.string_leaf
+    generic map (name => name & string'("(") & string'(")"))
+    port map (length_out => length_out);
+end architecture;
+
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -63,7 +75,7 @@ architecture sim of string_generics is
     kind := 3;
   end procedure;
 
-  signal named_length, default_length : natural;
+  signal named_length, default_length, forwarded_length : natural;
   signal vector : std_logic_vector(3 downto 0) := "1010";
   signal count : unsigned(3 downto 0) := "0011";
   signal offset : signed(3 downto 0) := "1111";
@@ -71,6 +83,9 @@ begin
   named : entity work.string_leaf generic map (name => "leaf-one")
     port map (length_out => named_length);
   defaulted : entity work.string_leaf port map (length_out => default_length);
+  forwarded : entity work.string_forwarder
+    generic map (name => config & string'(":"))
+    port map (length_out => forwarded_length);
 
   process
     variable kind : natural;
@@ -87,6 +102,10 @@ begin
     end if;
     if named_length /= 8 or default_length /= 7 then
       report "FAIL: STRING generic map and default" severity error;
+      failures := failures + 1;
+    end if;
+    if forwarded_length /= 10 then
+      report "FAIL: nested STRING generic forwarding" severity error;
       failures := failures + 1;
     end if;
     classify(vector, kind);

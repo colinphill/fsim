@@ -195,7 +195,11 @@ enum class StringMethodOperator : std::uint8_t {
     vhdl_integer_value,
     // T'VALUE of an enumeration type: the position of the literal named by
     // the source string among the newline-separated `argument` literals.
-    vhdl_enumeration_value
+    vhdl_enumeration_value,
+    // VHDL TextIO WRITE field widths evaluated at run time. The string form
+    // stores the field register in `first`; the packed form uses `second`.
+    format_packed_dynamic_field,
+    format_string_dynamic_field
 };
 struct StringMethod {
     StringMethodOperator operation { };

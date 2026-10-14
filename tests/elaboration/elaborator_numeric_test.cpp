@@ -427,6 +427,8 @@ end architecture;
         fsim::frontend::parse_text(
             "vhdl_subtype_execution.vhd",
             R"(
+library ieee;
+use ieee.std_logic_1164.all;
 package Subtype_Types is
   subtype Count_Base_T is natural range 0 to 15;
   subtype Count_T is Count_Base_T range 2 to 9;
@@ -438,6 +440,8 @@ package Subtype_Types is
   subtype Packet_Alias_T is Packet_T;
 end package;
 
+library ieee;
+use ieee.std_logic_1164.all;
 use work.subtype_types.all;
 entity subtype_execution is
   generic (
