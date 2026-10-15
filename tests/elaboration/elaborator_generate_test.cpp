@@ -1465,6 +1465,83 @@ begin
   end block invalid_scope;
 end architecture;
 
+package generated_vhdl_block_record_constraints is
+  type channel_t is record
+    payload : bit_vector;
+  end record;
+  type bus_t is record
+    channel : channel_t;
+  end record;
+  subtype eight_bus_t is bus_t(channel(payload(7 downto 0)));
+  subtype sixteen_bus_t is bus_t(channel(payload(15 downto 0)));
+
+  type other_channel_t is record
+    payload : bit_vector;
+  end record;
+  type other_bus_t is record
+    channel : other_channel_t;
+  end record;
+  subtype other_eight_bus_t is
+    other_bus_t(channel(payload(7 downto 0)));
+end package;
+
+use work.generated_vhdl_block_record_constraints.all;
+entity generated_vhdl_bad_block_nested_record_length is
+end entity;
+architecture rtl of generated_vhdl_bad_block_nested_record_length is
+  signal source_bus : sixteen_bus_t;
+begin
+  invalid_scope: block
+    port (input_bus : in eight_bus_t);
+    port map (input_bus.channel => source_bus.channel);
+  begin
+  end block invalid_scope;
+end architecture;
+
+use work.generated_vhdl_block_record_constraints.all;
+entity generated_vhdl_bad_block_nested_record_type is
+end entity;
+architecture rtl of generated_vhdl_bad_block_nested_record_type is
+  signal source_bus : other_eight_bus_t;
+begin
+  invalid_scope: block
+    port (input_bus : in eight_bus_t);
+    port map (input_bus.channel => source_bus.channel);
+  begin
+  end block invalid_scope;
+end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+package generated_vhdl_block_shadow_bit_vector is
+  type bit_vector is array (natural range <>) of bit;
+  type shadow_channel_t is record
+    payload : bit_vector;
+  end record;
+  type shadow_bus_t is record
+    channel : shadow_channel_t;
+  end record;
+  subtype shadow_eight_bus_t is
+    shadow_bus_t(channel(payload(7 downto 0)));
+end package;
+
+use work.generated_vhdl_block_shadow_bit_vector.all;
+entity generated_vhdl_bad_block_shadow_bit_vector is
+end entity;
+architecture rtl of generated_vhdl_bad_block_shadow_bit_vector is
+  signal source_bus : shadow_eight_bus_t;
+begin
+  invalid_scope: block
+    port (
+      input_bus : in
+        work.generated_vhdl_block_record_constraints.eight_bus_t
+    );
+    port map (input_bus.channel => source_bus.channel);
+  begin
+  end block invalid_scope;
+end architecture;
+
 library ieee;
 use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
@@ -2701,6 +2778,26 @@ endmodule
     assert(!bad_block_profile.ok());
     assert(has_diagnostic(
         bad_block_profile, "FSIM-ELAB-VHBLOCK-003"));
+
+    const auto bad_block_nested_record_length = compile_and_elaborate(
+        generated_design,
+        "vhdl:work.generated_vhdl_bad_block_nested_record_length(rtl)");
+    assert(!bad_block_nested_record_length.ok());
+    assert(has_diagnostic(
+        bad_block_nested_record_length, "FSIM-ELAB-VHBLOCK-003"));
+    const auto bad_block_nested_record_type = compile_and_elaborate(
+        generated_design,
+        "vhdl:work.generated_vhdl_bad_block_nested_record_type(rtl)");
+    assert(!bad_block_nested_record_type.ok());
+    assert(has_diagnostic(
+        bad_block_nested_record_type, "FSIM-ELAB-VHBLOCK-003"));
+
+    const auto bad_block_shadow_bit_vector = compile_and_elaborate(
+        generated_design,
+        "vhdl:work.generated_vhdl_bad_block_shadow_bit_vector(rtl)");
+    assert(!bad_block_shadow_bit_vector.ok());
+    assert(has_diagnostic(
+        bad_block_shadow_bit_vector, "FSIM-ELAB-VHBLOCK-003"));
 
     const auto guarded = compile_and_elaborate(
         generated_design,

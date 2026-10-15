@@ -199,6 +199,8 @@ void test_vhdl_access_type_storage();
 void test_vhdl_protected_type_storage();
 void test_vhdl_physical_type_execution();
 void test_vhdl_qualified_expressions_and_conversions();
+void test_vhdl_slice_index_range_propagation();
+void test_vhdl_bit_vector_array_segment_literals();
 void test_vhdl_aggregate_choice_closure();
 void test_vhdl_attribute_closure();
 void test_vhdl_composite_operation_closure();

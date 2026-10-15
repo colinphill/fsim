@@ -119,6 +119,8 @@ int main()
     FSIM_RUN_TEST(test_vhdl_protected_type_storage);
     FSIM_RUN_TEST(test_vhdl_physical_type_execution);
     FSIM_RUN_TEST(test_vhdl_qualified_expressions_and_conversions);
+    FSIM_RUN_TEST(test_vhdl_slice_index_range_propagation);
+    FSIM_RUN_TEST(test_vhdl_bit_vector_array_segment_literals);
     FSIM_RUN_TEST(test_vhdl_aggregate_choice_closure);
     FSIM_RUN_TEST(test_vhdl_attribute_closure);
     FSIM_RUN_TEST(test_vhdl_composite_operation_closure);

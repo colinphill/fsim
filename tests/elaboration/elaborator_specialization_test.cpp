@@ -1213,15 +1213,30 @@ end context package_context;
         R"(
 context work.package_context;
 entity package_user is
-  port (observed : out unsigned(width - 1 downto 0));
+  port (observed : out bit_vector(width - 1 downto 0));
 end entity package_user;
 
 context work.package_context;
 architecture rtl of package_user is
-  signal local_value : unsigned(width - 1 downto 0);
+  subtype context_word_t is bit_vector(width - 1 downto 0);
+  pure function natural_to_bit_vector(value : natural) return context_word_t is
+    variable bits : context_word_t;
+    variable remaining : natural := value;
+  begin
+    for index in 0 to width - 1 loop
+      if remaining mod 2 = 0 then
+        bits(index) := '0';
+      else
+        bits(index) := '1';
+      end if;
+      remaining := remaining / 2;
+    end loop;
+    return bits;
+  end function;
+  signal local_value : context_word_t;
 begin
-  local_value <= next_value;
-  observed <= local_value + 1;
+  local_value <= natural_to_bit_vector(next_value);
+  observed <= natural_to_bit_vector(next_value + 1);
 end architecture rtl;
 )",
         fsim::frontend::Language::Vhdl2008);
@@ -1342,16 +1357,32 @@ end architecture rtl;
         R"(
 entity selected_package_user is
   port (
-    observed : out unsigned(
+    observed : out bit_vector(
       work.constants.width - 1 downto 0)
   );
 end entity selected_package_user;
 architecture rtl of selected_package_user is
-  signal local_value : unsigned(
+  subtype selected_word_t is bit_vector(
     constants.width - 1 downto 0);
+  pure function natural_to_selected_word(value : natural)
+      return selected_word_t is
+    variable bits : selected_word_t;
+    variable remaining : natural := value;
+  begin
+    for index in 0 to constants.width - 1 loop
+      if remaining mod 2 = 0 then
+        bits(index) := '0';
+      else
+        bits(index) := '1';
+      end if;
+      remaining := remaining / 2;
+    end loop;
+    return bits;
+  end function;
+  signal local_value : selected_word_t;
 begin
-  local_value <= constants.next_value;
-  observed <= local_value + 1;
+  local_value <= natural_to_selected_word(constants.next_value);
+  observed <= natural_to_selected_word(constants.next_value + 1);
 end architecture rtl;
 )",
         fsim::frontend::Language::Vhdl2008);

@@ -1332,16 +1332,63 @@ void Interpreter::Impl::write_process_register(
 {
     const auto converted = coerce_value_kind(
         value, register_value_kind(process, destination));
-    if (process.cold().suspended_callable_context) {
-        auto& context = *process.cold().suspended_callable_context;
-        const auto found = std::ranges::lower_bound(
+    const auto update_context = [&](
+        ProcessState::CallableFrameState& context) {
+        const auto found = std::ranges::find(
             context.packed_ids, destination);
-        if (found != context.packed_ids.end()
-            && *found == destination) {
-            const auto index = static_cast<std::size_t>(
-                std::distance(context.packed_ids.begin(), found));
-            context.packed[index] = converted;
+        if (found == context.packed_ids.end()) {
+            return false;
+        }
+        const auto index = static_cast<std::size_t>(
+            std::distance(context.packed_ids.begin(), found));
+        context.packed[index] = converted;
+        return true;
+    };
+    if (process.cold().callable_registers_suspended) {
+        if (process.cold().suspended_callable_context
+            && update_context(
+                *process.cold().suspended_callable_context)) {
             return;
+        }
+        for (auto context
+            = process.cold().escaping_callable_contexts.rbegin();
+            context != process.cold().escaping_callable_contexts.rend();
+            ++context) {
+            if (!*context) {
+                fail(process, "escaping automatic callable context is null");
+            }
+            if (update_context(**context)) {
+                return;
+            }
+        }
+    } else {
+        const auto& frames = process.cold().callable_frames;
+        const ProcessState::CallableFrameState* owner_frame { };
+        for (auto frame = frames.rbegin(); frame != frames.rend(); ++frame) {
+            if (std::ranges::find(
+                    frame->packed_ids, destination)
+                != frame->packed_ids.end()) {
+                owner_frame = &*frame;
+                break;
+            }
+        }
+        if (owner_frame != nullptr) {
+            if (owner_frame->escaping_context) {
+                (void)update_context(*owner_frame->escaping_context);
+            }
+        } else {
+            for (auto context
+                = process.cold().escaping_callable_contexts.rbegin();
+                context != process.cold().escaping_callable_contexts.rend();
+                ++context) {
+                if (!*context) {
+                    fail(process,
+                        "escaping automatic callable context is null");
+                }
+                if (update_context(**context)) {
+                    break;
+                }
+            }
         }
     }
     if (process.executor) {

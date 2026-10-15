@@ -73,6 +73,10 @@ struct CompiledLinkResult;
 
 namespace fsim::app::application_detail {
 
+namespace systemverilog_hir_detail {
+class SystemVerilogHirBuilder;
+}
+
 #if defined(FSIM_HAS_LLVM)
 [[nodiscard]] std::uint64_t
 required_direct_read_entry_resume_count() noexcept;
@@ -379,7 +383,8 @@ invoke_systemverilog_randomization_mode(
 void complete_systemverilog_executable_hir(
     const frontend::ParsedDesign& parsed,
     semantic::Model& semantics,
-    semantic::sv::Hir& hir);
+    semantic::sv::Hir& hir,
+    systemverilog_hir_detail::SystemVerilogHirBuilder& type_builder);
 
 /// Owned, sorted runtime path snapshots for one DesignIR build and validation
 /// pass. Consumers borrow these views while the elaborated design is immutable.
@@ -1517,6 +1522,7 @@ frontend::VhdlStandard frontend_vhdl_standard(
 frontend::StandardRevision frontend_standard_revision(
     project::Language language,
     std::string_view standard);
+void stamp_vhdl_predefined_context(frontend::ParsedDesign& parsed);
 std::string_view vhdl_compatibility_profile() noexcept;
 std::string vhdl_compatibility_profile(std::string_view source_profile);
 std::optional<std::string_view> vhdl_source_compatibility_from_profile(
@@ -1754,6 +1760,10 @@ void validate_vhdl_analysis_order(
     bool allow_external_architecture_primary = false,
     const semantic::CompiledDesign* imported = nullptr,
     std::span<const CompiledUnitAvailability> available_units = { });
+
+void validate_vhdl_source_visibility(
+    const semantic::CompiledDesign& design,
+    diagnostic::Engine& diagnostics);
 
 void validate_vhdl_simulator_api(
     std::span<const frontend::DesignUnit> units,

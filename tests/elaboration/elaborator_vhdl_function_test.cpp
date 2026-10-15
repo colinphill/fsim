@@ -2369,6 +2369,141 @@ end architecture;
     assert(interpreter->signal_value(*controlled).low_word().aval == 8U);
 }
 
+void test_vhdl_array_range_for_loops()
+{
+    const auto parsed = fsim::frontend::parse_text(
+        "vhdl-array-range-for-loops.vhd",
+        R"(
+entity range_loop_worker is
+  port (
+    data_value : in bit_vector;
+    forward_value : out integer;
+    reverse_value : out integer
+  );
+end entity;
+architecture rtl of range_loop_worker is
+begin
+  worker : process
+    variable forward_digits : integer := 0;
+    variable reverse_digits : integer := 0;
+  begin
+    forward_digits := 0;
+    reverse_digits := 0;
+    for index in data_value'range loop
+      forward_digits := forward_digits * 10;
+      if data_value(index) = '1' then
+        forward_digits := forward_digits + 1;
+      end if;
+    end loop;
+    for index in data_value'reverse_range loop
+      reverse_digits := reverse_digits * 10;
+      if data_value(index) = '1' then
+        reverse_digits := reverse_digits + 1;
+      end if;
+    end loop;
+    forward_value <= forward_digits;
+    reverse_value <= reverse_digits;
+    wait;
+  end process;
+end architecture;
+
+entity vhdl_array_range_for_loops is end entity;
+architecture rtl of vhdl_array_range_for_loops is
+  type time_array_t is array (integer range <>) of time;
+  constant samples : time_array_t :=
+    (-1 fs, 37582 ns, 1 ms + 1 ns + 1 ps);
+  signal empty_bits : bit_vector(1 to 0);
+  signal descending_bits : bit_vector(2 downto 0) := "110";
+  signal ascending_bits : bit_vector(0 to 2) := "110";
+  signal descending_forward : integer;
+  signal descending_reverse : integer;
+  signal ascending_forward : integer;
+  signal ascending_reverse : integer;
+  signal sample_range_count : integer;
+  signal sample_reverse_count : integer;
+  signal empty_range_count : integer;
+begin
+  descending_instance : entity work.range_loop_worker(rtl)
+    port map (
+      data_value => descending_bits,
+      forward_value => descending_forward,
+      reverse_value => descending_reverse
+    );
+  ascending_instance : entity work.range_loop_worker(rtl)
+    port map (
+      data_value => ascending_bits,
+      forward_value => ascending_forward,
+      reverse_value => ascending_reverse
+    );
+
+  array_ranges : process
+    variable sample_count : integer := 0;
+    variable sample_reverse : integer := 0;
+    variable empty_count : integer := 0;
+  begin
+    for index in samples'range loop
+      sample_count := sample_count + 1;
+    end loop;
+    for index in samples'reverse_range loop
+      sample_reverse := sample_reverse + 1;
+    end loop;
+    for index in empty_bits'range loop
+      empty_count := empty_count + 1;
+    end loop;
+    sample_range_count <= sample_count;
+    sample_reverse_count <= sample_reverse;
+    empty_range_count <= empty_count;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(parsed.ok());
+    const auto elaborated = compile_and_elaborate(
+        parsed.design,
+        "vhdl:work.vhdl_array_range_for_loops(rtl)");
+    if (!elaborated.ok()) {
+        for (const auto& diagnostic : elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated.ok());
+
+    const auto descending_forward
+        = elaborated.design->find_signal("descending_forward");
+    const auto descending_reverse
+        = elaborated.design->find_signal("descending_reverse");
+    const auto ascending_forward
+        = elaborated.design->find_signal("ascending_forward");
+    const auto ascending_reverse
+        = elaborated.design->find_signal("ascending_reverse");
+    const auto sample_count
+        = elaborated.design->find_signal("sample_range_count");
+    const auto sample_reverse
+        = elaborated.design->find_signal("sample_reverse_count");
+    const auto empty_count
+        = elaborated.design->find_signal("empty_range_count");
+    assert(descending_forward && descending_reverse
+        && ascending_forward && ascending_reverse
+        && sample_count && sample_reverse && empty_count);
+
+    auto interpreter = elaborated.design->create_interpreter();
+    assert(interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(interpreter->signal_value(*descending_forward).low_word().aval
+        == 110U);
+    assert(interpreter->signal_value(*descending_reverse).low_word().aval
+        == 11U);
+    assert(interpreter->signal_value(*ascending_forward).low_word().aval
+        == 110U);
+    assert(interpreter->signal_value(*ascending_reverse).low_word().aval
+        == 11U);
+    assert(interpreter->signal_value(*sample_count).low_word().aval == 3U);
+    assert(interpreter->signal_value(*sample_reverse).low_word().aval == 3U);
+    assert(interpreter->signal_value(*empty_count).low_word().aval == 0U);
+}
+
 void test_vhdl_runtime_for_loop_iteration_cap()
 {
     const auto make_design = [](const std::string_view source_name,
@@ -3071,8 +3206,83 @@ end architecture;
     check_value("secondary_aliased", "0000");
 }
 
+void test_vhdl_object_alias_is_not_array_index_type()
+{
+    const auto elaborate_case = [](
+        const std::string_view entity_name,
+        const std::string_view index_mark,
+        const bool object_alias,
+        const bool expected_rejection) {
+        std::string source {
+            "entity " + std::string { entity_name } + " is\n"
+            "end entity;\n\n"
+            "architecture test of " + std::string { entity_name }
+                + " is\n"
+        };
+        if (object_alias) {
+            const auto alias_name = index_mark == "std.standard.integer"
+                ? std::string_view { "integer" }
+                : index_mark == "std.standard.natural"
+                ? std::string_view { "natural" }
+                : index_mark;
+            const auto object_name = alias_name == "integer"
+                ? std::string_view { "integer_object" }
+                : std::string_view { "natural_object" };
+            const auto standard_type = alias_name == "integer"
+                ? std::string_view { "std.standard.integer" }
+                : std::string_view { "std.standard.natural" };
+            source += "  signal " + std::string { object_name } + " : "
+                + std::string { standard_type } + " := 0;\n"
+                "  alias " + std::string { alias_name } + " : "
+                + std::string { standard_type } + " is "
+                + std::string { object_name } + ";\n";
+        } else {
+            source +=
+                "  subtype index_t is std.standard.integer;\n";
+        }
+        source += "  type rows_t is array (" + std::string { index_mark }
+            + " range <>) of integer_vector;\n"
+            "  function identity_rows(value : rows_t) return rows_t is\n"
+            "  begin\n"
+            "    return value;\n"
+            "  end function;\n"
+            "begin\n"
+            "end architecture;\n";
+        const auto parsed = fsim::frontend::parse_text(
+            std::string { entity_name } + ".vhd", source,
+            fsim::frontend::Language::Vhdl2008);
+        assert(parsed.ok());
+        const auto result = compile_and_elaborate(
+            parsed.design,
+            "vhdl:work." + std::string { entity_name } + "(test)");
+        if (expected_rejection) {
+            assert(!result.ok());
+            assert(has_diagnostic(result, "FSIM-ELAB-VHTYPE-006"));
+        } else {
+            assert(result.ok());
+            assert(!has_diagnostic(result, "FSIM-ELAB-VHTYPE-006"));
+        }
+    };
+
+    elaborate_case(
+        "object_alias_integer_index_mark_negative",
+        "integer", true, true);
+    elaborate_case(
+        "object_alias_natural_index_mark_negative",
+        "natural", true, true);
+    elaborate_case(
+        "object_alias_integer_qualified_index_control",
+        "std.standard.integer", true, false);
+    elaborate_case(
+        "object_alias_natural_qualified_index_control",
+        "std.standard.natural", true, false);
+    elaborate_case(
+        "subtype_alias_index_mark_control", "index_t", false, false);
+}
+
 void test_vhdl_interface_function_generics()
 {
+    test_vhdl_object_alias_is_not_array_index_type();
     test_vhdl_concurrent_pure_process_reuse();
     test_vhdl_pure_packed_function_fold();
     test_vhdl_local_integer_array_callable_generic_fold();
@@ -3092,6 +3302,7 @@ void test_vhdl_interface_function_generics()
     test_vhdl_dynamic_width_formal_remains_unresolved();
     test_vhdl_dynamic_exponent_formal_remains_unresolved();
     test_vhdl_dynamic_integer_for_loop_bounds();
+    test_vhdl_array_range_for_loops();
     test_vhdl_runtime_for_loop_iteration_cap();
     test_vhdl_large_static_for_loops_use_counted_lowering();
     test_vhdl_static_for_threshold_preserves_array_values_and_visits();

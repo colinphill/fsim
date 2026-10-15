@@ -760,13 +760,20 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
             continue;
         }
         const bool string = compiled_systemverilog_string_declaration(source);
+        const bool event_array
+            = source.type
+            && source.type->container_form
+                == semantic::sv::TypeForm::static_array
+            && source.type->container_element_types.size() == 1U
+            && source.type->container_element_types.front()
+                    .target.spelling == "event";
         const auto container
             = hierarchy_sv_type_layout_detail::systemverilog_container_type(
                 specialization, *source.type);
         const auto width
             = hierarchy_sv_type_layout_detail::systemverilog_declaration_width(
                 specialization, source);
-        if (!width && !string && !container) {
+        if (!width && !string && !container && !event_array) {
             continue;
         }
         std::optional<HirSystemVerilogConstant> packed_initializer;
@@ -830,7 +837,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_static_storage(
         const auto container_object = register_static_storage_alias(
             materialization.container_objects, design_.container_by_name_,
             storage.name, materialization.path, key);
-        if (!signal && !string_object && !container_object) {
+        if (!signal && !string_object && !container_object
+            && !event_array) {
             return false;
         }
     }
@@ -1139,6 +1147,138 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             read_only_strings,
             compiled_port_direction(declaration),
             compiled_source_span(*compiled_, declaration.source));
+    }
+    const bool event_array
+        = declaration.type
+        && declaration.type->container_form
+            == semantic::sv::TypeForm::static_array
+        && declaration.type->container_element_types.size() == 1U
+        && declaration.type->container_element_types.front()
+                .target.spelling == "event";
+    if (event_array) {
+        const auto full_name
+            = materialized_path + "." + declaration.name;
+        if (declared_signal_names.contains(declaration.name)) {
+            report(
+                "FSIM-ELAB-HIR-001",
+                "duplicate compiled signal declaration '"
+                    + declaration.name + "'",
+                compiled_source_span(
+                    *compiled_, declaration.source));
+            return false;
+        }
+        if (declaration.type->unpacked_dimensions.size() != 1U
+            || declaration.type->container_element_types.size() != 1U) {
+            report(
+                "FSIM-ELAB-SVEVENT-014",
+                "this implementation supports fixed one-dimensional named "
+                "event arrays",
+                compiled_source_span(
+                    *compiled_, declaration.source));
+            return true;
+        }
+        const auto& dimension
+            = declaration.type->unpacked_dimensions.front();
+        const auto boundary = [&](
+                                   const std::optional<std::int64_t> value,
+                                   const std::optional<semantic::ExpressionId>
+                                       expression) {
+            return expression
+                ? working_specialization.evaluate_integral_expression(
+                      *expression)
+                : value;
+        };
+        const auto left_value = boundary(
+            dimension.left, dimension.left_expression);
+        const auto right_value = boundary(
+            dimension.right, dimension.right_expression);
+        if (!left_value || !right_value
+            || *left_value < std::numeric_limits<std::int32_t>::min()
+            || *left_value > std::numeric_limits<std::int32_t>::max()
+            || *right_value < std::numeric_limits<std::int32_t>::min()
+            || *right_value > std::numeric_limits<std::int32_t>::max()) {
+            report(
+                "FSIM-ELAB-SVCONTAINER-020",
+                "named event array requires a resolvable 32-bit index range",
+                compiled_source_span(
+                    *compiled_, declaration.source));
+            return true;
+        }
+        const auto left = *left_value;
+        const auto right = *right_value;
+        const auto count = static_cast<std::uint64_t>(
+            left <= right ? right - left + 1 : left - right + 1);
+        if (count > maximum_compiled_event_array_elements
+            || count > std::numeric_limits<SignalId>::max()
+            || design_.signals_.size()
+                > std::numeric_limits<SignalId>::max() - count) {
+            report(
+                "FSIM-ELAB-SVCONTAINER-020",
+                "named event array exceeds the bounded event-signal "
+                "materialization or dispatch limit",
+                compiled_source_span(
+                    *compiled_, declaration.source));
+            return true;
+        }
+        const auto span = compiled_source_span(
+            *compiled_, declaration.source);
+        const auto step = left <= right ? std::int64_t { 1 }
+                                        : std::int64_t { -1 };
+        for (auto index = left;; index += step) {
+            const auto index_text = std::to_string(index);
+            const auto element_name
+                = full_name + "[" + index_text + "]";
+            const auto signal_id = static_cast<SignalId>(
+                design_.signals_.size());
+            SignalInfo info;
+            info.id = signal_id;
+            info.name = element_name;
+            info.width = 1U;
+            info.type_name = "event";
+            info.source_domain = frontend::ValueDomain::Logic4;
+            info.declaration_span = span;
+            Signal signal {
+                element_name,
+                PackedLogic4(1U, Logic4::zero),
+                ResolutionKind::none,
+                value_kind(frontend::ValueDomain::Logic4),
+                std::nullopt,
+                { StrengthRank::pull, StrengthRank::pull },
+                std::nullopt,
+                std::nullopt,
+                frontend::SystemVerilogScalarKind::None,
+            };
+            signal.event_variable = true;
+            design_.signal_info_.push_back(std::move(info));
+            design_.signals_.push_back(std::move(signal));
+            const auto source_name
+                = declaration.name + "[" + index_text + "]";
+            const auto stable_name
+                = "@event-array-declaration:"
+                + std::to_string(declaration_id.value())
+                + "[" + index_text + "]";
+            signals.insert_or_assign(source_name, signal_id);
+            signals.insert_or_assign(element_name, signal_id);
+            signals.insert_or_assign(stable_name, signal_id);
+            design_.signal_by_name_.insert_or_assign(
+                element_name, signal_id);
+            if (design_.roots_.size() == 1U) {
+                design_.signal_by_name_.insert_or_assign(
+                    source_name, signal_id);
+                const auto root_prefix = active_root_ + ".";
+                if (materialized_path.starts_with(root_prefix)) {
+                    design_.signal_by_name_.insert_or_assign(
+                        materialized_path.substr(root_prefix.size())
+                            + "." + source_name,
+                        signal_id);
+                }
+            }
+            if (index == right) {
+                break;
+            }
+        }
+        declared_signal_names.emplace(declaration.name);
+        return true;
     }
     const auto executable_container_type = declaration.type
         ? hierarchy_sv_type_layout_detail::

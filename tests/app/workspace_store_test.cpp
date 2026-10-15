@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "../../src/app/application_workspace_store.hpp"
 
+#include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
 #include <sqlite3.h>
@@ -9,11 +10,30 @@
 #include <atomic>
 #include <cassert>
 #include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <iterator>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <thread>
+#include <vector>
+
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#include <windows.h>
+#else
+#include <cerrno>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
 
 namespace {
 
@@ -87,6 +107,158 @@ void execute_sql(const fs::path& path, const char* sql)
         SQLITE_OPEN_READWRITE, nullptr) == SQLITE_OK);
     assert(sqlite3_exec(database, sql, nullptr, nullptr, nullptr) == SQLITE_OK);
     assert(sqlite3_close(database) == SQLITE_OK);
+}
+
+std::string encode_path(const fs::path& path)
+{
+    constexpr char digits[] = "0123456789abcdef";
+    const auto utf8 = fsim::support::path_to_utf8(path);
+    std::string encoded;
+    encoded.reserve(utf8.size() * 2U);
+    for (const char character : utf8) {
+        const auto byte = static_cast<unsigned char>(character);
+        encoded += digits[byte >> 4U];
+        encoded += digits[byte & 0x0fU];
+    }
+    return encoded;
+}
+
+std::optional<fs::path> decode_path(const std::string_view encoded)
+{
+    if (encoded.empty() || encoded.size() % 2U != 0U)
+        return std::nullopt;
+    const auto value = [](const char digit) -> int {
+        if (digit >= '0' && digit <= '9')
+            return digit - '0';
+        if (digit >= 'a' && digit <= 'f')
+            return digit - 'a' + 10;
+        if (digit >= 'A' && digit <= 'F')
+            return digit - 'A' + 10;
+        return -1;
+    };
+    std::string utf8;
+    utf8.reserve(encoded.size() / 2U);
+    for (std::size_t offset = 0U; offset < encoded.size(); offset += 2U) {
+        const int high = value(encoded[offset]);
+        const int low = value(encoded[offset + 1U]);
+        if (high < 0 || low < 0)
+            return std::nullopt;
+        utf8 += static_cast<char>((high << 4) | low);
+    }
+    return fsim::support::path_from_utf8(utf8);
+}
+
+int leave_hot_journal(const fs::path& database_path)
+{
+    sqlite3* database = nullptr;
+    const int opened = sqlite3_open_v2(
+        fsim::support::native_fs::utf8_for_native_io(database_path).c_str(), &database,
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX | SQLITE_OPEN_NOFOLLOW, nullptr);
+    if (opened != SQLITE_OK) {
+        if (database)
+            sqlite3_close(database);
+        return 10;
+    }
+    const int updated = sqlite3_exec(database,
+        "BEGIN IMMEDIATE; UPDATE metadata SET version=99 WHERE version=1",
+        nullptr, nullptr, nullptr);
+    if (updated != SQLITE_OK || sqlite3_changes(database) != 1
+        || sqlite3_db_cacheflush(database) != SQLITE_OK) {
+        sqlite3_exec(database, "ROLLBACK", nullptr, nullptr, nullptr);
+        sqlite3_close(database);
+        return 11;
+    }
+    // Exit without SQLite cleanup to model a writer process interrupted after
+    // its rollback journal is durable and before COMMIT.
+    std::_Exit(0);
+}
+
+#if defined(_WIN32)
+std::wstring quote_windows_argument(const std::wstring_view argument)
+{
+    std::wstring result { L"\"" };
+    std::size_t backslashes = 0U;
+    for (const wchar_t character : argument) {
+        if (character == L'\\') {
+            ++backslashes;
+            continue;
+        }
+        if (character == L'\"') {
+            result.append(backslashes * 2U + 1U, L'\\');
+            result += character;
+        } else {
+            result.append(backslashes, L'\\');
+            result += character;
+        }
+        backslashes = 0U;
+    }
+    result.append(backslashes * 2U, L'\\');
+    result += L'\"';
+    return result;
+}
+#endif
+
+fs::path current_executable([[maybe_unused]] const char* argument_zero)
+{
+#if defined(_WIN32)
+    std::wstring path(32768U, L'\0');
+    const auto size = GetModuleFileNameW(nullptr, path.data(),
+        static_cast<DWORD>(path.size()));
+    assert(size != 0U && size < path.size());
+    path.resize(size);
+    return fs::path { path };
+#else
+    return fs::absolute(fs::path { argument_zero });
+#endif
+}
+
+bool launch_hot_journal_child(const fs::path& executable, const fs::path& database)
+{
+    const auto encoded = encode_path(database);
+#if defined(_WIN32)
+    std::wstring command = quote_windows_argument(executable.native());
+    command += L" --leave-hot-journal ";
+    for (const char character : encoded)
+        command += static_cast<wchar_t>(character);
+    std::vector<wchar_t> mutable_command(command.begin(), command.end());
+    mutable_command.push_back(L'\0');
+    STARTUPINFOW startup { };
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process { };
+    if (!CreateProcessW(executable.c_str(), mutable_command.data(), nullptr, nullptr,
+            FALSE, 0, nullptr, nullptr, &startup, &process))
+        return false;
+    const auto waited = WaitForSingleObject(process.hProcess, INFINITE);
+    DWORD exit_code = 1U;
+    const bool completed = waited == WAIT_OBJECT_0
+        && GetExitCodeProcess(process.hProcess, &exit_code);
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return completed && exit_code == 0U;
+#else
+    const auto child = fork();
+    if (child < 0)
+        return false;
+    if (child == 0) {
+        execl(executable.c_str(), executable.c_str(), "--leave-hot-journal",
+            encoded.c_str(), static_cast<char*>(nullptr));
+        _exit(127);
+    }
+    int status = 0;
+    pid_t waited;
+    do {
+        waited = waitpid(child, &status, 0);
+    } while (waited < 0 && errno == EINTR);
+    return waited == child && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+#endif
+}
+
+std::string read_bytes(const fs::path& path)
+{
+    std::ifstream input { path, std::ios::binary };
+    assert(input);
+    return { std::istreambuf_iterator<char> { input },
+        std::istreambuf_iterator<char> { } };
 }
 
 void test_source_replacement_and_group_selection()
@@ -248,6 +420,42 @@ void test_mapping_and_corrupt_metadata()
     assert(!consumer.delete_library("work", error));
 }
 
+void test_writer_recovers_hot_journal_without_changing_reader_mode(
+    const fs::path& executable)
+{
+    TemporaryWorkspace temporary;
+    workspace::Store store { temporary.root };
+    std::string error;
+    auto transaction = store.begin_library("work", error);
+    assert(transaction && error.empty());
+    auto original = artifact(*transaction, { "top.sv" }, { { unit("top"), "top.sv" } });
+    const auto database = transaction->catalog().location.directory / "library.sqlite3";
+    assert(transaction->commit(std::move(original), error));
+    transaction.reset();
+
+    const auto journal = database.parent_path() / "library.sqlite3-journal";
+    assert(launch_hot_journal_child(executable, database));
+    assert(fs::exists(journal));
+    const auto database_before_reader = read_bytes(database);
+    const auto journal_before_reader = read_bytes(journal);
+    assert(!journal_before_reader.empty());
+
+    // A plain read remains read-only: it reports the hot journal and leaves
+    // both files byte-for-byte intact. Recovery belongs to the locked writer.
+    const auto unreadable = store.read_library("work", error);
+    assert(!unreadable && error.find("readonly") != std::string::npos);
+    assert(read_bytes(database) == database_before_reader);
+    assert(read_bytes(journal) == journal_before_reader);
+
+    auto recovered_writer = store.begin_library("work", error);
+    assert(recovered_writer && error.empty());
+    assert(recovered_writer->catalog().artifacts.size() == 1U);
+    recovered_writer.reset();
+    assert(!fs::exists(journal));
+    const auto recovered = store.read_library("work", error);
+    assert(recovered && error.empty() && recovered->artifacts.size() == 1U);
+}
+
 void test_snapshot_replacement_and_workspace_boundary()
 {
     TemporaryWorkspace temporary;
@@ -329,12 +537,19 @@ void test_serialized_writers_and_symlinks()
 
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
+    if (argc == 3 && std::string_view { argv[1] } == "--leave-hot-journal") {
+        const auto database = decode_path(argv[2]);
+        return database ? leave_hot_journal(*database) : 12;
+    }
+    assert(argc == 1);
     test_source_replacement_and_group_selection();
     test_collision_failure_and_sql_rollback();
     test_native_invalidation_and_delete();
     test_mapping_and_corrupt_metadata();
+    test_writer_recovers_hot_journal_without_changing_reader_mode(
+        current_executable(argv[0]));
     test_snapshot_replacement_and_workspace_boundary();
     test_serialized_writers_and_symlinks();
 }

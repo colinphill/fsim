@@ -15,9 +15,13 @@ namespace {
 
     class SystemVerilogExecutableBuilder final {
     public:
-        SystemVerilogExecutableBuilder(semantic::Model& model, sv::Hir& hir)
+        SystemVerilogExecutableBuilder(
+            semantic::Model& model,
+            sv::Hir& hir,
+            systemverilog_hir_detail::SystemVerilogHirBuilder& type_builder)
             : model_(model)
             , hir_(hir)
+            , type_builder_(type_builder)
         {
         }
 
@@ -1290,6 +1294,14 @@ namespace {
                 source(input.named_type.empty() ? fallback : input.named_type_span),
                 spelling
             };
+            // A procedural typedef cache can carry the cached frontend shape
+            // of an alias whose lexical spelling now resolves to a different
+            // visible declaration. Once the exact TypeId is known, its
+            // TypeDefinition supplies the packed shape and value category.
+            // Explicit inline types and packed arrays of simple typedefs keep
+            // an empty named_type and retain their use-site shape below.
+            const bool resolved_named_type = !input.named_type.empty()
+                && output.target.target.valid();
             const auto type_form = [&] {
                 if (input.systemverilog_container) {
                     switch (input.systemverilog_container->kind) {
@@ -1325,7 +1337,9 @@ namespace {
                 }
                 return sv::TypeForm::packed_integral;
             }();
-            output.value_form = type_form;
+            output.value_form = resolved_named_type
+                ? std::optional<sv::TypeForm> { }
+                : std::optional<sv::TypeForm> { type_form };
             if (!input.systemverilog_class_declaration.empty()) {
                 output.value_form = sv::TypeForm::class_handle;
                 output.class_identity = input.systemverilog_class_declaration;
@@ -1356,29 +1370,58 @@ namespace {
             output.systemverilog_net_type = input.systemverilog_net_type;
             output.systemverilog_resolution_function
                 = input.systemverilog_resolution_function;
-            output.signed_value = input.is_signed;
-            output.executable_width = input.width();
-            output.four_state = input.domain == frontend::ValueDomain::Logic4
-                || input.domain == frontend::ValueDomain::Integer;
-            if (input.packed_range) {
-                output.packed_range = sv::PackedRange {
-                    input.packed_range->left,
-                    input.packed_range->right,
-                    std::nullopt,
-                    std::nullopt,
-                    input.packed_range->descending,
-                    source(fallback)
-                };
-            } else if (input.packed_range_expression) {
-                const auto& range = *input.packed_range_expression;
-                output.packed_range = sv::PackedRange {
+            output.signed_value = !resolved_named_type && input.is_signed;
+            output.executable_width = resolved_named_type
+                ? std::optional<std::uint64_t> { }
+                : input.width();
+            output.four_state = !resolved_named_type
+                && (input.domain == frontend::ValueDomain::Logic4
+                    || input.domain == frontend::ValueDomain::Integer);
+            if (!resolved_named_type) {
+                if (input.packed_range) {
+                    output.packed_range = sv::PackedRange {
+                        input.packed_range->left,
+                        input.packed_range->right,
+                        std::nullopt,
+                        std::nullopt,
+                        input.packed_range->descending,
+                        source(fallback)
+                    };
+                } else if (input.packed_range_expression) {
+                    const auto& range = *input.packed_range_expression;
+                    output.packed_range = sv::PackedRange {
+                        std::nullopt,
+                        std::nullopt,
+                        expression(range.left, scope, parent),
+                        expression(range.right, scope, parent),
+                        range.descending.value_or(true),
+                        source(range.span)
+                    };
+                }
+                if (input.systemverilog_packed_dimensions.size() > 1U) {
+                    for (const auto& range :
+                        input.systemverilog_packed_dimensions) {
+                        output.packed_dimensions.push_back({
+                            std::nullopt,
+                            std::nullopt,
+                            expression(range.left, scope, parent),
+                            expression(range.right, scope, parent),
+                            range.descending.value_or(true),
+                            source(range.span)
+                        });
+                    }
+                }
+            }
+            for (const auto& range :
+                input.systemverilog_interface_array_dimensions) {
+                output.unpacked_dimensions.push_back({
                     std::nullopt,
                     std::nullopt,
                     expression(range.left, scope, parent),
                     expression(range.right, scope, parent),
                     range.descending.value_or(true),
                     source(range.span)
-                };
+                });
             }
             if (input.systemverilog_container) {
                 const auto& container = *input.systemverilog_container;
@@ -1554,6 +1597,36 @@ namespace {
                         imports.push_back(converted);
                         output.imports.push_back(std::move(converted));
                     }
+                }
+                if ((input.kind == frontend::StatementKind::Block
+                        || input.kind == frontend::StatementKind::Fork)
+                    && !input.type_aliases.empty()) {
+                    std::vector<std::pair<semantic::ScopeId, sv::Import>>
+                        visible_imports;
+                    auto import_scope = std::optional { child_scope };
+                    while (import_scope) {
+                        const auto found = block_imports_.find(*import_scope);
+                        if (found != block_imports_.end()) {
+                            for (const auto& imported : found->second) {
+                                visible_imports.emplace_back(
+                                    *import_scope, imported);
+                            }
+                        }
+                        import_scope = parent_scope(*import_scope);
+                    }
+                    const auto alias_declarations
+                        = type_builder_.add_statement_type_aliases(
+                            std::span<const frontend::TypeAliasDeclaration> {
+                                input.type_aliases.data(),
+                                input.type_aliases.size() },
+                            std::span<const std::pair<
+                                semantic::ScopeId, sv::Import>> {
+                                visible_imports },
+                            child_scope,
+                            statement_origin);
+                    output.declarations.insert(
+                        output.declarations.end(),
+                        alias_declarations.begin(), alias_declarations.end());
                 }
                 for (const auto& declaration : input.declarations) {
                     output.declarations.push_back(block_variable(
@@ -2340,6 +2413,7 @@ namespace {
 
         semantic::Model& model_;
         sv::Hir& hir_;
+        systemverilog_hir_detail::SystemVerilogHirBuilder& type_builder_;
         std::map<semantic::ScopeId, std::vector<sv::Import>> block_imports_;
         std::optional<std::map<semantic::ScopeId, std::string>> genvar_scopes_;
         std::set<std::uint32_t> claimed_expressions_;
@@ -2352,9 +2426,10 @@ namespace {
 void complete_systemverilog_executable_hir(
     const frontend::ParsedDesign& parsed,
     semantic::Model& semantics,
-    semantic::sv::Hir& hir)
+    semantic::sv::Hir& hir,
+    systemverilog_hir_detail::SystemVerilogHirBuilder& type_builder)
 {
-    SystemVerilogExecutableBuilder builder { semantics, hir };
+    SystemVerilogExecutableBuilder builder { semantics, hir, type_builder };
     builder.add_design(parsed);
 }
 

@@ -718,6 +718,11 @@ namespace systemverilog_hir_detail {
         const std::uint64_t source_order)
         const noexcept
     {
+        const auto qualifier_separator = type_name.rfind("::");
+        const auto simple_name = qualifier_separator
+                == std::string_view::npos
+            ? type_name
+            : type_name.substr(qualifier_separator + 2U);
         auto visible_scope = std::optional<semantic::ScopeId> { scope };
         while (visible_scope) {
             for (const auto& type : model_.types()) {
@@ -729,17 +734,58 @@ namespace systemverilog_hir_detail {
             if (exact_source) {
                 break;
             }
+            if (qualifier_separator == std::string_view::npos) {
+                std::vector<semantic::TypeId> candidates;
+                bool explicit_import { };
+                const auto append = [&](const sv::Import& imported) {
+                    const auto qualified = imported.package.spelling + "::"
+                        + std::string { simple_name };
+                    const auto selected = find_systemverilog_hir_type(
+                        model_, hir_, *visible_scope, qualified);
+                    if (selected.valid()
+                        && std::ranges::find(candidates, selected)
+                            == candidates.end()) {
+                        candidates.push_back(selected);
+                    }
+                };
+                for (const auto& [import_scope, imported] : statement_imports_) {
+                    if (import_scope != *visible_scope
+                        || !imported.member
+                        || imported.member->spelling != simple_name) {
+                        continue;
+                    }
+                    if (source_order != 0U && imported.source_order != 0U
+                        && imported.source_order >= source_order) {
+                        continue;
+                    }
+                    explicit_import = true;
+                    append(imported);
+                }
+                if (!explicit_import) {
+                    for (const auto& [import_scope, imported] : statement_imports_) {
+                        if (import_scope != *visible_scope
+                            || !imported.wildcard) {
+                            continue;
+                        }
+                        if (source_order != 0U && imported.source_order != 0U
+                            && imported.source_order >= source_order) {
+                            continue;
+                        }
+                        append(imported);
+                    }
+                }
+                if (explicit_import || !candidates.empty()) {
+                    return candidates.size() == 1U
+                        ? candidates.front()
+                        : semantic::TypeId { };
+                }
+            }
             if (!visible_scope->valid()
                 || visible_scope->value() >= model_.scopes().size()) {
                 break;
             }
             visible_scope = model_.scopes()[visible_scope->value()].parent;
         }
-        const auto qualifier_separator = type_name.rfind("::");
-        const auto simple_name = qualifier_separator
-                == std::string_view::npos
-            ? type_name
-            : type_name.substr(qualifier_separator + 2U);
         if (exact_source) {
             semantic::TypeId selected;
             for (const auto& type : model_.types()) {
@@ -752,12 +798,7 @@ namespace systemverilog_hir_detail {
                 }
                 selected = type.id;
             }
-            if (selected.valid()) {
-                return selected;
-            }
-        }
-        if (exact_source) {
-            return { };
+            return selected;
         }
         if (const auto selected = find_systemverilog_hir_type(
                 model_, hir_, scope, type_name, source_order);
@@ -1611,7 +1652,7 @@ semantic::sv::Hir build_systemverilog_hir(
         semantics, result, class_specializations
     };
     builder.add_design(parsed);
-    complete_systemverilog_executable_hir(parsed, semantics, result);
+    complete_systemverilog_executable_hir(parsed, semantics, result, builder);
     for (auto& specialization : class_specializations) {
         specialization.constraint_modes.clear();
         const auto declaration = std::ranges::find(

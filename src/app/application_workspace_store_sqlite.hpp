@@ -11,8 +11,14 @@ namespace fsim::app::workspace::detail {
 
 class Database final {
 public:
+    enum class OpenMode {
+        read_only,
+        read_write_existing,
+        read_write_create,
+    };
+
     ~Database();
-    [[nodiscard]] bool open(const LibraryLocation&, bool write, std::string& error);
+    [[nodiscard]] bool open(const LibraryLocation&, OpenMode, std::string& error);
     [[nodiscard]] bool execute(const char*, std::string& error);
     [[nodiscard]] bool validate_schema(std::string& error);
     [[nodiscard]] bool initialize_schema(std::string& error);

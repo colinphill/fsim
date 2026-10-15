@@ -1082,6 +1082,8 @@ void VerilogParser::parse_event_declaration(
   type.domain = ValueDomain::Logic4;
   for (;;) {
     const auto name = expect_identifier("named event");
+    auto declaration_type = type;
+    (void)parse_optional_container_dimension(declaration_type);
     std::optional<Expression> initializer;
     if (match(TokenKind::Assign)) {
         if (language_ != Language::SystemVerilog2017) {
@@ -1114,7 +1116,7 @@ void VerilogParser::parse_event_declaration(
     } else {
       unit.signals.push_back(SignalDeclaration{
           name.text,
-          type,
+          declaration_type,
           PortDirection::Unknown,
           false,
           name.span});

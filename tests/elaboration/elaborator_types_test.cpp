@@ -221,6 +221,67 @@ end architecture;
         invalid_vhdl_report_result,
         "FSIM-ELAB-VHREPORT-002"));
 
+    const auto retained_string_result_reports = fsim::frontend::parse_text(
+        "retained_string_result_reports.vhd",
+        R"(
+entity retained_string_result_reports is end entity;
+architecture rtl of retained_string_result_reports is
+  type report_record is record
+    value : string(1 to 2);
+  end record;
+  constant record_value : report_record := (value => "ok");
+  function "&" (left : string; right : natural) return string is
+  begin
+    return left;
+  end function;
+begin
+  worker: process
+  begin
+    report "record=" & record_value.value;
+    report "overload=" & 1;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(retained_string_result_reports.ok());
+    const auto retained_string_result = compile_and_elaborate(
+        retained_string_result_reports.design,
+        "vhdl:work.retained_string_result_reports(rtl)");
+    assert(retained_string_result.ok());
+
+    const auto shadow_string_overload_report = fsim::frontend::parse_text(
+        "shadow_string_overload_report.vhd",
+        R"(
+entity shadow_string_overload_report is end entity;
+architecture rtl of shadow_string_overload_report is
+  type string is array (natural range <>) of character;
+  function shadow_value(value : natural) return string is
+  begin
+    return "x";
+  end function;
+  function "&" (left : string; right : natural) return string is
+  begin
+    return left;
+  end function;
+begin
+  worker: process
+  begin
+    report shadow_value(1) & 1;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(shadow_string_overload_report.ok());
+    const auto rejected_shadow_string_report = compile_and_elaborate(
+        shadow_string_overload_report.design,
+        "vhdl:work.shadow_string_overload_report(rtl)");
+    assert(!rejected_shadow_string_report.ok());
+    assert(has_diagnostic(
+        rejected_shadow_string_report,
+        "FSIM-ELAB-VHREPORT-003"));
+
     const auto vhdl_files = fsim::frontend::parse_text(
         "vhdl_files.vhd",
         R"(
@@ -1697,10 +1758,13 @@ end architecture;
         has_diagnostic(
             invalid_array_design,
             "FSIM-ELAB-VHARRAYAGG-009"));
+    // Lossy_Aggregate supplies STD_LOGIC where BIT is required. The resolved
+    // scalar-type check reports the exact element mismatch (014) before the
+    // broader two-state-domain conversion diagnostic (007).
     assert(
         has_diagnostic(
             invalid_array_design,
-            "FSIM-ELAB-VHARRAYAGG-007"));
+            "FSIM-ELAB-VHARRAYAGG-014"));
     assert(
         has_diagnostic(
             invalid_array_design,
@@ -2012,6 +2076,62 @@ endmodule
                 && random->kind
                 == fsim::runtime::simir::RandomKind::random;
         }));
+
+    const auto name_attribute_history_source = fsim::frontend::parse_text(
+        "name_attribute_history.vhd",
+        R"(
+entity name_attribute_history is end entity;
+architecture rtl of name_attribute_history is
+  procedure emit_paths is
+    constant value : integer := 0;
+    alias alias_value : integer is value;
+    procedure nested is
+      constant value : integer := 1;
+    begin
+      report value'instance_name;
+    end procedure;
+  begin
+    report value'instance_name;
+    report alias_value'instance_name;
+    nested;
+  end procedure;
+begin
+  worker: process
+  begin
+    emit_paths;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(name_attribute_history_source.ok());
+    const auto name_attribute_history_design = compile_and_elaborate(
+        name_attribute_history_source.design,
+        "vhdl:work.name_attribute_history(rtl)");
+    assert(name_attribute_history_design.ok());
+    auto name_attribute_history_interpreter
+        = name_attribute_history_design.design->create_interpreter();
+    std::vector<std::string> name_attribute_paths;
+    name_attribute_history_interpreter->set_report_hook(
+        [&name_attribute_paths](
+            const fsim::runtime::simir::ProcessId,
+            const std::string_view message,
+            const fsim::runtime::simir::AssertionSeverity,
+            const fsim::runtime::simir::SourceLocation&,
+            const fsim::runtime::SimulationTick,
+            const std::uint64_t) {
+            name_attribute_paths.emplace_back(message);
+        });
+    const auto name_attribute_history_run
+        = name_attribute_history_interpreter->run();
+    assert(name_attribute_history_run.status
+        == fsim::runtime::RunStatus::completed);
+    assert(name_attribute_paths.size() == 3U);
+    assert(name_attribute_paths[0].ends_with(":value"));
+    assert(name_attribute_paths[1].ends_with(":alias_value"));
+    assert(name_attribute_paths[2].ends_with(":value")
+        && name_attribute_paths[2].find("nested") != std::string::npos);
+    assert(name_attribute_paths[0] != name_attribute_paths[2]);
 
     const auto invalid_verilog_random_source = fsim::frontend::parse_text(
         "invalid_verilog_random.v",

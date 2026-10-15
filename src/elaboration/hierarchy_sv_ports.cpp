@@ -600,12 +600,44 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                     };
                 } else {
                     if (selected_type != *expected) {
-                        report(
-                            "FSIM-ELAB-SVPORT-007",
-                            "whole-container port actuals require an exact container type match",
-                            compiled_source_span(
-                                *compiled_, binding.source));
-                        return false;
+                        const auto supported_element_kind = [](
+                            const ContainerElementKind kind) {
+                            return kind == ContainerElementKind::Packed
+                                || kind == ContainerElementKind::Scalar;
+                        };
+                        const bool ordinally_compatible
+                            = expected->fixed && selected_type.fixed
+                            && !expected->queue && !selected_type.queue
+                            && !expected->associative
+                            && !selected_type.associative
+                            && expected->dimensions.size() == 1U
+                            && selected_type.dimensions.size() == 1U
+                            && supported_element_kind(
+                                expected->element_kind)
+                            && element_count(selected_type)
+                                == element_count(*expected)
+                            && same_element_profile(
+                                selected_type, *expected);
+                        if (!ordinally_compatible) {
+                            report(
+                                "FSIM-ELAB-SVPORT-007",
+                                "whole-container port actuals require an exact container type match",
+                                compiled_source_span(
+                                    *compiled_, binding.source));
+                            return false;
+                        }
+
+                        // A whole-array port connection preserves array
+                        // declaration order even when the actual and formal
+                        // use different index bounds or directions. Reuse the
+                        // existing ordinal view so the child sees its formal
+                        // range while reads and writes map across the actual's
+                        // complete declared range.
+                        slice_alias = ContainerSliceAlias {
+                            actual->second,
+                            selected_type.index_left,
+                            selected_type.index_right,
+                        };
                     }
                     if (selected_type.fixed) {
                         driver_interval = std::pair {
@@ -1029,6 +1061,228 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
             && actual_expression->systemverilog != nullptr
             && actual_expression->systemverilog->kind
                 == semantic::sv::ExpressionKind::name;
+        struct ScalarArrayOutputElement {
+            ContainerObjectId object { };
+            std::int32_t index { };
+        };
+        std::optional<ScalarArrayOutputElement>
+            scalar_array_output_element;
+        if (direction == frontend::PortDirection::Output
+            && direct_name_actual
+            && context.array_position
+            && formal_declaration.type && !formal_container_type) {
+            const auto actual_container
+                = working_containers.find(actual_name);
+            if (actual_container != working_containers.end()) {
+                const auto actual_info = std::ranges::find_if(
+                    design_.container_object_info_.rbegin(),
+                    design_.container_object_info_.rend(),
+                    [&](const ContainerObjectInfo& candidate) {
+                        return candidate.id == actual_container->second;
+                    });
+                if (actual_info
+                        == design_.container_object_info_.rend()
+                    || actual_container->second
+                        >= design_.container_objects_.size()) {
+                    report(
+                        "FSIM-ELAB-SVPORT-006",
+                        "container connection object '" + actual_name
+                            + "' has no elaborated type",
+                        compiled_source_span(
+                            *compiled_, binding.source));
+                    return false;
+                }
+                if (working_read_only_containers.contains(actual_name)
+                    || working_read_only_containers.contains(
+                        actual_info->name)) {
+                    report(
+                        "FSIM-ELAB-SVPORT-009",
+                        "an input container port cannot be connected to a "
+                        "descendant output or inout port",
+                        compiled_source_span(
+                            *compiled_, binding.source));
+                    return false;
+                }
+                const auto& actual_type = actual_info->type;
+                const auto& actual_object
+                    = design_.container_objects_[actual_container->second];
+                const auto element_count = [](const ContainerType& type) {
+                    return static_cast<std::uint64_t>(
+                               type.index_left >= type.index_right
+                                   ? static_cast<std::int64_t>(
+                                         type.index_left)
+                                       - type.index_right
+                                   : static_cast<std::int64_t>(
+                                         type.index_right)
+                                       - type.index_left)
+                        + 1U;
+                };
+                const bool supported_array
+                    = actual_type.fixed && !actual_type.queue
+                    && !actual_type.associative
+                    && !actual_type.string_indices
+                    && !actual_type.aggregate_value
+                    && actual_type.element_kind
+                        == ContainerElementKind::Packed
+                    && actual_type.element_width != 0U
+                    && actual_type.dimensions.size() == 1U
+                    && actual_type.index_left
+                        == actual_type.dimensions.front().first
+                    && actual_type.index_right
+                        == actual_type.dimensions.front().second
+                    && actual_object.initial_value.type == actual_type;
+                if (!supported_array) {
+                    report(
+                        "FSIM-ELAB-SVPORT-007",
+                        "an instance-array scalar output requires a fixed "
+                        "one-dimensional packed array actual",
+                        compiled_source_span(
+                            *compiled_, binding.source));
+                    return false;
+                }
+                const auto [ordinal, instance_count]
+                    = *context.array_position;
+                const auto actual_count = element_count(actual_type);
+                if (actual_count != instance_count
+                    || ordinal >= actual_count
+                    || actual_object.initial_value.elements.size()
+                        != actual_count) {
+                    report(
+                        "FSIM-ELAB-SVPORT-007",
+                        "an instance-array scalar output requires one actual "
+                        "array element per instance",
+                        compiled_source_span(
+                            *compiled_, binding.source));
+                    return false;
+                }
+                // Reuse the type-layout resolver for the formal scalar's
+                // width, domain, signedness, and nominal identity.
+                semantic::sv::TypeReference formal_element_array;
+                formal_element_array.container_form
+                    = semantic::sv::TypeForm::static_array;
+                semantic::sv::PackedRange formal_element_range;
+                formal_element_range.left = 0;
+                formal_element_range.right = 0;
+                formal_element_array.unpacked_dimensions.push_back(
+                    std::move(formal_element_range));
+                formal_element_array.container_element_types.push_back(
+                    *formal_declaration.type);
+                const auto formal_element_profile
+                    = hierarchy_sv_type_layout_detail::
+                        systemverilog_container_type(
+                            *child_interface_specialization,
+                            formal_element_array);
+                const auto same_element_profile = [](
+                                                      const ContainerType& left,
+                                                      const ContainerType& right) {
+                    return left.element_kind == right.element_kind
+                        && left.scalar_kind == right.scalar_kind
+                        && left.element_width == right.element_width
+                        && left.two_state == right.two_state
+                        && left.signed_elements
+                        == right.signed_elements
+                        && left.element_nominal_type
+                        == right.element_nominal_type;
+                };
+                if (!formal_element_profile
+                    || formal_element_profile->element_kind
+                        != ContainerElementKind::Packed
+                    || !same_element_profile(
+                        actual_type, *formal_element_profile)) {
+                    report(
+                        "FSIM-ELAB-SVPORT-007",
+                        "an instance-array scalar output requires an "
+                        "identical packed element profile",
+                        compiled_source_span(
+                            *compiled_, binding.source));
+                    return false;
+                }
+                const auto has_signal_backing = [&] {
+                    auto object = actual_container->second;
+                    for (std::size_t depth = 0U;
+                        depth < design_.container_objects_.size();
+                        ++depth) {
+                        if (std::ranges::any_of(
+                                design_.container_element_signal_aliases_,
+                                [object](const ContainerElementSignalAlias& alias) {
+                                    return alias.object == object;
+                                })
+                            || std::ranges::any_of(
+                                design_.container_aggregate_signal_aliases_,
+                                [object](const ContainerAggregateSignalAlias& alias) {
+                                    return alias.object == object;
+                                })) {
+                            return true;
+                        }
+                        const auto direct_alias = std::ranges::find_if(
+                            design_.container_signal_aliases_,
+                            [object](const ContainerSignalAlias& alias) {
+                                return alias.object == object;
+                            });
+                        if (direct_alias
+                            != design_.container_signal_aliases_.end()) {
+                            if (!direct_alias->writable
+                                || direct_alias->signal
+                                    >= design_.signal_info_.size()
+                                || direct_alias->signal
+                                    >= design_.signals_.size()) {
+                                return true;
+                            }
+                            const auto& proxy_info
+                                = design_.signal_info_[direct_alias->signal];
+                            const auto& proxy_signal
+                                = design_.signals_[direct_alias->signal];
+                            // A variable array's aggregate bridge is writable
+                            // through WriteContainerObjectElement, which
+                            // commits only that element's packed slice. Net
+                            // or resolved proxies still need element drivers.
+                            return !proxy_info.systemverilog_net_type.empty()
+                                || proxy_signal.resolution
+                                    != ResolutionKind::none;
+                        }
+                        const auto& container_object
+                            = design_.container_objects_[object];
+                        if (!container_object.slice_alias) {
+                            return false;
+                        }
+                        object = container_object.slice_alias->object;
+                        if (object >= design_.container_objects_.size()) {
+                            return true;
+                        }
+                    }
+                    return true;
+                };
+                // This bridge writes variable-array storage only. A
+                // signal-backed array needs per-element driver regions.
+                if (!has_signal_backing()) {
+                    const auto left
+                        = static_cast<std::int64_t>(
+                            actual_type.index_left);
+                    const auto ordinal_offset
+                        = static_cast<std::int64_t>(ordinal);
+                    const auto index = actual_type.index_left
+                            >= actual_type.index_right
+                        ? left - ordinal_offset
+                        : left + ordinal_offset;
+                    if (index
+                            < std::numeric_limits<std::int32_t>::min()
+                        || index
+                            > std::numeric_limits<std::int32_t>::max()) {
+                        report(
+                            "FSIM-ELAB-SVPORT-007",
+                            "an instance-array output element index is out of range",
+                            compiled_source_span(
+                                *compiled_, binding.source));
+                        return false;
+                    }
+                    scalar_array_output_element
+                        = ScalarArrayOutputElement {
+                            actual_container->second,
+                            static_cast<std::int32_t>(index),
+                        };
+                }
+            }
+        }
         if (direction == frontend::PortDirection::Output
             && direct_name_actual && actual_signal
             && formal_declaration.type
@@ -1328,7 +1582,8 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                 // the leftmost instance to the leftmost bits (23.3.3.5).
                 std::optional<std::pair<std::uint32_t, std::uint32_t>>
                     actual_slice;
-                if (!joinable && context.array_position
+                if (!joinable && !scalar_array_output_element
+                    && context.array_position
                     && context.array_position->second > 1U) {
                     const auto [ordinal, count] = *context.array_position;
                     const auto natural = actual_lowerer.hir_actual_width(
@@ -1341,6 +1596,67 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                                 (count - 1U - ordinal) * *width),
                             static_cast<std::uint32_t>(*width),
                         };
+                    }
+                }
+                if (scalar_array_output_element) {
+                    // A scalar output of an instance array writes the
+                    // matching declared-order element of an unpacked
+                    // variable actual. Writing through a slice view lets
+                    // the existing ContainerSliceAlias path propagate the
+                    // element to the connected parent array.
+                    Process element_output;
+                    const auto process_index = design_.process_count();
+                    element_output.id = static_cast<ProcessId>(process_index);
+                    if (static_cast<std::size_t>(element_output.id)
+                        != process_index) {
+                        throw std::length_error {
+                            "too many SimIR processes" };
+                    }
+                    element_output.name
+                        = adapter_name + ".$array_element_output";
+                    element_output.language_standard = unit.standard;
+                    element_output.compatibility_profile
+                        = unit.compatibility_profile;
+                    element_output.scheduling_domain
+                        = ProcessSchedulingDomain::systemverilog;
+                    element_output.static_sensitivity.push_back({
+                        id, EdgeKind::any
+                    });
+                    element_output.operations.emplace_back(
+                        ReadSignal { 0U, id });
+                    element_output.operations.emplace_back(LoadConstant {
+                        1U,
+                        PackedLogic4::from_aval_bval(
+                            32U,
+                            static_cast<std::uint32_t>(
+                                scalar_array_output_element->index),
+                            0U),
+                    });
+                    element_output.operations.emplace_back(
+                        WriteContainerObjectElement {
+                            scalar_array_output_element->object,
+                            1U,
+                            0U,
+                            true,
+                            false,
+                            false,
+                            std::nullopt,
+                            std::nullopt,
+                            { },
+                        });
+                    element_output.operations.emplace_back(
+                        WaitSensitivity { });
+                    element_output.operations.emplace_back(Jump { 0U });
+                    element_output.register_count = 2U;
+                    element_output.register_value_kinds.push_back(
+                        design_.signals_[id].value_kind);
+                    element_output.register_value_kinds.push_back(
+                        ValueKind::logic4);
+                    adapted = append_adapter(
+                        std::optional<Process> {
+                            std::move(element_output) });
+                    if (adapted) {
+                        actual_signal = id;
                     }
                 }
                 if (!joinable && accepts_input) {

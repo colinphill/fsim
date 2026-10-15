@@ -8,8 +8,12 @@
 #include "fsim/frontend/class_inheritance.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/semantic/compiled_design_normalization.hpp"
+#include "fsim/semantic/compiled_design_resolver.hpp"
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
+
+#include <unordered_map>
+#include <unordered_set>
 
 namespace fsim::app {
 using namespace application_detail;
@@ -138,6 +142,186 @@ bool link_mapped_compiled_designs(
     return false;
   }
   return true;
+}
+
+bool simple_vhdl_type_mark(const std::string_view spelling) {
+  return !spelling.empty()
+      && spelling.find_first_of(".:") == std::string_view::npos;
+}
+
+bool vhdl_type_declaration_form(
+    const semantic::vhdl::DeclarationForm form) {
+  using Form = semantic::vhdl::DeclarationForm;
+  return form == Form::type || form == Form::subtype
+      || form == Form::generic_type;
+}
+
+bool vhdl_declaration_directly_visible(
+    const CompilationWorkspace& checked,
+    const semantic::UnitId use_unit,
+    const semantic::ScopeId use_scope,
+    const semantic::DeclarationId candidate_id) {
+  const auto find_scope = [&](const semantic::ScopeId id)
+      -> const semantic::Scope* {
+    const auto& scopes = checked.semantics.scopes();
+    const auto found = std::ranges::find(scopes, id, &semantic::Scope::id);
+    return found == scopes.end() ? nullptr : &*found;
+  };
+  const auto candidate = checked.find_declaration(candidate_id);
+  if (!candidate || candidate->vhdl == nullptr) {
+    return false;
+  }
+  const auto* candidate_scope = find_scope(candidate->vhdl->scope);
+  if (candidate_scope == nullptr) {
+    return false;
+  }
+  auto active = use_scope;
+  for (std::size_t depth { };
+       active.valid() && depth <= checked.semantics.scopes().size();
+       ++depth) {
+    if (active == candidate_scope->id) {
+      return true;
+    }
+    const auto* scope = find_scope(active);
+    if (scope == nullptr || !scope->parent) {
+      break;
+    }
+    active = *scope->parent;
+  }
+
+  const auto owner = checked.find_unit(use_unit);
+  if (!owner || owner->vhdl == nullptr) {
+    return false;
+  }
+  const auto primary = checked.vhdl_primary_unit(*owner->vhdl);
+  return primary && candidate_scope->unit == (**primary).id;
+}
+
+bool validate_vhdl_type_mark_visibility(
+    const CompilationWorkspace& checked,
+    diagnostic::Engine& diagnostics) {
+  const auto& scopes = checked.semantics.scopes();
+  const auto find_scope = [&](const semantic::ScopeId id)
+      -> const semantic::Scope* {
+    const auto found = std::ranges::find(scopes, id, &semantic::Scope::id);
+    return found == scopes.end() ? nullptr : &*found;
+  };
+  std::unordered_set<std::uint32_t> source_units;
+  for (const auto unit : checked.source_units) {
+    source_units.insert(unit.value());
+  }
+  std::unordered_map<std::uint32_t,
+      std::vector<const semantic::vhdl::Declaration*>>
+      declarations_by_unit;
+  for (const auto& declaration : checked.vhdl_hir.declarations()) {
+    if (!declaration.subtype) {
+      continue;
+    }
+    const auto* owner_scope = find_scope(declaration.scope);
+    if (owner_scope != nullptr
+        && source_units.contains(owner_scope->unit.value())) {
+      declarations_by_unit[owner_scope->unit.value()].push_back(
+          &declaration);
+    }
+  }
+
+  bool valid = true;
+  const semantic::CompiledDesign& design = checked;
+  for (const auto unit_id : checked.source_units) {
+    const auto declarations = declarations_by_unit.find(unit_id.value());
+    if (declarations == declarations_by_unit.end()) {
+      continue;
+    }
+    const auto unit = checked.find_unit(unit_id);
+    if (!unit || unit->vhdl == nullptr) {
+      continue;
+    }
+    const semantic::CompiledDesignResolver resolver(design, unit_id);
+    for (const auto* declaration : declarations->second) {
+      const auto& subtype = *declaration->subtype;
+      const std::string_view spelling { subtype.type_mark.spelling };
+      if (!simple_vhdl_type_mark(spelling)) {
+        continue;
+      }
+      semantic::vhdl::Name name;
+      name.spelling = std::string { spelling };
+      name.canonical = name.spelling;
+      name.source = subtype.type_mark.source;
+      const auto all_names = resolver.resolve_vhdl(name, declaration->scope);
+      if (all_names.status == semantic::CompiledResolutionStatus::not_found
+          || all_names.status == semantic::CompiledResolutionStatus::invalid) {
+        continue;
+      }
+      const auto package_members = resolver.resolve_vhdl_package_members(
+          name, declaration->scope);
+      const auto has_direct_declaration = std::ranges::any_of(
+          all_names.candidates, [&](const semantic::DeclarationId candidate) {
+            return vhdl_declaration_directly_visible(
+                checked, unit_id, declaration->scope, candidate);
+          });
+      if (has_direct_declaration) {
+        continue;
+      }
+      const auto has_type = std::ranges::any_of(
+          all_names.candidates, [&](const semantic::DeclarationId candidate) {
+            const auto view = checked.find_declaration(candidate);
+            return view && view->vhdl != nullptr
+                && vhdl_type_declaration_form(view->vhdl->form);
+          });
+      const auto has_non_type = std::ranges::any_of(
+          all_names.candidates, [&](const semantic::DeclarationId candidate) {
+            const auto view = checked.find_declaration(candidate);
+            return view && view->vhdl != nullptr
+                && !vhdl_type_declaration_form(view->vhdl->form);
+          });
+
+      std::string reason;
+      if (all_names.status == semantic::CompiledResolutionStatus::unique
+          && package_members.status
+              == semantic::CompiledResolutionStatus::unique
+          && has_type
+          && resolver.vhdl_library_name_visible(
+              spelling, declaration->scope)) {
+        const auto candidate = all_names.candidates.front();
+        if (std::ranges::any_of(package_members.candidates,
+                [&](const semantic::CompiledVhdlPackageMember& member) {
+                    return member.member == candidate;
+                })) {
+          reason = " is hidden by a directly visible library name";
+        }
+      } else if (all_names.status
+              == semantic::CompiledResolutionStatus::ambiguous
+          && package_members.status
+              == semantic::CompiledResolutionStatus::ambiguous
+          && has_type && has_non_type) {
+        reason = " is ambiguous across use-visible declarations";
+      }
+      if (reason.empty()) {
+        continue;
+      }
+
+      auto source_id = subtype.type_mark.source;
+      if (!source_id.valid()) {
+        source_id = declaration->source;
+      }
+      diagnostic::SourceSpan source;
+      if (source_id.valid()
+          && source_id.value() < checked.semantics.source_spans().size()) {
+        const auto& semantic_source
+            = checked.semantics.source_spans()[source_id.value()];
+        source.path = semantic_source.logical_name;
+        source.begin = { semantic_source.begin.line,
+            semantic_source.begin.column, semantic_source.begin.offset };
+        source.end = { semantic_source.end.line,
+            semantic_source.end.column, semantic_source.end.offset };
+      }
+      diagnostics.error("FSIM-ELAB-VHTYPE-006",
+          "VHDL type mark '" + std::string { spelling } + "'" + reason,
+          std::move(source));
+      valid = false;
+    }
+  }
+  return valid;
 }
 
 }  // namespace
@@ -862,10 +1046,17 @@ static std::optional<CompilationWorkspace> check_project_impl(
   }
   semantic::refresh_compiled_design_metadata(checked);
   remember_compiled_references(checked, source_references);
+  validate_vhdl_source_visibility(checked, diagnostics);
+  if (diagnostics.has_error()) {
+    return std::nullopt;
+  }
   if (!semantic::normalize_compiled_design(checked)) {
     diagnostics.error(
         "FSIM-SEM-0002",
         "source analysis produced invalid compiled-HIR dependencies");
+    return std::nullopt;
+  }
+  if (!validate_vhdl_type_mark_visibility(checked, diagnostics)) {
     return std::nullopt;
   }
   install_compiled_class_specializations(checked);

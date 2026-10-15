@@ -71,6 +71,11 @@ void Interpreter::Impl::capture_callable_values(
         account(
             sizeof(ContainerValue) + container_value_storage_bytes(*value));
     }
+    if (callable_storage_bytes_in_use(process, &context)
+        > maximum_container_storage_bytes) {
+        fail(process,
+            "automatic callable captures exceed their owning-storage budget");
+    }
 }
 
 void Interpreter::Impl::restore_callable_values(

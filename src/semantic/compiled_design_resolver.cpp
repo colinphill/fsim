@@ -1021,6 +1021,22 @@ bool standard_package_exports(const vhdl::Unit& package,
         });
 }
 
+bool builtin_standard_discrete_type(const std::string_view name)
+{
+    // Match the implicit STD.STANDARD scalar types completed below. The
+    // caller also requires unfiltered scoped lookup to find no declaration,
+    // so a same-spelled user type or object keeps its own identity.
+    constexpr auto names = std::to_array<std::string_view>({
+        "boolean", "bit", "character", "severity_level",
+        "file_open_kind", "file_open_status", "integer", "natural",
+        "positive",
+    });
+    return std::ranges::any_of(names,
+        [&](const std::string_view candidate) {
+            return same_vhdl_identifier(candidate, name);
+        });
+}
+
 bool builtin_standard_package_exports(const std::string_view library,
     const std::string_view package, const std::string_view member)
 {
@@ -1052,6 +1068,15 @@ bool builtin_standard_package_exports(const std::string_view library,
             [&](const std::string_view candidate) {
                 return same_vhdl_identifier(candidate, member);
             });
+    }
+    if (same_vhdl_identifier(library, "ieee")
+        && same_vhdl_identifier(package, "numeric_std")
+        && (same_vhdl_identifier(member, "unresolved_signed")
+            || same_vhdl_identifier(member, "unresolved_unsigned"))) {
+        // NUMERIC_STD's TO_SIGNED/TO_UNSIGNED results use these exact
+        // package types (IEEE 1076-2019, numeric_std D.3-D.4). They are not
+        // members of NUMERIC_BIT.
+        return true;
     }
     if (same_vhdl_identifier(library, "ieee")
         && (same_vhdl_identifier(package, "numeric_std")
@@ -2878,6 +2903,14 @@ CompiledDesignResolver::underlying_systemverilog_type(
         if (!definition || definition->systemverilog == nullptr) {
             break;
         }
+        const auto form = definition->systemverilog->form;
+        if (form == sv::TypeForm::packed_structure
+            || form == sv::TypeForm::packed_union
+            || form == sv::TypeForm::tagged_union
+            || form == sv::TypeForm::unpacked_structure
+            || form == sv::TypeForm::unpacked_union) {
+            break;
+        }
         auto replacement = effective_systemverilog_type(
                                definition->systemverilog->base,
                                use_scope)
@@ -2979,6 +3012,33 @@ CompiledDesignResolver::effective_vhdl_subtype(
                   *residual, make_boundary_binding(active))
             : std::nullopt;
     };
+    // A generic integral fold is not a substitute for an enum ordinal. Keep
+    // unresolved IDs only within this resolver call and exact active binding
+    // context, so one specialization cannot poison another.
+    struct EnumBoundaryMaterialization {
+        std::vector<CompiledBindingFrame> active_frames;
+        std::set<ExpressionId> unresolved;
+    };
+    std::vector<EnumBoundaryMaterialization> enum_boundary_materializations;
+    const auto unresolved_enum_boundaries_for = [&](
+        const std::span<const CompiledBindingFrame> active)
+        -> std::set<ExpressionId>& {
+        const auto found = std::ranges::find_if(
+            enum_boundary_materializations,
+            [&](const EnumBoundaryMaterialization& entry) {
+                return std::ranges::equal(entry.active_frames, active);
+            });
+        if (found != enum_boundary_materializations.end()) {
+            return found->unresolved;
+        }
+        enum_boundary_materializations.push_back({
+            std::vector<CompiledBindingFrame> {
+                active.begin(), active.end()
+            },
+            { }
+        });
+        return enum_boundary_materializations.back().unresolved;
+    };
     std::function<void(vhdl::SubtypeIndication&,
         std::span<const CompiledBindingFrame>)> materialize_boundaries;
     const auto standard_width = [&]() -> std::uint8_t {
@@ -2987,6 +3047,39 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 && selected->vhdl->standard == "2019"
             ? 64U
             : 32U;
+    };
+    const auto concrete_array_range_length = [](
+        const vhdl::RangeConstraint& range,
+        const std::int64_t left,
+        const std::int64_t right)
+        -> std::optional<std::uint64_t> {
+        if (range.direction_from_bounds) {
+            // Equal bounds are non-null for either direction. Unequal bounds
+            // still need the referenced range's direction; endpoint order
+            // cannot distinguish a null range from its non-null counterpart.
+            if (left != right) {
+                return std::nullopt;
+            }
+            return std::uint64_t { 1U };
+        }
+        if (range.null) {
+            return std::uint64_t { 0U };
+        }
+        const bool null_range = range.descending
+            ? left < right
+            : left > right;
+        if (null_range) {
+            return std::uint64_t { 0U };
+        }
+        const auto distance = left >= right
+            ? static_cast<std::uint64_t>(left)
+                - static_cast<std::uint64_t>(right)
+            : static_cast<std::uint64_t>(right)
+                - static_cast<std::uint64_t>(left);
+        if (distance == std::numeric_limits<std::uint64_t>::max()) {
+            return std::nullopt;
+        }
+        return distance + 1U;
     };
     const auto complete_predefined = [&](
         vhdl::SubtypeIndication& result,
@@ -3161,33 +3254,20 @@ CompiledDesignResolver::effective_vhdl_subtype(
                     result.executable_width.reset();
                     return true;
                 }
-                const auto descending = constraint.direction_from_bounds
-                    ? *left > *right
-                    : constraint.descending;
-                const auto null_range
-                    = (constraint.null && !constraint.direction_from_bounds)
-                    || (descending && *left < *right)
-                    || (!descending && *left > *right);
-                const auto distance = *left >= *right
-                    ? static_cast<std::uint64_t>(*left)
-                        - static_cast<std::uint64_t>(*right)
-                    : static_cast<std::uint64_t>(*right)
-                        - static_cast<std::uint64_t>(*left);
-                if (!null_range
-                    && distance
-                        == std::numeric_limits<std::uint64_t>::max()) {
+                const auto dimension = concrete_array_range_length(
+                    constraint, *left, *right);
+                if (!dimension) {
                     result.executable_width.reset();
                     return true;
                 }
-                const auto dimension = null_range ? 0U : distance + 1U;
-                if (dimension != 0U
+                if (*dimension != 0U
                     && count
                         > std::numeric_limits<std::uint64_t>::max()
-                            / dimension) {
+                            / *dimension) {
                     result.executable_width.reset();
                     return true;
                 }
-                count *= dimension;
+                count *= *dimension;
             }
             if (element_width != 0U
                 && count > std::numeric_limits<std::uint64_t>::max()
@@ -3323,13 +3403,37 @@ CompiledDesignResolver::effective_vhdl_subtype(
     std::function<std::optional<vhdl::SubtypeIndication>(
         vhdl::SubtypeIndication, ScopeId,
         std::vector<CompiledBindingFrame>&)> resolve;
-    const auto range_source_direction = [&](
+    using RangeDirectionPath
+        = std::set<std::pair<std::uint32_t, std::uint32_t>>;
+    std::function<std::optional<bool>(
+        const vhdl::RangeConstraint&,
+        std::span<const CompiledBindingFrame>, RangeDirectionPath&)>
+        range_source_direction;
+    range_source_direction = [&](
         const vhdl::RangeConstraint& constraint,
-        const std::span<const CompiledBindingFrame> active)
-        -> std::optional<bool> {
+        const std::span<const CompiledBindingFrame> active,
+        RangeDirectionPath& path) -> std::optional<bool> {
+        if (!constraint.direction_from_bounds) {
+            return constraint.descending;
+        }
         if (!constraint.left_expression || !constraint.right_expression) {
             return std::nullopt;
         }
+        constexpr std::size_t maximum_range_direction_depth = 32U;
+        if (path.size() >= maximum_range_direction_depth) {
+            return std::nullopt;
+        }
+        const auto path_key = std::pair {
+            constraint.left_expression->value(),
+            constraint.right_expression->value()
+        };
+        if (!path.insert(path_key).second) {
+            return std::nullopt;
+        }
+        const auto finish = [&](const std::optional<bool> result) {
+            path.erase(path_key);
+            return result;
+        };
         const auto left_expression = effective_ != nullptr
             ? effective_->find_expression(*constraint.left_expression)
             : design_->find_expression(*constraint.left_expression);
@@ -3340,7 +3444,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
             || !right_expression || right_expression->vhdl == nullptr
             || left_expression->vhdl->kind != vhdl::ExpressionKind::call
             || right_expression->vhdl->kind != vhdl::ExpressionKind::call) {
-            return std::nullopt;
+            return finish(std::nullopt);
         }
         const auto& left_call = *left_expression->vhdl;
         const auto& right_call = *right_expression->vhdl;
@@ -3351,7 +3455,7 @@ CompiledDesignResolver::effective_vhdl_subtype(
                     || right_call.text != "'right"))
             || left_call.operands.size() != 1U
             || right_call.operands.size() != 1U) {
-            return std::nullopt;
+            return finish(std::nullopt);
         }
         const auto prefix_id = left_call.operands.front();
         const auto paired_prefix_id = right_call.operands.front();
@@ -3365,29 +3469,138 @@ CompiledDesignResolver::effective_vhdl_subtype(
             || prefix->vhdl->kind != vhdl::ExpressionKind::name
             || !paired_prefix || paired_prefix->vhdl == nullptr
             || paired_prefix->vhdl->kind != vhdl::ExpressionKind::name) {
-            return std::nullopt;
+            return finish(std::nullopt);
         }
         const auto resolver = CompiledDesignResolver {
             *design_, selected_unit_, effective_, active
         };
-        const auto declaration_id
-            = resolver.resolve_expression_name(prefix_id).unique();
+        const auto prefix_resolution
+            = resolver.resolve_expression_name(prefix_id);
+        const auto paired_prefix_resolution
+            = resolver.resolve_expression_name(paired_prefix_id);
+        const auto declaration_id = prefix_resolution.unique();
         const auto paired_declaration_id
-            = resolver.resolve_expression_name(paired_prefix_id).unique();
+            = paired_prefix_resolution.unique();
         if (!declaration_id || !paired_declaration_id
             || *declaration_id != *paired_declaration_id) {
-            return std::nullopt;
+            const auto builtin_spelling = [](const vhdl::Name& name) {
+                auto spelling = vhdl_spelling(name);
+                constexpr auto prefix
+                    = std::string_view { "@builtin:" };
+                if (spelling.starts_with(prefix)) {
+                    spelling.remove_prefix(prefix.size());
+                }
+                return spelling;
+            };
+            const auto is_builtin_std_ulogic = [&](const vhdl::Name& name) {
+                const auto spelling = builtin_spelling(name);
+                return vhdl_name_parts(vhdl_spelling(name)).size() == 1U
+                    && same_vhdl_identifier(spelling, "std_ulogic");
+            };
+            const auto is_implicit_standard_discrete_type = [&](
+                const vhdl::Name& name) {
+                const auto spelling = builtin_spelling(name);
+                return spelling.find_first_of(".:") == std::string_view::npos
+                    && vhdl_name_parts(spelling).size() == 1U
+                    && builtin_standard_discrete_type(spelling);
+            };
+            const auto builtin_std_ulogic_visible = [&](
+                const vhdl::Name& name, const ScopeId scope) {
+                const auto spelling = builtin_spelling(name);
+                if (same_vhdl_identifier(spelling, "std_ulogic")) {
+                    // An unqualified name needs an exact IEEE import; a
+                    // same-spelled declaration from another package is not
+                    // sufficient evidence for compiler-owned enum order.
+                    return resolver.vhdl_builtin_package_member_imported(
+                            "ieee", "std_logic_1164", "std_ulogic", scope)
+                        && resolver.vhdl_builtin_type_visible(
+                            spelling, scope);
+                }
+                return false;
+            };
+            const auto& left_name = prefix->vhdl->referenced_name;
+            const auto& right_name = paired_prefix->vhdl->referenced_name;
+            const bool no_retained_identity = left_name && right_name
+                && !left_name->selected && left_name->overloads.empty()
+                && !right_name->selected && right_name->overloads.empty();
+            const bool same_prefix_spelling = left_name && right_name
+                && same_vhdl_identifier(
+                    builtin_spelling(*left_name),
+                    builtin_spelling(*right_name));
+            const bool same_ieee_std_ulogic = same_prefix_spelling
+                && is_builtin_std_ulogic(*left_name)
+                && is_builtin_std_ulogic(*right_name);
+            const bool same_standard_discrete_type
+                = same_prefix_spelling
+                && is_implicit_standard_discrete_type(*left_name)
+                && is_implicit_standard_discrete_type(*right_name);
+            const auto prefix_scope = prefix->vhdl->scope;
+            const bool recorded_prefix_scope = prefix_scope.valid()
+                && find_scope(*design_, prefix_scope) != nullptr;
+            const bool implicit_standard_type = recorded_prefix_scope
+                && same_standard_discrete_type;
+            const bool imported_ieee_type = same_ieee_std_ulogic
+                && builtin_std_ulogic_visible(
+                    *left_name, prefix->vhdl->scope)
+                && builtin_std_ulogic_visible(
+                    *right_name, paired_prefix->vhdl->scope);
+            if (constraint.kind == vhdl::RangeKind::array_index
+                && recorded_prefix_scope
+                && prefix_scope == paired_prefix->vhdl->scope
+                && prefix_resolution.status
+                    == CompiledResolutionStatus::not_found
+                && prefix_resolution.candidates.empty()
+                && paired_prefix_resolution.status
+                    == CompiledResolutionStatus::not_found
+                && paired_prefix_resolution.candidates.empty()
+                && no_retained_identity
+                && (implicit_standard_type || imported_ieee_type)) {
+                // STD.STANDARD is implicitly visible. Its predefined
+                // discrete ranges use ascending declaration/range order;
+                // IEEE std_ulogic uses ascending enumeration declaration
+                // order. Preserve attribute order directly so reverse,
+                // singleton, and null ranges do not depend on endpoint
+                // comparisons.
+                return finish(reverse_range);
+            }
+            return finish(std::nullopt);
         }
         const auto declaration = find_declaration(
             *design_, effective_, *declaration_id);
         if (!declaration || declaration->vhdl == nullptr) {
-            return std::nullopt;
+            return finish(std::nullopt);
         }
+        const auto form = declaration->vhdl->form;
+        const bool type_prefix = form == vhdl::DeclarationForm::type
+            || form == vhdl::DeclarationForm::subtype
+            || form == vhdl::DeclarationForm::generic_type;
         auto source_subtype = declaration->vhdl->subtype;
-        if (declaration->vhdl->form
-                == vhdl::DeclarationForm::generic_constant
-            && declaration_id) {
-            source_subtype = bound_type(*declaration_id, active, true);
+        const bool actual_shape_is_authoritative
+            = declaration->vhdl->form
+                    == vhdl::DeclarationForm::generic_constant
+            || (source_subtype && source_subtype->unconstrained);
+        if (actual_shape_is_authoritative) {
+            if (auto actual_subtype = bound_type(
+                    *declaration_id, active, true)) {
+                source_subtype = std::move(actual_subtype);
+            }
+        }
+        if (form == vhdl::DeclarationForm::generic_type) {
+            if (auto actual_type = bound_type(
+                    *declaration_id, active, true)) {
+                source_subtype = std::move(actual_type);
+            }
+        } else if (type_prefix && declaration->vhdl->declared_type) {
+            if (!source_subtype) {
+                source_subtype.emplace();
+            }
+            // A type mark denotes the declared type. Retain its nominal
+            // identity while following the type record for source bounds.
+            source_subtype->type_mark.target
+                = *declaration->vhdl->declared_type;
+            if (source_subtype->type_mark.spelling.empty()) {
+                source_subtype->type_mark.spelling = declaration->vhdl->name;
+            }
         } else if (!source_subtype && declaration->vhdl->declared_type) {
             source_subtype.emplace();
             source_subtype->type_mark.target
@@ -3395,20 +3608,112 @@ CompiledDesignResolver::effective_vhdl_subtype(
             source_subtype->type_mark.spelling = declaration->vhdl->name;
         }
         if (!source_subtype) {
-            return std::nullopt;
+            return finish(std::nullopt);
         }
 
-        std::optional<vhdl::RangeConstraint> source_range;
-        for (const auto& candidate : source_subtype->constraints) {
-            if (candidate.kind != vhdl::RangeKind::array_index) {
-                continue;
+        const auto scalar_range_kind = [](const vhdl::RangeKind kind) {
+            return kind == vhdl::RangeKind::integer
+                || kind == vhdl::RangeKind::enumeration
+                || kind == vhdl::RangeKind::discrete;
+        };
+        const auto source_type_id = source_subtype->type_mark.target;
+        enum class SourceTypeShape : std::uint8_t {
+            unknown,
+            scalar,
+            array,
+        };
+        const auto source_type_shape = [&] {
+            auto type_id = source_type_id;
+            std::set<TypeId> visited;
+            while (type_id.valid() && visited.insert(type_id).second) {
+                const auto type = effective_ != nullptr
+                    ? effective_->find_type(type_id)
+                    : design_->find_type(type_id);
+                const auto fallback = type ? type
+                                           : design_->find_type(type_id);
+                if (!fallback || fallback->vhdl == nullptr) {
+                    return SourceTypeShape::unknown;
+                }
+                const auto& definition = *fallback->vhdl;
+                if (definition.form == vhdl::TypeForm::array) {
+                    return SourceTypeShape::array;
+                }
+                if (definition.form == vhdl::TypeForm::scalar
+                    || definition.form == vhdl::TypeForm::enumeration
+                    || definition.form == vhdl::TypeForm::physical) {
+                    return SourceTypeShape::scalar;
+                }
+                if (definition.form != vhdl::TypeForm::subtype
+                    && definition.form != vhdl::TypeForm::alias) {
+                    return SourceTypeShape::unknown;
+                }
+                const auto has_scalar_constraint =
+                    [&](const vhdl::RangeConstraint& candidate) {
+                        return scalar_range_kind(candidate.kind);
+                    };
+                if ((definition.scalar_range
+                        && has_scalar_constraint(
+                            *definition.scalar_range))
+                    || std::ranges::any_of(
+                        definition.base.constraints,
+                        has_scalar_constraint)) {
+                    // Explicit scalar range metadata also identifies a
+                    // scalar subtype when its predefined base has no TypeId.
+                    return SourceTypeShape::scalar;
+                }
+                type_id = definition.base.type_mark.target;
             }
-            if (source_range) {
-                return std::nullopt;
+            return SourceTypeShape::unknown;
+        }();
+        const bool declared_scalar_constraint = std::ranges::any_of(
+            source_subtype->constraints,
+            [&](const vhdl::RangeConstraint& candidate) {
+                return scalar_range_kind(candidate.kind);
+            });
+        const bool allow_scalar_index_source
+            = constraint.kind == vhdl::RangeKind::array_index
+            && (source_type_shape == SourceTypeShape::scalar
+                || declared_scalar_constraint);
+        const bool scalar_constraint_source
+            = scalar_range_kind(constraint.kind)
+            || allow_scalar_index_source;
+        const auto find_source_constraint = [&](
+            const std::vector<vhdl::RangeConstraint>& constraints)
+            -> std::pair<std::optional<vhdl::RangeConstraint>, bool> {
+            std::optional<vhdl::RangeConstraint> found;
+            if (constraint.kind == vhdl::RangeKind::array_index) {
+                for (const auto& candidate : constraints) {
+                    if (candidate.kind
+                        != vhdl::RangeKind::array_index) {
+                        continue;
+                    }
+                    if (found) {
+                        return { std::nullopt, true };
+                    }
+                    found = candidate;
+                }
+                if (found || !allow_scalar_index_source) {
+                    return { found, false };
+                }
             }
-            source_range = candidate;
+            for (const auto& candidate : constraints) {
+                if (!scalar_range_kind(candidate.kind)) {
+                    continue;
+                }
+                if (found) {
+                    return { std::nullopt, true };
+                }
+                found = candidate;
+            }
+            return { found, false };
+        };
+        auto source_match
+            = find_source_constraint(source_subtype->constraints);
+        if (source_match.second) {
+            return finish(std::nullopt);
         }
-        auto type_id = source_subtype->type_mark.target;
+        auto source_range = std::move(source_match.first);
+        auto type_id = source_type_id;
         std::set<TypeId> visited;
         while (!source_range && type_id.valid()
             && visited.insert(type_id).second) {
@@ -3421,58 +3726,80 @@ CompiledDesignResolver::effective_vhdl_subtype(
             }
             const auto& definition = *fallback->vhdl;
             if (definition.form == vhdl::TypeForm::array) {
-                if (definition.array_dimensions.size() != 1U
+                if (constraint.kind != vhdl::RangeKind::array_index
+                    || definition.array_dimensions.size() != 1U
                     || !definition.array_dimensions.front().constraint) {
-                    return std::nullopt;
+                    return finish(std::nullopt);
                 }
                 source_range = *definition.array_dimensions.front().constraint;
                 break;
+            }
+            if (definition.scalar_range
+                && (definition.scalar_range->kind == constraint.kind
+                    || (scalar_constraint_source
+                        && scalar_range_kind(
+                            definition.scalar_range->kind)))) {
+                source_range = *definition.scalar_range;
+                break;
+            }
+            if (definition.form == vhdl::TypeForm::enumeration
+                && scalar_constraint_source) {
+                // An enumeration type's implicit base range follows literal
+                // declaration order. Do not infer this from endpoint values.
+                const auto direction = reverse_range;
+                return finish(direction);
             }
             if (definition.form != vhdl::TypeForm::subtype
                 && definition.form != vhdl::TypeForm::alias) {
                 break;
             }
-            for (const auto& candidate : definition.base.constraints) {
-                if (candidate.kind != vhdl::RangeKind::array_index) {
-                    continue;
-                }
-                if (source_range) {
-                    return std::nullopt;
-                }
-                source_range = candidate;
+            source_match
+                = find_source_constraint(definition.base.constraints);
+            if (source_match.second) {
+                return finish(std::nullopt);
             }
+            source_range = std::move(source_match.first);
             type_id = definition.base.type_mark.target;
         }
-        if (!source_range || source_range->direction_from_bounds) {
-            return std::nullopt;
+        if (!source_range) {
+            return finish(std::nullopt);
         }
-        return reverse_range
-            ? std::optional<bool> { !source_range->descending }
-            : std::optional<bool> { source_range->descending };
+        const auto direction = range_source_direction(
+            *source_range, active, path);
+        if (!direction) {
+            return finish(std::nullopt);
+        }
+        return finish(reverse_range
+            ? std::optional<bool> { !*direction }
+            : direction);
     };
     materialize_boundaries = [&](
         vhdl::SubtypeIndication& subtype,
         const std::span<const CompiledBindingFrame> active) {
+        const auto& unresolved = unresolved_enum_boundaries_for(active);
         for (auto& constraint : subtype.constraints) {
-            if (!constraint.left && constraint.left_expression) {
+            if (!constraint.left && constraint.left_expression
+                && !unresolved.contains(
+                    *constraint.left_expression)) {
                 constraint.left = evaluate_boundary(
                     constraint.left, constraint.left_expression, active);
             }
-            if (!constraint.right && constraint.right_expression) {
+            if (!constraint.right && constraint.right_expression
+                && !unresolved.contains(
+                    *constraint.right_expression)) {
                 constraint.right = evaluate_boundary(
                     constraint.right, constraint.right_expression, active);
             }
             if (constraint.direction_from_bounds && constraint.left
                 && constraint.right) {
-                const auto source_direction
-                    = range_source_direction(constraint, active);
-                constraint.descending = source_direction
-                    ? *source_direction
-                    : *constraint.left > *constraint.right;
-                constraint.null = constraint.descending
-                    ? *constraint.left < *constraint.right
-                    : *constraint.left > *constraint.right;
+                RangeDirectionPath path;
+                const auto source_direction = range_source_direction(
+                    constraint, active, path);
                 if (source_direction) {
+                    constraint.descending = *source_direction;
+                    constraint.null = constraint.descending
+                        ? *constraint.left < *constraint.right
+                        : *constraint.left > *constraint.right;
                     constraint.direction_from_bounds = false;
                 }
             }
@@ -3969,6 +4296,366 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 }
                 return false;
             };
+            const auto enum_root_for_type = [&](TypeId type_id,
+                                                ScopeId type_scope)
+                -> std::optional<TypeId> {
+                std::set<TypeId> visited;
+                while (type_id.valid() && visited.insert(type_id).second) {
+                    const auto type = effective_ != nullptr
+                        ? effective_->find_type(type_id)
+                        : design_->find_type(type_id);
+                    if (!type || type->vhdl == nullptr) {
+                        return std::nullopt;
+                    }
+                    const auto& definition = *type->vhdl;
+                    if (definition.form == vhdl::TypeForm::enumeration) {
+                        return definition.enumeration_literals.empty()
+                            ? std::nullopt
+                            : std::optional { type_id };
+                    }
+                    if (definition.form != vhdl::TypeForm::subtype
+                        && definition.form != vhdl::TypeForm::alias
+                        && definition.form != vhdl::TypeForm::scalar) {
+                        return std::nullopt;
+                    }
+                    const auto declaration = find_declaration(
+                        *design_, effective_, definition.declaration);
+                    if (declaration && declaration->vhdl != nullptr) {
+                        type_scope = declaration->vhdl->scope;
+                    }
+                    type_id = definition.base.type_mark.target.valid()
+                        ? definition.base.type_mark.target
+                        : resolve_vhdl_named_type(
+                              definition.base.type_mark.spelling, type_scope)
+                              .value_or(TypeId { });
+                }
+                return std::nullopt;
+            };
+            const auto enum_root_for_declaration = [&](
+                const DeclarationId id) -> std::optional<TypeId> {
+                const auto declaration = find_declaration(
+                    *design_, effective_, id);
+                if (!declaration || declaration->vhdl == nullptr) {
+                    return std::nullopt;
+                }
+                const auto& source = *declaration->vhdl;
+                if (source.declared_type) {
+                    return enum_root_for_type(
+                        *source.declared_type, source.scope);
+                }
+                if (source.subtype) {
+                    const auto& subtype = *source.subtype;
+                    const auto type = subtype.type_mark.target.valid()
+                        ? std::optional { subtype.type_mark.target }
+                        : resolve_vhdl_named_type(
+                              subtype.type_mark.spelling, source.scope);
+                    return type
+                        ? enum_root_for_type(*type, source.scope)
+                        : std::nullopt;
+                }
+                return std::nullopt;
+            };
+            const auto enumeration_index_root = [&](
+                const vhdl::ArrayDimension& dimension)
+                -> std::optional<TypeId> {
+                const auto& name = dimension.index_subtype;
+                auto scope = definition_scope;
+                std::optional<TypeId> type;
+                if (name.selected) {
+                    const auto declaration = find_declaration(
+                        *design_, effective_, *name.selected);
+                    if (!declaration || declaration->vhdl == nullptr) {
+                        return std::nullopt;
+                    }
+                    scope = declaration->vhdl->scope;
+                    if (declaration->vhdl->declared_type) {
+                        type = *declaration->vhdl->declared_type;
+                    } else if (declaration->vhdl->subtype) {
+                        const auto& subtype = *declaration->vhdl->subtype;
+                        type = subtype.type_mark.target.valid()
+                            ? std::optional { subtype.type_mark.target }
+                            : resolve_vhdl_named_type(
+                                  subtype.type_mark.spelling, scope);
+                    }
+                } else {
+                    type = resolve_vhdl_named_type(name.spelling, scope);
+                }
+                return type ? enum_root_for_type(*type, scope)
+                            : std::nullopt;
+            };
+            struct EnumerationBoundaryValue {
+                std::optional<std::int64_t> ordinal;
+                bool uses_enum_context { };
+            };
+            struct EnumerationActualBinding {
+                bool found { };
+                std::optional<ExpressionId> expression;
+                std::optional<DeclarationId> declaration;
+            };
+            constexpr auto maximum_enum_boundary_depth = std::size_t { 64U };
+            std::function<EnumerationBoundaryValue(TypeId, ExpressionId,
+                std::set<ExpressionId>&, std::set<DeclarationId>&,
+                std::size_t)>
+                evaluate_enum_expression;
+            std::function<EnumerationBoundaryValue(TypeId, DeclarationId,
+                std::set<ExpressionId>&, std::set<DeclarationId>&,
+                std::size_t)>
+                evaluate_enum_declaration;
+            const auto enum_literal_member = [&](const TypeId root,
+                                                 const DeclarationId id) {
+                const auto type = effective_ != nullptr
+                    ? effective_->find_type(root)
+                    : design_->find_type(root);
+                return type && type->vhdl != nullptr
+                    && std::ranges::any_of(
+                        type->vhdl->enumeration_literals,
+                        [&](const vhdl::EnumerationLiteral& literal) {
+                            return literal.declaration == id;
+                        });
+            };
+            const auto enum_literal_ordinal = [&](const TypeId root,
+                                                   const ExpressionId id) {
+                auto expression = design_->find_expression(id);
+                if ((!expression || expression->vhdl == nullptr)
+                    && effective_ != nullptr) {
+                    expression = effective_->find_expression(id);
+                }
+                if (!expression || expression->vhdl == nullptr) {
+                    return std::optional<std::int64_t> { };
+                }
+                const auto& source = *expression->vhdl;
+                if (source.referenced_name) {
+                    const auto& name = *source.referenced_name;
+                    if (name.selected
+                        && !enum_literal_member(root, *name.selected)) {
+                        return std::optional<std::int64_t> { };
+                    }
+                    if (!name.selected && !name.overloads.empty()
+                        && std::ranges::none_of(name.overloads,
+                            [&](const DeclarationId candidate) {
+                                return enum_literal_member(root, candidate);
+                            })) {
+                        return std::optional<std::int64_t> { };
+                    }
+                }
+                const auto type = effective_ != nullptr
+                    ? effective_->find_type(root)
+                    : design_->find_type(root);
+                if (!type || type->vhdl == nullptr) {
+                    return std::optional<std::int64_t> { };
+                }
+                const auto spelling = std::string_view { source.text };
+                const auto literal = std::ranges::find_if(
+                    type->vhdl->enumeration_literals,
+                    [&](const vhdl::EnumerationLiteral& value) {
+                        return spelling.starts_with('\'')
+                            ? spelling == value.spelling
+                            : same_vhdl_identifier(
+                                  spelling, value.spelling);
+                    });
+                return literal
+                        != type->vhdl->enumeration_literals.end()
+                    ? std::optional<std::int64_t> {
+                          static_cast<std::int64_t>(literal->ordinal) }
+                    : std::optional<std::int64_t> { };
+            };
+            const auto enum_actual_binding = [&](const DeclarationId formal) {
+                for (auto frame = active_frames.rbegin();
+                     frame != active_frames.rend(); ++frame) {
+                    const auto binding = std::ranges::find(
+                        *frame, formal, &CompiledActualBinding::formal);
+                    if (binding != frame->end()) {
+                        return EnumerationActualBinding {
+                            true, binding->expression,
+                            binding->actual_declaration };
+                    }
+                }
+                if (effective_ != nullptr) {
+                    const auto& actuals
+                        = effective_->specialization().actual_identities;
+                    const auto actual = std::ranges::find(
+                        actuals, formal,
+                        &SpecializedHirActualIdentity::declaration);
+                    if (actual != actuals.end()) {
+                        return EnumerationActualBinding {
+                            true, actual->actual_expression,
+                            actual->actual_declaration };
+                    }
+                }
+                return EnumerationActualBinding { };
+            };
+            evaluate_enum_declaration = [&](const TypeId root,
+                const DeclarationId id,
+                std::set<ExpressionId>& active_expressions,
+                std::set<DeclarationId>& active_declarations,
+                const std::size_t depth)
+                -> EnumerationBoundaryValue {
+                if (depth >= maximum_enum_boundary_depth
+                    || !active_declarations.insert(id).second) {
+                    return { std::nullopt, true };
+                }
+                struct DeclarationGuard {
+                    std::set<DeclarationId>& active;
+                    DeclarationId id;
+                    ~DeclarationGuard() { active.erase(id); }
+                } guard { active_declarations, id };
+                const auto declaration = find_declaration(
+                    *design_, effective_, id);
+                if (!declaration || declaration->vhdl == nullptr) {
+                    return { std::nullopt, true };
+                }
+                const auto form = declaration->vhdl->form;
+                if (form != vhdl::DeclarationForm::constant
+                    && form != vhdl::DeclarationForm::generic_constant) {
+                    return { std::nullopt, true };
+                }
+                const auto declared_root = enum_root_for_declaration(id);
+                if (!declared_root || *declared_root != root) {
+                    return { std::nullopt, true };
+                }
+                if (form == vhdl::DeclarationForm::generic_constant) {
+                    const auto binding = enum_actual_binding(id);
+                    if (binding.found) {
+                        if (binding.expression) {
+                            return evaluate_enum_expression(
+                                root, *binding.expression, active_expressions,
+                                active_declarations, depth + 1U);
+                        }
+                        if (binding.declaration) {
+                            return evaluate_enum_declaration(
+                                root, *binding.declaration,
+                                active_expressions, active_declarations,
+                                depth + 1U);
+                        }
+                        // An explicit binding owns the generic even when it
+                        // has no expression. Do not substitute its default.
+                        return { std::nullopt, true };
+                    }
+                }
+                if (!declaration->vhdl->initializer) {
+                    return { std::nullopt, true };
+                }
+                return evaluate_enum_expression(root,
+                    *declaration->vhdl->initializer, active_expressions,
+                    active_declarations, depth + 1U);
+            };
+            evaluate_enum_expression = [&](const TypeId root,
+                const ExpressionId id,
+                std::set<ExpressionId>& active_expressions,
+                std::set<DeclarationId>& active_declarations,
+                const std::size_t depth)
+                -> EnumerationBoundaryValue {
+                if (depth >= maximum_enum_boundary_depth
+                    || !active_expressions.insert(id).second) {
+                    return { std::nullopt, true };
+                }
+                struct ExpressionGuard {
+                    std::set<ExpressionId>& active;
+                    ExpressionId id;
+                    ~ExpressionGuard() { active.erase(id); }
+                } guard { active_expressions, id };
+                auto expression = design_->find_expression(id);
+                if ((!expression || expression->vhdl == nullptr)
+                    && effective_ != nullptr) {
+                    expression = effective_->find_expression(id);
+                }
+                if (!expression || expression->vhdl == nullptr) {
+                    return { std::nullopt, true };
+                }
+                const auto& source = *expression->vhdl;
+                if (source.kind == vhdl::ExpressionKind::logic_literal) {
+                    return { enum_literal_ordinal(root, id), true };
+                }
+                if (source.kind == vhdl::ExpressionKind::integer_literal
+                    || source.kind == vhdl::ExpressionKind::real_literal
+                    || source.kind == vhdl::ExpressionKind::string_literal) {
+                    return { std::nullopt, true };
+                }
+                if (source.kind == vhdl::ExpressionKind::boolean_literal) {
+                    return { enum_literal_ordinal(root, id), true };
+                }
+                if (source.kind == vhdl::ExpressionKind::name) {
+                    const auto resolver = CompiledDesignResolver {
+                        *design_, selected_unit_, effective_, active_frames
+                    };
+                    const auto selected = source.referenced_name
+                            && source.referenced_name->selected
+                        ? source.referenced_name->selected
+                        : source.referenced_name
+                            && source.referenced_name->overloads.size() == 1U
+                        ? std::optional {
+                              source.referenced_name->overloads.front() }
+                        : resolver.resolve_expression_name(id).unique();
+                    if (selected) {
+                        const auto declaration = find_declaration(
+                            *design_, effective_, *selected);
+                        if (declaration && declaration->vhdl != nullptr
+                            && declaration->vhdl->form
+                                == vhdl::DeclarationForm::enumeration_literal) {
+                            return enum_literal_member(root, *selected)
+                                ? EnumerationBoundaryValue {
+                                      enum_literal_ordinal(root, id), true }
+                                : EnumerationBoundaryValue {
+                                      std::nullopt, true };
+                        }
+                        return evaluate_enum_declaration(root, *selected,
+                            active_expressions, active_declarations,
+                            depth + 1U);
+                    }
+                    return { enum_literal_ordinal(root, id), true };
+                }
+                constexpr auto qualified_prefix
+                    = std::string_view { "@vhdl-qualified:" };
+                if (source.kind == vhdl::ExpressionKind::call
+                    && source.text.starts_with(qualified_prefix)) {
+                    if (source.operands.size() != 1U
+                        || !source.referenced_name) {
+                        return { std::nullopt, true };
+                    }
+                    const auto& name = *source.referenced_name;
+                    const auto selected_type = name.selected
+                        ? name.selected
+                        : name.overloads.size() == 1U
+                        ? std::optional { name.overloads.front() }
+                        : std::nullopt;
+                    if (!selected_type) {
+                        return { std::nullopt, true };
+                    }
+                    const auto qualified_root
+                        = enum_root_for_declaration(*selected_type);
+                    if (!qualified_root || *qualified_root != root) {
+                        return { std::nullopt, true };
+                    }
+                    const auto value = evaluate_enum_expression(root,
+                        source.operands.front(), active_expressions,
+                        active_declarations, depth + 1U);
+                    return value.uses_enum_context
+                        ? value
+                        : EnumerationBoundaryValue {
+                              std::nullopt, false };
+                }
+                // Preserve the existing evaluator for range attributes and
+                // other supported non-qualification expressions.
+                return { std::nullopt, false };
+            };
+            const auto enum_boundary_context = [&](
+                const std::size_t dimension,
+                const std::optional<ExpressionId> residual) {
+                if (!residual
+                    || dimension >= definition.array_dimensions.size()) {
+                    return EnumerationBoundaryValue { };
+                }
+                const auto enum_root = enumeration_index_root(
+                    definition.array_dimensions[dimension]);
+                if (!enum_root) {
+                    return EnumerationBoundaryValue { };
+                }
+                std::set<ExpressionId> active_expressions;
+                std::set<DeclarationId> active_declarations;
+                return evaluate_enum_expression(
+                    *enum_root, *residual, active_expressions,
+                    active_declarations, 0U);
+            };
             // A bound of a CHARACTER-indexed dimension written as a
             // character literal is its CHARACTER position (`'0' to '9'`).
             const auto dimension_boundary = [&](const std::size_t dimension,
@@ -3991,8 +4678,41 @@ CompiledDesignResolver::effective_vhdl_subtype(
                         return static_cast<std::int64_t>(
                             static_cast<unsigned char>(expression->vhdl->text[1]));
                     }
+                    const auto contextual = enum_boundary_context(
+                        dimension, residual);
+                    if (contextual.uses_enum_context) {
+                        if (!contextual.ordinal) {
+                            unresolved_enum_boundaries_for(active)
+                                .insert(*residual);
+                        }
+                        return contextual.ordinal;
+                    }
                 }
                 return evaluate_boundary(folded, residual, active);
+            };
+            const auto materialized_array_range = [&](
+                const vhdl::RangeConstraint& source,
+                const std::int64_t left, const std::int64_t right,
+                const std::span<const CompiledBindingFrame> active)
+                -> std::optional<vhdl::RangeConstraint> {
+                auto range = source;
+                range.left = left;
+                range.right = right;
+                if (!range.direction_from_bounds) {
+                    return range;
+                }
+                RangeDirectionPath path;
+                const auto direction = range_source_direction(
+                    range, active, path);
+                if (!direction) {
+                    return std::nullopt;
+                }
+                range.descending = *direction;
+                range.null = range.descending
+                    ? left < right
+                    : left > right;
+                range.direction_from_bounds = false;
+                return range;
             };
             std::uint64_t count { 1U };
             bool concrete = element && element->executable_width
@@ -4008,7 +4728,54 @@ CompiledDesignResolver::effective_vhdl_subtype(
             const auto& constraints = result.constraints.empty()
                 ? definition.array_dimensions
                 : std::vector<vhdl::ArrayDimension> { };
+            const bool collect_fixed_array_ranges
+                = result.constraints.empty()
+                && !definition.array_dimensions.empty()
+                && std::ranges::all_of(
+                    definition.array_dimensions,
+                    [](const vhdl::ArrayDimension& dimension) {
+                        return !dimension.unconstrained
+                            && dimension.constraint
+                            && dimension.constraint->kind
+                                == vhdl::RangeKind::array_index;
+                    });
+            std::vector<vhdl::RangeConstraint> materialized_dimensions;
+            if (collect_fixed_array_ranges) {
+                materialized_dimensions.reserve(
+                    definition.array_dimensions.size());
+            }
             if (!result.constraints.empty()) {
+                // Normalize only proven enum-context bounds before the
+                // ordinary width loop. This clears stale generic folds from
+                // all dimensions without evaluating later attributes or
+                // functions after an earlier ordinary failure.
+                for (std::size_t dimension_index { };
+                     dimension_index < result.constraints.size(); ++dimension_index) {
+                    auto& constraint = result.constraints[dimension_index];
+                    const auto clear_or_set = [&](
+                        const std::optional<ExpressionId> expression,
+                        std::optional<std::int64_t>& endpoint) {
+                        if (!expression) {
+                            return;
+                        }
+                        const auto contextual = enum_boundary_context(
+                            dimension_index, expression);
+                        if (!contextual.uses_enum_context) {
+                            return;
+                        }
+                        if (contextual.ordinal) {
+                            endpoint = contextual.ordinal;
+                        } else {
+                            endpoint.reset();
+                            unresolved_enum_boundaries_for(active_frames)
+                                .insert(*expression);
+                        }
+                    };
+                    clear_or_set(constraint.left_expression,
+                        constraint.left);
+                    clear_or_set(constraint.right_expression,
+                        constraint.right);
+                }
                 for (std::size_t dimension_index { };
                      dimension_index < result.constraints.size(); ++dimension_index) {
                     auto& constraint = result.constraints[dimension_index];
@@ -4018,37 +4785,32 @@ CompiledDesignResolver::effective_vhdl_subtype(
                     const auto right = dimension_boundary(dimension_index,
                         constraint.right, constraint.right_expression,
                         active_frames);
-                    if (left && right) {
-                        constraint.left = left;
-                        constraint.right = right;
-                    }
                     if (!left || !right) {
                         concrete = false;
                         break;
                     }
-                    const auto descending = constraint.direction_from_bounds
-                        ? *left > *right
-                        : constraint.descending;
-                    const auto null_range
-                        = (constraint.null
-                              && !constraint.direction_from_bounds)
-                        || (descending && *left < *right)
-                        || (!descending && *left > *right);
-                    const auto distance = *left >= *right
-                        ? static_cast<std::uint64_t>(*left)
-                            - static_cast<std::uint64_t>(*right)
-                        : static_cast<std::uint64_t>(*right)
-                            - static_cast<std::uint64_t>(*left);
-                    const auto dimension = null_range ? 0U : distance + 1U;
-                    if ((!null_range && distance
-                            == std::numeric_limits<std::uint64_t>::max())
-                        || (dimension != 0U && count
-                            > std::numeric_limits<std::uint64_t>::max()
-                                / dimension)) {
+                    constraint.left = left;
+                    constraint.right = right;
+                    const auto range = materialized_array_range(
+                        constraint, *left, *right, active_frames);
+                    if (!range) {
                         concrete = false;
                         break;
                     }
-                    count *= dimension;
+                    constraint = *range;
+                    const auto dimension = concrete_array_range_length(
+                        *range, *left, *right);
+                    if (!dimension) {
+                        concrete = false;
+                        break;
+                    }
+                    if ((*dimension != 0U && count
+                            > std::numeric_limits<std::uint64_t>::max()
+                                / *dimension)) {
+                        concrete = false;
+                        break;
+                    }
+                    count *= *dimension;
                 }
             } else {
                 for (std::size_t dimension_index { };
@@ -4070,31 +4832,39 @@ CompiledDesignResolver::effective_vhdl_subtype(
                         concrete = false;
                         break;
                     }
-                    const auto from_bounds
-                        = dimension.constraint->direction_from_bounds;
-                    const auto descending = from_bounds
-                        ? *left > *right
-                        : dimension.constraint->descending;
-                    const auto null_range
-                        = (dimension.constraint->null && !from_bounds)
-                        || (descending && *left < *right)
-                        || (!descending && *left > *right);
-                    const auto distance = *left >= *right
-                        ? static_cast<std::uint64_t>(*left)
-                            - static_cast<std::uint64_t>(*right)
-                        : static_cast<std::uint64_t>(*right)
-                            - static_cast<std::uint64_t>(*left);
-                    const auto size = null_range ? 0U : distance + 1U;
-                    if ((!null_range && distance
-                            == std::numeric_limits<std::uint64_t>::max())
-                        || (size != 0U && count
-                            > std::numeric_limits<std::uint64_t>::max()
-                                / size)) {
+                    const auto range = materialized_array_range(
+                        *dimension.constraint, *left, *right,
+                        active_frames);
+                    if (!range) {
                         concrete = false;
                         break;
                     }
-                    count *= size;
+                    if (collect_fixed_array_ranges) {
+                        materialized_dimensions.push_back(*range);
+                    }
+                    const auto size = concrete_array_range_length(
+                        *range, *left, *right);
+                    if (!size) {
+                        concrete = false;
+                        break;
+                    }
+                    if ((*size != 0U && count
+                            > std::numeric_limits<std::uint64_t>::max()
+                                / *size)) {
+                        concrete = false;
+                        break;
+                    }
+                    count *= *size;
                 }
+            }
+            if (collect_fixed_array_ranges
+                && materialized_dimensions.size()
+                    == definition.array_dimensions.size()) {
+                // Keep the context-specific, source-resolved declared shape
+                // on the returned subtype. The vector is committed only
+                // after every fixed dimension materialized successfully.
+                // The source TypeDefinition remains untouched.
+                result.constraints = std::move(materialized_dimensions);
             }
             // A statically constrained null array is still a complete
             // executable layout. Preserve its zero width so callers can
@@ -4111,6 +4881,10 @@ CompiledDesignResolver::effective_vhdl_subtype(
                     || result.domain == vhdl::ValueDomain::boolean) {
                     result.domain = vhdl::ValueDomain::bit2;
                 }
+            } else if (constrained_shape) {
+                // Do not retain a width from an older, incomplete bound
+                // evaluation when any declared or supplied dimension failed.
+                result.executable_width.reset();
             }
         }
         active_types.erase(result.type_mark.target);
@@ -4453,6 +5227,12 @@ std::optional<bool> CompiledDesignResolver::vhdl_array_shapes_match(
     for (std::size_t index { }; index < left_constraints->size(); ++index) {
         const auto& left_dimension = (*left_constraints)[index];
         const auto& right_dimension = (*right_constraints)[index];
+        if (!compare_lengths
+            && (left_dimension.direction_from_bounds
+                || right_dimension.direction_from_bounds)) {
+            residual = true;
+            continue;
+        }
         if (!compare_lengths
             && (left_dimension.descending != right_dimension.descending
                 || left_dimension.null != right_dimension.null)) {
@@ -5226,6 +6006,80 @@ bool CompiledDesignResolver::vhdl_package_member_visible(
     }
     const auto entity = primary_vhdl_unit(*design_, lookup_unit);
     return entity && visit(visit, **entity);
+}
+
+bool CompiledDesignResolver::vhdl_library_name_visible(
+    const std::string_view name, const ScopeId use_scope) const
+{
+    if (design_ == nullptr || name.empty()) {
+        return false;
+    }
+    const auto lookup_units = vhdl_lookup_units(
+        *design_, selected_unit_, use_scope);
+    if (lookup_units.empty()) {
+        return false;
+    }
+    const auto implicit = [&](const vhdl::Unit& unit) {
+        return same_vhdl_identifier(name, "std")
+            || same_vhdl_identifier(name, "work")
+            || std::ranges::any_of(
+                unit.predefined_environment.implicit_libraries,
+                [&](const std::string_view candidate) {
+                    return same_vhdl_identifier(candidate, name);
+                });
+    };
+    if (std::ranges::any_of(lookup_units,
+            [&](const vhdl::Unit* unit) {
+                return unit != nullptr && implicit(*unit);
+            })) {
+        return true;
+    }
+
+    std::unordered_set<std::uint32_t> active_contexts;
+    const auto visible_from = [&](const auto& self,
+                                  const vhdl::Unit& context_owner) -> bool {
+        if (!active_contexts.insert(context_owner.id.value()).second) {
+            return false;
+        }
+        for (const auto& item : context_owner.context) {
+            for (const auto& selected : item.selected_names) {
+                const auto parts = vhdl_name_parts(vhdl_spelling(selected));
+                if (item.kind == vhdl::ContextKind::library_clause) {
+                    if (parts.size() == 1U
+                        && same_vhdl_identifier(parts.front(), name)) {
+                        active_contexts.erase(context_owner.id.value());
+                        return true;
+                    }
+                    continue;
+                }
+                if (item.kind != vhdl::ContextKind::context_reference
+                    || parts.empty()) {
+                    continue;
+                }
+                const auto library = parts.size() >= 2U
+                    ? effective_vhdl_library(
+                          parts[parts.size() - 2U], context_owner.library)
+                    : normalized_library(context_owner.library);
+                for (const auto& context : design_->vhdl_units()) {
+                    if (context.kind == vhdl::UnitKind::context
+                        && same_vhdl_identifier(
+                            normalized_library(context.library), library)
+                        && same_vhdl_identifier(
+                            context.name, parts.back())
+                        && self(self, context)) {
+                        active_contexts.erase(context_owner.id.value());
+                        return true;
+                    }
+                }
+            }
+        }
+        active_contexts.erase(context_owner.id.value());
+        return false;
+    };
+    return std::ranges::any_of(lookup_units,
+        [&](const vhdl::Unit* unit) {
+            return unit != nullptr && visible_from(visible_from, *unit);
+        });
 }
 
 bool CompiledDesignResolver::vhdl_standard_package_member_visible(

@@ -215,7 +215,7 @@ bool insert_record(Database& database, const ArtifactRecord& record, std::string
 } // namespace
 
 std::optional<LibraryCatalog> load_catalog(const LibraryLocation& location,
-    const bool create, std::string& error)
+    const bool create, const CatalogAccess access, std::string& error)
 {
     std::error_code code;
     if (create
@@ -227,7 +227,9 @@ std::optional<LibraryCatalog> load_catalog(const LibraryLocation& location,
         return std::nullopt;
     }
     Database database;
-    if (!database.open(location, false, error)
+    const auto mode = access == CatalogAccess::writer_lock_held
+        ? Database::OpenMode::read_write_existing : Database::OpenMode::read_only;
+    if (!database.open(location, mode, error)
         || !database.execute("BEGIN", error) || !database.validate_schema(error)
         || !read_identity(database, location, error))
         return std::nullopt;
@@ -270,7 +272,7 @@ bool save_catalog(const LibraryCatalog& catalog, std::string& error)
     }
     PendingCatalog pending { catalog.location.directory / "library.sqlite3", exists };
     Database database;
-    if (!database.open(catalog.location, true, error)
+    if (!database.open(catalog.location, Database::OpenMode::read_write_create, error)
         || !database.execute("BEGIN IMMEDIATE", error))
         return false;
     if (exists) {

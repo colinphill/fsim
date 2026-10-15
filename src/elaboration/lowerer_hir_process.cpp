@@ -1805,6 +1805,35 @@ std::optional<Process> Lowerer::lower_hir_process(
             if (sensitivity.expression
                 && sensitivity.expression->valid()) {
                 if (sensitivity.edge == semantic::sv::EdgeKind::any) {
+                    // An indexed event-array sensitivity denotes the selected
+                    // event object, not a packed value dependency.
+                    if (const auto event_array
+                        = hir_systemverilog_event_array_selection(
+                            *sensitivity.expression, input.scope)) {
+                        const auto index
+                            = specialized_hir_unit_->evaluate_integral_expression(
+                                event_array->index_expression);
+                        if (index) {
+                            const auto selected = std::ranges::find_if(
+                                event_array->elements,
+                                [&](const auto& element) {
+                                    return element.first == *index;
+                                });
+                            if (selected == event_array->elements.end()) {
+                                report(
+                                    "FSIM-ELAB-SVEVENT-012",
+                                    "constant event-array index is outside its "
+                                    "declared range",
+                                    hir_source_span(sensitivity.source));
+                                return std::nullopt;
+                            }
+                            description.sensitivities.push_back({
+                                selected->second,
+                                runtime::simir::EdgeKind::any,
+                            });
+                            continue;
+                        }
+                    }
                     if (const auto selected = hir_static_signal_sensitivity(
                             *sensitivity.expression, input.scope)) {
                         // A constant selected element/bit subscribes to its

@@ -249,7 +249,7 @@ private:
         const std::vector<semantic::SpecializedHirActualIdentity>&
             child_actuals;
         const semantic::SpecializedHirUnit& working_specialization;
-        const std::optional<semantic::SpecializedHirUnit>&
+        std::optional<semantic::SpecializedHirUnit>&
             child_interface_specialization;
         const std::unordered_set<std::uint32_t>&
             component_defaulted_port_formals;

@@ -220,7 +220,9 @@ std::optional<std::vector<LibraryLocation>> Store::library_locations(
     std::vector<LibraryLocation> result;
     for (const auto& name : names) {
         auto location = detail::locate_library(*this, name, false, error);
-        if (!location || !detail::load_catalog(*location, false, error))
+        if (!location
+            || !detail::load_catalog(*location, false,
+                detail::CatalogAccess::read_only, error))
             return std::nullopt;
         result.push_back(std::move(*location));
     }
@@ -250,7 +252,7 @@ std::optional<LibraryCatalog> Store::read_library(
     const auto location = detail::locate_library(*this, name, false, error);
     if (!location)
         return std::nullopt;
-    return detail::load_catalog(*location, false, error);
+    return detail::load_catalog(*location, false, detail::CatalogAccess::read_only, error);
 }
 
 std::optional<std::filesystem::path> Store::artifact_path(
@@ -289,7 +291,8 @@ bool Store::map_library(const std::string_view name,
         return false;
     }
     // A mapping aliases a physical location, never its logical library name.
-    if (!detail::load_catalog({ std::string { name }, target, true }, false, error))
+    if (!detail::load_catalog({ std::string { name }, target, true }, false,
+            detail::CatalogAccess::read_only, error))
         return false;
     const auto local = managed_directory() / "libraries" / name;
     if (support::native_fs::exists(local, code)

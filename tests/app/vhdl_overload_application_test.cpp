@@ -163,6 +163,48 @@ void verify_compiled_package_type_reference(
       == type_declaration->vhdl->declared_type);
 }
 
+void verify_short_array_slice_rejected(
+    const fsim::project::Config& positive_config,
+    const std::filesystem::path& directory)
+{
+  const auto short_slice_top = directory / "overload_short_slice.vhd";
+  {
+    std::ofstream output(short_slice_top, std::ios::binary);
+    output << R"(library work;
+use work.overload_pkg.all;
+entity overload_short_slice is end entity;
+architecture rtl of overload_short_slice is
+  signal source_value : static_bits;
+  signal result_value : integer;
+begin
+  result_value <= aggregate_select(source_value(2 to 4));
+end architecture;
+)";
+    assert(output.good());
+  }
+
+  auto negative_config = positive_config;
+  negative_config.project.name = "vhdl-overloads-short-slice-negative";
+  negative_config.project.top = "vhdl:work.overload_short_slice(rtl)";
+  negative_config.build.cache_path
+      = directory / "cache-short-slice-negative";
+  assert(negative_config.source_sets.size() == 1U);
+  auto negative_sources = negative_config.source_sets.front().files;
+  assert(negative_sources.size() == 3U);
+  negative_config.source_sets.front().files = {
+      negative_sources[0], negative_sources[1], short_slice_top
+  };
+
+  fsim::diagnostic::Engine diagnostics;
+  const auto project = fsim::app::build_project(
+      negative_config, diagnostics);
+  assert(!project);
+  assert(std::ranges::any_of(
+      diagnostics.diagnostics(), [](const auto& diagnostic) {
+          return diagnostic.code == "FSIM-ELAB-VHOVER-002";
+      }));
+}
+
 Capture run_once(
     const fsim::project::Config& config,
     const fsim::app::SimulationEngine engine) {
@@ -850,7 +892,7 @@ begin
   static_length_value <= static_length;
   aggregate_value <= aggregate_select((others => '1'));
   indexed_value <= bit_select(static_vector_value(2));
-  slice_value <= aggregate_select(static_vector_value(2 to 4));
+  slice_value <= aggregate_select(static_vector_value(2 to 9));
   reduction_value <= and static_vector_value;
   condition_value <= ?? reduction_value;
   process(integer_input, boolean_input)
@@ -902,6 +944,7 @@ end architecture;
         optimization);
     if (optimization == fsim::project::Optimization::o0) {
       verify_compiled_package_type_reference(config);
+      verify_short_array_slice_rejected(config, directory.path);
     }
     const auto reference = run_once(
         config, fsim::app::SimulationEngine::interpreter);

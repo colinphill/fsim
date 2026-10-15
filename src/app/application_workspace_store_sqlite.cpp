@@ -46,7 +46,7 @@ Database::~Database()
         sqlite3_close(handle);
 }
 
-bool Database::open(const LibraryLocation& location, const bool write, std::string& error)
+bool Database::open(const LibraryLocation& location, const OpenMode mode, std::string& error)
 {
     for (const auto* name : { "library.sqlite3", "library.sqlite3-journal",
              "library.sqlite3-wal", "library.sqlite3-shm" }) {
@@ -62,7 +62,11 @@ bool Database::open(const LibraryLocation& location, const bool write, std::stri
             return false;
         }
     }
-    const int flags = write ? SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE : SQLITE_OPEN_READONLY;
+    int flags = SQLITE_OPEN_READONLY;
+    if (mode == OpenMode::read_write_existing)
+        flags = SQLITE_OPEN_READWRITE;
+    else if (mode == OpenMode::read_write_create)
+        flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE;
     // SQLite's Windows VFS only widens drive paths and leaves '/' in place.
     if (sqlite3_open_v2(support::native_fs::utf8_for_native_io(path).c_str(), &handle,
             flags | SQLITE_OPEN_NOMUTEX | SQLITE_OPEN_NOFOLLOW, nullptr) != SQLITE_OK) {

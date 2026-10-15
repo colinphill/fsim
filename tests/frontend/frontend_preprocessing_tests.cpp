@@ -1815,6 +1815,44 @@ end architecture;
         "aggregate assignments retain choices while single parentheses remain "
         "ordinary grouping");
 
+    const auto mixed_enumeration_choices = parse_text(
+        "mixed_enumeration_array_choices.vhd",
+        R"(
+entity Mixed_Enumeration_Array_Choices is
+end entity;
+architecture rtl of mixed_enumeration_array_choices is
+  type Index_T is ('U', 'X', '0', '1');
+  type Table_T is array (Index_T range <>) of bit;
+  constant Selected_Index : Index_T := 'X';
+  signal Values : Table_T('U' to '1');
+begin
+  drive : process
+  begin
+    Values <= ('U' => '1', Selected_Index => '0', '0' to '1' => '0');
+    wait;
+  end process;
+end architecture;
+)",
+        Language::Vhdl2008);
+    require(mixed_enumeration_choices.ok(),
+        "enum literal, typed-name, and range array choices parse together");
+    const auto& mixed_process =
+        mixed_enumeration_choices.design.units.back().processes.front();
+    const auto& mixed_choices = mixed_process.statements.front().value
+        .aggregate_choice_expressions;
+    require(mixed_process.statements.front().value.kind
+                == ExpressionKind::Aggregate
+            && mixed_choices.size() == 3
+            && mixed_choices[0].size() == 1
+            && mixed_choices[0][0].kind == ExpressionKind::LogicLiteral
+            && mixed_choices[1].size() == 1
+            && mixed_choices[1][0].kind == ExpressionKind::Identifier
+            && mixed_choices[1][0].text == "selected_index"
+            && mixed_choices[2].size() == 1
+            && mixed_choices[2][0].kind == ExpressionKind::Binary
+            && mixed_choices[2][0].text == "to",
+        "mixed enum-array choices retain their literal, name, and range forms");
+
     const auto invalid_aggregates = parse_text("invalid_record_aggregates.vhd",
         R"(
 entity invalid_record_aggregates is
@@ -1830,6 +1868,7 @@ begin
   begin
     result <= (Data => "00", false);
     result <= (others => false, Data => "00");
+    result <= ("00" => false);
     result <= (others => false, others => true);
     result <= (true => false, Data => "00");
     result <= (Data => , Valid => true);

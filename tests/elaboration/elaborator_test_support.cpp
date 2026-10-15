@@ -13,6 +13,7 @@ namespace fsim::tests::elaboration {
 
 semantic::CompiledDesign compile_test_design(frontend::ParsedDesign parsed)
 {
+    app::application_detail::stamp_vhdl_predefined_context(parsed);
     std::vector<frontend::Diagnostic> class_diagnostics;
     (void)frontend::resolve_systemverilog_classes(
         parsed, class_diagnostics);

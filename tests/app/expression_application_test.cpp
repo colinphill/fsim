@@ -1390,6 +1390,10 @@ endmodule
     {
         std::ofstream output(attribute_source);
         output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
 entity attribute_app is
 end entity;
 
@@ -1411,17 +1415,17 @@ architecture rtl of attribute_app is
 begin
   observe: process
   begin
-    descending_left <= descending'left;
-    descending_right <= descending'right(1);
-    descending_low <= descending'low;
-    descending_high <= descending'high;
-    descending_length <= descending'length;
+    descending_left <= to_signed(descending'left, 32);
+    descending_right <= to_signed(descending'right(1), 32);
+    descending_low <= to_signed(descending'low, 32);
+    descending_high <= to_signed(descending'high, 32);
+    descending_length <= to_signed(descending'length, 32);
     descending_ascending <= descending'ascending;
-    ascending_left <= ascending'left;
-    ascending_right <= ascending'right;
-    ascending_low <= ascending'low;
-    ascending_high <= ascending'high;
-    ascending_length <= ascending'length(1);
+    ascending_left <= to_signed(ascending'left, 32);
+    ascending_right <= to_signed(ascending'right, 32);
+    ascending_low <= to_signed(ascending'low, 32);
+    ascending_high <= to_signed(ascending'high, 32);
+    ascending_length <= to_signed(ascending'length(1), 32);
     ascending_ascending <= ascending'ascending;
     wait;
   end process;

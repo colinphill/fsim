@@ -110,11 +110,20 @@ public:
             class_specializations);
 
     void add_design(const frontend::ParsedDesign& parsed);
+    [[nodiscard]] std::vector<semantic::DeclarationId>
+    add_statement_type_aliases(
+        std::span<const frontend::TypeAliasDeclaration> aliases,
+        std::span<const std::pair<semantic::ScopeId, sv::Import>> imports,
+        semantic::ScopeId scope,
+        semantic::OriginId parent);
 
 private:
-    // True while projecting a typedef's own base type, which must not
-    // resolve an anonymous enumeration to its hidden typedef (itself).
-    bool projecting_typedef_base_ = false;
+    // Keep anonymous enumerations from resolving to their hidden typedef
+    // while projecting the typedef base or an object using the enum.
+    bool suppress_hidden_anonymous_enum_typedef_ = false;
+    // Only a typedef declaration base discards cached named-type shape: the
+    // lexical TypeId is authoritative if that cache names another typedef.
+    bool projecting_typedef_declaration_base_ = false;
     struct Pending {
         std::string_view physical_source;
         std::size_t offset { };
@@ -442,6 +451,9 @@ private:
     std::span<const frontend::SystemVerilogClassSpecialization>
         class_specializations_;
     std::span<const frontend::SystemVerilogImport> current_imports_;
+    // Block imports are supplied nearest-scope first during local typedef
+    // projection; each import retains its owning scope for lexical lookup.
+    std::span<const std::pair<semantic::ScopeId, sv::Import>> statement_imports_;
     std::multimap<std::string, semantic::ScopeId, std::less<>> class_scopes_;
     std::unordered_map<const frontend::Expression*, semantic::ExpressionId>
         expressions_;

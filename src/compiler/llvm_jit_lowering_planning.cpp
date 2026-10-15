@@ -120,13 +120,26 @@ using namespace runtime::simir;
         return false;
     };
 
+    // Forked processes clone their executor while retaining its shared
+    // register storage. Native callable-frame elision assumes only one
+    // activation can use a callable identity at a time; keep runtime-owned
+    // snapshots for fork-bearing programs. Programs without child processes
+    // continue to use native frames for proven acyclic call chains.
+    const bool can_create_fork_children = std::ranges::any_of(
+        process.operations, [](const auto& operation) {
+            const auto* fork
+                = fsim::runtime::simir::operation_get_if<Fork>(&operation);
+            return fork != nullptr && !fork->branches.empty();
+        });
+
     std::set<std::uint32_t> safe_identities;
     for (const auto& [identity, target] : targets) {
         (void)target;
         std::set<std::uint32_t> visited;
         const bool recursive = reaches(
             identity, identity, reaches, visited);
-        if (!recursive && !conflicting_identities.contains(identity)
+        if (!can_create_fork_children && !recursive
+            && !conflicting_identities.contains(identity)
             && !unknown_dependencies.contains(identity)) {
             safe_identities.insert(identity);
         }

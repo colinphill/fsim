@@ -4,6 +4,80 @@
 namespace fsim::tests::elaboration {
 
 void test_vhdl_callable_overloads() {
+    for (const auto* element : { "boolean", "bit" }) {
+        for (const auto* operation : { "and", "or", "nand", "nor",
+                 "xor", "xnor", "not" }) {
+            const std::string value = std::string { element } == "boolean"
+                ? "true"
+                : "'1'";
+            const auto operand = "matrix'(1 => (1 => " + value + "))";
+            const auto expression = std::string { operation } == "not"
+                ? "not " + operand
+                : operand + " " + operation + " " + operand;
+            const auto source = std::string {
+                "entity multidimensional_logical is end;\n"
+                "architecture rtl of multidimensional_logical is begin\n"
+                "process\n type matrix is array (1 to 1, 1 to 1) of " }
+                + element + ";\n variable result : matrix;\n begin\n result := "
+                + expression + ";\n wait;\n end process;\n end;\n";
+            const auto parsed = frontend::parse_text(
+                "multidimensional_logical.vhd", source,
+                frontend::Language::Vhdl2008);
+            assert(parsed.ok());
+            const auto elaborated = compile_and_elaborate(
+                parsed.design, "vhdl:work.multidimensional_logical(rtl)");
+            assert(!elaborated.ok());
+            assert(has_diagnostic(elaborated, "FSIM-ELAB-VHOPER-001"));
+
+            auto with_inapplicable_operator = source;
+            const auto declaration_at = with_inapplicable_operator.find(
+                "\n variable result");
+            assert(declaration_at != std::string::npos);
+            const auto formals = std::string { operation } == "not"
+                ? "value : boolean" : "value, other : boolean";
+            with_inapplicable_operator.insert(declaration_at,
+                "\n function \"" + std::string { operation } + "\"("
+                    + formals + ") return boolean is begin return value; end;\n");
+            const auto shadowed = frontend::parse_text(
+                "multidimensional_logical_shadowed.vhd",
+                with_inapplicable_operator, frontend::Language::Vhdl2008);
+            assert(shadowed.ok());
+            const auto shadowed_result = compile_and_elaborate(
+                shadowed.design, "vhdl:work.multidimensional_logical(rtl)");
+            assert(!shadowed_result.ok());
+            assert(has_diagnostic(shadowed_result, "FSIM-ELAB-VHOPER-001"));
+        }
+    }
+
+    const auto logical_result_type = frontend::parse_text(
+        "logical_result_type.vhd",
+        R"(
+entity logical_result_type is end;
+architecture rtl of logical_result_type is
+  type row_type is array (1 to 2) of boolean;
+  type other_row_type is array (1 to 2) of boolean;
+  type matrix_type is array (1 to 1, 1 to 1) of boolean;
+  function "not"(value : matrix_type) return matrix_type is
+  begin
+    return value;
+  end function;
+begin
+  process
+    variable source_row : row_type := (true, false);
+    variable target_row : other_row_type;
+  begin
+    target_row := not source_row;
+    wait;
+  end process;
+end;
+)",
+        frontend::Language::Vhdl2008);
+    assert(logical_result_type.ok());
+    const auto logical_result_elaboration = compile_and_elaborate(
+        logical_result_type.design, "vhdl:work.logical_result_type(rtl)");
+    assert(!logical_result_elaboration.ok());
+    assert(has_diagnostic(logical_result_elaboration, "FSIM-ELAB-VHARRAY-006"));
+
     const auto unconstrained_result = frontend::parse_text(
         "vhdl_unconstrained_function_result.vhd",
         R"(

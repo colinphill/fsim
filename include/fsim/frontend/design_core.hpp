@@ -303,8 +303,9 @@ struct DiscreteRangeExpression {
     SourceSpan span;
     bool descending { };
     // A VHDL range attribute or subtype name (`x'range`, `T`) whose bounds
-    // are `'left`/`'right` expressions; its direction follows the evaluated
-    // bounds (IEEE 1076-2008 5.2.1, 16.2.3).
+    // are `'left`/`'right` expressions. Resolve direction from that source
+    // range; endpoint order alone does not determine it, especially for
+    // singleton or null ranges (IEEE 1076-2008 5.2.1, 16.2.3).
     bool direction_from_bounds { };
 };
 

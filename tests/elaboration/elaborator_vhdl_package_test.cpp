@@ -447,6 +447,48 @@ end rtl;
         }
     }
     assert(parsed.ok());
+    const auto verify_predefined_context = [](
+        const fsim::semantic::CompiledDesign& compiled,
+        const std::string_view identity,
+        const bool has_1993_declarations) {
+        bool found_work_unit { };
+        for (const auto& unit : compiled.vhdl_units()) {
+            // parse_text leaves this default-work source unit's library empty;
+            // its attached predefined environment records the work library.
+            const auto effective_library = unit.library.empty()
+                ? std::string_view { "work" }
+                : std::string_view { unit.library };
+            assert(effective_library == "work");
+            found_work_unit = true;
+            const auto& environment = unit.predefined_environment;
+            assert(environment.identity == identity);
+            assert(environment.working_library == "work");
+            assert(environment.implicit_libraries.size() == 2U);
+            assert(environment.implicit_libraries[0] == "std");
+            assert(environment.implicit_libraries[1] == "work");
+            assert(environment.implicit_packages.size() == 1U);
+            assert(environment.implicit_packages[0] == "std.standard.all");
+            assert(std::ranges::find(
+                       environment.declarations, "integer")
+                != environment.declarations.end());
+            assert(std::ranges::find(
+                       environment.declarations, "natural")
+                != environment.declarations.end());
+            assert(std::ranges::find(
+                       environment.declarations, "bit_vector")
+                != environment.declarations.end());
+            assert(!unit.compatibility_profile.empty());
+            const auto file_open_kind = std::ranges::find(
+                environment.declarations, "file_open_kind");
+            assert((file_open_kind != environment.declarations.end())
+                == has_1993_declarations);
+        }
+        assert(found_work_unit);
+    };
+    const auto compiled_1987 = compile_test_design(parsed.design);
+    assert(compiled_1987.valid());
+    verify_predefined_context(
+        compiled_1987, "ieee-1076-standard:1987:fsim-v3", false);
     const auto elaborated = compile_and_elaborate(
         parsed.design, "vhdl:work.environment_root(rtl)");
     if (!elaborated.ok()) {
@@ -477,6 +519,10 @@ end rtl;
         fsim::frontend::Language::Vhdl2008,
         fsim::frontend::VhdlStandard::Vhdl1993);
     assert(vhdl_1993.ok());
+    const auto compiled_1993 = compile_test_design(vhdl_1993.design);
+    assert(compiled_1993.valid());
+    verify_predefined_context(
+        compiled_1993, "ieee-1076-standard:1993:fsim-v3", true);
     const auto elaborated_1993 = compile_and_elaborate(
         vhdl_1993.design, "vhdl:work.vhdl93_predefined(rtl)");
     assert(elaborated_1993.ok());

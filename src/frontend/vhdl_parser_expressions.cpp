@@ -1456,11 +1456,6 @@ Expression VhdlParser::parse_primary()
         aggregate.kind = ExpressionKind::Aggregate;
         bool named_association = false;
         bool saw_others = false;
-        // Boolean and character literal choices select array elements; they
-        // cannot be mixed with element-name (record) choices.
-        bool saw_literal_choice = false;
-        bool saw_name_choice = false;
-        bool reported_mixed_choice = false;
         const auto append_association = [&](Expression head) {
             const auto choice_with_optional_range = [&]() {
                 const auto left_span = head.span;
@@ -1509,19 +1504,7 @@ Expression VhdlParser::parse_primary()
                         choice_expression.text = vhdl_name(choice_expression.text);
                         if (choice_expression.text == "others") {
                             ++others_count;
-                        } else {
-                            saw_name_choice = true;
                         }
-                    }
-                    if (choice_expression.kind == ExpressionKind::BooleanLiteral || choice_expression.kind == ExpressionKind::LogicLiteral) {
-                        saw_literal_choice = true;
-                    }
-                    if (saw_literal_choice && saw_name_choice && !reported_mixed_choice) {
-                        reported_mixed_choice = true;
-                        error(previous(), "FSIM-VHDL-PARSE-132",
-                            "an aggregate choice must be a record element, "
-                            "others, or a locally static discrete expression or "
-                            "range");
                     }
                 }
                 if (others_count != 0) {

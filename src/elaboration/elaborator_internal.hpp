@@ -30,6 +30,11 @@ using runtime::Logic4;
 using runtime::PackedLogic4;
 using namespace runtime::simir;
 
+// Dynamic event-array selection emits one branch per static element. Keep
+// both elaboration materialization and executable dispatch bounded.
+inline constexpr std::uint64_t maximum_compiled_event_array_elements
+    = 65'536U;
+
 // The units of STD.STANDARD.TIME and their values in femtoseconds
 // (IEEE 1076-2008 16.3).
 inline constexpr std::array<std::pair<std::string_view, std::uint64_t>, 8U>

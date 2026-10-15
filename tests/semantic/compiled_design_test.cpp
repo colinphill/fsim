@@ -3168,6 +3168,38 @@ void test_compiled_systemverilog_resolver_expression_targets()
     builder.systemverilog.mutable_declarations().push_back(
         std::move(type_record));
 
+    const auto alias_declaration = builder.model.add_declaration(
+        scope, DeclarationKind::type, "payload_alias_t",
+        builder.source, builder.origin);
+    sv::TypeReference alias_base;
+    alias_base.target.target = type;
+    alias_base.target.source = builder.source;
+    alias_base.target.spelling = "payload_t";
+    const auto alias_type = builder.model.add_type(
+        scope, TypeKind::alias, "payload_alias_t", alias_base.target,
+        builder.source, builder.origin);
+    sv::TypeDefinition alias_definition;
+    alias_definition.id = alias_type;
+    alias_definition.declaration = alias_declaration;
+    alias_definition.form = sv::TypeForm::packed_integral;
+    alias_definition.name = "payload_alias_t";
+    alias_definition.base = alias_base;
+    alias_definition.source = builder.source;
+    alias_definition.origin = builder.origin;
+    builder.systemverilog.mutable_types().push_back(
+        std::move(alias_definition));
+    sv::Declaration alias_record;
+    alias_record.id = alias_declaration;
+    alias_record.scope = scope;
+    alias_record.form = sv::DeclarationForm::typedef_declaration;
+    alias_record.name = "payload_alias_t";
+    alias_record.source = builder.source;
+    alias_record.origin = builder.origin;
+    alias_record.declared_type = alias_type;
+    alias_record.type = alias_base;
+    builder.systemverilog.mutable_declarations().push_back(
+        std::move(alias_record));
+
     const auto payload = builder.model.add_declaration(
         scope, DeclarationKind::variable, "payload",
         builder.source, builder.origin);
@@ -3186,6 +3218,7 @@ void test_compiled_systemverilog_resolver_expression_targets()
         std::move(payload_record));
     auto& declarations = builder.systemverilog_unit(unit).declarations;
     declarations.push_back(type_declaration);
+    declarations.push_back(alias_declaration);
     declarations.push_back(payload);
 
     const auto add_name = [&](std::string spelling) {
@@ -3232,6 +3265,24 @@ void test_compiled_systemverilog_resolver_expression_targets()
     const auto design = builder.finish();
     assert(design.valid());
     const CompiledDesignResolver resolver { design, unit };
+    sv::TypeReference concrete_aggregate;
+    concrete_aggregate.target.target = type;
+    concrete_aggregate.target.source = builder.source;
+    concrete_aggregate.target.spelling = "payload_t";
+    const auto retained_aggregate = resolver.underlying_systemverilog_type(
+        concrete_aggregate, scope);
+    assert(retained_aggregate);
+    assert(retained_aggregate->target.target == type);
+
+    sv::TypeReference aliased_aggregate;
+    aliased_aggregate.target.target = alias_type;
+    aliased_aggregate.target.source = builder.source;
+    aliased_aggregate.target.spelling = "payload_alias_t";
+    const auto resolved_alias = resolver.underlying_systemverilog_type(
+        aliased_aggregate, scope);
+    assert(resolved_alias);
+    assert(resolved_alias->target.target == type);
+
     sv::Name retained;
     retained.spelling = "payload";
     retained.selected = payload;
@@ -3814,6 +3865,11 @@ void test_compiled_vhdl_resolver_array_shapes()
     auto equal_endpoint_from_bounds = equal_endpoint_known;
     equal_endpoint_from_bounds.constraints.front().direction_from_bounds
         = true;
+    // A missing source direction leaves exact shape unresolved, while equal
+    // endpoints still prove the non-null range has length one.
+    assert(!resolver.vhdl_array_shapes_match(
+        equal_endpoint_known, scope, equal_endpoint_from_bounds, scope)
+            .has_value());
     assert(resolver.vhdl_array_lengths_match(
         equal_endpoint_known, scope, equal_endpoint_from_bounds, scope)
         .value_or(false));
@@ -3830,6 +3886,893 @@ void test_compiled_vhdl_resolver_array_shapes()
         exact, scope, bounds_mismatch, scope));
     assert(resolver.vhdl_subtype_profiles_match(
         exact, scope, residual, scope));
+}
+
+void test_compiled_vhdl_resolver_active_formal_range_direction()
+{
+    LinkBundleBuilder builder { "resolver-active-formal-range.vhd" };
+    const auto unit = builder.add_vhdl_unit(UnitKind::vhdl_entity,
+        vhdl::UnitKind::entity, "active_formal_range");
+    const auto scope = builder.model.units()[unit.value()].scope;
+
+    const auto vector_declaration = builder.model.add_declaration(scope,
+        DeclarationKind::type, "vector_t", builder.source,
+        builder.origin);
+    TypeReference vector_base;
+    vector_base.source = builder.source;
+    vector_base.spelling = "vector_t";
+    const auto vector_type = builder.model.add_type(scope,
+        TypeKind::declaration, "vector_t", vector_base,
+        builder.source, builder.origin);
+    vhdl::Declaration vector_declaration_record;
+    vector_declaration_record.id = vector_declaration;
+    vector_declaration_record.scope = scope;
+    vector_declaration_record.form = vhdl::DeclarationForm::type;
+    vector_declaration_record.name = "vector_t";
+    vector_declaration_record.declared_type = vector_type;
+    vector_declaration_record.source = builder.source;
+    vector_declaration_record.origin = builder.origin;
+    builder.vhdl_hir.mutable_declarations().push_back(
+        std::move(vector_declaration_record));
+    vhdl::TypeDefinition vector_definition;
+    vector_definition.id = vector_type;
+    vector_definition.declaration = vector_declaration;
+    vector_definition.form = vhdl::TypeForm::array;
+    vector_definition.name = "vector_t";
+    vector_definition.element_subtype.emplace();
+    vector_definition.element_subtype->type_mark.spelling = "bit";
+    vector_definition.element_subtype->domain = vhdl::ValueDomain::bit2;
+    vector_definition.element_subtype->executable_width = 1U;
+    vector_definition.array_dimensions.resize(1U);
+    vector_definition.array_dimensions.front().unconstrained = true;
+    vector_definition.array_dimensions.front().index_subtype
+        = vhdl_name("natural", builder.source);
+    vector_definition.array_dimensions.front().source = builder.source;
+    vector_definition.source = builder.source;
+    vector_definition.origin = builder.origin;
+    builder.vhdl_hir.mutable_types().push_back(
+        std::move(vector_definition));
+    builder.vhdl_unit(unit).declarations.push_back(vector_declaration);
+
+    const auto make_range = [&](const std::int64_t left,
+                                const std::int64_t right,
+                                const bool descending,
+                                const bool null_range) {
+        vhdl::RangeConstraint result;
+        result.kind = vhdl::RangeKind::array_index;
+        result.left = left;
+        result.right = right;
+        result.descending = descending;
+        result.null = null_range;
+        result.source = builder.source;
+        return result;
+    };
+    const auto make_subtype = [&](
+        std::vector<vhdl::RangeConstraint> ranges,
+        const bool unconstrained) {
+        vhdl::SubtypeIndication result;
+        result.type_mark.target = vector_type;
+        result.type_mark.spelling = "vector_t";
+        result.domain = vhdl::ValueDomain::bit2;
+        result.constraints = std::move(ranges);
+        result.unconstrained = unconstrained;
+        return result;
+    };
+    const auto add_object = [&](const std::string& name,
+                                const DeclarationKind declaration_kind,
+                                const vhdl::DeclarationForm form,
+                                const vhdl::ObjectClass object_class,
+                                const vhdl::Direction direction,
+                                vhdl::SubtypeIndication object_subtype) {
+        const auto declaration = builder.model.add_declaration(scope,
+            declaration_kind, name, builder.source, builder.origin);
+        vhdl::Declaration record;
+        record.id = declaration;
+        record.scope = scope;
+        record.form = form;
+        record.name = name;
+        record.declared_type = vector_type;
+        record.subtype = std::move(object_subtype);
+        record.object_class = object_class;
+        record.direction = direction;
+        record.source = builder.source;
+        record.origin = builder.origin;
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(record));
+        builder.vhdl_unit(unit).declarations.push_back(declaration);
+        return declaration;
+    };
+
+    const auto source_formal = add_object("source", DeclarationKind::port,
+        vhdl::DeclarationForm::port, vhdl::ObjectClass::signal,
+        vhdl::Direction::input, make_subtype({ }, true));
+    const auto ascending_singleton = add_object(
+        "ascending_singleton", DeclarationKind::signal,
+        vhdl::DeclarationForm::signal, vhdl::ObjectClass::signal,
+        vhdl::Direction::unknown,
+        make_subtype({ make_range(5, 5, false, false) }, false));
+    const auto descending_singleton = add_object(
+        "descending_singleton", DeclarationKind::signal,
+        vhdl::DeclarationForm::signal, vhdl::ObjectClass::signal,
+        vhdl::Direction::unknown,
+        make_subtype({ make_range(5, 5, true, false) }, false));
+    const auto ascending_null = add_object("ascending_null",
+        DeclarationKind::signal, vhdl::DeclarationForm::signal,
+        vhdl::ObjectClass::signal, vhdl::Direction::unknown,
+        make_subtype({ make_range(5, 4, false, true) }, false));
+    const auto descending_null = add_object("descending_null",
+        DeclarationKind::signal, vhdl::DeclarationForm::signal,
+        vhdl::ObjectClass::signal, vhdl::Direction::unknown,
+        make_subtype({ make_range(4, 5, true, true) }, false));
+
+    const auto fixed_source_formal = add_object(
+        "fixed_source", DeclarationKind::port,
+        vhdl::DeclarationForm::port, vhdl::ObjectClass::signal,
+        vhdl::Direction::input,
+        make_subtype({ make_range(9, 6, true, false) }, false));
+    const auto ascending_actual = add_object("ascending_actual",
+        DeclarationKind::signal, vhdl::DeclarationForm::signal,
+        vhdl::ObjectClass::signal, vhdl::Direction::unknown,
+        make_subtype({ make_range(1, 4, false, false) }, false));
+
+    const auto add_name_expression = [&](const std::string& name,
+                                        const DeclarationId selected) {
+        const auto id = builder.model.add_expression_identity(
+            scope, builder.source, builder.origin);
+        vhdl::Expression expression;
+        expression.id = id;
+        expression.scope = scope;
+        expression.kind = vhdl::ExpressionKind::name;
+        expression.text = name;
+        expression.referenced_name = vhdl_name(name, builder.source);
+        expression.referenced_name->selected = selected;
+        expression.source = builder.source;
+        expression.origin = builder.origin;
+        builder.vhdl_hir.mutable_expressions().push_back(
+            std::move(expression));
+        return id;
+    };
+    const auto add_attribute_expression = [&](const std::string& attribute,
+                                              const ExpressionId prefix) {
+        const auto id = builder.model.add_expression_identity(
+            scope, builder.source, builder.origin);
+        vhdl::Expression expression;
+        expression.id = id;
+        expression.scope = scope;
+        expression.kind = vhdl::ExpressionKind::call;
+        expression.text = attribute;
+        expression.operands.push_back(prefix);
+        expression.source = builder.source;
+        expression.origin = builder.origin;
+        builder.vhdl_hir.mutable_expressions().push_back(
+            std::move(expression));
+        return id;
+    };
+    const auto local_range = [&](const DeclarationId formal,
+                                 const std::string& name,
+                                 const std::int64_t left,
+                                 const std::int64_t right) {
+        const auto prefix = add_name_expression(name, formal);
+        auto constraint = make_range(left, right, false, false);
+        constraint.left_expression
+            = add_attribute_expression("'left", prefix);
+        constraint.right_expression
+            = add_attribute_expression("'right", prefix);
+        constraint.direction_from_bounds = true;
+        return make_subtype({ std::move(constraint) }, false);
+    };
+
+    const auto ascending_singleton_range = local_range(
+        source_formal, "source", 5, 5);
+    const auto descending_singleton_range = local_range(
+        source_formal, "source", 5, 5);
+    const auto ascending_null_range = local_range(
+        source_formal, "source", 5, 4);
+    const auto descending_null_range = local_range(
+        source_formal, "source", 4, 5);
+    const auto fixed_formal_range = local_range(
+        fixed_source_formal, "fixed_source", 9, 6);
+
+    auto design = builder.finish();
+    const auto assert_forwarded_range = [&](
+        const DeclarationId formal, const DeclarationId actual,
+        const vhdl::SubtypeIndication& local,
+        const std::int64_t left, const std::int64_t right,
+        const bool descending, const bool null_range) {
+        CompiledActualBinding binding;
+        binding.formal = formal;
+        binding.actual_declaration = actual;
+        const std::vector<CompiledBindingFrame> frames {
+            CompiledBindingFrame { binding }
+        };
+        const CompiledDesignResolver resolver {
+            design, unit, nullptr, frames
+        };
+        const auto effective = resolver.effective_vhdl_subtype(local, scope);
+        assert(effective && effective->constraints.size() == 1U);
+        const auto& result = effective->constraints.front();
+        assert(result.left == left && result.right == right);
+        assert(result.descending == descending);
+        assert(result.null == null_range);
+        assert(!result.direction_from_bounds);
+    };
+    assert_forwarded_range(source_formal, ascending_singleton,
+        ascending_singleton_range, 5, 5, false, false);
+    assert_forwarded_range(source_formal, descending_singleton,
+        descending_singleton_range, 5, 5, true, false);
+    assert_forwarded_range(source_formal, ascending_null,
+        ascending_null_range, 5, 4, false, true);
+    assert_forwarded_range(source_formal, descending_null,
+        descending_null_range, 4, 5, true, true);
+
+    // A constrained formal keeps its declared range even if an active frame
+    // carries a conflicting actual subtype.
+    assert_forwarded_range(fixed_source_formal, ascending_actual,
+        fixed_formal_range, 9, 6, true, false);
+}
+
+void test_compiled_vhdl_resolver_scalar_range_direction()
+{
+    LinkBundleBuilder builder { "resolver-scalar-range-direction.vhd" };
+    const auto unit = builder.add_vhdl_unit(UnitKind::vhdl_entity,
+        vhdl::UnitKind::entity, "scalar_range_direction");
+    const auto scope = builder.model.units()[unit.value()].scope;
+
+    const auto add_type = [&](
+        const std::string& name, const vhdl::TypeForm type_form,
+        const vhdl::DeclarationForm declaration_form) {
+        const auto declaration = builder.model.add_declaration(scope,
+            DeclarationKind::type, name, builder.source, builder.origin);
+        TypeReference type_reference;
+        type_reference.source = builder.source;
+        type_reference.spelling = name;
+        const auto type = builder.model.add_type(scope,
+            TypeKind::declaration, name, type_reference,
+            builder.source, builder.origin);
+        vhdl::Declaration record;
+        record.id = declaration;
+        record.scope = scope;
+        record.form = declaration_form;
+        record.name = name;
+        record.declared_type = type;
+        record.source = builder.source;
+        record.origin = builder.origin;
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(record));
+        vhdl::TypeDefinition definition;
+        definition.id = type;
+        definition.declaration = declaration;
+        definition.form = type_form;
+        definition.name = name;
+        definition.source = builder.source;
+        definition.origin = builder.origin;
+        builder.vhdl_hir.mutable_types().push_back(
+            std::move(definition));
+        builder.vhdl_unit(unit).declarations.push_back(declaration);
+        return std::pair { declaration, type };
+    };
+    const auto vector_type = add_type(
+        "vector_t", vhdl::TypeForm::array,
+        vhdl::DeclarationForm::type).second;
+    auto& vector_definition = builder.vhdl_hir.mutable_types().back();
+    vector_definition.element_subtype.emplace();
+    vector_definition.element_subtype->type_mark.spelling = "bit";
+    vector_definition.element_subtype->domain = vhdl::ValueDomain::bit2;
+    vector_definition.element_subtype->executable_width = 1U;
+    vector_definition.array_dimensions.resize(1U);
+    vector_definition.array_dimensions.front().unconstrained = true;
+    vector_definition.array_dimensions.front().index_subtype
+        = vhdl_name("natural", builder.source);
+    vector_definition.array_dimensions.front().source = builder.source;
+
+    const auto [integer_declaration, integer_type] = add_type(
+        "integer_index_t", vhdl::TypeForm::scalar,
+        vhdl::DeclarationForm::type);
+    auto& integer_definition = builder.vhdl_hir.mutable_types().back();
+    vhdl::RangeConstraint descending_integer;
+    descending_integer.kind = vhdl::RangeKind::integer;
+    descending_integer.left = 8;
+    descending_integer.right = 3;
+    descending_integer.descending = true;
+    descending_integer.source = builder.source;
+    integer_definition.scalar_range = descending_integer;
+
+    const auto discrete_declaration = add_type(
+        "discrete_index_t", vhdl::TypeForm::subtype,
+        vhdl::DeclarationForm::subtype).first;
+    const auto discrete_type_index
+        = builder.vhdl_hir.mutable_types().size() - 1U;
+    auto& discrete_definition
+        = builder.vhdl_hir.mutable_types()[discrete_type_index];
+    discrete_definition.base.type_mark.target = integer_type;
+    discrete_definition.base.type_mark.spelling = "integer_index_t";
+    auto inherited_discrete_range = descending_integer;
+    inherited_discrete_range.kind = vhdl::RangeKind::discrete;
+    inherited_discrete_range.direction_from_bounds = true;
+
+    const auto enumeration_declaration = add_type(
+        "enum_index_t", vhdl::TypeForm::enumeration,
+        vhdl::DeclarationForm::type).first;
+    auto& enumeration_definition = builder.vhdl_hir.mutable_types().back();
+    enumeration_definition.enumeration_literals.push_back({
+        { }, "low", 0U, builder.source
+    });
+    enumeration_definition.enumeration_literals.push_back({
+        { }, "high", 1U, builder.source
+    });
+
+    const auto unknown_declaration = add_type(
+        "unknown_scalar_t", vhdl::TypeForm::scalar,
+        vhdl::DeclarationForm::type).first;
+    const auto builtin_integer_index_declaration = add_type(
+        "builtin_integer_index_t", vhdl::TypeForm::subtype,
+        vhdl::DeclarationForm::subtype).first;
+    auto& builtin_integer_index_definition
+        = builder.vhdl_hir.mutable_types().back();
+    builtin_integer_index_definition.base.type_mark.spelling = "integer";
+    vhdl::RangeConstraint builtin_integer_range;
+    builtin_integer_range.kind = vhdl::RangeKind::integer;
+    builtin_integer_range.left = 1;
+    builtin_integer_range.right = 10;
+    builtin_integer_range.source = builder.source;
+    builtin_integer_index_definition.scalar_range = builtin_integer_range;
+
+    const auto add_name_expression = [&](
+        const std::string& name, const DeclarationId selected) {
+        const auto id = builder.model.add_expression_identity(
+            scope, builder.source, builder.origin);
+        vhdl::Expression expression;
+        expression.id = id;
+        expression.scope = scope;
+        expression.kind = vhdl::ExpressionKind::name;
+        expression.text = name;
+        expression.referenced_name = vhdl_name(name, builder.source);
+        expression.referenced_name->selected = selected;
+        expression.source = builder.source;
+        expression.origin = builder.origin;
+        builder.vhdl_hir.mutable_expressions().push_back(
+            std::move(expression));
+        return id;
+    };
+    const auto add_attribute_expression = [&](
+        const std::string& attribute, const ExpressionId prefix) {
+        const auto id = builder.model.add_expression_identity(
+            scope, builder.source, builder.origin);
+        vhdl::Expression expression;
+        expression.id = id;
+        expression.scope = scope;
+        expression.kind = vhdl::ExpressionKind::call;
+        expression.text = attribute;
+        expression.operands.push_back(prefix);
+        expression.source = builder.source;
+        expression.origin = builder.origin;
+        builder.vhdl_hir.mutable_expressions().push_back(
+            std::move(expression));
+        return id;
+    };
+    const auto source_range = [&](
+        const std::string& name, const DeclarationId declaration,
+        const std::int64_t left, const std::int64_t right) {
+        const auto prefix = add_name_expression(name, declaration);
+        vhdl::RangeConstraint range;
+        range.kind = vhdl::RangeKind::array_index;
+        range.left = left;
+        range.right = right;
+        range.left_expression
+            = add_attribute_expression("'left", prefix);
+        range.right_expression
+            = add_attribute_expression("'right", prefix);
+        range.direction_from_bounds = true;
+        range.source = builder.source;
+        vhdl::SubtypeIndication subtype;
+        subtype.type_mark.target = vector_type;
+        subtype.type_mark.spelling = "vector_t";
+        subtype.domain = vhdl::ValueDomain::bit2;
+        subtype.constraints.push_back(std::move(range));
+        return subtype;
+    };
+
+    const auto integer_prefix = add_name_expression(
+        "integer_index_t", integer_declaration);
+    inherited_discrete_range.left_expression
+        = add_attribute_expression("'left", integer_prefix);
+    inherited_discrete_range.right_expression
+        = add_attribute_expression("'right", integer_prefix);
+    builder.vhdl_hir.mutable_types()[discrete_type_index]
+        .base.constraints.push_back(inherited_discrete_range);
+
+    const auto inherited_descending_null = source_range(
+        "discrete_index_t", discrete_declaration, 4, 5);
+    const auto inherited_descending_singleton = source_range(
+        "discrete_index_t", discrete_declaration, 5, 5);
+    const auto enum_ascending_null = source_range(
+        "enum_index_t", enumeration_declaration, 5, 4);
+    const auto unknown_source = source_range(
+        "unknown_scalar_t", unknown_declaration, 8, 3);
+
+    // Exercise the array-definition path: the subtype indication has no
+    // explicit constraints, so width comes from the raw declared dimension.
+    const auto raw_index_prefix = add_name_expression(
+        "builtin_integer_index_t", builtin_integer_index_declaration);
+    vhdl::RangeConstraint raw_array_range;
+    raw_array_range.kind = vhdl::RangeKind::array_index;
+    raw_array_range.left_expression
+        = add_attribute_expression("'left", raw_index_prefix);
+    raw_array_range.right_expression
+        = add_attribute_expression("'right", raw_index_prefix);
+    raw_array_range.direction_from_bounds = true;
+    raw_array_range.source = builder.source;
+    auto raw_vector_definition = std::ranges::find(
+        builder.vhdl_hir.mutable_types(), vector_type,
+        &vhdl::TypeDefinition::id);
+    assert(raw_vector_definition != builder.vhdl_hir.mutable_types().end());
+    assert(raw_vector_definition->array_dimensions.size() == 1U);
+    auto& raw_dimension = raw_vector_definition->array_dimensions.front();
+    raw_dimension.index_subtype
+        = vhdl_name("builtin_integer_index_t", builder.source);
+    raw_dimension.index_subtype.selected
+        = builtin_integer_index_declaration;
+    raw_dimension.constraint = raw_array_range;
+    raw_dimension.unconstrained = false;
+
+    vhdl::SubtypeIndication bare_vector;
+    bare_vector.type_mark.target = vector_type;
+    bare_vector.type_mark.spelling = "vector_t";
+
+    auto design = builder.finish();
+    assert(design.valid());
+    const CompiledDesignResolver resolver { design, unit };
+    const auto assert_resolved = [&](
+        const vhdl::SubtypeIndication& local,
+        const bool descending, const bool null_range) {
+        const auto effective = resolver.effective_vhdl_subtype(local, scope);
+        assert(effective && effective->type_mark.target == vector_type);
+        assert(effective->constraints.size() == 1U);
+        const auto& range = effective->constraints.front();
+        assert(range.descending == descending);
+        assert(range.null == null_range);
+        assert(!range.direction_from_bounds);
+    };
+    assert_resolved(inherited_descending_null, true, true);
+    assert_resolved(inherited_descending_singleton, true, false);
+    assert_resolved(enum_ascending_null, false, true);
+
+    const auto unresolved = resolver.effective_vhdl_subtype(
+        unknown_source, scope);
+    assert(unresolved && unresolved->constraints.size() == 1U);
+    assert(unresolved->constraints.front().direction_from_bounds);
+
+    const std::array<SpecializedHirActualIdentity, 0> actuals { };
+    const auto specialized = make_specialized_hir_unit(
+        design, unit, actuals);
+    assert(specialized);
+    const CompiledDesignResolver specialized_resolver { *specialized };
+    const auto raw_effective = specialized_resolver.effective_vhdl_subtype(
+        bare_vector, scope);
+    assert(raw_effective && raw_effective->type_mark.target == vector_type);
+    assert(raw_effective->constraints.size() == 1U);
+    const auto& materialized_range = raw_effective->constraints.front();
+    assert(materialized_range.kind == vhdl::RangeKind::array_index);
+    assert(materialized_range.left == 1);
+    assert(materialized_range.right == 10);
+    assert(!materialized_range.descending);
+    assert(!materialized_range.null);
+    assert(!materialized_range.direction_from_bounds);
+    assert(materialized_range.left_expression
+        == raw_array_range.left_expression);
+    assert(materialized_range.right_expression
+        == raw_array_range.right_expression);
+    assert(materialized_range.source == raw_array_range.source);
+    assert(raw_effective->executable_width == 10U);
+    assert(!raw_effective->unconstrained);
+    const auto raw_type = design.find_type(vector_type);
+    assert(raw_type && raw_type->vhdl != nullptr);
+    assert(!raw_type->vhdl->array_dimensions.empty());
+    const auto& retained_raw_range
+        = raw_type->vhdl->array_dimensions.front().constraint;
+    assert(retained_raw_range);
+    assert(!retained_raw_range->left && !retained_raw_range->right);
+    assert(retained_raw_range->left_expression
+        == raw_array_range.left_expression);
+    assert(retained_raw_range->right_expression
+        == raw_array_range.right_expression);
+    assert(retained_raw_range->source == raw_array_range.source);
+    assert(retained_raw_range->direction_from_bounds);
+}
+
+void test_compiled_vhdl_resolver_enumeration_array_bounds()
+{
+    LinkBundleBuilder builder { "resolver-enum-array-bounds.vhd" };
+    const auto unit = builder.add_vhdl_unit(UnitKind::vhdl_package,
+        vhdl::UnitKind::package, "enum_array_bounds");
+    auto& package = builder.vhdl_unit(unit);
+    const auto scope = builder.model.units()[unit.value()].scope;
+    const auto add_declaration = [&](const DeclarationKind kind,
+                                     const vhdl::DeclarationForm form,
+                                     const std::string& name) {
+        const auto id = builder.model.add_declaration(scope, kind, name,
+            builder.source, builder.origin);
+        vhdl::Declaration declaration;
+        declaration.id = id;
+        declaration.scope = scope;
+        declaration.form = form;
+        declaration.name = name;
+        declaration.source = builder.source;
+        declaration.origin = builder.origin;
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(declaration));
+        package.declarations.push_back(id);
+        return id;
+    };
+    const auto add_type = [&](const std::string& name,
+                              const vhdl::TypeForm form) {
+        const auto declaration = add_declaration(DeclarationKind::type,
+            vhdl::DeclarationForm::type, name);
+        TypeReference base;
+        base.source = builder.source;
+        base.spelling = name;
+        const auto type = builder.model.add_type(scope,
+            TypeKind::declaration, name, base,
+            builder.source, builder.origin);
+        const auto declaration_view = std::ranges::find(
+            builder.vhdl_hir.mutable_declarations(), declaration,
+            &vhdl::Declaration::id);
+        assert(declaration_view
+            != builder.vhdl_hir.mutable_declarations().end());
+        declaration_view->declared_type = type;
+        vhdl::TypeDefinition definition;
+        definition.id = type;
+        definition.declaration = declaration;
+        definition.form = form;
+        definition.name = name;
+        definition.source = builder.source;
+        definition.origin = builder.origin;
+        builder.vhdl_hir.mutable_types().push_back(
+            std::move(definition));
+        return std::pair { declaration, type };
+    };
+    const auto add_enumeration = [&](const std::string& name) {
+        const auto [declaration, type]
+            = add_type(name, vhdl::TypeForm::enumeration);
+        auto definition = std::ranges::find(
+            builder.vhdl_hir.mutable_types(), type,
+            &vhdl::TypeDefinition::id);
+        assert(definition != builder.vhdl_hir.mutable_types().end());
+        constexpr std::array<std::string_view, 4U> literals {
+            "'U'", "'X'", "'0'", "'1'"
+        };
+        for (std::size_t ordinal { }; ordinal < literals.size(); ++ordinal) {
+            const auto literal = builder.model.add_declaration(scope,
+                DeclarationKind::enumeration_literal,
+                std::string { literals[ordinal] },
+                builder.source, builder.origin);
+            vhdl::Declaration literal_declaration;
+            literal_declaration.id = literal;
+            literal_declaration.scope = scope;
+            literal_declaration.form
+                = vhdl::DeclarationForm::enumeration_literal;
+            literal_declaration.name = literals[ordinal];
+            literal_declaration.source = builder.source;
+            literal_declaration.origin = builder.origin;
+            builder.vhdl_hir.mutable_declarations().push_back(
+                std::move(literal_declaration));
+            definition->enumeration_literals.push_back({
+                literal, std::string { literals[ordinal] },
+                static_cast<std::uint32_t>(ordinal), builder.source });
+        }
+        return std::pair { declaration, type };
+    };
+    const auto [index_declaration, index_type]
+        = add_enumeration("Index_T");
+    const auto [other_index_declaration, other_index_type]
+        = add_enumeration("Other_Index_T");
+    const auto [boolean_declaration, boolean_type]
+        = add_type("Boolean_T", vhdl::TypeForm::enumeration);
+    auto boolean_definition = std::ranges::find(
+        builder.vhdl_hir.mutable_types(), boolean_type,
+        &vhdl::TypeDefinition::id);
+    assert(boolean_definition != builder.vhdl_hir.mutable_types().end());
+    constexpr std::array<std::string_view, 2U> boolean_literals {
+        "false", "true"
+    };
+    std::array<DeclarationId, 2U> boolean_literal_declarations;
+    for (std::size_t ordinal { }; ordinal < boolean_literals.size(); ++ordinal) {
+        const auto literal = builder.model.add_declaration(scope,
+            DeclarationKind::enumeration_literal,
+            std::string { boolean_literals[ordinal] },
+            builder.source, builder.origin);
+        vhdl::Declaration literal_declaration;
+        literal_declaration.id = literal;
+        literal_declaration.scope = scope;
+        literal_declaration.form
+            = vhdl::DeclarationForm::enumeration_literal;
+        literal_declaration.name = boolean_literals[ordinal];
+        literal_declaration.source = builder.source;
+        literal_declaration.origin = builder.origin;
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(literal_declaration));
+        boolean_definition->enumeration_literals.push_back({
+            literal, std::string { boolean_literals[ordinal] },
+            static_cast<std::uint32_t>(ordinal), builder.source });
+        boolean_literal_declarations[ordinal] = literal;
+    }
+
+    const auto add_expression = [&](const vhdl::ExpressionKind kind,
+                                    const std::string& text,
+                                    const std::optional<DeclarationId> selected,
+                                    std::vector<ExpressionId> operands = { }) {
+        const auto id = builder.model.add_expression_identity(
+            scope, builder.source, builder.origin);
+        vhdl::Expression expression;
+        expression.id = id;
+        expression.scope = scope;
+        expression.kind = kind;
+        expression.text = text;
+        expression.source = builder.source;
+        expression.origin = builder.origin;
+        expression.operands = std::move(operands);
+        expression.referenced_name = vhdl_name(text, builder.source);
+        expression.referenced_name->selected = selected;
+        builder.vhdl_hir.mutable_expressions().push_back(
+            std::move(expression));
+        return id;
+    };
+    const auto low = add_expression(vhdl::ExpressionKind::logic_literal,
+        "'U'", [&] {
+            const auto& literals = std::ranges::find(
+                builder.vhdl_hir.types(), index_type,
+                &vhdl::TypeDefinition::id)->enumeration_literals;
+            return literals.front().declaration;
+        }());
+    const auto one = add_expression(vhdl::ExpressionKind::logic_literal,
+        "'1'", [&] {
+            const auto& literals = std::ranges::find(
+                builder.vhdl_hir.types(), index_type,
+                &vhdl::TypeDefinition::id)->enumeration_literals;
+            return literals.back().declaration;
+        }());
+    const auto x = add_expression(vhdl::ExpressionKind::logic_literal,
+        "'X'", [&] {
+            const auto& literals = std::ranges::find(
+                builder.vhdl_hir.types(), index_type,
+                &vhdl::TypeDefinition::id)->enumeration_literals;
+            return literals[1U].declaration;
+        }());
+    const auto other_one = add_expression(
+        vhdl::ExpressionKind::logic_literal, "'1'", [&] {
+            const auto& literals = std::ranges::find(
+                builder.vhdl_hir.types(), other_index_type,
+                &vhdl::TypeDefinition::id)->enumeration_literals;
+            return literals.back().declaration;
+        }());
+    const auto boolean_false = add_expression(
+        vhdl::ExpressionKind::boolean_literal, "false",
+        boolean_literal_declarations.front());
+    const auto boolean_true = add_expression(
+        vhdl::ExpressionKind::boolean_literal, "true",
+        boolean_literal_declarations.back());
+
+    const auto add_typed_object = [&](const std::string& name,
+                                      const DeclarationKind kind,
+                                      const vhdl::DeclarationForm form,
+                                      const TypeId object_type,
+                                      const std::optional<ExpressionId> initializer) {
+        const auto declaration = add_declaration(kind, form, name);
+        auto view = std::ranges::find(
+            builder.vhdl_hir.mutable_declarations(), declaration,
+            &vhdl::Declaration::id);
+        assert(view != builder.vhdl_hir.mutable_declarations().end());
+        view->subtype.emplace();
+        view->subtype->type_mark.target = object_type;
+        view->subtype->type_mark.spelling = object_type == index_type
+            ? "Index_T"
+            : "Other_Index_T";
+        view->subtype->type_mark.source = builder.source;
+        view->initializer = initializer;
+        return declaration;
+    };
+    const auto high_constant = add_typed_object("High_Index",
+        DeclarationKind::constant, vhdl::DeclarationForm::constant,
+        index_type, one);
+    const auto high_name = add_expression(vhdl::ExpressionKind::name,
+        "High_Index", high_constant);
+    const auto qualified_one = add_expression(
+        vhdl::ExpressionKind::call, "@vhdl-qualified:Index_T",
+        index_declaration, { one });
+    const auto qualified_constant = add_typed_object("Qualified_Index",
+        DeclarationKind::constant, vhdl::DeclarationForm::constant,
+        index_type, qualified_one);
+    const auto qualified_name = add_expression(
+        vhdl::ExpressionKind::name, "Qualified_Index", qualified_constant);
+    const auto alias_constant = add_typed_object("Alias_Index",
+        DeclarationKind::constant, vhdl::DeclarationForm::constant,
+        index_type, high_name);
+    const auto alias_name = add_expression(
+        vhdl::ExpressionKind::name, "Alias_Index", alias_constant);
+    const auto wrong_constant = add_typed_object("Wrong_Index",
+        DeclarationKind::constant, vhdl::DeclarationForm::constant,
+        other_index_type, other_one);
+    const auto wrong_name = add_expression(
+        vhdl::ExpressionKind::name, "Wrong_Index", wrong_constant);
+    const auto dynamic_object = add_typed_object("Dynamic_Index",
+        DeclarationKind::variable, vhdl::DeclarationForm::variable,
+        index_type, std::nullopt);
+    const auto dynamic_name = add_expression(
+        vhdl::ExpressionKind::name, "Dynamic_Index", dynamic_object);
+    const auto generic_constant = add_typed_object("Generic_Index",
+        DeclarationKind::generic, vhdl::DeclarationForm::generic_constant,
+        index_type, x);
+    const auto generic_name = add_expression(
+        vhdl::ExpressionKind::name, "Generic_Index", generic_constant);
+
+    const auto [array_declaration, array_type]
+        = add_type("Index_Table_T", vhdl::TypeForm::array);
+    auto array_definition = std::ranges::find(
+        builder.vhdl_hir.mutable_types(), array_type,
+        &vhdl::TypeDefinition::id);
+    assert(array_definition != builder.vhdl_hir.mutable_types().end());
+    array_definition->element_subtype.emplace();
+    array_definition->element_subtype->type_mark.spelling = "bit";
+    array_definition->element_subtype->domain = vhdl::ValueDomain::bit2;
+    array_definition->element_subtype->executable_width = 1U;
+    vhdl::ArrayDimension dimension;
+    dimension.index_subtype = vhdl_name("Index_T", builder.source);
+    dimension.index_subtype.selected = index_declaration;
+    dimension.unconstrained = true;
+    dimension.source = builder.source;
+    array_definition->array_dimensions.push_back(std::move(dimension));
+
+    const auto [boolean_array_declaration, boolean_array_type]
+        = add_type("Boolean_Table_T", vhdl::TypeForm::array);
+    auto boolean_array_definition = std::ranges::find(
+        builder.vhdl_hir.mutable_types(), boolean_array_type,
+        &vhdl::TypeDefinition::id);
+    assert(boolean_array_definition != builder.vhdl_hir.mutable_types().end());
+    boolean_array_definition->element_subtype.emplace();
+    boolean_array_definition->element_subtype->type_mark.spelling = "bit";
+    boolean_array_definition->element_subtype->domain
+        = vhdl::ValueDomain::bit2;
+    boolean_array_definition->element_subtype->executable_width = 1U;
+    vhdl::ArrayDimension boolean_dimension;
+    boolean_dimension.index_subtype = vhdl_name("Boolean_T", builder.source);
+    boolean_dimension.index_subtype.selected = boolean_declaration;
+    boolean_dimension.unconstrained = true;
+    boolean_dimension.source = builder.source;
+    boolean_array_definition->array_dimensions.push_back(
+        std::move(boolean_dimension));
+
+    const auto [declared_array_declaration, declared_array_type]
+        = add_type("Declared_Index_Table_T", vhdl::TypeForm::array);
+    auto declared_array_definition = std::ranges::find(
+        builder.vhdl_hir.mutable_types(), declared_array_type,
+        &vhdl::TypeDefinition::id);
+    assert(declared_array_definition
+        != builder.vhdl_hir.mutable_types().end());
+    declared_array_definition->element_subtype.emplace();
+    declared_array_definition->element_subtype->type_mark.spelling = "bit";
+    declared_array_definition->element_subtype->domain
+        = vhdl::ValueDomain::bit2;
+    declared_array_definition->element_subtype->executable_width = 1U;
+    vhdl::ArrayDimension declared_dimension;
+    declared_dimension.index_subtype = vhdl_name("Index_T", builder.source);
+    declared_dimension.index_subtype.selected = index_declaration;
+    vhdl::RangeConstraint declared_range;
+    declared_range.kind = vhdl::RangeKind::array_index;
+    declared_range.left_expression = low;
+    declared_range.right_expression = dynamic_name;
+    declared_dimension.constraint = std::move(declared_range);
+    declared_dimension.source = builder.source;
+    declared_array_definition->array_dimensions.push_back(
+        std::move(declared_dimension));
+
+    auto design = builder.finish();
+    const auto constrained = [&](const ExpressionId right) {
+        vhdl::SubtypeIndication subtype;
+        subtype.type_mark.target = array_type;
+        subtype.type_mark.spelling = "Index_Table_T";
+        vhdl::RangeConstraint range;
+        range.kind = vhdl::RangeKind::array_index;
+        range.left_expression = low;
+        range.right_expression = right;
+        range.descending = false;
+        subtype.constraints.push_back(std::move(range));
+        return subtype;
+    };
+    const auto assert_shape = [&](const CompiledDesignResolver& resolver,
+                                  const ExpressionId right) {
+        const auto effective = resolver.effective_vhdl_subtype(
+            constrained(right), scope);
+        assert(effective
+            && effective->executable_width == 4U
+            && effective->constraints.size() == 1U
+            && effective->constraints.front().left == 0
+            && effective->constraints.front().right == 3);
+    };
+    const CompiledDesignResolver resolver { design, unit };
+    assert_shape(resolver, one);
+    assert_shape(resolver, high_name);
+    assert_shape(resolver, qualified_name);
+    assert_shape(resolver, alias_name);
+
+    vhdl::SubtypeIndication boolean_subtype;
+    boolean_subtype.type_mark.target = boolean_array_type;
+    boolean_subtype.type_mark.spelling = "Boolean_Table_T";
+    vhdl::RangeConstraint boolean_range;
+    boolean_range.kind = vhdl::RangeKind::array_index;
+    boolean_range.left_expression = boolean_false;
+    boolean_range.right_expression = boolean_true;
+    boolean_subtype.constraints.push_back(std::move(boolean_range));
+    const auto boolean_shape = resolver.effective_vhdl_subtype(
+        boolean_subtype, scope);
+    assert(boolean_shape && boolean_shape->executable_width == 2U
+        && boolean_shape->constraints.size() == 1U
+        && boolean_shape->constraints.front().left == 0
+        && boolean_shape->constraints.front().right == 1);
+
+    vhdl::SubtypeIndication declared_constraint;
+    declared_constraint.type_mark.target = declared_array_type;
+    declared_constraint.type_mark.spelling = "Declared_Index_Table_T";
+    declared_constraint.executable_width = 4U;
+    const auto unresolved_declared = resolver.effective_vhdl_subtype(
+        declared_constraint, scope);
+    assert(unresolved_declared && !unresolved_declared->executable_width);
+
+    const auto wrong_nominal = resolver.effective_vhdl_subtype(
+        constrained(wrong_name), scope);
+    assert(wrong_nominal && !wrong_nominal->executable_width
+        && wrong_nominal->constraints.size() == 1U
+        && wrong_nominal->constraints.front().left == 0
+        && !wrong_nominal->constraints.front().right
+        && wrong_nominal->constraints.front().left_expression == low
+        && wrong_nominal->constraints.front().right_expression
+            == wrong_name);
+    const auto dynamic = resolver.effective_vhdl_subtype(
+        constrained(dynamic_name), scope);
+    assert(dynamic && !dynamic->executable_width
+        && dynamic->constraints.size() == 1U
+        && dynamic->constraints.front().left == 0
+        && !dynamic->constraints.front().right
+        && dynamic->constraints.front().left_expression == low
+        && dynamic->constraints.front().right_expression
+            == dynamic_name);
+
+    const auto generic_default = resolver.effective_vhdl_subtype(
+        constrained(generic_name), scope);
+    assert(generic_default && generic_default->executable_width == 2U
+        && generic_default->constraints.size() == 1U
+        && generic_default->constraints.front().left == 0
+        && generic_default->constraints.front().right == 1);
+
+    CompiledActualBinding generic_binding;
+    generic_binding.formal = generic_constant;
+    generic_binding.expression = one;
+    const std::vector<CompiledBindingFrame> generic_frames {
+        CompiledBindingFrame { generic_binding }
+    };
+    const CompiledDesignResolver specialized_resolver {
+        design, unit, nullptr, generic_frames
+    };
+    assert_shape(specialized_resolver, generic_name);
+    generic_binding.expression = dynamic_name;
+    const std::vector<CompiledBindingFrame> dynamic_generic_frames {
+        CompiledBindingFrame { generic_binding }
+    };
+    const CompiledDesignResolver dynamic_specialized_resolver {
+        design, unit, nullptr, dynamic_generic_frames
+    };
+    const auto dynamic_generic =
+        dynamic_specialized_resolver.effective_vhdl_subtype(
+            constrained(generic_name), scope);
+    assert(dynamic_generic && !dynamic_generic->executable_width
+        && dynamic_generic->constraints.size() == 1U
+        && dynamic_generic->constraints.front().left == 0
+        && !dynamic_generic->constraints.front().right
+        && dynamic_generic->constraints.front().right_expression
+            == generic_name);
+    (void) other_index_declaration;
+    (void) array_declaration;
+    (void) boolean_array_declaration;
+    (void) declared_array_declaration;
 }
 
 void test_compiled_association_resolution()
@@ -8616,6 +9559,975 @@ void test_compiled_design_normalization()
     assert(!normalize_compiled_design(invalid));
 }
 
+void test_vhdl_nominal_constant_provenance()
+{
+    auto design = make_compiled_design();
+    auto& vhdl_units = design.mutable_vhdl().mutable_units();
+    const auto package = std::ranges::find_if(
+        vhdl_units, [](const vhdl::Unit& unit) {
+            return unit.name == "vhdl_package";
+        });
+    const auto consumer = std::ranges::find_if(
+        vhdl_units, [](const vhdl::Unit& unit) {
+            return unit.kind == vhdl::UnitKind::entity;
+        });
+    assert(package != vhdl_units.end());
+    assert(consumer != vhdl_units.end());
+    const auto package_id = package->id;
+    const auto package_scope = package->scope;
+    const auto package_source = package->source;
+    const auto package_origin = package->origin;
+    const auto consumer_id = consumer->id;
+    const auto consumer_scope = consumer->scope;
+    const auto consumer_source = consumer->source;
+    const auto consumer_origin = consumer->origin;
+
+    const auto ieee_package_id = design.mutable_semantics().add_unit(
+        Language::vhdl, UnitKind::vhdl_package,
+        "ieee", "user_index_pkg", {}, package_source, package_origin);
+    const auto& ieee_package_model
+        = design.semantics.units()[ieee_package_id.value()];
+    const auto ieee_package_scope = ieee_package_model.scope;
+    vhdl::Unit ieee_package;
+    ieee_package.id = ieee_package_id;
+    ieee_package.scope = ieee_package_scope;
+    ieee_package.kind = vhdl::UnitKind::package;
+    ieee_package.library = ieee_package_model.library;
+    ieee_package.name = ieee_package_model.name;
+    ieee_package.source = package_source;
+    ieee_package.origin = package_origin;
+    vhdl_units.push_back(std::move(ieee_package));
+    assert(vhdl_units.back().standard_package_revision.empty());
+
+    const auto standard_package_id = design.mutable_semantics().add_unit(
+        Language::vhdl, UnitKind::vhdl_package,
+        "std", "standard", {}, package_source, package_origin);
+    const auto& standard_package_model
+        = design.semantics.units()[standard_package_id.value()];
+    const auto standard_package_scope = standard_package_model.scope;
+    vhdl::Unit standard_package;
+    standard_package.id = standard_package_id;
+    standard_package.scope = standard_package_scope;
+    standard_package.kind = vhdl::UnitKind::package;
+    standard_package.library = standard_package_model.library;
+    standard_package.name = standard_package_model.name;
+    standard_package.source = package_source;
+    standard_package.origin = package_origin;
+    vhdl_units.push_back(std::move(standard_package));
+    assert(vhdl_units.back().primary_name.empty());
+    assert(vhdl_units.back().standard_package_revision.empty());
+
+    const auto add_type = [&](const UnitId unit_id, const ScopeId scope,
+                              const std::string& name,
+                              const vhdl::TypeForm form,
+                              const TypeKind model_kind,
+                              const std::string& base_name,
+                              const std::optional<TypeId> model_base,
+                              const std::optional<TypeId> hir_base,
+                              const bool has_scalar_range = false) {
+        const auto declaration = design.mutable_semantics().add_declaration(
+            scope, form == vhdl::TypeForm::subtype
+                    ? DeclarationKind::subtype : DeclarationKind::type,
+            name, package_source, package_origin);
+        TypeReference semantic_base;
+        semantic_base.source = package_source;
+        semantic_base.spelling = base_name;
+        if (model_base) {
+            semantic_base.target = *model_base;
+        }
+        const auto type = design.mutable_semantics().add_type(
+            scope, model_kind, name, semantic_base,
+            package_source, package_origin);
+        vhdl::TypeDefinition definition;
+        definition.id = type;
+        definition.declaration = declaration;
+        definition.form = form;
+        definition.name = name;
+        definition.base.type_mark.source = package_source;
+        definition.base.type_mark.spelling = base_name;
+        if (hir_base) {
+            definition.base.type_mark.target = *hir_base;
+        }
+        definition.source = package_source;
+        definition.origin = package_origin;
+        if (form == vhdl::TypeForm::scalar || has_scalar_range) {
+            vhdl::RangeConstraint range;
+            range.kind = vhdl::RangeKind::integer;
+            range.left = 1;
+            range.right = 5;
+            range.source = package_source;
+            definition.scalar_range = range;
+        }
+        if (form == vhdl::TypeForm::array) {
+            vhdl::SubtypeIndication element;
+            element.type_mark.source = package_source;
+            element.type_mark.spelling = "bit";
+            element.domain = vhdl::ValueDomain::bit2;
+            definition.element_subtype = std::move(element);
+            vhdl::ArrayDimension dimension;
+            dimension.index_subtype = vhdl_name("integer", package_source);
+            definition.array_dimensions.push_back(std::move(dimension));
+        }
+        vhdl::Declaration type_declaration;
+        type_declaration.id = declaration;
+        type_declaration.scope = scope;
+        type_declaration.form = form == vhdl::TypeForm::subtype
+            ? vhdl::DeclarationForm::subtype
+            : vhdl::DeclarationForm::type;
+        type_declaration.name = name;
+        type_declaration.declared_type = type;
+        type_declaration.source = package_source;
+        type_declaration.origin = package_origin;
+        design.mutable_vhdl().mutable_types().push_back(
+            std::move(definition));
+        design.mutable_vhdl().mutable_declarations().push_back(
+            std::move(type_declaration));
+        const auto unit = std::ranges::find(
+            design.mutable_vhdl().mutable_units(), unit_id,
+            &vhdl::Unit::id);
+        assert(unit != design.mutable_vhdl().mutable_units().end());
+        unit->declarations.push_back(declaration);
+        return std::pair { declaration, type };
+    };
+
+    const auto [package_index_declaration, package_index_type] = add_type(
+        package_id, package_scope, "Index_T", vhdl::TypeForm::scalar,
+        TypeKind::declaration, "integer", std::nullopt, std::nullopt);
+    const auto [package_alias_declaration, package_alias_type] = add_type(
+        package_id, package_scope, "Alias_Index_T",
+        vhdl::TypeForm::subtype, TypeKind::subtype,
+        "Index_T", package_index_type, std::nullopt);
+    static_cast<void>(package_index_declaration);
+    static_cast<void>(package_alias_declaration);
+    const auto [shadow_declaration, shadow_type] = add_type(
+        consumer_id, consumer_scope, "Index_T", vhdl::TypeForm::array,
+        TypeKind::declaration, "bit", std::nullopt, std::nullopt);
+    static_cast<void>(shadow_declaration);
+    static_cast<void>(shadow_type);
+    const auto [ieee_index_declaration, ieee_index_type] = add_type(
+        ieee_package_id, ieee_package_scope, "Ieee_Index_T",
+        vhdl::TypeForm::scalar, TypeKind::declaration,
+        "integer", std::nullopt, std::nullopt);
+    static_cast<void>(ieee_index_declaration);
+
+    const auto [integer_declaration, integer_type] = add_type(
+        standard_package_id, standard_package_scope, "integer",
+        vhdl::TypeForm::scalar, TypeKind::declaration,
+        "integer", std::nullopt, std::nullopt);
+    static_cast<void>(integer_declaration);
+    const auto [declared_integer_declaration, declared_integer_type] =
+        add_type(package_id, package_scope, "Distinct_Integer_T",
+            vhdl::TypeForm::subtype, TypeKind::declaration,
+            "integer", integer_type, integer_type, true);
+    static_cast<void>(declared_integer_declaration);
+    const auto [ordinary_subtype_declaration, ordinary_subtype_type] =
+        add_type(package_id, package_scope, "Ordinary_Integer_Subtype",
+            vhdl::TypeForm::subtype, TypeKind::subtype,
+            "integer", integer_type, integer_type, true);
+    static_cast<void>(ordinary_subtype_declaration);
+    const auto declared_integer_record = std::ranges::find(
+        design.vhdl_hir.types(), declared_integer_type,
+        &vhdl::TypeDefinition::id);
+    assert(declared_integer_record != design.vhdl_hir.types().end());
+    assert(declared_integer_record->form == vhdl::TypeForm::subtype);
+    assert(declared_integer_record->scalar_range.has_value());
+    const auto declared_integer_model = std::ranges::find(
+        design.semantics.types(), declared_integer_type, &Type::id);
+    assert(declared_integer_model != design.semantics.types().end());
+    assert(declared_integer_model->kind == TypeKind::declaration);
+    const auto declared_integer_hir_declaration = std::ranges::find(
+        design.vhdl_hir.declarations(), declared_integer_record->declaration,
+        &vhdl::Declaration::id);
+    assert(declared_integer_hir_declaration
+        != design.vhdl_hir.declarations().end());
+    assert(declared_integer_hir_declaration->form
+        == vhdl::DeclarationForm::subtype);
+
+    const auto add_expression = [&](const UnitId unit_id,
+                                    const ScopeId scope,
+                                    const vhdl::ExpressionKind kind,
+                                    std::string text,
+                                    std::vector<ExpressionId> operands = {}) {
+        const auto unit = std::ranges::find(
+            design.vhdl_units(), unit_id, &vhdl::Unit::id);
+        assert(unit != design.vhdl_units().end());
+        const auto id = design.mutable_semantics().add_expression_identity(
+            scope, unit->source, unit->origin);
+        vhdl::Expression expression;
+        expression.id = id;
+        expression.scope = scope;
+        expression.kind = kind;
+        expression.text = std::move(text);
+        expression.source = unit->source;
+        expression.origin = unit->origin;
+        expression.operands = std::move(operands);
+        design.mutable_vhdl().mutable_expressions().push_back(
+            std::move(expression));
+        return id;
+    };
+
+    const auto generic_limit = design.mutable_semantics().add_declaration(
+        consumer_scope, DeclarationKind::generic, "Generic_Limit",
+        consumer_source, consumer_origin);
+    vhdl::Declaration generic_limit_record;
+    generic_limit_record.id = generic_limit;
+    generic_limit_record.scope = consumer_scope;
+    generic_limit_record.form = vhdl::DeclarationForm::generic_constant;
+    generic_limit_record.object_class = vhdl::ObjectClass::constant;
+    generic_limit_record.name = "Generic_Limit";
+    generic_limit_record.subtype.emplace();
+    generic_limit_record.subtype->type_mark.source = consumer_source;
+    generic_limit_record.subtype->type_mark.spelling = "integer";
+    generic_limit_record.subtype->type_mark.target = integer_type;
+    generic_limit_record.subtype->domain = vhdl::ValueDomain::integer;
+    generic_limit_record.source = consumer_source;
+    generic_limit_record.origin = consumer_origin;
+    design.mutable_vhdl().mutable_declarations().push_back(
+        std::move(generic_limit_record));
+    const auto mutable_consumer = std::ranges::find(
+        design.mutable_vhdl().mutable_units(), consumer_id,
+        &vhdl::Unit::id);
+    assert(mutable_consumer != design.mutable_vhdl().mutable_units().end());
+    mutable_consumer->declarations.push_back(generic_limit);
+
+    const auto generic_limit_name = add_expression(
+        consumer_id, consumer_scope, vhdl::ExpressionKind::name,
+        "Generic_Limit");
+    auto& generic_limit_name_expression
+        = design.mutable_vhdl().mutable_expressions()[
+            generic_limit_name.value()];
+    generic_limit_name_expression.referenced_name.emplace();
+    generic_limit_name_expression.referenced_name->spelling
+        = "Generic_Limit";
+    generic_limit_name_expression.referenced_name->canonical
+        = "generic_limit";
+    generic_limit_name_expression.referenced_name->source = consumer_source;
+    generic_limit_name_expression.referenced_name->selected = generic_limit;
+
+    const auto unresolved_identity_generic_limit = add_expression(
+        consumer_id, consumer_scope, vhdl::ExpressionKind::name,
+        "Generic_Limit");
+    auto& unresolved_identity_generic_limit_expression
+        = design.mutable_vhdl().mutable_expressions()[
+            unresolved_identity_generic_limit.value()];
+    unresolved_identity_generic_limit_expression.referenced_name.emplace();
+    unresolved_identity_generic_limit_expression.referenced_name->spelling
+        = "Generic_Limit";
+    unresolved_identity_generic_limit_expression.referenced_name->canonical
+        = "generic_limit";
+    unresolved_identity_generic_limit_expression.referenced_name->source
+        = consumer_source;
+
+    const auto package_value = add_expression(
+        package_id, package_scope,
+        vhdl::ExpressionKind::integer_literal, "2");
+    const auto universal_value = add_expression(
+        consumer_id, consumer_scope,
+        vhdl::ExpressionKind::integer_literal, "4");
+    const auto ieee_value = add_expression(
+        ieee_package_id, ieee_package_scope,
+        vhdl::ExpressionKind::integer_literal, "3");
+    const auto declared_integer_value = add_expression(
+        package_id, package_scope,
+        vhdl::ExpressionKind::integer_literal, "5");
+    const auto ordinary_subtype_value = add_expression(
+        package_id, package_scope,
+        vhdl::ExpressionKind::integer_literal, "6");
+
+    const auto add_constant = [&](const UnitId unit_id,
+                                  const ScopeId scope,
+                                  const std::string& name,
+                                  const std::optional<TypeId> type,
+                                  const ExpressionId initializer,
+                                  const std::string& type_spelling) {
+        const auto unit = std::ranges::find(
+            design.vhdl_units(), unit_id, &vhdl::Unit::id);
+        assert(unit != design.vhdl_units().end());
+        const auto declaration = design.mutable_semantics().add_declaration(
+            scope, DeclarationKind::constant, name,
+            unit->source, unit->origin);
+        vhdl::Declaration record;
+        record.id = declaration;
+        record.scope = scope;
+        record.form = vhdl::DeclarationForm::constant;
+        record.name = name;
+        record.initializer = initializer;
+        record.source = unit->source;
+        record.origin = unit->origin;
+        if (type) {
+            record.subtype.emplace();
+            record.subtype->type_mark.source = unit->source;
+            record.subtype->type_mark.spelling = type_spelling;
+            record.subtype->type_mark.target = *type;
+            record.subtype->domain = vhdl::ValueDomain::integer;
+        }
+        design.mutable_vhdl().mutable_declarations().push_back(
+            std::move(record));
+        const auto mutable_unit = std::ranges::find(
+            design.mutable_vhdl().mutable_units(), unit_id,
+            &vhdl::Unit::id);
+        assert(mutable_unit != design.mutable_vhdl().mutable_units().end());
+        mutable_unit->declarations.push_back(declaration);
+        return declaration;
+    };
+    const auto add_bounded_constant = [&](const std::string& name,
+                                          const ExpressionId bound,
+                                          const std::optional<ExpressionId>
+                                              initializer) {
+        const auto declaration = design.mutable_semantics().add_declaration(
+            consumer_scope, DeclarationKind::constant, name,
+            consumer_source, consumer_origin);
+        vhdl::Declaration record;
+        record.id = declaration;
+        record.scope = consumer_scope;
+        record.form = vhdl::DeclarationForm::constant;
+        record.object_class = vhdl::ObjectClass::constant;
+        record.name = name;
+        record.initializer = initializer;
+        record.source = consumer_source;
+        record.origin = consumer_origin;
+        record.subtype.emplace();
+        record.subtype->type_mark.source = consumer_source;
+        record.subtype->type_mark.spelling = "Ordinary_Integer_Subtype";
+        record.subtype->type_mark.target = ordinary_subtype_type;
+        record.subtype->domain = vhdl::ValueDomain::integer;
+        vhdl::RangeConstraint constraint;
+        constraint.kind = vhdl::RangeKind::integer;
+        constraint.left = 0;
+        constraint.right = 8;
+        constraint.right_expression = bound;
+        constraint.source = consumer_source;
+        record.subtype->constraints.push_back(std::move(constraint));
+        design.mutable_vhdl().mutable_declarations().push_back(
+            std::move(record));
+        const auto mutable_unit = std::ranges::find(
+            design.mutable_vhdl().mutable_units(), consumer_id,
+            &vhdl::Unit::id);
+        assert(mutable_unit != design.mutable_vhdl().mutable_units().end());
+        mutable_unit->declarations.push_back(declaration);
+        return declaration;
+    };
+    const auto add_selected_name = [&](const std::string& spelling,
+                                      const DeclarationId declaration) {
+        const auto id = add_expression(consumer_id, consumer_scope,
+            vhdl::ExpressionKind::name, spelling);
+        auto& expression
+            = design.mutable_vhdl().mutable_expressions()[id.value()];
+        expression.referenced_name.emplace();
+        expression.referenced_name->spelling = spelling;
+        expression.referenced_name->canonical = spelling;
+        expression.referenced_name->source = consumer_source;
+        expression.referenced_name->selected = declaration;
+        return id;
+    };
+    const auto typed_constant = add_constant(
+        package_id, package_scope, "Typed_Bound",
+        package_alias_type, package_value, "Alias_Index_T");
+    const auto universal_constant = add_constant(
+        consumer_id, consumer_scope, "Universal_Bound",
+        std::nullopt, universal_value, { });
+    const auto ieee_typed_constant = add_constant(
+        ieee_package_id, ieee_package_scope, "Ieee_Typed_Bound",
+        ieee_index_type, ieee_value, "Ieee_Index_T");
+    const auto declared_integer_constant = add_constant(
+        package_id, package_scope, "Distinct_Integer_Bound",
+        declared_integer_type, declared_integer_value,
+        "Distinct_Integer_T");
+    const auto ordinary_subtype_constant = add_constant(
+        package_id, package_scope, "Ordinary_Subtype_Bound",
+        ordinary_subtype_type, ordinary_subtype_value,
+        "Ordinary_Integer_Subtype");
+    const auto add_package_selected_name =
+        [&](const std::string& spelling,
+            const DeclarationId declaration) {
+        const auto id = add_expression(package_id, package_scope,
+            vhdl::ExpressionKind::name, spelling);
+        auto& expression
+            = design.mutable_vhdl().mutable_expressions()[id.value()];
+        expression.referenced_name.emplace();
+        expression.referenced_name->spelling = spelling;
+        expression.referenced_name->canonical = spelling;
+        expression.referenced_name->source = package_source;
+        expression.referenced_name->selected = declaration;
+        return id;
+    };
+    std::vector<ExpressionId> repeated_resolved_type_names;
+    for (std::size_t index = 0; index < 8U; ++index) {
+        const auto name = "Repeated_Resolved_Type_" + std::to_string(index);
+        const auto declaration = add_constant(package_id, package_scope,
+            name, ordinary_subtype_type, ordinary_subtype_value,
+            "Ordinary_Integer_Subtype");
+        const auto record_iterator = std::ranges::find(
+            design.mutable_vhdl().mutable_declarations(), declaration,
+            &vhdl::Declaration::id);
+        assert(record_iterator
+            != design.mutable_vhdl().mutable_declarations().end());
+        auto& record = *record_iterator;
+        assert(record.subtype);
+        // Exercise the resolver by removing the retained TypeId while keeping
+        // the exact in-scope declared subtype name available.
+        record.subtype->type_mark.target = TypeId { };
+        repeated_resolved_type_names.push_back(
+            add_package_selected_name(name, declaration));
+    }
+
+    const auto generic_bound_constant
+        = design.mutable_semantics().add_declaration(
+            consumer_scope, DeclarationKind::constant,
+            "Generic_Bound", consumer_source, consumer_origin);
+    vhdl::Declaration generic_bound_record;
+    generic_bound_record.id = generic_bound_constant;
+    generic_bound_record.scope = consumer_scope;
+    generic_bound_record.form = vhdl::DeclarationForm::constant;
+    generic_bound_record.object_class = vhdl::ObjectClass::constant;
+    generic_bound_record.name = "Generic_Bound";
+    generic_bound_record.initializer = universal_value;
+    generic_bound_record.source = consumer_source;
+    generic_bound_record.origin = consumer_origin;
+    generic_bound_record.subtype.emplace();
+    generic_bound_record.subtype->type_mark.source = consumer_source;
+    generic_bound_record.subtype->type_mark.spelling
+        = "Ordinary_Integer_Subtype";
+    generic_bound_record.subtype->type_mark.target
+        = ordinary_subtype_type;
+    generic_bound_record.subtype->domain = vhdl::ValueDomain::integer;
+    vhdl::RangeConstraint generic_bound_range;
+    generic_bound_range.kind = vhdl::RangeKind::integer;
+    generic_bound_range.left = 0;
+    generic_bound_range.right = 8;
+    generic_bound_range.right_expression = generic_limit_name;
+    generic_bound_range.source = consumer_source;
+    generic_bound_record.subtype->constraints.push_back(
+        std::move(generic_bound_range));
+    design.mutable_vhdl().mutable_declarations().push_back(
+        std::move(generic_bound_record));
+    const auto generic_consumer = std::ranges::find(
+        design.mutable_vhdl().mutable_units(), consumer_id,
+        &vhdl::Unit::id);
+    assert(generic_consumer != design.mutable_vhdl().mutable_units().end());
+    generic_consumer->declarations.push_back(generic_bound_constant);
+
+    const auto generic_bound_template = *std::ranges::find(
+        design.vhdl_hir.declarations(), generic_bound_constant,
+        &vhdl::Declaration::id);
+    std::vector<std::pair<ExpressionId, DeclarationId>>
+        repeated_unselected_guard_names;
+    for (std::size_t index = 0; index < 8U; ++index) {
+        const auto name = "Repeated_Unselected_Guard_"
+            + std::to_string(index);
+        const auto declaration = design.mutable_semantics().add_declaration(
+            consumer_scope, DeclarationKind::constant, name,
+            consumer_source, consumer_origin);
+        auto record = generic_bound_template;
+        record.id = declaration;
+        record.name = name;
+        assert(record.subtype && !record.subtype->constraints.empty());
+        record.subtype->constraints.front().right_expression
+            = unresolved_identity_generic_limit;
+        design.mutable_vhdl().mutable_declarations().push_back(
+            std::move(record));
+        const auto unit = std::ranges::find(
+            design.mutable_vhdl().mutable_units(), consumer_id,
+            &vhdl::Unit::id);
+        assert(unit != design.mutable_vhdl().mutable_units().end());
+        unit->declarations.push_back(declaration);
+        repeated_unselected_guard_names.emplace_back(
+            add_selected_name(name, declaration), declaration);
+    }
+
+    std::vector<std::pair<ExpressionId, DeclarationId>>
+        repeated_incomplete_guard_names;
+    const auto missing_guard_name = add_expression(
+        consumer_id, consumer_scope, vhdl::ExpressionKind::name,
+        "Missing_Guard_Limit");
+    auto& missing_guard_name_expression
+        = design.mutable_vhdl().mutable_expressions()[
+            missing_guard_name.value()];
+    missing_guard_name_expression.referenced_name.emplace();
+    missing_guard_name_expression.referenced_name->spelling
+        = "Missing_Guard_Limit";
+    missing_guard_name_expression.referenced_name->canonical
+        = "missing_guard_limit";
+    missing_guard_name_expression.referenced_name->source = consumer_source;
+    for (std::size_t index = 0; index < 8U; ++index) {
+        const auto name = "Repeated_Incomplete_Guard_"
+            + std::to_string(index);
+        const auto declaration = design.mutable_semantics().add_declaration(
+            consumer_scope, DeclarationKind::constant, name,
+            consumer_source, consumer_origin);
+        auto record = generic_bound_template;
+        record.id = declaration;
+        record.name = name;
+        assert(record.subtype && !record.subtype->constraints.empty());
+        record.subtype->constraints.front().left_expression
+            = missing_guard_name;
+        record.subtype->constraints.front().right_expression
+            = unresolved_identity_generic_limit;
+        design.mutable_vhdl().mutable_declarations().push_back(
+            std::move(record));
+        const auto unit = std::ranges::find(
+            design.mutable_vhdl().mutable_units(), consumer_id,
+            &vhdl::Unit::id);
+        assert(unit != design.mutable_vhdl().mutable_units().end());
+        unit->declarations.push_back(declaration);
+        repeated_incomplete_guard_names.emplace_back(
+            add_selected_name(name, declaration), declaration);
+    }
+
+    const auto typed_name = add_expression(
+        consumer_id, consumer_scope, vhdl::ExpressionKind::name,
+        "Typed_Bound");
+    auto& typed_name_expression
+        = design.mutable_vhdl().mutable_expressions()[typed_name.value()];
+    typed_name_expression.referenced_name.emplace();
+    typed_name_expression.referenced_name->spelling = "Typed_Bound";
+    typed_name_expression.referenced_name->canonical = "typed_bound";
+    typed_name_expression.referenced_name->source = consumer_source;
+    typed_name_expression.referenced_name->selected = typed_constant;
+
+    const auto universal_name = add_expression(
+        consumer_id, consumer_scope, vhdl::ExpressionKind::name,
+        "Universal_Bound");
+    auto& universal_name_expression
+        = design.mutable_vhdl().mutable_expressions()[universal_name.value()];
+    universal_name_expression.referenced_name.emplace();
+    universal_name_expression.referenced_name->spelling = "Universal_Bound";
+    universal_name_expression.referenced_name->canonical = "universal_bound";
+    universal_name_expression.referenced_name->source = consumer_source;
+    universal_name_expression.referenced_name->selected = universal_constant;
+
+    const auto ieee_typed_name = add_expression(
+        consumer_id, consumer_scope, vhdl::ExpressionKind::name,
+        "Ieee_Typed_Bound");
+    auto& ieee_typed_name_expression
+        = design.mutable_vhdl().mutable_expressions()[ieee_typed_name.value()];
+    ieee_typed_name_expression.referenced_name.emplace();
+    ieee_typed_name_expression.referenced_name->spelling = "Ieee_Typed_Bound";
+    ieee_typed_name_expression.referenced_name->canonical = "ieee_typed_bound";
+    ieee_typed_name_expression.referenced_name->source = consumer_source;
+    ieee_typed_name_expression.referenced_name->selected = ieee_typed_constant;
+
+    const auto declared_integer_name = add_expression(
+        consumer_id, consumer_scope, vhdl::ExpressionKind::name,
+        "Distinct_Integer_Bound");
+    auto& declared_integer_name_expression
+        = design.mutable_vhdl().mutable_expressions()[
+            declared_integer_name.value()];
+    declared_integer_name_expression.referenced_name.emplace();
+    declared_integer_name_expression.referenced_name->spelling
+        = "Distinct_Integer_Bound";
+    declared_integer_name_expression.referenced_name->canonical
+        = "distinct_integer_bound";
+    declared_integer_name_expression.referenced_name->source = consumer_source;
+    declared_integer_name_expression.referenced_name->selected
+        = declared_integer_constant;
+
+    const auto ordinary_subtype_name = add_expression(
+        consumer_id, consumer_scope, vhdl::ExpressionKind::name,
+        "Ordinary_Subtype_Bound");
+    auto& ordinary_subtype_name_expression
+        = design.mutable_vhdl().mutable_expressions()[
+            ordinary_subtype_name.value()];
+    ordinary_subtype_name_expression.referenced_name.emplace();
+    ordinary_subtype_name_expression.referenced_name->spelling
+        = "Ordinary_Subtype_Bound";
+    ordinary_subtype_name_expression.referenced_name->canonical
+        = "ordinary_subtype_bound";
+    ordinary_subtype_name_expression.referenced_name->source = consumer_source;
+    ordinary_subtype_name_expression.referenced_name->selected
+        = ordinary_subtype_constant;
+
+    std::vector<ExpressionId> repeated_generic_bound_names;
+    for (std::size_t index = 0; index < 8U; ++index) {
+        const auto name = add_expression(
+            consumer_id, consumer_scope, vhdl::ExpressionKind::name,
+            "Generic_Bound");
+        auto& name_expression
+            = design.mutable_vhdl().mutable_expressions()[name.value()];
+        name_expression.referenced_name.emplace();
+        name_expression.referenced_name->spelling = "Generic_Bound";
+        name_expression.referenced_name->canonical = "generic_bound";
+        name_expression.referenced_name->source = consumer_source;
+        name_expression.referenced_name->selected = generic_bound_constant;
+        repeated_generic_bound_names.push_back(name);
+    }
+    std::vector<ExpressionId> repeated_ordinary_subtype_names;
+    for (std::size_t index = 0; index < 8U; ++index) {
+        const auto name = add_expression(
+            consumer_id, consumer_scope, vhdl::ExpressionKind::name,
+            "Ordinary_Subtype_Bound");
+        auto& name_expression
+            = design.mutable_vhdl().mutable_expressions()[name.value()];
+        name_expression.referenced_name.emplace();
+        name_expression.referenced_name->spelling = "Ordinary_Subtype_Bound";
+        name_expression.referenced_name->canonical
+            = "ordinary_subtype_bound";
+        name_expression.referenced_name->source = consumer_source;
+        name_expression.referenced_name->selected
+            = ordinary_subtype_constant;
+        repeated_ordinary_subtype_names.push_back(name);
+    }
+
+    const auto missing_selected_bound = add_selected_name(
+        "Missing_Selected_Bound", DeclarationId::from_index(1000));
+    const auto missing_selected_constant = add_bounded_constant(
+        "Missing_Selected_Constant", missing_selected_bound, universal_value);
+    const auto missing_selected_name = add_selected_name(
+        "Missing_Selected_Constant", missing_selected_constant);
+    const auto missing_name_bound = add_expression(consumer_id,
+        consumer_scope, vhdl::ExpressionKind::name,
+        "Missing_Name_Reference");
+    const auto missing_name_constant = add_bounded_constant(
+        "Missing_Name_Constant", missing_name_bound, universal_value);
+    const auto missing_name_constant_name = add_selected_name(
+        "Missing_Name_Constant", missing_name_constant);
+
+    const auto missing_initializer_constant
+        = design.mutable_semantics().add_declaration(consumer_scope,
+            DeclarationKind::constant, "Missing_Initializer_Bound",
+            consumer_source, consumer_origin);
+    vhdl::Declaration missing_initializer_record;
+    missing_initializer_record.id = missing_initializer_constant;
+    missing_initializer_record.scope = consumer_scope;
+    missing_initializer_record.form = vhdl::DeclarationForm::constant;
+    missing_initializer_record.object_class = vhdl::ObjectClass::constant;
+    missing_initializer_record.name = "Missing_Initializer_Bound";
+    missing_initializer_record.source = consumer_source;
+    missing_initializer_record.origin = consumer_origin;
+    design.mutable_vhdl().mutable_declarations().push_back(
+        std::move(missing_initializer_record));
+    const auto mutable_consumer_for_missing_initializer = std::ranges::find(
+        design.mutable_vhdl().mutable_units(), consumer_id,
+        &vhdl::Unit::id);
+    assert(mutable_consumer_for_missing_initializer
+        != design.mutable_vhdl().mutable_units().end());
+    mutable_consumer_for_missing_initializer->declarations.push_back(
+        missing_initializer_constant);
+    const auto missing_initializer_bound = add_selected_name(
+        "Missing_Initializer_Bound", missing_initializer_constant);
+    const auto missing_initializer_guard = add_bounded_constant(
+        "Missing_Initializer_Guard", missing_initializer_bound,
+        universal_value);
+    const auto missing_initializer_guard_name = add_selected_name(
+        "Missing_Initializer_Guard", missing_initializer_guard);
+
+    const auto deferred_valueless_constant
+        = design.mutable_semantics().add_declaration(consumer_scope,
+            DeclarationKind::constant, "Deferred_Valueless_Constant",
+            consumer_source, consumer_origin);
+    vhdl::Declaration deferred_valueless_record;
+    deferred_valueless_record.id = deferred_valueless_constant;
+    deferred_valueless_record.scope = consumer_scope;
+    deferred_valueless_record.form = vhdl::DeclarationForm::constant;
+    deferred_valueless_record.object_class = vhdl::ObjectClass::constant;
+    deferred_valueless_record.name = "Deferred_Valueless_Constant";
+    deferred_valueless_record.deferred = true;
+    deferred_valueless_record.source = consumer_source;
+    deferred_valueless_record.origin = consumer_origin;
+    deferred_valueless_record.subtype.emplace();
+    deferred_valueless_record.subtype->type_mark.source = consumer_source;
+    deferred_valueless_record.subtype->type_mark.spelling
+        = "Ordinary_Integer_Subtype";
+    deferred_valueless_record.subtype->type_mark.target
+        = ordinary_subtype_type;
+    deferred_valueless_record.subtype->domain = vhdl::ValueDomain::integer;
+    design.mutable_vhdl().mutable_declarations().push_back(
+        std::move(deferred_valueless_record));
+    const auto mutable_consumer_for_deferred_valueless = std::ranges::find(
+        design.mutable_vhdl().mutable_units(), consumer_id,
+        &vhdl::Unit::id);
+    assert(mutable_consumer_for_deferred_valueless
+        != design.mutable_vhdl().mutable_units().end());
+    mutable_consumer_for_deferred_valueless->declarations.push_back(
+        deferred_valueless_constant);
+    const auto deferred_valueless_name = add_selected_name(
+        "Deferred_Valueless_Constant", deferred_valueless_constant);
+
+    std::vector<std::pair<ExpressionId, DeclarationId>>
+        repeated_missing_named_type_epoch_names;
+    for (std::size_t index = 0; index < 2U; ++index) {
+        const auto name = "Missing_Named_Type_Epoch_"
+            + std::to_string(index);
+        const auto declaration = design.mutable_semantics().add_declaration(
+            consumer_scope, DeclarationKind::constant, name,
+            consumer_source, consumer_origin);
+        vhdl::Declaration record;
+        record.id = declaration;
+        record.scope = consumer_scope;
+        record.form = vhdl::DeclarationForm::constant;
+        record.object_class = vhdl::ObjectClass::constant;
+        record.name = name;
+        record.initializer = missing_name_bound;
+        record.source = consumer_source;
+        record.origin = consumer_origin;
+        record.subtype.emplace();
+        record.subtype->type_mark.source = consumer_source;
+        record.subtype->type_mark.spelling = "Resolver_Epoch_Scalar_T";
+        record.subtype->domain = vhdl::ValueDomain::integer;
+        design.mutable_vhdl().mutable_declarations().push_back(
+            std::move(record));
+        const auto mutable_consumer_for_missing_type_epoch
+            = std::ranges::find(design.mutable_vhdl().mutable_units(),
+                consumer_id, &vhdl::Unit::id);
+        assert(mutable_consumer_for_missing_type_epoch
+            != design.mutable_vhdl().mutable_units().end());
+        mutable_consumer_for_missing_type_epoch->declarations.push_back(
+            declaration);
+        repeated_missing_named_type_epoch_names.emplace_back(
+            add_selected_name(name, declaration), declaration);
+    }
+
+    const auto cycle_first = add_expression(
+        consumer_id, consumer_scope, vhdl::ExpressionKind::unary, "+");
+    const auto cycle_second = add_expression(consumer_id, consumer_scope,
+        vhdl::ExpressionKind::unary, "+", { cycle_first });
+    design.mutable_vhdl().mutable_expressions()[cycle_first.value()]
+        .operands.push_back(cycle_second);
+    const auto cycle_guard = add_bounded_constant(
+        "Cycle_Guard", cycle_first, universal_value);
+    const auto cycle_guard_name = add_selected_name(
+        "Cycle_Guard", cycle_guard);
+
+    auto deep_bound = add_expression(consumer_id, consumer_scope,
+        vhdl::ExpressionKind::integer_literal, "1");
+    for (std::size_t depth = 0; depth < 70U; ++depth) {
+        deep_bound = add_expression(consumer_id, consumer_scope,
+            vhdl::ExpressionKind::unary, "+", { deep_bound });
+    }
+    const auto depth_guard = add_bounded_constant(
+        "Depth_Guard", deep_bound, universal_value);
+    const auto depth_guard_name = add_selected_name(
+        "Depth_Guard", depth_guard);
+
+    const auto missing_type_constant = add_constant(
+        consumer_id, consumer_scope, "Missing_Type_Constant",
+        ordinary_subtype_type, universal_value,
+        "Missing_Type_T");
+    const auto missing_type_iterator = std::ranges::find(
+        design.mutable_vhdl().mutable_declarations(), missing_type_constant,
+        &vhdl::Declaration::id);
+    assert(missing_type_iterator
+        != design.mutable_vhdl().mutable_declarations().end());
+    auto& missing_type_record = *missing_type_iterator;
+    missing_type_record.subtype->type_mark.target
+        = TypeId::from_index(1000);
+    const auto missing_type_name = add_selected_name(
+        "Missing_Type_Constant", missing_type_constant);
+
+    const auto unresolved_base_declaration = add_type(consumer_id,
+        consumer_scope, "Unresolved_Base_Subtype",
+        vhdl::TypeForm::subtype, TypeKind::subtype,
+        "Missing_Base_Type", std::nullopt, std::nullopt);
+    const auto unresolved_base_constant = add_constant(
+        consumer_id, consumer_scope, "Unresolved_Base_Constant",
+        unresolved_base_declaration.second, universal_value,
+        "Unresolved_Base_Subtype");
+    const auto unresolved_base_name = add_selected_name(
+        "Unresolved_Base_Constant", unresolved_base_constant);
+
+    const auto cache_epoch_bound = add_selected_name(
+        "Cache_Epoch_Missing_Bound", DeclarationId::from_index(1000));
+    const auto cache_epoch_constant = add_bounded_constant(
+        "Cache_Epoch_Constant", cache_epoch_bound, std::nullopt);
+    const auto cache_epoch_name = add_selected_name(
+        "Cache_Epoch_Constant", cache_epoch_constant);
+
+    const auto& deferred_valueless_definition = *std::ranges::find(
+        design.vhdl_hir.declarations(), deferred_valueless_constant,
+        &vhdl::Declaration::id);
+    assert(deferred_valueless_definition.deferred);
+    assert(!deferred_valueless_definition.initializer);
+    assert(deferred_valueless_definition.subtype);
+    for (const auto& [name, declaration]
+        : repeated_missing_named_type_epoch_names) {
+        const auto& unresolved_name
+            = design.vhdl_hir.expressions()[name.value()];
+        assert(unresolved_name.kind == vhdl::ExpressionKind::name);
+        assert(unresolved_name.referenced_name
+            && unresolved_name.referenced_name->selected == declaration);
+    }
+
+    assert(normalize_compiled_design(design));
+    const auto& normalized = design.vhdl_hir.expressions();
+    const auto& retained = normalized[typed_name.value()];
+    assert(retained.kind == vhdl::ExpressionKind::name);
+    assert(retained.referenced_name
+        && retained.referenced_name->selected == typed_constant);
+    assert(!retained.folded);
+    assert(retained.nominal_type.empty());
+    assert(retained.dependencies.packages
+        == std::vector<UnitId> { package_id });
+    const auto& folded = normalized[universal_name.value()];
+    assert(folded.kind == vhdl::ExpressionKind::integer_literal);
+    assert(folded.text == "4");
+    assert(folded.referenced_name == std::nullopt);
+    assert(folded.folded);
+    const auto& ieee_retained = normalized[ieee_typed_name.value()];
+    assert(ieee_retained.kind == vhdl::ExpressionKind::name);
+    assert(ieee_retained.referenced_name
+        && ieee_retained.referenced_name->selected == ieee_typed_constant);
+    assert(!ieee_retained.folded);
+    assert(ieee_retained.dependencies.packages
+        == std::vector<UnitId> { ieee_package_id });
+    const auto& declared_integer_retained
+        = normalized[declared_integer_name.value()];
+    assert(declared_integer_retained.kind == vhdl::ExpressionKind::name);
+    assert(declared_integer_retained.referenced_name
+        && declared_integer_retained.referenced_name->selected
+            == declared_integer_constant);
+    assert(!declared_integer_retained.folded);
+    assert(declared_integer_retained.dependencies.packages
+        == std::vector<UnitId> { package_id });
+    const auto& ordinary_subtype_folded
+        = normalized[ordinary_subtype_name.value()];
+    assert(ordinary_subtype_folded.kind
+        == vhdl::ExpressionKind::integer_literal);
+    assert(ordinary_subtype_folded.text == "6");
+    assert(ordinary_subtype_folded.referenced_name == std::nullopt);
+    assert(ordinary_subtype_folded.folded);
+    const auto& normalized_generic_limit
+        = normalized[generic_limit_name.value()];
+    assert(normalized_generic_limit.kind == vhdl::ExpressionKind::name);
+    assert(normalized_generic_limit.referenced_name
+        && normalized_generic_limit.referenced_name->selected
+            == generic_limit);
+    for (const auto name : repeated_generic_bound_names) {
+        const auto& retained_generic_bound = normalized[name.value()];
+        assert(retained_generic_bound.kind == vhdl::ExpressionKind::name);
+        assert(retained_generic_bound.referenced_name
+            && retained_generic_bound.referenced_name->selected
+                == generic_bound_constant);
+        assert(!retained_generic_bound.folded);
+    }
+    for (const auto& [name, declaration]
+        : repeated_unselected_guard_names) {
+        const auto& retained_unselected_guard
+            = normalized[name.value()];
+        assert(retained_unselected_guard.kind
+            == vhdl::ExpressionKind::name);
+        assert(retained_unselected_guard.referenced_name
+            && retained_unselected_guard.referenced_name->selected
+                == declaration);
+        assert(!retained_unselected_guard.folded);
+    }
+    for (const auto& [name, declaration]
+        : repeated_incomplete_guard_names) {
+        const auto& retained_incomplete_guard
+            = normalized[name.value()];
+        assert(retained_incomplete_guard.kind
+            == vhdl::ExpressionKind::name);
+        assert(retained_incomplete_guard.referenced_name
+            && retained_incomplete_guard.referenced_name->selected
+                == declaration);
+        assert(!retained_incomplete_guard.folded);
+    }
+    for (const auto name : repeated_ordinary_subtype_names) {
+        const auto& folded_ordinary_subtype = normalized[name.value()];
+        assert(folded_ordinary_subtype.kind
+            == vhdl::ExpressionKind::integer_literal);
+        assert(folded_ordinary_subtype.text == "6");
+        assert(folded_ordinary_subtype.referenced_name == std::nullopt);
+        assert(folded_ordinary_subtype.folded);
+    }
+    for (const auto name : repeated_resolved_type_names) {
+        const auto& folded_resolved_type = normalized[name.value()];
+        assert(folded_resolved_type.kind
+            == vhdl::ExpressionKind::integer_literal);
+        assert(folded_resolved_type.text == "6");
+        assert(folded_resolved_type.referenced_name == std::nullopt);
+        assert(folded_resolved_type.folded);
+    }
+    const auto assert_fallback_fold = [&](const ExpressionId name) {
+        const auto& folded_fallback = normalized[name.value()];
+        assert(folded_fallback.kind == vhdl::ExpressionKind::integer_literal);
+        assert(folded_fallback.text == "4");
+        assert(folded_fallback.referenced_name == std::nullopt);
+        assert(folded_fallback.folded);
+    };
+    assert_fallback_fold(missing_selected_name);
+    assert_fallback_fold(missing_name_constant_name);
+    assert_fallback_fold(missing_initializer_guard_name);
+    assert_fallback_fold(cycle_guard_name);
+    assert_fallback_fold(depth_guard_name);
+    assert_fallback_fold(missing_type_name);
+    assert_fallback_fold(unresolved_base_name);
+    const auto& unresolved_initializer_ref
+        = normalized[missing_initializer_bound.value()];
+    assert(unresolved_initializer_ref.kind == vhdl::ExpressionKind::name);
+    assert(unresolved_initializer_ref.referenced_name
+        && unresolved_initializer_ref.referenced_name->selected
+            == missing_initializer_constant);
+    const auto& deferred_valueless_ref
+        = normalized[deferred_valueless_name.value()];
+    assert(deferred_valueless_ref.kind == vhdl::ExpressionKind::name);
+    assert(deferred_valueless_ref.referenced_name
+        && deferred_valueless_ref.referenced_name->selected
+            == deferred_valueless_constant);
+    assert(!deferred_valueless_ref.folded);
+    for (const auto& [name, declaration]
+        : repeated_missing_named_type_epoch_names) {
+        const auto& unresolved_type_name = normalized[name.value()];
+        assert(unresolved_type_name.kind == vhdl::ExpressionKind::name);
+        assert(unresolved_type_name.referenced_name
+            && unresolved_type_name.referenced_name->selected == declaration);
+        assert(!unresolved_type_name.folded);
+    }
+    const auto& incomplete_cache_epoch_ref
+        = normalized[cache_epoch_name.value()];
+    assert(incomplete_cache_epoch_ref.kind == vhdl::ExpressionKind::name);
+    assert(incomplete_cache_epoch_ref.referenced_name
+        && incomplete_cache_epoch_ref.referenced_name->selected
+            == cache_epoch_constant);
+    const auto normalized_once = design;
+    assert(normalize_compiled_design(design));
+    assert_same_expressions(design.vhdl_hir.expressions(),
+        normalized_once.vhdl_hir.expressions());
+
+    const auto [resolver_epoch_type_declaration, resolver_epoch_type]
+        = add_type(consumer_id, consumer_scope, "Resolver_Epoch_Scalar_T",
+            vhdl::TypeForm::scalar, TypeKind::declaration, "integer",
+            integer_type, std::nullopt);
+    static_cast<void>(resolver_epoch_type_declaration);
+    assert(resolver_epoch_type.valid());
+    for (const auto& [name, declaration]
+        : repeated_missing_named_type_epoch_names) {
+        auto& definition = *std::ranges::find(
+            design.mutable_vhdl().mutable_declarations(), declaration,
+            &vhdl::Declaration::id);
+        assert(definition.subtype
+            && !definition.subtype->type_mark.target.valid());
+        definition.initializer = universal_value;
+        static_cast<void>(name);
+    }
+    assert(normalize_compiled_design(design));
+    for (const auto& [name, declaration]
+        : repeated_missing_named_type_epoch_names) {
+        const auto& resolved_type_name
+            = design.vhdl_hir.expressions()[name.value()];
+        assert(resolved_type_name.kind == vhdl::ExpressionKind::name);
+        assert(resolved_type_name.referenced_name
+            && resolved_type_name.referenced_name->selected == declaration);
+        assert(!resolved_type_name.folded);
+    }
+
+    auto& cache_epoch_record = *std::ranges::find(
+        design.mutable_vhdl().mutable_declarations(), cache_epoch_constant,
+        &vhdl::Declaration::id);
+    assert(cache_epoch_record.subtype
+        && !cache_epoch_record.subtype->constraints.empty());
+    cache_epoch_record.subtype->constraints.front().right_expression
+        = generic_limit_name;
+    cache_epoch_record.initializer = universal_value;
+    assert(normalize_compiled_design(design));
+    const auto& recomputed_cache_epoch_ref
+        = design.vhdl_hir.expressions()[cache_epoch_name.value()];
+    assert(recomputed_cache_epoch_ref.kind == vhdl::ExpressionKind::name);
+    assert(recomputed_cache_epoch_ref.referenced_name
+        && recomputed_cache_epoch_ref.referenced_name->selected
+            == cache_epoch_constant);
+    assert(!recomputed_cache_epoch_ref.folded);
+}
+
 void test_compiled_design_indexed_lookup_contract()
 {
     LinkBundleBuilder builder { "indexed-lookup" };
@@ -10346,6 +12258,11 @@ void test_compiled_vhdl_named_type_lexical_visibility()
     const auto outer_shadow = add_type(outer_scope, "shadowed_type");
     const auto sibling_shadow = add_type(sibling_scope, "SHADOWED_TYPE");
     (void)add_type(inner_scope, "Nested_Only_Type");
+    const auto first_ambiguous_type
+        = add_type(root_scope, "Ambiguous_Named_Type");
+    const auto second_ambiguous_type
+        = add_type(root_scope, "AMBIGUOUS_NAMED_TYPE");
+    assert(first_ambiguous_type != second_ambiguous_type);
 
     const auto design = builder.finish();
     const CompiledDesignResolver resolver { design, unit };
@@ -10366,6 +12283,10 @@ void test_compiled_vhdl_named_type_lexical_visibility()
         "nested_only_type", outer_scope));
     assert(!resolver.resolve_vhdl_named_type(
         "nested_only_type", sibling_scope));
+    assert(!resolver.resolve_vhdl_named_type(
+        "absent_named_type", root_scope));
+    assert(!resolver.resolve_vhdl_named_type(
+        "ambiguous_named_type", root_scope));
 }
 
 void test_vhdl_architecture_compatibility_profile_pairing()
@@ -10521,6 +12442,9 @@ void run_compiled_design_tests()
     test_compiled_design_resolver_generic_callable_profile();
     test_compiled_vhdl_resolver_retained_time_layout();
     test_compiled_vhdl_resolver_array_shapes();
+    test_compiled_vhdl_resolver_active_formal_range_direction();
+    test_compiled_vhdl_resolver_scalar_range_direction();
+    test_compiled_vhdl_resolver_enumeration_array_bounds();
     test_compiled_vhdl_predefined_subtype_fast_path();
     test_vhdl_builtin_std_logic_1164_provenance();
     test_vhdl_architecture_compatibility_profile_pairing();
@@ -10537,6 +12461,7 @@ void run_compiled_design_tests()
     test_specialized_hir_vhdl_integer_array_rejects_shadowed_integer();
     test_specialized_hir_vhdl_packed_array_projection();
     test_compiled_design_normalization();
+    test_vhdl_nominal_constant_provenance();
     test_compiled_design_indexed_lookup_contract();
     test_vhdl_primary_unit_index_contract();
     test_vhdl_package_member_index_contract();

@@ -470,6 +470,38 @@ void Interpreter::Impl::execute_dynamic_return(
     process.pc = target;
 }
 
+std::size_t Interpreter::Impl::callable_storage_bytes_in_use(
+    const ProcessState& process,
+    const ProcessState::CallableFrameState* additional_context) const
+{
+    auto bytes = process.cold().callable_frame_storage_bytes;
+    const auto account = [&](const std::size_t amount) {
+        if (bytes > maximum_container_storage_bytes
+            || amount > maximum_container_storage_bytes - bytes) {
+            bytes = maximum_container_storage_bytes + 1U;
+            return;
+        }
+        bytes += amount;
+    };
+    account(process.cold().callable_context_storage_bytes);
+
+    std::set<const ProcessState::CallableFrameState*> seen;
+    const auto account_context = [&](
+        const ProcessState::CallableFrameState* context) {
+        if (context != nullptr && seen.insert(context).second) {
+            account(context->storage_bytes);
+        }
+    };
+    for (const auto& context : process.cold().escaping_callable_contexts) {
+        account_context(context.get());
+    }
+    for (const auto& frame : process.cold().callable_frames) {
+        account_context(frame.escaping_context.get());
+    }
+    account_context(additional_context);
+    return bytes;
+}
+
 void Interpreter::Impl::push_callable_frame(
     ProcessState& process,
     const CallableFramePush& operation)
@@ -511,11 +543,10 @@ void Interpreter::Impl::push_callable_frame(
             + container_value_storage_bytes(*value);
         frame.containers.push_back(std::move(value));
     }
-    if (frame.storage_bytes
-        > maximum_container_storage_bytes
-            - std::min(
-                process.cold().callable_frame_storage_bytes,
-                maximum_container_storage_bytes)) {
+    const auto unavailable = callable_storage_bytes_in_use(process);
+    if (unavailable > maximum_container_storage_bytes
+        || frame.storage_bytes
+            > maximum_container_storage_bytes - unavailable) {
         fail(process, "automatic callable frames exceed their owning-storage budget");
     }
     process.cold().callable_frame_storage_bytes += frame.storage_bytes;
@@ -531,9 +562,11 @@ void Interpreter::Impl::pop_callable_frame(
         || process.cold().callable_frames.back().identity != operation.identity) {
         fail(process, "automatic callable frame stack mismatch");
     }
-    if (process.cold().callable_frames.back().escaping_context) {
+    const auto owner_context
+        = process.cold().callable_frames.back().escaping_context;
+    if (owner_context) {
         capture_callable_values(
-            process, *process.cold().callable_frames.back().escaping_context);
+            process, *owner_context);
     }
     std::vector<PackedLogic4> preserved_packed;
     std::vector<std::string> preserved_strings;
@@ -543,10 +576,9 @@ void Interpreter::Impl::pop_callable_frame(
     preserved_containers.reserve(operation.preserve_containers.size());
     std::size_t preserved_storage_bytes { };
     const auto account_preserved_storage = [&](const std::size_t bytes) {
-        const auto unavailable = std::min(
-            process.cold().callable_frame_storage_bytes,
-            maximum_container_storage_bytes);
-        if (bytes > maximum_container_storage_bytes - unavailable
+        const auto unavailable = callable_storage_bytes_in_use(process);
+        if (unavailable > maximum_container_storage_bytes
+            || bytes > maximum_container_storage_bytes - unavailable
             || preserved_storage_bytes
                 > maximum_container_storage_bytes - unavailable - bytes) {
             fail(process,
@@ -612,6 +644,14 @@ void Interpreter::Impl::pop_callable_frame(
         }
     }
     process.cold().callable_frame_storage_bytes -= frame.storage_bytes;
+    if (owner_context) {
+        auto& contexts = process.cold().escaping_callable_contexts;
+        const auto found = std::ranges::find(contexts, owner_context);
+        if (found != contexts.end()) {
+            contexts.erase(found);
+        }
+    }
+    restore_escaping_callable_contexts(process);
     for (std::size_t index = 0;
         index < preserved_packed.size(); ++index) {
         if (process.executor) {
@@ -644,33 +684,48 @@ void Interpreter::Impl::pop_callable_frame(
                 std::move(preserved_containers[index]));
         }
     }
+    capture_escaping_callable_contexts(process);
     ++process.pc;
 }
 
-void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
+void Interpreter::Impl::capture_escaping_callable_contexts(
+    ProcessState& process)
 {
-    if (!process.has_callable_frame_push) {
-        return;
-    }
     std::set<RegisterId> shadowed_packed;
     std::set<StringRegisterId> shadowed_strings;
     std::set<ContainerRegisterId> shadowed_containers;
-    for (const auto& frame : process.cold().callable_frames) {
-        shadowed_packed.insert(
-            frame.packed_ids.begin(), frame.packed_ids.end());
-        shadowed_strings.insert(
-            frame.string_ids.begin(), frame.string_ids.end());
-        shadowed_containers.insert(
-            frame.container_ids.begin(), frame.container_ids.end());
-    }
+    const auto& frames = process.cold().callable_frames;
     for (auto context = process.cold().escaping_callable_contexts.rbegin();
         context != process.cold().escaping_callable_contexts.rend(); ++context) {
         if (!*context) {
             fail(process, "escaping automatic callable context is null");
         }
+        auto excluded_packed = shadowed_packed;
+        auto excluded_strings = shadowed_strings;
+        auto excluded_containers = shadowed_containers;
+        std::optional<std::size_t> owner_index;
+        for (std::size_t index = frames.size(); index > 0; --index) {
+            if (frames[index - 1U].escaping_context == *context) {
+                owner_index = index - 1U;
+                break;
+            }
+        }
+        const auto first_shadowing_frame = owner_index
+            ? *owner_index + 1U
+            : 0U;
+        for (std::size_t index = first_shadowing_frame;
+            index < frames.size(); ++index) {
+            const auto& frame = frames[index];
+            excluded_packed.insert(
+                frame.packed_ids.begin(), frame.packed_ids.end());
+            excluded_strings.insert(
+                frame.string_ids.begin(), frame.string_ids.end());
+            excluded_containers.insert(
+                frame.container_ids.begin(), frame.container_ids.end());
+        }
         capture_callable_values(
             process, **context,
-            shadowed_packed, shadowed_strings, shadowed_containers);
+            excluded_packed, excluded_strings, excluded_containers);
         shadowed_packed.insert(
             (*context)->packed_ids.begin(), (*context)->packed_ids.end());
         shadowed_strings.insert(
@@ -678,24 +733,101 @@ void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
         shadowed_containers.insert(
             (*context)->container_ids.begin(),
             (*context)->container_ids.end());
+        shadowed_packed.insert(
+            excluded_packed.begin(), excluded_packed.end());
+        shadowed_strings.insert(
+            excluded_strings.begin(), excluded_strings.end());
+        shadowed_containers.insert(
+            excluded_containers.begin(), excluded_containers.end());
     }
+}
 
+void Interpreter::Impl::restore_escaping_callable_contexts(
+    ProcessState& process)
+{
+    for (const auto& context : process.cold().escaping_callable_contexts) {
+        if (!context) {
+            fail(process, "escaping automatic callable context is null");
+        }
+        restore_callable_values(process, *context);
+    }
+}
+
+void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
+{
+    if (!process.has_callable_frame_push) {
+        return;
+    }
+    process.cold().callable_registers_suspended = false;
     process.cold().suspended_callable_context.reset();
     process.cold().callable_context_storage_bytes = 0;
-    if (process.halted || process.cold().callable_frames.empty()) {
+    capture_escaping_callable_contexts(process);
+    std::set<RegisterId> wake_result_ids;
+    if (const auto* const dynamic_wait
+        = process.cold().dynamic_wait_state_if_present()) {
+        if (dynamic_wait->wait_order_result) {
+            wake_result_ids.insert(*dynamic_wait->wait_order_result);
+        }
+        if (dynamic_wait->wait_timeout_result) {
+            wake_result_ids.insert(*dynamic_wait->wait_timeout_result);
+        }
+    }
+    if (process.cold().pending_mailbox_result) {
+        wake_result_ids.insert(
+            *process.cold().pending_mailbox_result);
+    }
+    if (process.halted) {
+        process.cold().callable_registers_suspended
+            = !process.cold().escaping_callable_contexts.empty();
         return;
+    }
+    if (process.cold().callable_frames.empty()) {
+        process.cold().callable_registers_suspended
+            = !process.cold().escaping_callable_contexts.empty();
+        if (!process.cold().callable_registers_suspended
+            || wake_result_ids.empty()) {
+            return;
+        }
     }
 
     std::set<RegisterId> packed_ids;
     std::set<StringRegisterId> string_ids;
     std::set<ContainerRegisterId> container_ids;
-    for (const auto& frame : process.cold().callable_frames) {
-        packed_ids.insert(frame.packed_ids.begin(), frame.packed_ids.end());
-        string_ids.insert(frame.string_ids.begin(), frame.string_ids.end());
-        container_ids.insert(
-            frame.container_ids.begin(), frame.container_ids.end());
+    std::set<RegisterId> seen_packed;
+    std::set<StringRegisterId> seen_strings;
+    std::set<ContainerRegisterId> seen_containers;
+    for (auto frame = process.cold().callable_frames.rbegin();
+        frame != process.cold().callable_frames.rend(); ++frame) {
+        for (const auto id : frame->packed_ids) {
+            if (seen_packed.insert(id).second
+                && (!frame->escaping_context
+                    || std::ranges::find(
+                           frame->escaping_context->packed_ids, id)
+                        == frame->escaping_context->packed_ids.end())) {
+                packed_ids.insert(id);
+            }
+        }
+        for (const auto id : frame->string_ids) {
+            if (seen_strings.insert(id).second
+                && (!frame->escaping_context
+                    || std::ranges::find(
+                           frame->escaping_context->string_ids, id)
+                        == frame->escaping_context->string_ids.end())) {
+                string_ids.insert(id);
+            }
+        }
+        for (const auto id : frame->container_ids) {
+            if (seen_containers.insert(id).second
+                && (!frame->escaping_context
+                    || std::ranges::find(
+                           frame->escaping_context->container_ids, id)
+                        == frame->escaping_context->container_ids.end())) {
+                container_ids.insert(id);
+            }
+        }
     }
 
+    packed_ids.insert(wake_result_ids.begin(), wake_result_ids.end());
     auto snapshot = std::make_unique<ProcessState::CallableFrameState>();
     auto& context = *snapshot;
     context.packed_ids.assign(packed_ids.begin(), packed_ids.end());
@@ -705,10 +837,9 @@ void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
     context.strings.reserve(context.string_ids.size());
     context.containers.reserve(context.container_ids.size());
     const auto account_context_storage = [&](const std::size_t bytes) {
-        const auto unavailable = std::min(
-            process.cold().callable_frame_storage_bytes,
-            maximum_container_storage_bytes);
-        if (bytes > maximum_container_storage_bytes - unavailable
+        const auto unavailable = callable_storage_bytes_in_use(process);
+        if (unavailable > maximum_container_storage_bytes
+            || bytes > maximum_container_storage_bytes - unavailable
             || context.storage_bytes
                 > maximum_container_storage_bytes - unavailable - bytes) {
             fail(process,
@@ -745,17 +876,14 @@ void Interpreter::Impl::snapshot_callable_context(ProcessState& process)
     }
     process.cold().callable_context_storage_bytes = context.storage_bytes;
     process.cold().suspended_callable_context = std::move(snapshot);
+    process.cold().callable_registers_suspended = true;
 }
 
 void Interpreter::Impl::restore_callable_context_nonempty(ProcessState& process)
 {
-    for (const auto& context : process.cold().escaping_callable_contexts) {
-        if (!context) {
-            fail(process, "escaping automatic callable context is null");
-        }
-        restore_callable_values(process, *context);
-    }
+    restore_escaping_callable_contexts(process);
     if (!process.cold().suspended_callable_context) {
+        process.cold().callable_registers_suspended = false;
         return;
     }
     auto context = std::move(*process.cold().suspended_callable_context);
@@ -789,6 +917,7 @@ void Interpreter::Impl::restore_callable_context_nonempty(ProcessState& process)
                 std::move(context.containers[index]));
         }
     }
+    process.cold().callable_registers_suspended = false;
 }
 
 bool Interpreter::clear_process_executor(const ProcessId process)

@@ -2454,8 +2454,16 @@ module bad_input(
   end
 endmodule
 
-module incompatible(
-    input logic [7:0] memory[0:3]);
+module matching_array_port(
+    input logic [7:0] memory[3:0]);
+endmodule
+
+module incompatible_count(
+    input logic [7:0] memory[0:4]);
+endmodule
+
+module incompatible_element_width(
+    input logic [6:0] memory[3:0]);
 endmodule
 
 module output_driver(
@@ -2471,10 +2479,11 @@ endmodule
 module bad_port_top;
   logic [7:0] memory[3:0];
   bad_input input_child(.memory(memory));
-  incompatible wrong_range(.memory(memory));
-  incompatible expression_actual(.memory(memory[3]));
-  incompatible slice_actual(.memory(memory[3:0]));
-  incompatible unknown_actual(.memory(missing));
+  incompatible_count wrong_count(.memory(memory));
+  incompatible_element_width wrong_width(.memory(memory));
+  matching_array_port expression_actual(.memory(memory[3]));
+  matching_array_port slice_actual(.memory(memory[3:0]));
+  matching_array_port unknown_actual(.memory(missing));
   output_driver first(.memory(memory));
   output_driver second(.memory(memory));
   input_forward forward(.memory(memory));

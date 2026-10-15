@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_vhdl_hir_internal.hpp"
 
-
+#include <algorithm>
 #include <charconv>
+#include <string>
+#include <string_view>
 
 namespace fsim::app::application_detail {
 

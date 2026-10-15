@@ -1405,12 +1405,25 @@ std::optional<std::string_view> vhdl_source_compatibility_from_profile(
     return std::nullopt;
 }
 
+void stamp_vhdl_predefined_context(frontend::ParsedDesign& parsed)
+{
+    for (auto& unit : parsed.units) {
+        if (unit.language != frontend::Language::Vhdl2008) {
+            continue;
+        }
+        if (unit.vhdl_compatibility_profile.empty()) {
+            unit.vhdl_compatibility_profile = vhdl_compatibility_profile();
+        }
+    }
+    stamp_predefined_environments(parsed);
+}
+
 void inject_vhdl_standard_libraries(
     CompilationWorkspace& checked,
     diagnostic::Engine& diagnostics,
     const bool complete_environment)
 {
-    stamp_predefined_environments(checked.parsed);
+    stamp_vhdl_predefined_context(checked.parsed);
     const auto root = library_root();
     const bool has_vhdl = std::ranges::any_of(
         checked.parsed.units, [](const frontend::DesignUnit& unit) {

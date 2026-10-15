@@ -171,6 +171,154 @@ endmodule
       && shared_value.elements.back()
           == PackedLogic4::from_msb_string("11100010"));
 
+  const auto ordinal_view = fsim::frontend::parse_text(
+      "whole-array-ordinal-view-ports.sv",
+      R"(
+module ordinal_view_leaf(
+    input logic [7:0] sampled[7:5],
+    output logic [7:0] result[10:8]);
+  initial begin
+    #1;
+    assert (sampled[7] === 8'h11);
+    assert (sampled[6] === 8'h22);
+    assert (sampled[5] === 8'h33);
+    result[10] = sampled[7];
+    result[9] = sampled[6];
+    result[8] = sampled[5];
+  end
+endmodule
+
+module whole_array_ordinal_view_top;
+  logic [7:0] sampled[0:2];
+  logic [7:0] result[18:20];
+  ordinal_view_leaf child(
+      .sampled(sampled),
+      .result(result));
+  initial begin
+    sampled = '{8'h11, 8'h22, 8'h33};
+    result = '{default: 8'h00};
+    #2;
+    assert (result[18] === 8'h11);
+    assert (result[19] === 8'h22);
+    assert (result[20] === 8'h33);
+  end
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(ordinal_view.ok());
+  const auto ordinal_view_elaborated = compile_and_elaborate(
+      ordinal_view.design, "whole_array_ordinal_view_top");
+  assert(ordinal_view_elaborated.ok());
+  const auto ordinal_input = ordinal_view_elaborated.design->find_container(
+      "whole_array_ordinal_view_top.sampled");
+  const auto ordinal_child_input =
+      ordinal_view_elaborated.design->find_container(
+          "whole_array_ordinal_view_top.child.sampled");
+  const auto ordinal_output = ordinal_view_elaborated.design->find_container(
+      "whole_array_ordinal_view_top.result");
+  const auto ordinal_child_output =
+      ordinal_view_elaborated.design->find_container(
+          "whole_array_ordinal_view_top.child.result");
+  assert(
+      ordinal_input && ordinal_child_input && ordinal_output
+      && ordinal_child_output);
+  const auto& ordinal_input_info =
+      ordinal_view_elaborated.design->container_objects().at(
+          *ordinal_child_input);
+  const auto& ordinal_output_info =
+      ordinal_view_elaborated.design->container_objects().at(
+          *ordinal_child_output);
+  assert(
+      ordinal_input_info.type.index_left == 7
+      && ordinal_input_info.type.index_right == 5
+      && ordinal_input_info.slice_alias
+      && ordinal_input_info.slice_alias->object == *ordinal_input
+      && ordinal_input_info.slice_alias->selected_left == 0
+      && ordinal_input_info.slice_alias->selected_right == 2);
+  assert(
+      ordinal_output_info.type.index_left == 10
+      && ordinal_output_info.type.index_right == 8
+      && ordinal_output_info.slice_alias
+      && ordinal_output_info.slice_alias->object == *ordinal_output
+      && ordinal_output_info.slice_alias->selected_left == 18
+      && ordinal_output_info.slice_alias->selected_right == 20);
+  auto ordinal_view_interpreter =
+      ordinal_view_elaborated.design->create_interpreter();
+  const auto ordinal_view_result = ordinal_view_interpreter->run();
+  assert(
+      ordinal_view_result.status == fsim::runtime::RunStatus::completed
+      && ordinal_view_result.time == 2);
+  const auto& ordinal_output_value =
+      ordinal_view_interpreter->container_object_value(*ordinal_output);
+  assert(
+      ordinal_output_value.elements.front()
+          == PackedLogic4::from_msb_string("00010001")
+      && ordinal_output_value.elements[1]
+          == PackedLogic4::from_msb_string("00100010")
+      && ordinal_output_value.elements.back()
+          == PackedLogic4::from_msb_string("00110011"));
+
+  const auto scalar_array_output = fsim::frontend::parse_text(
+      "instance-array-scalar-output-actual.sv",
+      R"(
+module scalar_array_output_leaf(
+    input logic [7:0] value,
+    output logic [7:0] result);
+  assign result = value;
+endmodule
+
+module scalar_array_output_wrapper(
+    output logic [7:0] result[3:0]);
+  logic [7:0] values[20:17];
+  scalar_array_output_leaf child[0:3](
+      .value(values),
+      .result(result));
+  initial values = '{8'h13, 8'h24, 8'h35, 8'h46};
+endmodule
+
+module instance_array_scalar_output_actual;
+  logic [7:0] observed[16:19];
+  scalar_array_output_wrapper wrapper(.result(observed));
+  initial begin
+    #1;
+    assert (observed[16] === 8'h13);
+    assert (observed[17] === 8'h24);
+    assert (observed[18] === 8'h35);
+    assert (observed[19] === 8'h46);
+  end
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(scalar_array_output.ok());
+  const auto scalar_array_output_elaborated = compile_and_elaborate(
+      scalar_array_output.design,
+      "instance_array_scalar_output_actual");
+  assert(scalar_array_output_elaborated.ok());
+  auto scalar_array_output_interpreter =
+      scalar_array_output_elaborated.design->create_interpreter();
+  const auto scalar_array_output_result
+      = scalar_array_output_interpreter->run();
+  assert(
+      scalar_array_output_result.status
+          == fsim::runtime::RunStatus::completed
+      && scalar_array_output_result.time == 1);
+  const auto scalar_array_output_value
+      = scalar_array_output_elaborated.design->find_container(
+          "instance_array_scalar_output_actual.observed");
+  assert(scalar_array_output_value);
+  const auto& scalar_array_output_elements
+      = scalar_array_output_interpreter->container_object_value(
+          *scalar_array_output_value);
+  assert(
+      scalar_array_output_elements.elements[0]
+          == PackedLogic4::from_msb_string("00010011")
+      && scalar_array_output_elements.elements[1]
+          == PackedLogic4::from_msb_string("00100100")
+      && scalar_array_output_elements.elements[2]
+          == PackedLogic4::from_msb_string("00110101")
+      && scalar_array_output_elements.elements[3]
+          == PackedLogic4::from_msb_string("01000110"));
+
   const auto invalid = fsim::frontend::parse_text(
       "static-slice-port-invalid.sv",
       R"(
@@ -224,6 +372,49 @@ endmodule
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVPORT-006"));
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVPORT-007"));
   assert(has_diagnostic(rejected, "FSIM-ELAB-SVPORT-008"));
+
+  const auto scalar_array_output_controls = fsim::frontend::parse_text(
+      "instance-array-scalar-output-controls.sv",
+      R"(
+module scalar_array_control_leaf(output logic [7:0] result);
+  assign result = 8'h5a;
+endmodule
+
+module scalar_array_count_mismatch;
+  logic [7:0] result[2:0];
+  scalar_array_control_leaf child[3:0](.result(result));
+endmodule
+
+module scalar_array_profile_mismatch;
+  logic [6:0] result[3:0];
+  scalar_array_control_leaf child[3:0](.result(result));
+endmodule
+
+module scalar_array_read_only(input logic [7:0] result[3:0]);
+  scalar_array_control_leaf child[3:0](.result(result));
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(scalar_array_output_controls.ok());
+  const auto scalar_array_count_rejected = compile_and_elaborate(
+      scalar_array_output_controls.design, "scalar_array_count_mismatch");
+  assert(
+      !scalar_array_count_rejected.ok()
+      && has_diagnostic(
+          scalar_array_count_rejected, "FSIM-ELAB-SVPORT-007"));
+  const auto scalar_array_profile_rejected = compile_and_elaborate(
+      scalar_array_output_controls.design,
+      "scalar_array_profile_mismatch");
+  assert(
+      !scalar_array_profile_rejected.ok()
+      && has_diagnostic(
+          scalar_array_profile_rejected, "FSIM-ELAB-SVPORT-007"));
+  const auto scalar_array_read_only_rejected = compile_and_elaborate(
+      scalar_array_output_controls.design, "scalar_array_read_only");
+  assert(
+      !scalar_array_read_only_rejected.ok()
+      && has_diagnostic(
+          scalar_array_read_only_rejected, "FSIM-ELAB-SVPORT-009"));
 
   const auto read_only = fsim::frontend::parse_text(
       "static-slice-port-read-only.sv",

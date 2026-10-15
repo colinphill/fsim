@@ -1114,6 +1114,699 @@ namespace {
             .value_or(std::move(subtype));
     }
 
+    struct CompiledVhdlSubelementPortSpecialization {
+        enum class Status { unchanged,
+            specialized,
+            incompatible };
+        Status status { Status::unchanged };
+        semantic::vhdl::SubtypeIndication subtype;
+        semantic::SourceSpanId source;
+    };
+
+    // Derive the same nominally guarded static element constraints for block
+    // ports and ordinary entity ports. The actual expression and formal
+    // declaration can belong to different hierarchy specializations, so each
+    // side is resolved and constant-folded in its own context.
+    class CompiledVhdlSubelementPortSpecializer {
+    public:
+        using Subtype = semantic::vhdl::SubtypeIndication;
+        using Scope = semantic::ScopeId;
+        using SpecializedUnit = semantic::SpecializedHirUnit;
+        using Result = CompiledVhdlSubelementPortSpecialization;
+
+        [[nodiscard]] static Result derive(
+            const SpecializedUnit& formal_specialization,
+            const SpecializedUnit& actual_specialization,
+            const Subtype& formal_subtype,
+            const Scope formal_scope,
+            const semantic::ExpressionId actual_id)
+        {
+            auto aggregate
+                = actual_specialization.find_expression(actual_id);
+            if (!aggregate || aggregate->vhdl == nullptr
+                || aggregate->vhdl->kind
+                    != semantic::vhdl::ExpressionKind::aggregate
+                || aggregate->vhdl->text != "@vhdl-formal-subelements") {
+                return { };
+            }
+            auto candidate = formal_subtype;
+            const auto formal_record = record_subtype(
+                formal_specialization, candidate, formal_scope);
+            if (!formal_record) {
+                return { };
+            }
+            auto next = candidate.element_constraints;
+            bool changed { };
+            for (const auto& association : aggregate->vhdl->associations) {
+                if (association.choice_spelling.empty()
+                    || association.choice_spelling == "@array") {
+                    continue;
+                }
+                const auto formal_element = record_element_subtype(
+                    formal_specialization, candidate, formal_scope,
+                    association.choice_spelling);
+                const auto actual_element = actual_subtype(
+                    actual_specialization, association.value);
+                if (!formal_element || !actual_element) {
+                    continue;
+                }
+                const auto formal_type = type_identity(
+                    formal_specialization, formal_element->first,
+                    formal_element->second);
+                const auto actual_type = type_identity(
+                    actual_specialization, actual_element->first,
+                    actual_element->second);
+                if (!formal_type || !actual_type) {
+                    if (formal_type || actual_type
+                        || !predefined_bit_vector_identity(
+                            formal_specialization, formal_element->first,
+                            formal_element->second)
+                        || !predefined_bit_vector_identity(
+                            actual_specialization, actual_element->first,
+                            actual_element->second)) {
+                        continue;
+                    }
+                } else if (*formal_type != *actual_type) {
+                    return { Result::Status::incompatible, { },
+                        association.source };
+                }
+                const auto append_static_array_constraint = [&](
+                                                                std::vector<std::string> path,
+                                                                const Subtype& field_formal,
+                                                                const Scope field_formal_scope,
+                                                                const Subtype& field_actual,
+                                                                const Scope field_actual_scope) {
+                    const auto formal_shape = array_shape(
+                        formal_specialization, field_formal,
+                        field_formal_scope);
+                    const auto actual_shape = array_shape(
+                        actual_specialization, field_actual,
+                        field_actual_scope);
+                    if (!formal_shape.known || !actual_shape.known
+                        || formal_shape.array != actual_shape.array
+                        || !formal_shape.array) {
+                        return true;
+                    }
+                    if (formal_shape.constrained) {
+                        if (!actual_shape.constrained
+                            || !formal_shape.ranges
+                            || !actual_shape.ranges) {
+                            return true;
+                        }
+                        if (&formal_specialization
+                            == &actual_specialization) {
+                            const auto lengths_match
+                                = semantic::CompiledDesignResolver {
+                                      formal_specialization
+                                  }
+                                      .vhdl_array_lengths_match(
+                                          field_formal, field_formal_scope,
+                                          field_actual, field_actual_scope);
+                            return lengths_match.value_or(true);
+                        }
+                        return same_array_lengths(
+                            *formal_shape.ranges, *actual_shape.ranges);
+                    }
+                    if (!actual_shape.constrained || !actual_shape.ranges) {
+                        return true;
+                    }
+                    const auto existing = std::ranges::find_if(
+                        next,
+                        [&](const semantic::vhdl::ElementConstraint& item) {
+                            if (item.path.size() != path.size()) {
+                                return false;
+                            }
+                            return std::ranges::equal(
+                                item.path, path,
+                                [](const std::string& left,
+                                    const std::string& right) {
+                                    return compiled_vhdl_name_equal(
+                                        left, right);
+                                });
+                        });
+                    if (existing != next.end()) {
+                        const auto existing_ranges
+                            = normalized_static_array_ranges(
+                                formal_specialization,
+                                existing->constraints, false);
+                        if (!existing_ranges) {
+                            return true;
+                        }
+                        return same_static_array_ranges(
+                            *existing_ranges, *actual_shape.ranges);
+                    }
+                    next.push_back(
+                        { std::move(path), *actual_shape.ranges });
+                    changed = true;
+                    return true;
+                };
+                if (!append_static_array_constraint(
+                        { association.choice_spelling },
+                        formal_element->first, formal_element->second,
+                        actual_element->first, actual_element->second)) {
+                    return { Result::Status::incompatible, { },
+                        association.source };
+                }
+                for (const auto& nested : actual_element->first.element_constraints) {
+                    if (nested.path.empty()) {
+                        continue;
+                    }
+                    auto formal_nested = *formal_element;
+                    auto actual_nested = *actual_element;
+                    bool resolved_nested_path = true;
+                    for (const auto& member : nested.path) {
+                        if (member.empty()) {
+                            resolved_nested_path = false;
+                            break;
+                        }
+                        const auto formal_member = record_element_subtype(
+                            formal_specialization, formal_nested.first,
+                            formal_nested.second, member);
+                        const auto actual_member = record_element_subtype(
+                            actual_specialization, actual_nested.first,
+                            actual_nested.second, member);
+                        if (!formal_member || !actual_member) {
+                            resolved_nested_path = false;
+                            break;
+                        }
+                        const auto formal_member_type = type_identity(
+                            formal_specialization, formal_member->first,
+                            formal_member->second);
+                        const auto actual_member_type = type_identity(
+                            actual_specialization, actual_member->first,
+                            actual_member->second);
+                        if (!formal_member_type || !actual_member_type) {
+                            if (formal_member_type || actual_member_type
+                                || !predefined_bit_vector_identity(
+                                    formal_specialization,
+                                    formal_member->first,
+                                    formal_member->second)
+                                || !predefined_bit_vector_identity(
+                                    actual_specialization,
+                                    actual_member->first,
+                                    actual_member->second)) {
+                                resolved_nested_path = false;
+                                break;
+                            }
+                        } else if (*formal_member_type
+                            != *actual_member_type) {
+                            return { Result::Status::incompatible, { },
+                                association.source };
+                        }
+                        formal_nested = *formal_member;
+                        actual_nested = *actual_member;
+                    }
+                    if (!resolved_nested_path) {
+                        continue;
+                    }
+                    auto path = std::vector<std::string> {
+                        association.choice_spelling
+                    };
+                    path.insert(
+                        path.end(), nested.path.begin(), nested.path.end());
+                    if (!append_static_array_constraint(
+                            std::move(path), formal_nested.first,
+                            formal_nested.second, actual_nested.first,
+                            actual_nested.second)) {
+                        return { Result::Status::incompatible, { },
+                            association.source };
+                    }
+                }
+            }
+            if (!changed) {
+                return { };
+            }
+            candidate.element_constraints = std::move(next);
+            candidate.executable_width.reset();
+            return { Result::Status::specialized,
+                std::move(candidate), { } };
+        }
+
+    private:
+        struct RecordSubtype {
+            Subtype subtype;
+            const semantic::vhdl::TypeDefinition* definition { };
+            Scope scope;
+        };
+
+        struct ArrayShape {
+            bool known { };
+            bool array { };
+            bool constrained { };
+            std::optional<std::vector<semantic::vhdl::RangeConstraint>>
+                ranges;
+        };
+
+        [[nodiscard]] static Subtype link_subtype(
+            const SpecializedUnit& specialization,
+            Subtype subtype,
+            const Scope scope)
+        {
+            return compiled_vhdl_link_subtype(
+                specialization, std::move(subtype), scope);
+        }
+
+        [[nodiscard]] static std::optional<RecordSubtype> record_subtype(
+            const SpecializedUnit& specialization,
+            const Subtype& input,
+            const Scope input_scope)
+        {
+            auto current = link_subtype(specialization, input, input_scope);
+            std::unordered_set<std::uint32_t> visited;
+            for (;;) {
+                const auto type_id = current.type_mark.target;
+                if (!type_id.valid()
+                    || !visited.insert(type_id.value()).second) {
+                    return std::nullopt;
+                }
+                const auto type = specialization.find_type(type_id);
+                if (!type || type->vhdl == nullptr) {
+                    return std::nullopt;
+                }
+                const auto declaration = specialization.find_declaration(
+                    type->vhdl->declaration);
+                const auto type_scope = declaration
+                        && declaration->vhdl != nullptr
+                    ? declaration->vhdl->scope
+                    : input_scope;
+                if (type->vhdl->form == semantic::vhdl::TypeForm::record) {
+                    return RecordSubtype {
+                        std::move(current), type->vhdl, type_scope
+                    };
+                }
+                if (type->vhdl->form
+                        != semantic::vhdl::TypeForm::subtype
+                    && type->vhdl->form
+                        != semantic::vhdl::TypeForm::alias) {
+                    return std::nullopt;
+                }
+                auto base = type->vhdl->base;
+                if (!current.constraints.empty()) {
+                    base.constraints = current.constraints;
+                    base.unconstrained = false;
+                }
+                for (const auto& inherited : current.element_constraints) {
+                    const auto duplicate = std::ranges::any_of(
+                        base.element_constraints,
+                        [&](const semantic::vhdl::ElementConstraint& item) {
+                            return item.path.size() == inherited.path.size()
+                                && std::ranges::equal(
+                                    item.path, inherited.path,
+                                    [](const std::string& left,
+                                        const std::string& right) {
+                                        return compiled_vhdl_name_equal(
+                                            left, right);
+                                    })
+                                && item.constraints == inherited.constraints;
+                        });
+                    if (!duplicate) {
+                        base.element_constraints.push_back(inherited);
+                    }
+                }
+                current = link_subtype(
+                    specialization, std::move(base), type_scope);
+            }
+        }
+
+        [[nodiscard]] static std::optional<std::pair<Subtype, Scope>>
+        record_element_subtype(
+            const SpecializedUnit& specialization,
+            const Subtype& owner,
+            const Scope owner_scope,
+            const std::string_view element_name)
+        {
+            const auto record = record_subtype(
+                specialization, owner, owner_scope);
+            if (!record) {
+                return std::nullopt;
+            }
+            const auto element = std::ranges::find_if(
+                record->definition->record_elements,
+                [&](const semantic::vhdl::RecordElement& candidate) {
+                    return compiled_vhdl_name_equal(
+                        candidate.name, element_name);
+                });
+            if (element == record->definition->record_elements.end()) {
+                return std::nullopt;
+            }
+            auto subtype = semantic::vhdl::constrained_element_subtype(
+                record->subtype, element->name, element->subtype);
+            subtype = link_subtype(
+                specialization, std::move(subtype), record->scope);
+            return std::pair { std::move(subtype), record->scope };
+        }
+
+        [[nodiscard]] static std::optional<semantic::TypeId> type_identity(
+            const SpecializedUnit& specialization,
+            const Subtype& input,
+            Scope scope)
+        {
+            auto current = link_subtype(specialization, input, scope);
+            std::unordered_set<std::uint32_t> visited;
+            while (current.type_mark.target.valid()
+                && visited.insert(current.type_mark.target.value()).second) {
+                const auto type = specialization.find_type(
+                    current.type_mark.target);
+                if (!type || type->vhdl == nullptr) {
+                    return std::nullopt;
+                }
+                const auto& definition = *type->vhdl;
+                if (definition.form != semantic::vhdl::TypeForm::subtype
+                    && definition.form != semantic::vhdl::TypeForm::alias) {
+                    return current.type_mark.target;
+                }
+                const auto declaration = specialization.find_declaration(
+                    definition.declaration);
+                if (declaration && declaration->vhdl != nullptr) {
+                    scope = declaration->vhdl->scope;
+                }
+                auto base = definition.base;
+                if (!current.constraints.empty()) {
+                    base.constraints = current.constraints;
+                    base.unconstrained = false;
+                }
+                current = link_subtype(
+                    specialization, std::move(base), scope);
+            }
+            return std::nullopt;
+        }
+
+        [[nodiscard]] static bool predefined_bit_vector_identity(
+            const SpecializedUnit& specialization,
+            const Subtype& input,
+            const Scope scope)
+        {
+            const auto current = link_subtype(
+                specialization, input, scope);
+            if (current.type_mark.target.valid()
+                || current.domain != semantic::vhdl::ValueDomain::bit2) {
+                return false;
+            }
+            auto spelling = std::string_view { current.type_mark.spelling };
+            constexpr auto builtin_prefix = std::string_view { "@builtin:" };
+            const bool compiler_builtin = spelling.starts_with(builtin_prefix);
+            if (compiler_builtin) {
+                spelling.remove_prefix(builtin_prefix.size());
+            }
+            if (compiled_vhdl_name_equal(
+                    spelling, "std.standard.bit_vector")) {
+                return true;
+            }
+            if (!compiled_vhdl_name_equal(spelling, "bit_vector")) {
+                return false;
+            }
+            if (compiler_builtin) {
+                return true;
+            }
+            if (!scope.valid()) {
+                return false;
+            }
+            semantic::vhdl::Name type_name;
+            type_name.spelling = std::string { spelling };
+            type_name.canonical = type_name.spelling;
+            const auto resolution
+                = semantic::CompiledDesignResolver { specialization }
+                      .resolve_vhdl(type_name, scope);
+            return resolution.status
+                == semantic::CompiledResolutionStatus::not_found
+                && resolution.candidates.empty();
+        }
+
+        [[nodiscard]] static std::optional<std::pair<Subtype, Scope>>
+        actual_subtype(
+            const SpecializedUnit& specialization,
+            const semantic::ExpressionId id)
+        {
+            const auto expression = specialization.find_expression(id);
+            if (!expression || expression->vhdl == nullptr) {
+                return std::nullopt;
+            }
+            const auto& source = *expression->vhdl;
+            if (source.kind != semantic::vhdl::ExpressionKind::name) {
+                return std::nullopt;
+            }
+            const auto separator = source.text.find('.');
+            const auto root_name = std::string_view { source.text }
+                                       .substr(0U, separator);
+            auto selected = source.referenced_name
+                ? source.referenced_name->selected
+                : std::nullopt;
+            auto declaration = selected
+                ? specialization.find_declaration(*selected)
+                : std::nullopt;
+            if (!declaration || declaration->vhdl == nullptr
+                || !compiled_vhdl_name_equal(
+                    declaration->vhdl->name, root_name)) {
+                semantic::vhdl::Name root_reference;
+                root_reference.spelling = std::string { root_name };
+                selected = semantic::CompiledDesignResolver {
+                    specialization
+                }
+                               .resolve_vhdl(root_reference, source.scope)
+                               .unique();
+                declaration = selected
+                    ? specialization.find_declaration(*selected)
+                    : std::nullopt;
+            }
+            if (!declaration || declaration->vhdl == nullptr
+                || !declaration->vhdl->subtype) {
+                return std::nullopt;
+            }
+            auto current = link_subtype(
+                specialization, *declaration->vhdl->subtype,
+                declaration->vhdl->scope);
+            if (separator == std::string::npos) {
+                return std::pair {
+                    std::move(current), declaration->vhdl->scope
+                };
+            }
+            auto current_scope = declaration->vhdl->scope;
+            auto remaining = std::string_view { source.text }
+                                 .substr(separator + 1U);
+            if (remaining.empty()) {
+                return std::nullopt;
+            }
+            while (!remaining.empty()) {
+                const auto member_separator = remaining.find('.');
+                const auto member = remaining.substr(0U, member_separator);
+                if (member.empty()) {
+                    return std::nullopt;
+                }
+                const auto selected_element = record_element_subtype(
+                    specialization, current, current_scope, member);
+                if (!selected_element) {
+                    return std::nullopt;
+                }
+                current = selected_element->first;
+                current_scope = selected_element->second;
+                if (member_separator == std::string_view::npos) {
+                    break;
+                }
+                remaining.remove_prefix(member_separator + 1U);
+            }
+            return std::pair { std::move(current), current_scope };
+        }
+
+        [[nodiscard]] static std::optional<std::vector<
+            semantic::vhdl::RangeConstraint>>
+        normalized_static_array_ranges(
+            const SpecializedUnit& specialization,
+            const std::vector<semantic::vhdl::RangeConstraint>& ranges,
+            const bool boundaries_are_materialized)
+        {
+            std::vector<semantic::vhdl::RangeConstraint> result;
+            result.reserve(ranges.size());
+            for (auto range : ranges) {
+                if (range.kind != semantic::vhdl::RangeKind::array_index
+                    || range.direction_from_bounds) {
+                    return std::nullopt;
+                }
+                const auto boundary = [&](
+                                          const std::optional<std::int64_t> value,
+                                          const std::optional<semantic::ExpressionId> expression) {
+                    if (boundaries_are_materialized || !expression) {
+                        return value;
+                    }
+                    return specialization.evaluate_integral_expression(
+                        *expression);
+                };
+                const auto left = boundary(
+                    range.left, range.left_expression);
+                const auto right = boundary(
+                    range.right, range.right_expression);
+                if (!left || !right) {
+                    return std::nullopt;
+                }
+                range.left = *left;
+                range.right = *right;
+                range.left_expression.reset();
+                range.right_expression.reset();
+                range.null = range.descending
+                    ? *left < *right
+                    : *left > *right;
+                result.push_back(std::move(range));
+            }
+            return result;
+        }
+
+        [[nodiscard]] static ArrayShape array_shape(
+            const SpecializedUnit& specialization,
+            const Subtype& input,
+            const Scope input_scope)
+        {
+            auto subtype = input;
+            for (auto& range : subtype.constraints) {
+                if (range.left_expression) {
+                    range.left.reset();
+                }
+                if (range.right_expression) {
+                    range.right.reset();
+                }
+            }
+            auto current = link_subtype(
+                specialization, std::move(subtype), input_scope);
+            if (predefined_bit_vector_identity(
+                    specialization, current, input_scope)) {
+                if (current.constraints.empty()) {
+                    return { true, true, false,
+                        std::vector<semantic::vhdl::RangeConstraint> { } };
+                }
+                if (current.constraints.size() != 1U
+                    || current.constraints.front().kind
+                        != semantic::vhdl::RangeKind::array_index) {
+                    return { true, true, true, std::nullopt };
+                }
+                const auto normalized = normalized_static_array_ranges(
+                    specialization, current.constraints, false);
+                if (!normalized || normalized->size() != 1U) {
+                    return { true, true, true, std::nullopt };
+                }
+                return { true, true, true, normalized };
+            }
+            std::unordered_set<std::uint32_t> visited;
+            while (current.type_mark.target.valid()
+                && visited.insert(current.type_mark.target.value()).second) {
+                const auto type = specialization.find_type(
+                    current.type_mark.target);
+                if (!type || type->vhdl == nullptr) {
+                    return { };
+                }
+                const auto& definition = *type->vhdl;
+                if (definition.form == semantic::vhdl::TypeForm::array) {
+                    const bool subtype_constraints = std::ranges::any_of(
+                        current.constraints,
+                        [](const semantic::vhdl::RangeConstraint& range) {
+                            return range.kind
+                                == semantic::vhdl::RangeKind::array_index;
+                        });
+                    const bool declared_constraints = std::ranges::any_of(
+                        definition.array_dimensions,
+                        [](const semantic::vhdl::ArrayDimension& dimension) {
+                            return dimension.constraint.has_value();
+                        });
+                    const bool constrained
+                        = subtype_constraints || declared_constraints;
+                    if (!constrained) {
+                        return { true, true, false,
+                            std::vector<semantic::vhdl::RangeConstraint> { } };
+                    }
+                    std::vector<semantic::vhdl::RangeConstraint> ranges;
+                    if (subtype_constraints) {
+                        ranges = current.constraints;
+                    } else {
+                        for (const auto& dimension : definition.array_dimensions) {
+                            if (!dimension.constraint) {
+                                return { true, true, true, std::nullopt };
+                            }
+                            ranges.push_back(*dimension.constraint);
+                        }
+                    }
+                    const auto normalized = normalized_static_array_ranges(
+                        specialization, ranges, subtype_constraints);
+                    if (!normalized
+                        || normalized->size()
+                            != definition.array_dimensions.size()) {
+                        return { true, true, true, std::nullopt };
+                    }
+                    return { true, true, true, normalized };
+                }
+                if (definition.form != semantic::vhdl::TypeForm::subtype
+                    && definition.form != semantic::vhdl::TypeForm::alias) {
+                    return { true, false, false,
+                        std::vector<semantic::vhdl::RangeConstraint> { } };
+                }
+                const auto declaration = specialization.find_declaration(
+                    definition.declaration);
+                const auto type_scope = declaration
+                        && declaration->vhdl != nullptr
+                    ? declaration->vhdl->scope
+                    : input_scope;
+                auto base = definition.base;
+                if (!current.constraints.empty()) {
+                    base.constraints = current.constraints;
+                    base.unconstrained = false;
+                }
+                for (auto& range : base.constraints) {
+                    if (range.left_expression) {
+                        range.left.reset();
+                    }
+                    if (range.right_expression) {
+                        range.right.reset();
+                    }
+                }
+                current = link_subtype(
+                    specialization, std::move(base), type_scope);
+            }
+            return { };
+        }
+
+        [[nodiscard]] static bool same_static_array_ranges(
+            const std::vector<semantic::vhdl::RangeConstraint>& left,
+            const std::vector<semantic::vhdl::RangeConstraint>& right)
+        {
+            if (left.size() != right.size()) {
+                return false;
+            }
+            return std::ranges::equal(
+                left, right, [](const auto& first, const auto& second) {
+                    return first.kind == second.kind
+                        && first.left == second.left
+                        && first.right == second.right
+                        && first.descending == second.descending
+                        && first.null == second.null;
+                });
+        }
+
+        [[nodiscard]] static std::uint64_t range_distance(
+            const std::int64_t left, const std::int64_t right)
+        {
+            return left >= right
+                ? static_cast<std::uint64_t>(left)
+                    - static_cast<std::uint64_t>(right)
+                : static_cast<std::uint64_t>(right)
+                    - static_cast<std::uint64_t>(left);
+        }
+
+        [[nodiscard]] static bool same_array_lengths(
+            const std::vector<semantic::vhdl::RangeConstraint>& left,
+            const std::vector<semantic::vhdl::RangeConstraint>& right)
+        {
+            if (left.size() != right.size()) {
+                return false;
+            }
+            return std::ranges::equal(
+                left, right, [](const auto& first, const auto& second) {
+                    const bool first_null = first.null;
+                    const bool second_null = second.null;
+                    if (first_null || second_null) {
+                        return first_null == second_null;
+                    }
+                    return range_distance(*first.left, *first.right)
+                        == range_distance(*second.left, *second.right);
+                });
+        }
+    };
+
     // The width of STD.STANDARD.INTEGER for the specialization's unit: 64
     // bits under VHDL-2019 (IEEE 1076-2019 5.2.3.1), otherwise 32.
     std::size_t compiled_vhdl_integer_width(
@@ -1335,12 +2028,16 @@ namespace {
         };
         const auto range_count = [&](
                                      const semantic::vhdl::RangeConstraint& range,
-                                     const semantic::vhdl::Name* index_subtype)
+                                     const semantic::vhdl::Name* index_subtype,
+                                     const bool authoritative_endpoints)
             -> std::optional<std::size_t> {
             const auto contextual_boundary = [&] (
                 const std::optional<std::int64_t> value,
                 const std::optional<semantic::ExpressionId> expression)
                 -> std::optional<std::int64_t> {
+                if (authoritative_endpoints) {
+                    return value;
+                }
                 if (index_subtype != nullptr) {
                     const auto spelling = index_subtype->canonical.empty()
                         ? std::string_view { index_subtype->spelling }
@@ -1759,10 +2456,13 @@ namespace {
                 // leaves unbounded.
                 const auto effective = compiled_vhdl_link_subtype(
                     specialization, subtype, owner_scope);
-                if (effective.executable_width) {
+                const auto effective_domain = compiled_value_domain(
+                    effective.domain);
+                if (effective.executable_width
+                    && compiled_vhdl_scalar_domain(effective_domain)) {
                     return CompiledVhdlSignalLayout {
                         static_cast<std::size_t>(*effective.executable_width),
-                        compiled_value_domain(effective.domain),
+                        effective_domain,
                     };
                 }
             }
@@ -1829,7 +2529,8 @@ namespace {
                     return std::nullopt;
                 }
                 for (const auto& constraint : subtype.constraints) {
-                    const auto count = range_count(constraint, nullptr);
+                    const auto count = range_count(
+                        constraint, nullptr, false);
                     if (!count) {
                         return std::nullopt;
                     }
@@ -1905,12 +2606,35 @@ namespace {
                 && definition.form == semantic::vhdl::TypeForm::array
                 && definition.element_subtype
                 && !definition.array_dimensions.empty()) {
-                auto layout = resolve_subtype(*definition.element_subtype);
+                // The object's element constraints supply each row's bounds;
+                // the array definition can still contain an open element type.
+                const auto effective_subtype
+                    = type_resolver.effective_vhdl_subtype(
+                        subtype,
+                        owner_scope.value_or(semantic::ScopeId { }));
+                const bool use_effective_constraints = effective_subtype
+                    && effective_subtype->type_mark.target
+                        == subtype.type_mark.target
+                    && effective_subtype->constraints.size()
+                        == definition.array_dimensions.size()
+                    && std::ranges::all_of(
+                        effective_subtype->constraints,
+                        [](const semantic::vhdl::RangeConstraint& constraint) {
+                            return constraint.kind
+                                == semantic::vhdl::RangeKind::array_index;
+                        });
+                const auto element_subtype
+                    = semantic::vhdl::constrained_element_subtype(
+                        subtype, "", *definition.element_subtype);
+                auto layout = resolve_subtype(element_subtype);
                 for (std::size_t index { };
                     layout && index < definition.array_dimensions.size();
                     ++index) {
                     const semantic::vhdl::RangeConstraint* constraint = nullptr;
-                    if (index < subtype.constraints.size()) {
+                    if (use_effective_constraints) {
+                        constraint
+                            = &effective_subtype->constraints[index];
+                    } else if (index < subtype.constraints.size()) {
                         constraint = &subtype.constraints[index];
                     } else if (definition.array_dimensions[index].constraint) {
                         constraint
@@ -1919,7 +2643,8 @@ namespace {
                     const auto count = constraint != nullptr
                         ? range_count(
                               *constraint,
-                              &definition.array_dimensions[index].index_subtype)
+                              &definition.array_dimensions[index].index_subtype,
+                              use_effective_constraints)
                         : std::nullopt;
                     layout = count
                         ? apply_count(*layout, *count)
@@ -5100,15 +5825,21 @@ namespace {
                 if (index >= values.size() || values[index]) {
                     return false;
                 }
+                auto element_subtype = compiled_vhdl_link_subtype(
+                    specialization,
+                    semantic::vhdl::constrained_element_subtype(
+                        effective_subtype, elements[index].name,
+                        elements[index].subtype),
+                    scope);
                 const auto layout = compiled_vhdl_named_signal_layout(
-                    specialization, elements[index].subtype, scope);
+                    specialization, element_subtype, scope);
                 if (!layout || layout->width == 0U) {
                     return false;
                 }
                 const auto evaluated = compiled_vhdl_static_element_value(
-                    specialization, value, elements[index].subtype, scope,
+                    specialization, value, element_subtype, scope,
                     compiled_vhdl_signal_type(
-                        specialization, elements[index].subtype, scope),
+                        specialization, element_subtype, scope),
                     layout->domain, layout->width);
                 if (!evaluated) {
                     return false;
@@ -24738,7 +25469,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_port_associations(
     const auto& port_bindings = context.port_bindings;
     const auto& child_actuals = context.child_actuals;
     const auto& working_specialization = context.working_specialization;
-    const auto& child_interface_specialization
+    auto& child_interface_specialization
         = context.child_interface_specialization;
     const auto& component_defaulted_port_formals
         = context.component_defaulted_port_formals;
@@ -24805,8 +25536,13 @@ bool HierarchyBuilder::materialize_compiled_vhdl_port_associations(
     std::unordered_map<std::string, std::string>
         inferred_vhdl_port_types;
     for (const auto& binding : port_bindings.bindings) {
-        const auto formal = compiled_->find_declaration(
-            binding.formal);
+        const auto specialized_formal
+            = child_interface_specialization->find_declaration(
+                binding.formal);
+        const auto formal = specialized_formal
+                && specialized_formal->vhdl != nullptr
+            ? specialized_formal
+            : compiled_->find_declaration(binding.formal);
         if (!formal || formal->vhdl == nullptr
             || formal->vhdl->form
                 != semantic::vhdl::DeclarationForm::port) {
@@ -24817,7 +25553,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_port_associations(
                 compiled_source_span(*compiled_, binding.source));
             return false;
         }
-        const auto& formal_declaration = *formal->vhdl;
+        auto formal_declaration = *formal->vhdl;
         if (binding.kind
                 == semantic::SpecializedHirAssociationKind::open
             || binding.kind
@@ -24872,6 +25608,30 @@ bool HierarchyBuilder::materialize_compiled_vhdl_port_associations(
         const auto expression
             = port_actual_specialization.find_expression(
                 *binding.expression);
+        // This helper only contributes proven static field constraints. If
+        // identity or shape checks do not prove a match, leave the formal
+        // unchanged so the existing compatibility and aggregate checks run.
+        if (formal_declaration.subtype) {
+            const auto result
+                = CompiledVhdlSubelementPortSpecializer::derive(
+                    *child_interface_specialization,
+                    port_actual_specialization,
+                    *formal_declaration.subtype,
+                    formal_declaration.scope, *binding.expression);
+            if (result.status
+                == CompiledVhdlSubelementPortSpecialization::Status::specialized) {
+                auto replacement = formal_declaration;
+                replacement.subtype = result.subtype;
+                if (!child_interface_specialization->replace(replacement)) {
+                    report(
+                        "FSIM-ELAB-HIR-001",
+                        "compiled VHDL port subtype could not be specialized",
+                        compiled_source_span(*compiled_, binding.source));
+                    return false;
+                }
+                formal_declaration = std::move(replacement);
+            }
+        }
         const auto direction = compiled_port_direction(
             formal_declaration.direction);
         const auto accepts_input
@@ -26955,7 +27715,10 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
             materialization.signal_declarations.push_back(declaration_id);
         }
     }
+    std::vector<semantic::vhdl::Declaration> block_port_declarations;
+    block_port_declarations.reserve(region.declarations.size());
     std::vector<const semantic::vhdl::Declaration*> block_ports;
+    block_ports.reserve(region.declarations.size());
     for (const auto declaration_id : region.declarations) {
         const auto declaration
             = materialization.specialization.find_declaration(
@@ -26963,9 +27726,48 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
         if (declaration && declaration->vhdl != nullptr
             && declaration->vhdl->form
                 == semantic::vhdl::DeclarationForm::port) {
-            block_ports.push_back(declaration->vhdl);
+            block_port_declarations.push_back(*declaration->vhdl);
+            block_ports.push_back(&block_port_declarations.back());
         }
     }
+    const auto specialize_block_port_from_subelements = [&](
+                                                            const std::size_t port_index,
+                                                            const semantic::ExpressionId actual_id)
+        -> bool {
+        auto& stored = block_port_declarations[port_index];
+        if (!stored.subtype) {
+            return true;
+        }
+        const auto result = CompiledVhdlSubelementPortSpecializer::derive(
+            materialization.specialization,
+            materialization.specialization,
+            *stored.subtype, stored.scope, actual_id);
+        if (result.status
+            == CompiledVhdlSubelementPortSpecialization::Status::unchanged) {
+            return true;
+        }
+        if (result.status
+            == CompiledVhdlSubelementPortSpecialization::Status::incompatible) {
+            report(
+                "FSIM-ELAB-VHBLOCK-003",
+                "nested record field type or range for block port '"
+                    + stored.name + "' does not match its actual",
+                compiled_source_span(*compiled_, result.source));
+            return false;
+        }
+        auto replacement = stored;
+        replacement.subtype = result.subtype;
+        if (!materialization.specialization.replace(replacement)) {
+            report(
+                "FSIM-ELAB-HIR-001",
+                "compiled VHDL block port subtype could not be specialized",
+                compiled_source_span(*compiled_, stored.source));
+            return false;
+        }
+        stored = std::move(replacement);
+        block_ports[port_index] = &stored;
+        return true;
+    };
     std::size_t positional_port { };
     bool saw_named_port { };
     std::vector<bool> associated_block_ports(block_ports.size());
@@ -27031,6 +27833,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
                 compiled_source_span(*compiled_, association.source));
             continue;
         }
+        formal = block_ports[*formal_index];
         if (associated_block_ports[*formal_index]) {
             report(
                 "FSIM-ELAB-VHBLOCK-002",
@@ -27083,7 +27886,7 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
                 compiled_source_span(*compiled_, association.source));
             continue;
         }
-        const auto actual
+        auto actual
             = materialization.specialization.find_expression(
                 *association.expression);
         if (!actual || actual->vhdl == nullptr) {
@@ -27093,6 +27896,21 @@ bool HierarchyBuilder::materialize_compiled_vhdl_generated_block(
                     + "' has no retained expression actual",
                 compiled_source_span(*compiled_, association.source));
             continue;
+        }
+        if (!specialize_block_port_from_subelements(
+                *formal_index, *association.expression)) {
+            return false;
+        }
+        // Reacquire the expression view after specializing the generated
+        // declaration; replacement invalidates the specialization cache.
+        actual = materialization.specialization.find_expression(
+            *association.expression);
+        if (!actual || actual->vhdl == nullptr) {
+            report(
+                "FSIM-ELAB-HIR-001",
+                "compiled VHDL block port actual was invalidated",
+                compiled_source_span(*compiled_, association.source));
+            return false;
         }
         if (writable_formal
             && actual->vhdl->kind

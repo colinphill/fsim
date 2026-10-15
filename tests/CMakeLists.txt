@@ -7052,6 +7052,75 @@ if(TARGET fsim)
   endforeach()
 endif()
 
+# A component-nested block configuration must select the architecture named
+# by the component's explicit entity binding.
+if(TARGET fsim)
+  set(vhdl_block_configuration_dir
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl_block_configuration")
+  add_test(
+    NAME fsim.vhdl-block-configuration.matching-bound-architecture
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE=${vhdl_block_configuration_dir}/matching_bound_architecture_batch59.vhd"
+      -P "${vhdl_block_configuration_dir}/run_compile_only.cmake")
+  set_tests_properties(
+    fsim.vhdl-block-configuration.matching-bound-architecture PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+endif()
+
+# Legal and illegal type-mark visibility controls exercise direct and
+# use-visible declarations during VHDL source analysis.
+if(TARGET fsim)
+  set(vhdl_type_mark_visibility_dir
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl_type_mark_visibility")
+  add_test(
+    NAME fsim.vhdl-type-mark-visibility.legal-controls
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE=${vhdl_type_mark_visibility_dir}/legal_direct_qualified_and_overloaded_batch59.vhd"
+      -P "${vhdl_type_mark_visibility_dir}/run_compile_only.cmake")
+  set_tests_properties(
+    fsim.vhdl-type-mark-visibility.legal-controls PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+
+  add_test(
+    NAME fsim.vhdl-type-mark-visibility.explicit-library-mask
+    COMMAND "${CMAKE_COMMAND}"
+      "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+      "-DFSIM_FIXTURE_DIR=${vhdl_type_mark_visibility_dir}"
+      -P "${vhdl_type_mark_visibility_dir}/run_explicit_library_mask.cmake")
+  set_tests_properties(
+    fsim.vhdl-type-mark-visibility.explicit-library-mask PROPERTIES
+    LABELS "application;compliance;vhdl"
+    TIMEOUT 120)
+endif()
+
+# Compile-only VHDL controls exercise legal signal-name forms that currently
+# reach a bounded function-lowering diagnostic. They verify analysis does not
+# reclassify those calls as overload-resolution failures.
+if(TARGET fsim)
+  file(GLOB vhdl_compile_only_fixtures CONFIGURE_DEPENDS
+    "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl_compile_only/*.vhd")
+  foreach(vhdl_compile_only_fixture IN LISTS vhdl_compile_only_fixtures)
+    get_filename_component(vhdl_compile_only_name
+      "${vhdl_compile_only_fixture}" NAME_WE)
+    set(vhdl_compile_only_test
+      "fsim.vhdl-compile-only.${vhdl_compile_only_name}")
+    add_test(
+      NAME "${vhdl_compile_only_test}"
+      COMMAND "${CMAKE_COMMAND}"
+        "-DFSIM_EXECUTABLE=$<TARGET_FILE:fsim>"
+        "-DFSIM_FIXTURE=${vhdl_compile_only_fixture}"
+        -P
+        "${PROJECT_SOURCE_DIR}/tests/fixtures/vhdl_compile_only/run_compile_only.cmake")
+    set_tests_properties("${vhdl_compile_only_test}" PROPERTIES
+      LABELS "application;compliance;vhdl"
+      TIMEOUT 120)
+  endforeach()
+endif()
+
 # The scheduling contract is kept as a source-only CLI corpus so both runtime
 # engines run the same independent-oracle transcripts from fresh workspaces.
 if(TARGET fsim)

@@ -231,9 +231,11 @@ public:
         const sv::TypeReference&, ScopeId use_scope) const;
 
     /// Resolve type parameters and aliases to their executable base while
-    /// retaining declarators contributed at each use site. Unlike
-    /// effective_systemverilog_type(), this deliberately removes ordinary
-    /// typedef identity and is intended for scalar/layout classification.
+    /// retaining declarators contributed at each use site. Concrete aggregate
+    /// identities remain intact so callers can inspect their member layouts.
+    /// Unlike effective_systemverilog_type(), this deliberately removes
+    /// ordinary typedef identity and is intended for scalar/layout
+    /// classification.
     [[nodiscard]] std::optional<sv::TypeReference>
     underlying_systemverilog_type(
         const sv::TypeReference&, ScopeId use_scope) const;
@@ -336,6 +338,12 @@ public:
     [[nodiscard]] bool vhdl_package_member_visible(
         const vhdl::Unit& lookup_unit, const vhdl::Unit& package,
         std::string_view member) const;
+
+    /// Return whether a simple library name is directly visible at a VHDL
+    /// use site through the implicit STD/WORK libraries, an explicit library
+    /// clause, or a referenced context declaration.
+    [[nodiscard]] bool vhdl_library_name_visible(
+        std::string_view name, ScopeId use_scope) const;
 
     /// Resolve visibility of a governed standard-package member, including
     /// compiler-owned VHDL-2019 std.env and std.reflection packages which do

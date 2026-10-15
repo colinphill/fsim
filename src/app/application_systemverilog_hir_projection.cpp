@@ -150,7 +150,7 @@ namespace {
               scope, input.named_type, std::nullopt,
               input.systemverilog_source_order)
         : !input.enumeration_literals.empty()
-                && !projecting_typedef_base_
+                && !suppress_hidden_anonymous_enum_typedef_
             ? find_type(scope,
                   frontend::anonymous_enumeration_type_name(
                       input.enumeration_literals.front()), std::nullopt,
@@ -163,7 +163,14 @@ namespace {
         spelling
     };
     output.source_order = input.systemverilog_source_order;
-    output.value_form = type_form(input);
+    // A named typedef base uses the declaration selected in this lexical
+    // scope. The frontend cache can retain a different visible typedef's
+    // packed shape; explicit use-site dimensions have an inline type instead.
+    const bool resolved_typedef_base = projecting_typedef_declaration_base_
+        && !input.named_type.empty() && output.target.target.valid();
+    output.value_form = resolved_typedef_base
+        ? std::optional<sv::TypeForm> { }
+        : std::optional<sv::TypeForm> { type_form(input) };
     if (!input.systemverilog_class_declaration.empty()) {
         output.value_form = sv::TypeForm::class_handle;
         output.class_identity = input.systemverilog_class_declaration;
@@ -194,21 +201,23 @@ namespace {
     output.systemverilog_net_type = input.systemverilog_net_type;
     output.systemverilog_resolution_function
         = input.systemverilog_resolution_function;
-    output.signed_value = input.is_signed;
-    output.executable_width = input.width();
-    output.four_state = input.domain == frontend::ValueDomain::Logic4
-        || input.domain == frontend::ValueDomain::Integer;
-    if (input.packed_range) {
-        output.packed_range = packed_range(
-            *input.packed_range, source(fallback));
-    } else if (input.packed_range_expression) {
-        output.packed_range = packed_range(
-            *input.packed_range_expression, scope, parent);
-    }
-    if (input.systemverilog_packed_dimensions.size() > 1U) {
-        for (const auto& dimension : input.systemverilog_packed_dimensions) {
-            output.packed_dimensions.push_back(
-                packed_range(dimension, scope, parent));
+    if (!resolved_typedef_base) {
+        output.signed_value = input.is_signed;
+        output.executable_width = input.width();
+        output.four_state = input.domain == frontend::ValueDomain::Logic4
+            || input.domain == frontend::ValueDomain::Integer;
+        if (input.packed_range) {
+            output.packed_range = packed_range(
+                *input.packed_range, source(fallback));
+        } else if (input.packed_range_expression) {
+            output.packed_range = packed_range(
+                *input.packed_range_expression, scope, parent);
+        }
+        if (input.systemverilog_packed_dimensions.size() > 1U) {
+            for (const auto& dimension : input.systemverilog_packed_dimensions) {
+                output.packed_dimensions.push_back(
+                    packed_range(dimension, scope, parent));
+            }
         }
     }
     // An interface port array keeps its dimensions without a container
@@ -433,10 +442,12 @@ namespace {
         input.span,
         parent);
     const auto declaration_origin = declaration(id).origin;
-    projecting_typedef_base_ = true;
+    suppress_hidden_anonymous_enum_typedef_ = true;
+    projecting_typedef_declaration_base_ = true;
     const auto base = type_reference(
         input.type, input.span, scope, declaration_origin);
-    projecting_typedef_base_ = false;
+    projecting_typedef_declaration_base_ = false;
+    suppress_hidden_anonymous_enum_typedef_ = false;
     const auto type_id = ensure_type(
         input.name,
         scope,
@@ -458,6 +469,24 @@ namespace {
     add_type_payload(input, output, scope, declaration_origin);
     hir_.mutable_types().push_back(std::move(output));
     return id;
+}
+
+std::vector<semantic::DeclarationId>
+SystemVerilogHirBuilder::add_statement_type_aliases(
+    const std::span<const frontend::TypeAliasDeclaration> aliases,
+    const std::span<const std::pair<semantic::ScopeId, sv::Import>> imports,
+    const semantic::ScopeId scope,
+    const semantic::OriginId parent)
+{
+    const auto previous_imports = statement_imports_;
+    statement_imports_ = imports;
+    std::vector<semantic::DeclarationId> declarations;
+    declarations.reserve(aliases.size());
+    for (const auto& alias : aliases) {
+        declarations.push_back(add_type_declaration(alias, scope, parent));
+    }
+    statement_imports_ = previous_imports;
+    return declarations;
 }
 
 void SystemVerilogHirBuilder::add_type_payload(
@@ -609,10 +638,10 @@ template <typename Input>
     auto& output = declaration(id);
     // Enumeration literals stay anonymous-typed values; only objects of an
     // anonymous enumeration refer to its hidden typedef.
-    projecting_typedef_base_ = true;
+    suppress_hidden_anonymous_enum_typedef_ = true;
     output.type = type_reference(
         input.type, input.span, scope, output.origin);
-    projecting_typedef_base_ = false;
+    suppress_hidden_anonymous_enum_typedef_ = false;
     if (input.default_type) {
         output.default_type = type_reference(
             *input.default_type, input.span, scope, output.origin);

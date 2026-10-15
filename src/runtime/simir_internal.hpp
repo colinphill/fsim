@@ -1035,9 +1035,9 @@ struct Interpreter::Impl : SchedulerBatchTask {
         std::vector<std::string> strings;
         std::vector<SharedContainerValue> containers;
         std::size_t storage_bytes { };
-        // Non-null only when a SystemVerilog-2023 function activation
-        // spawned background processes. The activation owns one context;
-        // every spawned process shares it until the final child exits.
+        // Non-null when this automatic activation has fork children. The
+        // activation owns one live context; its owner and every child share
+        // it until the owner detaches and the final child exits.
         std::shared_ptr<ProcessCallableFrameState> escaping_context;
     };
 
@@ -1145,6 +1145,11 @@ struct Interpreter::Impl : SchedulerBatchTask {
         // allocates its owning snapshot on the checked execution path.
         std::unique_ptr<ProcessCallableFrameState> suspended_callable_context;
         std::size_t callable_context_storage_bytes { };
+        // Callable register backing is live only between restore and
+        // suspension. Suspended writes go to the authoritative snapshots.
+        bool callable_registers_suspended { };
+        // A mailbox wake result must survive stale sibling activation captures.
+        std::optional<RegisterId> pending_mailbox_result;
         std::optional<ProcessId> fork_parent;
         std::optional<InstructionIndex> fork_site;
         std::optional<std::uint64_t> fork_group;
@@ -4485,6 +4490,12 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessState& process,
         const ProcessState::CallableFrameState& context);
 
+    [[nodiscard]] std::size_t callable_storage_bytes_in_use(
+        const ProcessState& process,
+        const ProcessState::CallableFrameState* additional_context = nullptr)
+        const;
+    void capture_escaping_callable_contexts(ProcessState& process);
+    void restore_escaping_callable_contexts(ProcessState& process);
     void snapshot_callable_context(ProcessState& process);
 
     void restore_callable_context(ProcessState& process)
@@ -4495,6 +4506,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
         const auto& cold = process.cold();
         if (cold.escaping_callable_contexts.empty()
             && !cold.suspended_callable_context) {
+            process.cold().callable_registers_suspended = false;
             return;
         }
         restore_callable_context_nonempty(process);

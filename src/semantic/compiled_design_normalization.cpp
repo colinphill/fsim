@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "fsim/semantic/compiled_design_normalization.hpp"
+#include "fsim/semantic/compiled_design_resolver.hpp"
 
 #include <algorithm>
 #include <map>
@@ -7,6 +8,7 @@
 #include <cctype>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <set>
 #include <span>
@@ -142,6 +144,8 @@ struct NormalizationIndexes {
     RecordIndex vhdl_declarations;
     RecordIndex systemverilog_expressions;
     RecordIndex vhdl_expressions;
+    RecordIndex semantic_scopes;
+    RecordIndex semantic_types;
 };
 thread_local const NormalizationIndexes* normalization_indexes = nullptr;
 
@@ -607,8 +611,12 @@ const vhdl::Statement* find_statement(
 }
 
 bool vhdl_callable_formal(
-    const CompiledDesign& design, const DeclarationId id)
+    const CompiledDesign& design, const DeclarationId id,
+    const std::vector<DeclarationId>* cached_formals = nullptr)
 {
+    if (cached_formals != nullptr) {
+        return std::ranges::binary_search(*cached_formals, id);
+    }
     return std::ranges::any_of(
         design.vhdl_hir.declarations(), [&](const auto& declaration) {
             return declaration.callable
@@ -622,13 +630,15 @@ std::optional<ConstantValue> evaluate_vhdl_constant(
     const CompiledDesign& design, const vhdl::Expression& expression,
     const ConstantBindings& bindings,
     std::set<DeclarationId>& active_declarations,
-    std::set<ExpressionId>& active_expressions);
+    std::set<ExpressionId>& active_expressions,
+    const std::vector<DeclarationId>* cached_formals = nullptr);
 
 std::optional<ConstantValue> evaluate_vhdl_expression(
     const CompiledDesign& design, const ExpressionId id,
     const ConstantBindings& bindings,
     std::set<DeclarationId>& active_declarations,
-    std::set<ExpressionId>& active_expressions)
+    std::set<ExpressionId>& active_expressions,
+    const std::vector<DeclarationId>* cached_formals = nullptr)
 {
     if (!active_expressions.insert(id).second) {
         return std::nullopt;
@@ -638,7 +648,7 @@ std::optional<ConstantValue> evaluate_vhdl_expression(
     const auto value = expression == nullptr
         ? std::nullopt
         : evaluate_vhdl_constant(design, *expression, bindings,
-              active_declarations, active_expressions);
+              active_declarations, active_expressions, cached_formals);
     active_expressions.erase(id);
     return value;
 }
@@ -662,11 +672,72 @@ const vhdl::Declaration* defined_pure_function(
         : nullptr;
 }
 
+const SourceSpan* vhdl_source_span(
+    const Model& model, const SourceSpanId id)
+{
+    const auto& spans = model.source_spans();
+    if (!id.valid() || id.value() >= spans.size()) {
+        return nullptr;
+    }
+    const auto& span = spans[id.value()];
+    return span.id == id ? &span : nullptr;
+}
+
+const SourceFile* vhdl_source_file(
+    const Model& model, const SourceFileId id)
+{
+    const auto& files = model.source_files();
+    if (!id.valid() || id.value() >= files.size()) {
+        return nullptr;
+    }
+    const auto& file = files[id.value()];
+    return file.id == id ? &file : nullptr;
+}
+
+bool same_vhdl_physical_source(
+    const Model& model, const SourceSpanId left_id,
+    const SourceSpanId right_id)
+{
+    const auto* const left = vhdl_source_span(model, left_id);
+    const auto* const right = vhdl_source_span(model, right_id);
+    if (left == nullptr || right == nullptr
+        || !left->file.valid() || !right->file.valid()) {
+        return false;
+    }
+    if (left->file == right->file) {
+        return true;
+    }
+    const auto* const left_file = vhdl_source_file(model, left->file);
+    const auto* const right_file = vhdl_source_file(model, right->file);
+    return left_file != nullptr && right_file != nullptr
+        && !left_file->physical_name.empty()
+        && left_file->physical_name == right_file->physical_name;
+}
+
+bool vhdl_call_targets_later_local_function(
+    const CompiledDesign& design, const vhdl::Expression& use,
+    const vhdl::Declaration& definition)
+{
+    if (use.kind != vhdl::ExpressionKind::call
+        || use.scope != definition.scope
+        || !same_vhdl_physical_source(
+            design.semantics, definition.source, use.source)) {
+        return false;
+    }
+    const auto* const use_span = vhdl_source_span(
+        design.semantics, use.source);
+    const auto* const definition_span = vhdl_source_span(
+        design.semantics, definition.source);
+    return use_span != nullptr && definition_span != nullptr
+        && definition_span->begin.offset > use_span->begin.offset;
+}
+
 std::optional<ConstantValue> evaluate_pure_vhdl_call(
     const CompiledDesign& design, const vhdl::Expression& expression,
     const ConstantBindings& caller_bindings,
     std::set<DeclarationId>& active_declarations,
-    std::set<ExpressionId>& active_expressions)
+    std::set<ExpressionId>& active_expressions,
+    const std::vector<DeclarationId>* cached_formals = nullptr)
 {
     if (!expression.referenced_name) {
         return std::nullopt;
@@ -678,7 +749,10 @@ std::optional<ConstantValue> evaluate_pure_vhdl_call(
     }
     const auto* declaration = selected
         ? defined_pure_function(design, *selected) : nullptr;
-    if (declaration == nullptr || declaration->statements.size() != 1U
+    if (declaration == nullptr
+        || vhdl_call_targets_later_local_function(
+            design, expression, *declaration)
+        || declaration->statements.size() != 1U
         || !active_declarations.insert(declaration->id).second) {
         return std::nullopt;
     }
@@ -698,14 +772,14 @@ std::optional<ConstantValue> evaluate_pure_vhdl_call(
         if (index < expression.operands.size()) {
             value = evaluate_vhdl_expression(design,
                 expression.operands[index], caller_bindings,
-                active_declarations, active_expressions);
+                active_declarations, active_expressions, cached_formals);
         } else {
             const auto* formal = find_declaration(
                 design.vhdl_hir, formals[index]);
             if (formal != nullptr && formal->initializer) {
                 value = evaluate_vhdl_expression(design,
                     *formal->initializer, bindings,
-                    active_declarations, active_expressions);
+                    active_declarations, active_expressions, cached_formals);
             }
         }
         if (!value) {
@@ -721,14 +795,15 @@ std::optional<ConstantValue> evaluate_pure_vhdl_call(
         return finish(std::nullopt);
     }
     return finish(evaluate_vhdl_expression(design, *statement->value,
-        bindings, active_declarations, active_expressions));
+        bindings, active_declarations, active_expressions, cached_formals));
 }
 
 std::optional<ConstantValue> evaluate_vhdl_constant(
     const CompiledDesign& design, const vhdl::Expression& expression,
     const ConstantBindings& bindings,
     std::set<DeclarationId>& active_declarations,
-    std::set<ExpressionId>& active_expressions)
+    std::set<ExpressionId>& active_expressions,
+    const std::vector<DeclarationId>* cached_formals)
 {
     if (!expression.nominal_type.empty()) {
         return std::nullopt;
@@ -747,14 +822,15 @@ std::optional<ConstantValue> evaluate_vhdl_constant(
             design.vhdl_hir, declaration_id);
         if (declaration == nullptr
             || declaration->form != vhdl::DeclarationForm::constant
-            || vhdl_callable_formal(design, declaration_id)
+            || vhdl_callable_formal(
+                design, declaration_id, cached_formals)
             || !declaration->initializer
             || !active_declarations.insert(declaration_id).second) {
             return std::nullopt;
         }
         const auto value = evaluate_vhdl_expression(design,
             *declaration->initializer, bindings,
-            active_declarations, active_expressions);
+            active_declarations, active_expressions, cached_formals);
         active_declarations.erase(declaration_id);
         return value;
     }
@@ -768,7 +844,7 @@ std::optional<ConstantValue> evaluate_vhdl_constant(
         && expression.operands.size() == 1U) {
         const auto operand = evaluate_vhdl_expression(design,
             expression.operands.front(), bindings,
-            active_declarations, active_expressions);
+            active_declarations, active_expressions, cached_formals);
         return operand ? fold_unary(lowercase(expression.text), *operand)
                        : std::nullopt;
     }
@@ -776,17 +852,17 @@ std::optional<ConstantValue> evaluate_vhdl_constant(
         && expression.operands.size() == 2U) {
         const auto left = evaluate_vhdl_expression(design,
             expression.operands.front(), bindings,
-            active_declarations, active_expressions);
+            active_declarations, active_expressions, cached_formals);
         const auto right = evaluate_vhdl_expression(design,
             expression.operands.back(), bindings,
-            active_declarations, active_expressions);
+            active_declarations, active_expressions, cached_formals);
         return left && right
             ? fold_binary(lowercase(expression.text), *left, *right)
             : std::nullopt;
     }
     if (expression.kind == vhdl::ExpressionKind::call) {
         return evaluate_pure_vhdl_call(design, expression, bindings,
-            active_declarations, active_expressions);
+            active_declarations, active_expressions, cached_formals);
     }
     return std::nullopt;
 }
@@ -813,9 +889,12 @@ void write_literal(Expression& expression, const ConstantValue value)
     expression.decoded_string.reset();
 }
 
+struct VhdlConstantGuardCache;
+
 template <typename Expression>
 std::optional<ConstantValue> constant_name_value(
-    const CompiledDesign&, const std::vector<Expression>&, const Expression&)
+    const CompiledDesign&, const std::vector<Expression>&,
+    const Expression&, VhdlConstantGuardCache* = nullptr)
 {
     return std::nullopt;
 }
@@ -824,7 +903,8 @@ template <>
 std::optional<ConstantValue> constant_name_value(
     const CompiledDesign& design,
     const std::vector<sv::Expression>& expressions,
-    const sv::Expression& expression)
+    const sv::Expression& expression,
+    VhdlConstantGuardCache*)
 {
     if (expression.kind != sv::ExpressionKind::name
         || !expression.referenced_name
@@ -877,24 +957,670 @@ std::optional<ConstantValue> constant_name_value(
     return value;
 }
 
+bool simple_vhdl_guard_identifier(const std::string_view spelling)
+{
+    if (spelling.empty()) {
+        return false;
+    }
+    const auto first = static_cast<unsigned char>(spelling.front());
+    if (!((first >= 'A' && first <= 'Z')
+            || (first >= 'a' && first <= 'z'))) {
+        return false;
+    }
+    return std::ranges::all_of(spelling, [](const char raw) {
+        const auto character = static_cast<unsigned char>(raw);
+        return (character >= 'A' && character <= 'Z')
+            || (character >= 'a' && character <= 'z')
+            || (character >= '0' && character <= '9')
+            || raw == '_';
+    });
+}
+
+struct VhdlGenericDependencyContext {
+    const CompiledDesign& design;
+    CompiledDesignResolver resolver;
+    // These are completed resolver lookups, not dependency-search results.
+    // The design's declaration/type/scope tables are immutable during this
+    // annotation pass. Keep this context alive through fallback queries while
+    // each dependency search still owns fresh recursion state.
+    std::map<std::pair<ScopeId, std::string>,
+        std::optional<DeclarationId>> simple_names { };
+    std::map<std::pair<ScopeId, std::string>, std::optional<TypeId>>
+        named_types { };
+
+    VhdlGenericDependencyContext(
+        const CompiledDesign& design, const UnitId unit)
+        : design { design }
+        , resolver { design, unit }
+    {
+    }
+
+    [[nodiscard]] bool is_lexical_declaration(
+        const DeclarationId declaration_id, const ScopeId use_scope) const
+    {
+        const auto* declaration = find_declaration(
+            design.vhdl_hir, declaration_id);
+        if (declaration == nullptr) {
+            return false;
+        }
+        const auto* declaration_scope = find_record(
+            design.semantics.scopes(), declaration->scope,
+            normalization_indexes == nullptr
+                ? nullptr : &normalization_indexes->semantic_scopes);
+        const auto* use_record = find_record(
+            design.semantics.scopes(), use_scope,
+            normalization_indexes == nullptr
+                ? nullptr : &normalization_indexes->semantic_scopes);
+        if (declaration_scope == nullptr || use_record == nullptr
+            || declaration_scope->unit != use_record->unit) {
+            return false;
+        }
+        auto active = std::optional { use_scope };
+        for (std::size_t depth { };
+             active && depth <= design.semantics.scopes().size(); ++depth) {
+            if (*active == declaration->scope) {
+                return true;
+            }
+            const auto* scope = find_record(
+                design.semantics.scopes(), *active,
+                normalization_indexes == nullptr
+                    ? nullptr : &normalization_indexes->semantic_scopes);
+            if (scope == nullptr) {
+                break;
+            }
+            active = scope->parent;
+        }
+        return false;
+    }
+
+    [[nodiscard]] std::optional<DeclarationId> resolve_simple_name(
+        const ExpressionId expression, const vhdl::Name& name,
+        const ScopeId scope)
+    {
+        // resolve_vhdl() consumes only `vhdl_spelling(name)` and the use
+        // scope when there is no selected identity or overload set. Calls,
+        // extended/qualified names, and names with retained candidates stay
+        // on the original expression resolver path. Only cache a unique
+        // result proved to come from the same unit's lexical ancestor chain;
+        // package/import results can involve recursive context resolution and
+        // are deliberately recomputed. This context is keyed by selected unit,
+        // so the resolver's other lookup input is fixed too.
+        const auto spelling = name.canonical.empty()
+            ? std::string_view { name.spelling }
+            : std::string_view { name.canonical };
+        if (name.selected || !name.overloads.empty()
+            || !simple_vhdl_guard_identifier(spelling)) {
+            return resolver.resolve_expression_name(expression).unique();
+        }
+        const auto key = std::pair { scope, std::string { spelling } };
+        const auto cached = simple_names.find(key);
+        if (cached != simple_names.end()) {
+            return cached->second;
+        }
+        // Invoke the original expression API on a miss, preserving its
+        // per-expression recursion guard and the exact name snapshot loaded
+        // from the current HIR record. The cache is consulted only from the
+        // outer dependency walk, after any resolver call has returned.
+        const auto resolved
+            = resolver.resolve_expression_name(expression).unique();
+        if (resolved && is_lexical_declaration(*resolved, scope)) {
+            simple_names.emplace(key, resolved);
+        }
+        return resolved;
+    }
+
+    [[nodiscard]] std::optional<TypeId> resolve_named_type(
+        const std::string_view spelling, const ScopeId scope)
+    {
+        const auto key = std::pair { scope, std::string { spelling } };
+        const auto cached = named_types.find(key);
+        if (cached != named_types.end()) {
+            return cached->second;
+        }
+        const auto resolved = resolver.resolve_vhdl_named_type(
+            spelling, scope);
+        // This is a completed lookup over catalogs fixed for this context:
+        // misses and ambiguities are stable too. Dependency completeness is
+        // still tracked by VhdlGenericDependencySearch and is not cached here.
+        named_types.emplace(key, resolved);
+        return resolved;
+    }
+};
+
+struct VhdlGenericDependencySearch {
+    struct Result {
+        bool depends { };
+        // False means a cycle, depth limit, unresolved lookup, or missing
+        // record prevented a complete search. Such results preserve the old
+        // bool answer but are not stored in the pass-scoped guard cache.
+        bool complete { true };
+    };
+
+    const CompiledDesign& design;
+    VhdlGenericDependencyContext& context;
+    std::set<ExpressionId> active_expressions { };
+    std::set<TypeId> active_types { };
+
+    [[nodiscard]] Result expression(
+        const ExpressionId id, const std::size_t depth = 0U)
+    {
+        if (depth > 64U || !active_expressions.insert(id).second) {
+            return { false, false };
+        }
+        const auto finish = [&](const Result result) {
+            active_expressions.erase(id);
+            return result;
+        };
+        const auto stored = design.find_expression(id);
+        if (!stored || stored->vhdl == nullptr) {
+            return finish({ false, false });
+        }
+        const auto& value = *stored->vhdl;
+        if (!value.dependencies.generics.empty()) {
+            return finish({ true, true });
+        }
+        bool complete = true;
+        if (value.kind == vhdl::ExpressionKind::name
+            && !value.referenced_name) {
+            complete = false;
+        }
+        if (value.referenced_name) {
+            const auto selected = value.referenced_name->selected
+                ? value.referenced_name->selected
+                : value.kind == vhdl::ExpressionKind::name
+                    ? context.resolve_simple_name(
+                          id, *value.referenced_name, value.scope)
+                    : context.resolver.resolve_expression_name(id).unique();
+            if (!selected) {
+                complete = false;
+            } else {
+                const auto* declaration
+                    = find_declaration(design.vhdl_hir, *selected);
+                if (declaration == nullptr) {
+                    complete = false;
+                } else {
+                    using Form = vhdl::DeclarationForm;
+                    switch (declaration->form) {
+                    case Form::generic_constant:
+                    case Form::generic_type:
+                    case Form::generic_function:
+                    case Form::generic_procedure:
+                    case Form::generic_package:
+                        return finish({ true, true });
+                    case Form::constant: {
+                        if (declaration->initializer) {
+                            const auto initializer = expression(
+                                *declaration->initializer, depth + 1U);
+                            if (initializer.depends) {
+                                return finish({ true,
+                                    complete && initializer.complete });
+                            }
+                            complete = complete && initializer.complete;
+                        } else {
+                            complete = false;
+                        }
+                        break;
+                    }
+                    default:
+                        break;
+                    }
+                }
+            }
+        }
+        for (const auto operand : value.operands) {
+            const auto result = expression(operand, depth + 1U);
+            if (result.depends) {
+                return finish({ true, complete && result.complete });
+            }
+            complete = complete && result.complete;
+        }
+        for (const auto& association : value.associations) {
+            const auto result = expression(
+                association.value, depth + 1U);
+            if (result.depends) {
+                return finish({ true, complete && result.complete });
+            }
+            complete = complete && result.complete;
+            for (const auto choice : association.choices) {
+                const auto choice_result = expression(
+                    choice, depth + 1U);
+                if (choice_result.depends) {
+                    return finish({ true,
+                        complete && choice_result.complete });
+                }
+                complete = complete && choice_result.complete;
+            }
+        }
+        return finish({ false, complete });
+    }
+
+    [[nodiscard]] Result range(
+        const vhdl::RangeConstraint& value,
+        const std::size_t depth = 0U)
+    {
+        bool complete = true;
+        if (value.left_expression) {
+            const auto left = expression(
+                *value.left_expression, depth + 1U);
+            if (left.depends) {
+                return left;
+            }
+            complete = complete && left.complete;
+        }
+        if (value.right_expression) {
+            const auto right = expression(
+                *value.right_expression, depth + 1U);
+            if (right.depends) {
+                return { true, complete && right.complete };
+            }
+            complete = complete && right.complete;
+        }
+        return { false, complete };
+    }
+
+    [[nodiscard]] Result constraints(
+        const vhdl::SubtypeIndication& value,
+        const std::size_t depth = 0U)
+    {
+        if (depth > 64U) {
+            return { true, false };
+        }
+        bool complete = true;
+        for (const auto& candidate : value.constraints) {
+            const auto result = range(candidate, depth + 1U);
+            if (result.depends) {
+                return { true, complete && result.complete };
+            }
+            complete = complete && result.complete;
+        }
+        for (const auto& element : value.element_constraints) {
+            for (const auto& candidate : element.constraints) {
+                const auto result = range(candidate, depth + 1U);
+                if (result.depends) {
+                    return { true, complete && result.complete };
+                }
+                complete = complete && result.complete;
+            }
+        }
+        return { false, complete };
+    }
+
+    [[nodiscard]] Result type(
+        const TypeId id, const ScopeId scope, const std::size_t depth = 0U)
+    {
+        if (depth > 64U || !active_types.insert(id).second) {
+            return { false, false };
+        }
+        const auto finish = [&](const Result result) {
+            active_types.erase(id);
+            return result;
+        };
+        const auto stored = design.find_type(id);
+        if (!stored || stored->vhdl == nullptr) {
+            return finish({ false, false });
+        }
+        const auto& definition = *stored->vhdl;
+        const auto* declaration = find_declaration(
+            design.vhdl_hir, definition.declaration);
+        const bool generic_type = declaration != nullptr
+            && declaration->form == vhdl::DeclarationForm::generic_type;
+        if (generic_type) {
+            return finish({ true,
+                definition.form != vhdl::TypeForm::unresolved });
+        }
+        bool complete = declaration != nullptr
+            && definition.form != vhdl::TypeForm::unresolved;
+        const auto base_constraints = constraints(
+            definition.base, depth + 1U);
+        if (base_constraints.depends) {
+            return finish({ true,
+                complete && base_constraints.complete });
+        }
+        complete = complete && base_constraints.complete;
+        if (definition.scalar_range) {
+            const auto scalar_range = range(
+                *definition.scalar_range, depth + 1U);
+            if (scalar_range.depends) {
+                return finish({ true,
+                    complete && scalar_range.complete });
+            }
+            complete = complete && scalar_range.complete;
+        }
+        if (definition.form != vhdl::TypeForm::subtype
+            && definition.form != vhdl::TypeForm::alias) {
+            if (definition.form == vhdl::TypeForm::unresolved) {
+                return finish({ false, false });
+            }
+            return finish({ false, complete });
+        }
+        const auto use_scope = declaration != nullptr
+            ? declaration->scope : scope;
+        const auto base = definition.base.type_mark.target.valid()
+            ? std::optional { definition.base.type_mark.target }
+            : context.resolve_named_type(
+                  definition.base.type_mark.spelling, use_scope);
+        if (!base) {
+            return finish({ false, false });
+        }
+        const auto base_result = type(*base, use_scope, depth + 1U);
+        if (base_result.depends) {
+            return finish({ true,
+                complete && base_result.complete });
+        }
+        complete = complete && base_result.complete;
+        return finish({ false, complete });
+    }
+
+    [[nodiscard]] Result subtype(
+        const vhdl::SubtypeIndication& value,
+        const ScopeId scope,
+        const std::size_t depth = 0U)
+    {
+        if (depth > 64U) {
+            return { true, false };
+        }
+        const auto subtype_constraints = constraints(value, depth + 1U);
+        if (subtype_constraints.depends) {
+            return subtype_constraints;
+        }
+        const auto type_id = value.type_mark.target.valid()
+            ? std::optional { value.type_mark.target }
+            : context.resolve_named_type(
+                  value.type_mark.spelling, scope);
+        if (!type_id) {
+            return { false, false };
+        }
+        const auto type_result = type(*type_id, scope, depth + 1U);
+        if (type_result.depends) {
+            return { true,
+                subtype_constraints.complete && type_result.complete };
+        }
+        return { false,
+            subtype_constraints.complete && type_result.complete };
+    }
+};
+
+bool vhdl_constant_subtype_has_user_defined_scalar_type(
+    const CompiledDesign& design, const vhdl::Declaration& declaration,
+    VhdlGenericDependencyContext& context, bool& complete)
+{
+    complete = true;
+    if (!declaration.subtype) {
+        return false;
+    }
+
+    const auto resolve_type = [&](const vhdl::SubtypeIndication& subtype,
+                                  const ScopeId scope) {
+        return subtype.type_mark.target.valid()
+            ? std::optional { subtype.type_mark.target }
+            : context.resolve_named_type(
+                  subtype.type_mark.spelling, scope);
+    };
+    auto type_id = resolve_type(*declaration.subtype, declaration.scope);
+    if (!type_id) {
+        complete = false;
+        return false;
+    }
+    std::set<TypeId> visited;
+    while (type_id) {
+        if (!visited.insert(*type_id).second) {
+            complete = false;
+            return false;
+        }
+        const auto type = design.find_type(*type_id);
+        if (!type || type->vhdl == nullptr) {
+            complete = false;
+            return false;
+        }
+        const auto& definition = *type->vhdl;
+        if (definition.form == vhdl::TypeForm::unresolved) {
+            complete = false;
+            return false;
+        }
+        const auto* type_declaration = find_declaration(
+            design.vhdl_hir, definition.declaration);
+        if (type_declaration == nullptr) {
+            complete = false;
+            return false;
+        }
+        const auto* semantic_type = find_record(
+            design.semantics.types(), *type_id,
+            normalization_indexes == nullptr
+                ? nullptr : &normalization_indexes->semantic_types);
+        if (semantic_type == nullptr) {
+            complete = false;
+            return false;
+        }
+        // The parser represents `type T is range ...` as a subtype-shaped
+        // HIR declaration over INTEGER/REAL, while the semantic type remains
+        // a declaration (a new nominal type) and the HIR retains its scalar
+        // range. An ordinary `subtype T is INTEGER range ...` has
+        // TypeKind::subtype and must continue through the base instead.
+        const bool declared_integer_scalar_type
+            = definition.form == vhdl::TypeForm::subtype
+            && type_declaration->form
+                == vhdl::DeclarationForm::subtype
+            && semantic_type->kind == TypeKind::declaration
+            && definition.scalar_range.has_value();
+        if ((definition.form == vhdl::TypeForm::subtype
+                || definition.form == vhdl::TypeForm::alias)
+            && !declared_integer_scalar_type) {
+            type_id = resolve_type(
+                definition.base, type_declaration->scope);
+            if (!type_id) {
+                complete = false;
+                return false;
+            }
+            continue;
+        }
+        const bool scalar_type
+            = definition.form == vhdl::TypeForm::scalar
+            && type_declaration->form == vhdl::DeclarationForm::type;
+        if (!scalar_type && !declared_integer_scalar_type) {
+            return false;
+        }
+
+        // A scalar declared in a user unit has a nominal identity which an
+        // integer literal cannot carry. Compiler-owned standard packages are
+        // marked by revision; the implicit root is identified as STD.STANDARD.
+        const auto* scope = find_record(
+            design.semantics.scopes(), type_declaration->scope,
+            normalization_indexes == nullptr
+                ? nullptr : &normalization_indexes->semantic_scopes);
+        if (scope == nullptr) {
+            complete = false;
+            return false;
+        }
+        const auto owner = design.find_unit(scope->unit);
+        if (!owner || owner->vhdl == nullptr) {
+            complete = false;
+            return false;
+        }
+        const auto& owner_vhdl = *owner->vhdl;
+        const bool standard_root = owner_vhdl.kind == vhdl::UnitKind::package
+            && owner_vhdl.primary_name.empty()
+            && lowercase(owner_vhdl.library) == "std"
+            && lowercase(owner_vhdl.name) == "standard";
+        return owner_vhdl.standard_package_revision.empty()
+            && !standard_root;
+    }
+    return false;
+}
+
+bool vhdl_constant_subtype_requires_name(
+    const CompiledDesign& design, const vhdl::Declaration& declaration,
+    VhdlGenericDependencyContext& context)
+{
+    if (!declaration.subtype) {
+        return false;
+    }
+    VhdlGenericDependencySearch search { design, context };
+    bool nominal_complete = true;
+    // Keep the existing generic-dependent-constant guard intact. The second
+    // condition preserves exact nominal provenance for user-defined scalars.
+    return search.subtype(*declaration.subtype, declaration.scope).depends
+        || vhdl_constant_subtype_has_user_defined_scalar_type(
+            design, declaration, context, nominal_complete);
+}
+
+struct VhdlConstantGuardCache {
+    using GuardKey = std::pair<UnitId, DeclarationId>;
+    std::vector<DeclarationId> callable_formals { };
+    std::map<GuardKey, bool> requires_name { };
+    std::map<UnitId, std::unique_ptr<VhdlGenericDependencyContext>> contexts { };
+
+    VhdlGenericDependencyContext& context_for(
+        const CompiledDesign& design, const UnitId unit)
+    {
+        auto& context = contexts[unit];
+        if (!context) {
+            context = std::make_unique<VhdlGenericDependencyContext>(
+                design, unit);
+        }
+        return *context;
+    }
+
+    VhdlConstantGuardCache(const CompiledDesign& design,
+        const std::vector<vhdl::Expression>& expressions)
+    {
+        for (const auto& declaration : design.vhdl_hir.declarations()) {
+            if (declaration.callable) {
+                callable_formals.insert(callable_formals.end(),
+                    declaration.callable->formals.begin(),
+                    declaration.callable->formals.end());
+            }
+        }
+        std::ranges::sort(callable_formals);
+        callable_formals.erase(
+            std::unique(callable_formals.begin(), callable_formals.end()),
+            callable_formals.end());
+
+        // Cache only complete top-level answers. Declaration subtype/type
+        // links and selected names remain stable during this annotation pass;
+        // folding may rewrite derived expression nodes, but it cannot add a
+        // generic dependency or change nominal ownership. The cache is
+        // discarded before the next normalization pass. Each recursive walk
+        // gets its own active sets so cycle/depth answers stay query-local.
+        std::set<DeclarationId> referenced_constants;
+        for (const auto& expression : expressions) {
+            if (expression.kind != vhdl::ExpressionKind::name
+                || !expression.nominal_type.empty()
+                || !expression.referenced_name
+                || !expression.referenced_name->selected) {
+                continue;
+            }
+            const auto declaration_id
+                = *expression.referenced_name->selected;
+            const auto* declaration
+                = find_declaration(design.vhdl_hir, declaration_id);
+            // The evaluator cannot fold a constant without an initializer,
+            // so no subtype guard for that reference can affect the result.
+            if (declaration != nullptr
+                && declaration->form == vhdl::DeclarationForm::constant
+                && declaration->initializer
+                && declaration->subtype) {
+                referenced_constants.insert(declaration_id);
+            }
+        }
+
+        for (const auto declaration_id : referenced_constants) {
+            const auto* declaration
+                = find_declaration(design.vhdl_hir, declaration_id);
+            if (declaration == nullptr || !declaration->initializer
+                || !declaration->subtype) {
+                continue;
+            }
+            const auto unit = declaration_unit(
+                design.semantics, declaration_id);
+            if (!unit) {
+                continue;
+            }
+            auto& context = context_for(design, *unit);
+            // Keep recursion state local to one top-level declaration query.
+            // Only the completed guard answer is reused across this pass.
+            VhdlGenericDependencySearch search {
+                design, context };
+            const auto generic_result = search.subtype(
+                *declaration->subtype, declaration->scope);
+            bool nominal_complete = true;
+            const bool user_defined_scalar = generic_result.depends
+                ? false
+                : vhdl_constant_subtype_has_user_defined_scalar_type(
+                      design, *declaration, context,
+                      nominal_complete);
+            if (generic_result.complete && nominal_complete) {
+                requires_name.emplace(GuardKey { *unit, declaration_id },
+                    generic_result.depends || user_defined_scalar);
+            }
+        }
+    }
+
+    [[nodiscard]] std::optional<bool> lookup(
+        const UnitId unit, const DeclarationId declaration) const
+    {
+        const auto found = requires_name.find(GuardKey { unit, declaration });
+        return found == requires_name.end()
+            ? std::nullopt : std::optional { found->second };
+    }
+};
+
 template <>
 std::optional<ConstantValue> constant_name_value(
     const CompiledDesign& design,
     const std::vector<vhdl::Expression>&,
-    const vhdl::Expression& expression)
+    const vhdl::Expression& expression,
+    VhdlConstantGuardCache* guard_cache)
 {
     if (expression.kind != vhdl::ExpressionKind::name) {
         return std::nullopt;
     }
+    if (expression.referenced_name
+        && expression.referenced_name->selected) {
+        const auto declaration = find_declaration(design.vhdl_hir,
+            *expression.referenced_name->selected);
+        // Match the prepass filter: a missing initializer makes this name
+        // valueless before its subtype guard can affect folding.
+        if (declaration != nullptr
+            && declaration->form == vhdl::DeclarationForm::constant
+            && declaration->initializer
+            && declaration->subtype) {
+            const auto unit = declaration_unit(
+                design.semantics, declaration->id);
+            const auto cached = guard_cache == nullptr
+                || !unit ? std::nullopt
+                         : guard_cache->lookup(*unit, declaration->id);
+            bool requires_name { };
+            if (cached) {
+                requires_name = *cached;
+            } else if (unit) {
+                if (guard_cache != nullptr) {
+                    auto& context = guard_cache->context_for(
+                        design, *unit);
+                    requires_name = vhdl_constant_subtype_requires_name(
+                        design, *declaration, context);
+                } else {
+                    VhdlGenericDependencyContext context { design, *unit };
+                    requires_name = vhdl_constant_subtype_requires_name(
+                        design, *declaration, context);
+                }
+            }
+            if (requires_name) {
+                return std::nullopt;
+            }
+        }
+    }
     std::set<DeclarationId> active_declarations;
     std::set<ExpressionId> active_expressions { expression.id };
+    const auto* cached_formals = guard_cache == nullptr
+        ? nullptr : &guard_cache->callable_formals;
     return evaluate_vhdl_constant(design, expression, { },
-        active_declarations, active_expressions);
+        active_declarations, active_expressions, cached_formals);
 }
 
 template <typename Expression>
 bool fold_expression(const CompiledDesign& design,
-    const std::vector<Expression>& expressions, Expression& expression)
+    const std::vector<Expression>& expressions, Expression& expression,
+    VhdlConstantGuardCache* guard_cache = nullptr)
 {
     using Kind = std::remove_cvref_t<decltype(expression.kind)>;
     if (!expression.nominal_type.empty()) {
@@ -907,7 +1633,8 @@ bool fold_expression(const CompiledDesign& design,
             return false;
         }
     }
-    auto value = constant_name_value(design, expressions, expression);
+    auto value = constant_name_value(
+        design, expressions, expression, guard_cache);
     if (!value && expression.kind == Kind::unary
         && expression.operands.size() == 1) {
         const auto* operand = expression_for(
@@ -946,7 +1673,9 @@ bool fold_expression(const CompiledDesign& design,
             std::set<DeclarationId> active_declarations;
             std::set<ExpressionId> active_expressions { expression.id };
             value = evaluate_vhdl_constant(design, expression, { },
-                active_declarations, active_expressions);
+                active_declarations, active_expressions,
+                guard_cache == nullptr
+                    ? nullptr : &guard_cache->callable_formals);
         }
     }
     if (!value) {
@@ -999,7 +1728,7 @@ bool add_operand_dependencies(const std::vector<Expression>& expressions,
 template <typename Expression>
 bool add_initializer_dependencies(const CompiledDesign&,
     const std::vector<Expression>&, const Expression&,
-    ResidualDependencies&)
+    ResidualDependencies&, const VhdlConstantGuardCache*)
 {
     return true;
 }
@@ -1008,7 +1737,8 @@ template <>
 bool add_initializer_dependencies(const CompiledDesign& design,
     const std::vector<sv::Expression>& expressions,
     const sv::Expression& expression,
-    ResidualDependencies& dependencies)
+    ResidualDependencies& dependencies,
+    const VhdlConstantGuardCache*)
 {
     if (expression.kind != sv::ExpressionKind::name
         || !expression.referenced_name
@@ -1034,7 +1764,8 @@ template <>
 bool add_initializer_dependencies(const CompiledDesign& design,
     const std::vector<vhdl::Expression>& expressions,
     const vhdl::Expression& expression,
-    ResidualDependencies& dependencies)
+    ResidualDependencies& dependencies,
+    const VhdlConstantGuardCache* guard_cache)
 {
     if (!expression.referenced_name
         || !expression.referenced_name->selected) {
@@ -1042,7 +1773,10 @@ bool add_initializer_dependencies(const CompiledDesign& design,
     }
     const auto declaration_id = *expression.referenced_name->selected;
     if (expression.kind == vhdl::ExpressionKind::name) {
-        if (vhdl_callable_formal(design, declaration_id)) {
+        const auto* cached_formals = guard_cache == nullptr
+            ? nullptr : &guard_cache->callable_formals;
+        if (vhdl_callable_formal(
+                design, declaration_id, cached_formals)) {
             return true;
         }
         const auto* declaration = find_declaration(
@@ -1116,6 +1850,25 @@ bool annotate_expressions(const CompiledDesign& design,
         expression.folded = literal(expression.kind)
             || static_choice(expression.kind);
     }
+    std::optional<VhdlConstantGuardCache> vhdl_guard_cache;
+    if constexpr (std::is_same_v<Expression, vhdl::Expression>) {
+        // Build constant guard answers before fold_expression rewrites any
+        // expression nodes, then discard them with this annotation pass.
+        vhdl_guard_cache.emplace(design, expressions);
+    }
+    std::set<decltype(std::declval<Expression>().id)>
+        named_path_attribute_prefixes;
+    if constexpr (std::is_same_v<Expression, vhdl::Expression>) {
+        for (const auto& use : expressions) {
+            if (use.kind == vhdl::ExpressionKind::call
+                && use.operands.size() == 1U
+                && (use.text == "'simple_name"
+                    || use.text == "'path_name"
+                    || use.text == "'instance_name")) {
+                named_path_attribute_prefixes.insert(use.operands.front());
+            }
+        }
+    }
     for (std::size_t pass = 0; pass <= expressions.size(); ++pass) {
         bool changed = false;
         for (auto& expression : expressions) {
@@ -1123,7 +1876,8 @@ bool annotate_expressions(const CompiledDesign& design,
             add_name_dependencies(
                 design, expression.referenced_name, dependencies);
             if (!add_initializer_dependencies(
-                    design, expressions, expression, dependencies)) {
+                    design, expressions, expression, dependencies,
+                    vhdl_guard_cache ? &*vhdl_guard_cache : nullptr)) {
                 return false;
             }
             bool nested_folded = true;
@@ -1138,11 +1892,26 @@ bool annotate_expressions(const CompiledDesign& design,
                 = expression.kind == Kind::name;
             const bool rewrite_with_residual_call
                 = expression.kind == Kind::call;
-            const bool rewritten = nested_folded
+            // SIMPLE_NAME, PATH_NAME, and INSTANCE_NAME apply to the named
+            // entity itself. Replacing a constant prefix by its scalar value
+            // discards the selected declaration needed by the attribute's
+            // path producer, so retain only those exact name operands.
+            const bool named_path_attribute_prefix = [&] {
+                if constexpr (std::is_same_v<Expression, vhdl::Expression>) {
+                    return expression.kind == vhdl::ExpressionKind::name
+                        && named_path_attribute_prefixes.contains(
+                            expression.id);
+                }
+                return false;
+            }();
+            const bool rewritten = !named_path_attribute_prefix
+                && nested_folded
                 && (dependency_free(dependencies)
                     || rewrite_with_residual_name
                     || rewrite_with_residual_call)
-                && fold_expression(design, expressions, expression);
+                && fold_expression(design, expressions, expression,
+                    vhdl_guard_cache
+                        ? &*vhdl_guard_cache : nullptr);
             if (rewritten) {
                 dependencies = { };
             }
@@ -1856,6 +2625,8 @@ bool normalize_compiled_design(CompiledDesign& design) noexcept
         indexes->systemverilog_expressions.build(
             design.systemverilog_hir.expressions());
         indexes->vhdl_expressions.build(design.vhdl_hir.expressions());
+        indexes->semantic_scopes.build(design.semantics.scopes());
+        indexes->semantic_types.build(design.semantics.types());
     } catch (...) {
         indexes.reset();
     }
@@ -1868,11 +2639,22 @@ bool normalize_compiled_design(CompiledDesign& design) noexcept
         ActiveIndexes(const ActiveIndexes&) = delete;
         ActiveIndexes& operator=(const ActiveIndexes&) = delete;
     } active { indexes ? &*indexes : nullptr };
-    if (!design.valid()
-        || !annotate_expressions(
-            design, design.systemverilog_hir.mutable_expressions())
-        || !annotate_expressions(
-            design, design.vhdl_hir.mutable_expressions())
+    if (!design.valid()) {
+        return false;
+    }
+    auto& systemverilog_expressions
+        = design.systemverilog_hir.mutable_expressions();
+    auto& vhdl_expressions = design.vhdl_hir.mutable_expressions();
+    // Mutable access advances each HIR revision. Both annotation passes edit
+    // the existing expression records in place, so refresh once after both
+    // accesses and before resolver lookups begin.
+    try {
+        design.refresh_lookup_indexes();
+    } catch (...) {
+        return false;
+    }
+    if (!annotate_expressions(design, systemverilog_expressions)
+        || !annotate_expressions(design, vhdl_expressions)
         || !materialize_systemverilog_ranges(design)
         || !materialize_vhdl_ranges(design)
         || !annotate_generates(

@@ -253,6 +253,76 @@ on other gaps:
 - non-ANSI port forms;
 - randomization.
 
+### Batch 59: event lifetime, lexical types and VHDL composite shape
+
+SystemVerilog fixes preserve declaration and instance identity for event arrays,
+event aliases, forked automatic frames, synchronization ownership and output
+argument copy-back. Scoped aliases and imports retain dimensions and signedness.
+Instance-array port bridges check writable container counts, widths and nominal
+types before connecting individual instances.
+
+VHDL fixes retain expected types and lexical owners through concatenation,
+STRING formals and results, nested array/record constraints and function-result
+bounds. Case and selected-assignment checks use typed selector provenance and
+complete coverage. Read-only INTEGER/TIME constant arrays support bounded
+runtime selection. Materialized array dimensions retain their index bounds and
+direction through type attributes; implicit STANDARD index types and CHARACTER
+aggregate choices resolve with scope and identity guards. Use visibility,
+block/component binding and selected architecture identity retain their nominal
+context. Compilation also avoids repeated declaration-index refreshes and
+callable-formal scans identified in the Ashenden workload.
+
+The native overload fixture now supplies the complete eight-element slice to
+its constrained formal. Its original three-element slice remains a negative
+test. Traces proved that the rejected actual had the correct nominal type and
+slice bounds but the wrong length; the product's length guard remains intact.
+
+The `m59c` failure-union measurement covers 3,411 unique cases and 3,428 raw
+occurrences across six suites. Combined with the fresh 295-case fast set, it
+records **67 new passes, one scope exclusion and zero observed regressions**
+against Batch58. All 67 gains pass on both interpreter and compiled engines:
+30 VESTS, 26 NVC, ten Verilator and one VHDL-compliance case. The table is an
+overlay: unmeasured cases retain their Batch58 status. The full six-suite
+checkpoint remains due in Batch60.
+
+| Suite | Batch58 passes / in scope | Batch59 passes / in scope | Total excluded |
+|---|---:|---:|---:|
+| ivtest | 2451 / 2657 | 2451 / 2657 | 169 |
+| sv-tests | 1420 / 1497 | 1420 / 1497 | 0 |
+| verilator | 1387 / 2216 | 1397 / 2216 | 199 |
+| vests | 3481 / 3646 | 3511 / 3646 | 2 |
+| nvc | 744 / 1263 | 770 / 1262 | 220 |
+| vhdl-compliance | 31 / 72 | 32 / 72 | 0 |
+
+NVC `integer2` expects wrapping for an expression beyond INTEGER's upper bound;
+that expectation is a scope exclusion, not a passing gain. Legal INTEGER2019
+bounds and invoked overflow rejection remain covered. No prior exclusions were
+reopened. Verilator `t_recursive_method` changed from a frame-storage-budget
+failure to a timeout and remains open; it was not a previously passing case.
+
+Validation on frozen `wip59cd`: the build passed with no source-write events;
+focused checks passed 121/121, and the broader labelled set passed 730/741 with
+the same eleven known failures or dependency skips. Native overload checks,
+STANDARD index controls, nominal-identity controls and bounded array controls
+passed. The fast set passed 295/295. Retention covered 580 unique IDs and 597 raw
+occurrences per engine, preserving all 66 required gains and 98 recovered
+passes with no selected baseline-pass loss and matching engine statuses. The
+additional measured gain, VESTS `tc1029`, was verified separately on both engines.
+The live-root UVM source-package audit still reports the unrelated `.claude`
+entry; no live-root UVM audit pass is claimed.
+
+Remaining work includes local CHARACTER-shadow named-aggregate lowering,
+automatic/event activation identity, typed-file nested STRING I/O, per-object
+bounds and payload shape for access-to-unconstrained arrays and strings, and
+recursive-method runtime behavior. Property-solver, class SimIR and UVM gaps
+remain within the broader closure activity.
+
+The executable SHA-256 is
+`b1f6a5667222a3e0a869b4a360f5b8f5f20678929c5db476f55568828d213bb9`.
+Local evidence is under `.local-artifacts/lrm-closure/work/batch59/` in
+`m59c-comparison.json`, `final67-canonical-verification.json`,
+`retention99-retention-assessment.json` and the associated pinned run reports.
+
 ### Batch 58: scoped types, formatted I/O and VHDL array values
 
 SystemVerilog fixes preserve declaration and receiver identity for scoped types,

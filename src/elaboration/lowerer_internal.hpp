@@ -9,6 +9,7 @@
 #include "fsim/frontend/parser.hpp"
 #include "fsim/semantic/compiled_design_resolver.hpp"
 
+#include <cstdint>
 #include <functional>
 #include <map>
 #include <vector>
@@ -447,6 +448,10 @@ private:
         std::size_t width { };
         frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
         HirPackedRange range;
+        std::size_t element_width { };
+        std::vector<semantic::vhdl::ElementConstraint>
+            element_constraints { };
+        bool null_range { };
     };
     struct HirVhdlArrayIndex {
         semantic::ExpressionId expression;
@@ -467,10 +472,20 @@ private:
         std::optional<semantic::ExpressionId> root_expression;
         bool access_object_root { };
     };
+    struct HirVhdlConstantArrayShape {
+        std::size_t root_width { };
+        std::size_t element_width { };
+        semantic::vhdl::RangeConstraint element_range;
+        std::vector<semantic::SpecializedHirVhdlPackedValue> elements;
+    };
+    [[nodiscard]] std::optional<HirVhdlConstantArrayShape>
+    hir_vhdl_constant_array_shape(
+        semantic::DeclarationId declaration) const;
     [[nodiscard]] std::optional<HirPackedRange>
     hir_vhdl_unconstrained_constant_range(
         const semantic::vhdl::Declaration& declaration, std::size_t width,
-        semantic::ScopeId process_scope) const;
+        semantic::ScopeId process_scope,
+        std::size_t* proven_width = nullptr) const;
     [[nodiscard]] std::optional<HirPackedRange> hir_expression_range(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
@@ -617,6 +632,19 @@ private:
     hir_systemverilog_event_signal(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
+    struct HirSystemVerilogEventArraySelection {
+        semantic::ExpressionId index_expression;
+        std::vector<std::pair<std::int32_t, SignalId>> elements;
+    };
+    [[nodiscard]] std::optional<HirSystemVerilogEventArraySelection>
+    hir_systemverilog_event_array_selection(
+        semantic::ExpressionId expression,
+        semantic::ScopeId process_scope) const;
+    [[nodiscard]] std::optional<PackedLogic4>
+    hir_systemverilog_event_array_index_value(
+        std::int32_t index,
+        semantic::ExpressionId index_expression,
+        std::size_t width) const;
     [[nodiscard]] std::optional<std::uint64_t>
     hir_systemverilog_interface_handle(
         semantic::ExpressionId expression) const;
@@ -718,7 +746,8 @@ private:
         semantic::ScopeId process_scope) const;
     [[nodiscard]] std::optional<std::size_t>
     hir_systemverilog_type_width(
-        const semantic::sv::TypeReference& type) const;
+        const semantic::sv::TypeReference& type,
+        std::optional<semantic::ScopeId> use_scope = std::nullopt) const;
     [[nodiscard]] bool hir_systemverilog_type_four_state(
         const semantic::sv::TypeReference& type) const;
     [[nodiscard]] std::optional<semantic::sv::TypeReference>
@@ -958,6 +987,9 @@ private:
         semantic::TypeId>>
     hir_vhdl_composite_root_type(
         semantic::ExpressionId expression) const;
+    [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
+    hir_vhdl_constant_record_object_subtype(
+        semantic::DeclarationId declaration, semantic::ScopeId use_scope) const;
     [[nodiscard]] std::optional<HirVhdlMemberSelection>
     hir_vhdl_member_selection(
         semantic::ExpressionId expression) const;
@@ -1048,6 +1080,8 @@ private:
         HirVhdlAttributeKind kind { HirVhdlAttributeKind::length };
         std::optional<semantic::ExpressionId> value;
         std::optional<std::int64_t> constant;
+        std::optional<PackedLogic4> packed_constant { };
+        std::optional<semantic::vhdl::SubtypeIndication> scalar_subtype { };
         std::optional<HirPackedRange> discrete_range;
         std::size_t width { };
         std::size_t value_width { };
@@ -1120,7 +1154,8 @@ private:
     lower_hir_vhdl_aggregate(
         semantic::ExpressionId expression,
         std::size_t expected_width,
-        const semantic::vhdl::SubtypeIndication* contextual_subtype = nullptr);
+        const semantic::vhdl::SubtypeIndication* contextual_subtype = nullptr,
+        std::size_t array_dimension_offset = 0U);
     [[nodiscard]] std::optional<semantic::vhdl::SubtypeIndication>
     hir_vhdl_concat_aggregate_context(
         const semantic::vhdl::SubtypeIndication& result_context,
@@ -1220,7 +1255,8 @@ private:
         semantic::ExpressionId expression,
         std::size_t expected_width);
     [[nodiscard]] bool hir_systemverilog_type_signed(
-        const semantic::sv::TypeReference& type) const;
+        const semantic::sv::TypeReference& type,
+        std::optional<semantic::ScopeId> use_scope = std::nullopt) const;
     [[nodiscard]] std::optional<std::pair<std::size_t, std::size_t>>
     hir_systemverilog_parameter_member_slice(
         semantic::ExpressionId parameter, std::string_view path) const;
@@ -1435,9 +1471,21 @@ private:
     [[nodiscard]] bool hir_expression_is_string(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
-    [[nodiscard]] bool can_lower_hir_string_expression(
+    [[nodiscard]] std::optional<std::size_t>
+    hir_vhdl_predefined_string_concat_length(
+        semantic::ExpressionId expression,
+        semantic::ScopeId process_scope,
+        bool* predefined_operator = nullptr,
+        bool compute_length = true) const;
+    /// Check operator eligibility without deriving a static result length.
+    [[nodiscard]] bool hir_vhdl_is_predefined_string_concat(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
+    [[nodiscard]] bool can_lower_hir_string_expression(
+        semantic::ExpressionId expression,
+        semantic::ScopeId process_scope,
+        const semantic::vhdl::SubtypeIndication* contextual_subtype
+            = nullptr) const;
     enum class HirStringFormatStatus : std::uint8_t {
         not_applicable,
         valid,
@@ -2073,7 +2121,8 @@ private:
         const semantic::vhdl::Expression& source);
     [[nodiscard]] std::optional<HirCallableType> hir_callable_type(
         semantic::DeclarationId declaration,
-        std::size_t contextual_width = 0U) const;
+        std::size_t contextual_width = 0U,
+        bool allow_null_vhdl_array = false) const;
     [[nodiscard]] std::optional<HirCallableResolution>
     resolve_hir_vhdl_function_call(
         semantic::ExpressionId expression,

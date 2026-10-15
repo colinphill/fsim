@@ -174,6 +174,161 @@ end architecture;
       && slice_interpreter->signal_value(*ascending).to_msb_string()
           == "11111111UUUUUUUU");
 
+  const auto direct_signal_slice_aggregates = fsim::frontend::parse_text(
+      "vhdl_direct_signal_slice_aggregate_context.vhd",
+      R"(
+entity Direct_Signal_Slice_Aggregate_Context is end entity;
+architecture rtl of direct_signal_slice_aggregate_context is
+  type sample_bits_t is array (integer range <>) of bit;
+  signal ascending : sample_bits_t(0 to 3) := (others => '0');
+  signal descending : sample_bits_t(3 downto 0) := (others => '0');
+  signal source_byte : bit_vector(7 downto 0) := (others => '0');
+  signal conditional_byte : bit_vector(7 downto 0) := (others => '0');
+begin
+  conditional_byte(1 downto 0) <=
+    (1 => source_byte(1), 0 => '0') when true else (others => '0');
+
+  drive : process
+  begin
+    ascending(1 to 2) <= ('1', '0');
+    descending(2 downto 1) <= ('0', '1');
+    source_byte(0) <= '0';
+    source_byte(1) <= '1';
+    wait for 1 ns;
+    assert ascending(0) = '0' and ascending(1) = '1'
+            and ascending(2) = '0' and ascending(3) = '0'
+      report "ascending signal-slice aggregate lost its range"
+      severity failure;
+    assert descending(3) = '0' and descending(2) = '0'
+            and descending(1) = '1' and descending(0) = '0'
+      report "descending signal-slice aggregate lost its range"
+      severity failure;
+    assert conditional_byte = "00000010"
+      report "conditional named-range slice aggregate lost its context"
+      severity failure;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(direct_signal_slice_aggregates.ok());
+  const auto direct_signal_slice_design = compile_and_elaborate(
+      direct_signal_slice_aggregates.design,
+      "vhdl:work.direct_signal_slice_aggregate_context(rtl)");
+  if (!direct_signal_slice_design.ok()) {
+    for (const auto& diagnostic : direct_signal_slice_design.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(direct_signal_slice_design.ok());
+  const auto direct_ascending =
+      direct_signal_slice_design.design->find_signal("ascending");
+  const auto direct_descending =
+      direct_signal_slice_design.design->find_signal("descending");
+  const auto direct_conditional =
+      direct_signal_slice_design.design->find_signal("conditional_byte");
+  assert(direct_ascending && direct_descending && direct_conditional);
+  auto direct_signal_slice_interpreter =
+      direct_signal_slice_design.design->create_interpreter();
+  const auto direct_signal_slice_run =
+      direct_signal_slice_interpreter->run();
+  assert(
+      direct_signal_slice_run.status == fsim::runtime::RunStatus::completed);
+  assert(
+      direct_signal_slice_interpreter->signal_value(*direct_ascending)
+          .to_msb_string()
+          == "0100"
+      && direct_signal_slice_interpreter->signal_value(*direct_descending)
+             .to_msb_string()
+          == "0010"
+      && direct_signal_slice_interpreter->signal_value(*direct_conditional)
+             .to_msb_string()
+          == "00000010");
+
+  const auto constrained_bit_row_slice = fsim::frontend::parse_text(
+      "vhdl_constrained_bit_row_slice_context.vhd",
+      R"(
+entity Constrained_Bit_Row_Slice_Context is end entity;
+architecture test of constrained_bit_row_slice_context is
+  type bit_rows_t is array (natural range <>) of bit_vector;
+  subtype byte_rows_t is bit_rows_t(open)(7 downto 0);
+  signal data : byte_rows_t(1 to 3);
+begin
+  check : process is
+  begin
+    data(2) <= X"AB";
+    wait for 1 ns;
+    assert data(2) = X"AB"
+      report "constrained open-array row lost its subtype"
+      severity failure;
+    data(1 to 2) <= (X"01", X"02");
+    wait for 1 ns;
+    assert data(1) = X"01" and data(2) = X"02"
+            and data(3) = X"00"
+      report "nested row slice lost its element constraints"
+      severity failure;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(constrained_bit_row_slice.ok());
+  const auto constrained_bit_row_design = compile_and_elaborate(
+      constrained_bit_row_slice.design,
+      "vhdl:work.constrained_bit_row_slice_context(test)");
+  if (!constrained_bit_row_design.ok()) {
+    for (const auto& diagnostic : constrained_bit_row_design.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(constrained_bit_row_design.ok());
+  const auto constrained_rows =
+      constrained_bit_row_design.design->find_signal("data");
+  assert(constrained_rows);
+  auto constrained_bit_row_interpreter =
+      constrained_bit_row_design.design->create_interpreter();
+  const auto constrained_bit_row_run =
+      constrained_bit_row_interpreter->run();
+  assert(
+      constrained_bit_row_run.status == fsim::runtime::RunStatus::completed);
+  assert(
+      constrained_bit_row_interpreter->signal_value(*constrained_rows)
+          .to_msb_string()
+      == "000000010000001000000000");
+
+  const auto short_bit_row_slice = fsim::frontend::parse_text(
+      "vhdl_short_bit_row_slice_missing_index.vhd",
+      R"(
+entity Short_Bit_Row_Slice_Missing_Index is end entity;
+architecture test of short_bit_row_slice_missing_index is
+  type bit_rows_t is array (natural range <>) of bit_vector;
+  subtype byte_rows_t is bit_rows_t(open)(7 downto 0);
+  signal data : byte_rows_t(1 to 3);
+begin
+  check : process is
+  begin
+    data(1 to 2) <= (1 => X"01");
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(short_bit_row_slice.ok());
+  const auto rejected_short_bit_row_slice = compile_and_elaborate(
+      short_bit_row_slice.design,
+      "vhdl:work.short_bit_row_slice_missing_index(test)");
+  if (rejected_short_bit_row_slice.ok()
+      || !has_diagnostic(
+          rejected_short_bit_row_slice, "FSIM-ELAB-VHARRAYAGG-005")) {
+    for (const auto& diagnostic : rejected_short_bit_row_slice.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(
+      !rejected_short_bit_row_slice.ok()
+      && has_diagnostic(
+          rejected_short_bit_row_slice, "FSIM-ELAB-VHARRAYAGG-005"));
+
   const auto inactive_generate = fsim::frontend::parse_text(
       "vhdl_inactive_generate_slice_validation.vhd",
       R"(
@@ -272,6 +427,326 @@ end architecture;
         found != result.diagnostics.end()
         && found->span.source_name == filename && !found->span.empty());
   };
+
+  const auto dynamic_scalar_target = fsim::frontend::parse_text(
+      "vhdl_dynamic_scalar_indexed_assignment.vhd",
+      R"(
+entity Dynamic_Scalar_Indexed_Assignment is end entity;
+architecture rtl of dynamic_scalar_indexed_assignment is
+  signal Value : bit_vector(0 to 1) := "00";
+begin
+  assign_value : process
+    variable Index : integer := 0;
+  begin
+    Value(Index) <= '1';
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008,
+      fsim::frontend::VhdlStandard::Vhdl2008);
+  assert(dynamic_scalar_target.ok());
+  const auto accepted_dynamic_scalar_target = compile_and_elaborate(
+      dynamic_scalar_target.design,
+      "vhdl:work.dynamic_scalar_indexed_assignment(rtl)");
+  assert(accepted_dynamic_scalar_target.ok());
+
+  const auto static_alias_target = fsim::frontend::parse_text(
+      "vhdl_aggregate_signal_target_static_alias_bound.vhd",
+      R"(
+entity Static_Alias_Target is end entity;
+architecture rtl of static_alias_target is
+  subtype First_Index_T is integer range 0 to 1;
+  subtype Index_T is First_Index_T;
+  constant I : Index_T := 0;
+  signal S, T : bit_vector(0 to 1);
+begin
+  assign_values : process
+  begin
+    (S(I), T(I)) <= bit_vector'("11");
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008,
+      fsim::frontend::VhdlStandard::Vhdl2008);
+  assert(static_alias_target.ok());
+  const auto accepted_static_alias_target = compile_and_elaborate(
+      static_alias_target.design, "vhdl:work.static_alias_target(rtl)");
+  assert(accepted_static_alias_target.ok());
+
+  reject(
+      "vhdl_aggregate_signal_target_variable_index.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  signal S, T : bit_vector(0 to 1);
+begin
+  assign_values : process
+    variable I : integer := 0;
+  begin
+    (S(I), T(I)) <= bit_vector'("11");
+    wait;
+  end process;
+end architecture;
+)",
+      "FSIM-ELAB-VHASSIGN-005");
+  reject(
+      "vhdl_aggregate_signal_target_generic_index.vhd",
+      R"(
+entity Invalid is generic (GEN : integer); end entity;
+architecture rtl of invalid is
+  signal S, T : bit_vector(0 to 1);
+begin
+  assign_values : process
+  begin
+    (S(GEN), T(GEN)) <= bit_vector'("11");
+    wait;
+  end process;
+end architecture;
+)",
+      "FSIM-ELAB-VHASSIGN-005");
+  reject(
+      "vhdl_aggregate_signal_target_constant_generic_alias_bound.vhd",
+      R"(
+entity Invalid is generic (GEN : integer := 1); end entity;
+architecture rtl of invalid is
+  subtype First_Index_T is integer range 0 to GEN;
+  subtype Index_T is First_Index_T;
+  constant I : Index_T := 0;
+  signal S, T : bit_vector(0 to 1);
+begin
+  assign_values : process
+  begin
+    (S(I), T(I)) <= bit_vector'("11");
+    wait;
+  end process;
+end architecture;
+)",
+      "FSIM-ELAB-VHASSIGN-005");
+  reject(
+      "vhdl_aggregate_variable_target_dynamic_index.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+begin
+  assign_values : process
+    type Pair_T is array (0 to 1) of bit;
+    variable I, J : integer := 0;
+    variable S, T : bit_vector(0 to 1);
+  begin
+    (S(I), T(J)) := Pair_T'('0', '1');
+    wait;
+  end process;
+end architecture;
+)",
+      "FSIM-ELAB-VHASSIGN-005");
+
+  const auto qualified_aggregate_targets = fsim::frontend::parse_text(
+      "vhdl_qualified_aggregate_assignment_targets.vhd",
+      R"(
+entity Qualified_Aggregate_Assignment_Targets is end entity;
+architecture rtl of qualified_aggregate_assignment_targets is
+  type Bit_Pair_T is array (0 to 1) of bit;
+  type Integer_Pair_T is array (0 to 1) of integer;
+  signal A, B : bit;
+begin
+  assign_values : process
+    variable First, Second : integer;
+  begin
+    (A, B) <= Bit_Pair_T'('1', '0');
+    (First, Second) := Integer_Pair_T'(3, 4);
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(qualified_aggregate_targets.ok());
+  const auto accepted_qualified_aggregate_targets = compile_and_elaborate(
+      qualified_aggregate_targets.design,
+      "vhdl:work.qualified_aggregate_assignment_targets(rtl)");
+  if (!accepted_qualified_aggregate_targets.ok()) {
+    for (const auto& diagnostic :
+         accepted_qualified_aggregate_targets.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(accepted_qualified_aggregate_targets.ok());
+
+  reject(
+      "vhdl_signal_aggregate_target_unqualified_rhs.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  signal A, B : bit;
+begin
+  assign_values : process
+  begin
+    (A, B) <= ('1', '0');
+    wait;
+  end process;
+end architecture;
+)",
+      "FSIM-ELAB-VHAGG-001");
+  reject(
+      "vhdl_variable_aggregate_target_unqualified_rhs.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+begin
+  assign_values : process
+    variable First, Second : integer;
+  begin
+    (First, Second) := (3, 4);
+    wait;
+  end process;
+end architecture;
+)",
+      "FSIM-ELAB-VHAGG-001");
+
+  const auto same_type_rows = fsim::frontend::parse_text(
+      "vhdl_aggregate_same_type_rows.vhd",
+      R"(
+entity Aggregate_Same_Type_Rows is end entity;
+architecture rtl of aggregate_same_type_rows is
+  type Row_T is array (integer range <>) of integer;
+  type Rows_T is array (integer range <>) of Row_T;
+  type Matrix_T is array (integer range <>, integer range <>) of integer;
+  signal Value : Rows_T(0 to 1)(0 to 1);
+  signal Matrix : Matrix_T(0 to 1, 0 to 1);
+begin
+  Value <= (0 => Row_T'(1, 2), 1 => Row_T'(3, 4));
+  Matrix <= (0 => (0 => 1, 1 => 2), 1 => (0 => 3, 1 => 4));
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(same_type_rows.ok());
+  const auto accepted_same_type_rows = compile_and_elaborate(
+      same_type_rows.design, "vhdl:work.aggregate_same_type_rows(rtl)");
+  if (!accepted_same_type_rows.ok()) {
+    for (const auto& diagnostic :
+         accepted_same_type_rows.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(accepted_same_type_rows.ok());
+
+  const auto named_bounds_sliding_rows = fsim::frontend::parse_text(
+      "vhdl_aggregate_named_bounds_sliding_rows.vhd",
+      R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity Aggregate_Named_Bounds_Sliding_Rows is end entity;
+architecture rtl of aggregate_named_bounds_sliding_rows is
+  type Row_T is array (integer range <>) of std_logic;
+  type Rows_T is array (integer range <>) of Row_T;
+  signal Value : Rows_T(0 to 1)(0 to 1);
+begin
+  Value <= (0 => Row_T'(3 => '0', 4 => '1'),
+            1 => Row_T'(5 => '1', 6 => '0'));
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(named_bounds_sliding_rows.ok());
+  const auto accepted_named_bounds_sliding_rows = compile_and_elaborate(
+      named_bounds_sliding_rows.design,
+      "vhdl:work.aggregate_named_bounds_sliding_rows(rtl)");
+  if (!accepted_named_bounds_sliding_rows.ok()) {
+    for (const auto& diagnostic :
+         accepted_named_bounds_sliding_rows.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(accepted_named_bounds_sliding_rows.ok());
+
+  reject(
+      "vhdl_aggregate_named_bounds_sliding_rows_wrong_extent.vhd",
+      R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Row_T is array (integer range <>) of std_logic;
+  type Rows_T is array (integer range <>) of Row_T;
+  signal Value : Rows_T(0 to 1)(0 to 1);
+begin
+  Value <= (0 => Row_T'(3 => '0', 4 => '1', 5 => '0'),
+            1 => Row_T'(5 => '1', 6 => '0', 7 => '1'));
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-006");
+
+  const auto same_type_positional_segments = fsim::frontend::parse_text(
+      "vhdl_aggregate_same_type_positional_segments.vhd",
+      R"(
+entity Aggregate_Same_Type_Positional_Segments is end entity;
+architecture rtl of aggregate_same_type_positional_segments is
+  type Word_T is array (integer range <>) of integer;
+  signal Value : Word_T(0 to 3);
+begin
+  Value <= (Word_T'(1, 2), Word_T'(3, 4));
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(same_type_positional_segments.ok());
+  const auto accepted_same_type_positional_segments = compile_and_elaborate(
+      same_type_positional_segments.design,
+      "vhdl:work.aggregate_same_type_positional_segments(rtl)");
+  if (!accepted_same_type_positional_segments.ok()) {
+    for (const auto& diagnostic :
+         accepted_same_type_positional_segments.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(accepted_same_type_positional_segments.ok());
+
+  reject(
+      "vhdl_aggregate_wrong_nominal_positional_segments.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Word_T is array (integer range <>) of integer;
+  type Other_Word_T is array (integer range <>) of integer;
+  signal Value : Word_T(0 to 3);
+begin
+  Value <= (Other_Word_T'(1, 2), Other_Word_T'(3, 4));
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-009");
+
+  reject(
+      "vhdl_aggregate_row_wrong_nominal_type.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Row_T is array (integer range <>) of integer;
+  type Other_Row_T is array (integer range <>) of integer;
+  type Rows_T is array (integer range <>) of Row_T;
+  signal Value : Rows_T(0 to 1)(0 to 1);
+begin
+  Value <= (0 => Other_Row_T'(1, 2), 1 => Other_Row_T'(3, 4));
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-009");
+
+  reject(
+      "vhdl_rank2_aggregate_element_wrong_rank.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Matrix_T is array (integer range <>, integer range <>) of integer;
+  type Wrong_Matrix_T is array (integer range <>, integer range <>) of real;
+  signal Value : Matrix_T(0 to 1, 0 to 1);
+begin
+  Value <=
+    (0 =>
+       (0 => Wrong_Matrix_T'((0 => (0 => 1.0, 1 => 2.0),
+                              1 => (0 => 3.0, 1 => 4.0))),
+        1 => 0),
+     1 => (0 => 0, 1 => 0));
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-009");
 
   const auto unselected_time_leaf = fsim::frontend::parse_text(
       "vhdl_unselected_time_integer_matrix_leaf.vhd",
@@ -643,6 +1118,98 @@ end architecture;
 )",
       "FSIM-ELAB-VHAGG-014");
 
+  const auto unconstrained_matrix_row_comparison = fsim::frontend::parse_text(
+      "vhdl_unconstrained_matrix_row_string_comparison.vhd",
+      R"(
+entity Control is end entity;
+architecture rtl of control is
+  type Matrix_T is array (natural range <>, positive range <>) of bit;
+  signal Matrix : Matrix_T(0 to 1, 3 downto 1);
+  signal Equal : boolean;
+begin
+  Equal <= Matrix = ("101", "010");
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(unconstrained_matrix_row_comparison.ok());
+  const auto unconstrained_matrix_row_design = compile_and_elaborate(
+      unconstrained_matrix_row_comparison.design,
+      "vhdl:work.control(rtl)");
+  if (!unconstrained_matrix_row_design.ok()) {
+    for (const auto& diagnostic :
+         unconstrained_matrix_row_design.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message
+                << " at " << diagnostic.span.begin.line << ':'
+                << diagnostic.span.begin.column << '\n';
+    }
+  }
+  assert(unconstrained_matrix_row_design.ok());
+
+  const auto constrained_matrix_row_width_mismatch
+      = fsim::frontend::parse_text(
+          "vhdl_constrained_matrix_row_string_width_mismatch.vhd",
+          R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Matrix_T is array (0 to 1, 3 downto 1) of bit;
+  signal Value : Matrix_T := ("1010", "0101");
+begin
+end architecture;
+)",
+          fsim::frontend::Language::Vhdl2008);
+  assert(constrained_matrix_row_width_mismatch.ok());
+  const auto constrained_matrix_row_width_result = compile_and_elaborate(
+      constrained_matrix_row_width_mismatch.design,
+      "vhdl:work.invalid(rtl)");
+  assert(
+      !constrained_matrix_row_width_result.ok()
+      && has_diagnostic(
+          constrained_matrix_row_width_result,
+          "FSIM-ELAB-VHARRAYAGG-006"));
+
+  const auto multidimensional_string_enum_control
+      = fsim::frontend::parse_text(
+          "vhdl_multidimensional_string_enum_membership_control.vhd",
+          R"(
+entity Control is end entity;
+architecture rtl of control is
+  type Glyph_T is ('a', 'b');
+  type Matrix_T is array (natural range <>, positive range <>) of Glyph_T;
+  signal Matrix : Matrix_T(0 to 1, 1 to 2);
+  signal Equal : boolean;
+begin
+  Equal <= Matrix = ("ab", "ba");
+end architecture;
+)",
+          fsim::frontend::Language::Vhdl2008);
+  assert(multidimensional_string_enum_control.ok());
+  const auto accepted_multidimensional_string_enum_control
+      = compile_and_elaborate(
+          multidimensional_string_enum_control.design,
+          "vhdl:work.control(rtl)");
+  if (!accepted_multidimensional_string_enum_control.ok()) {
+    for (const auto& diagnostic :
+         accepted_multidimensional_string_enum_control.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(accepted_multidimensional_string_enum_control.ok());
+
+  reject(
+      "vhdl_multidimensional_string_enum_rejects_nonmember.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Glyph_T is ('a', 'b');
+  type Matrix_T is array (natural range <>, positive range <>) of Glyph_T;
+  signal Matrix : Matrix_T(0 to 1, 1 to 2);
+  signal Equal : boolean;
+begin
+  Equal <= Matrix = ("01", "ab");
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-014");
+
   const auto contextual_string_array_control = fsim::frontend::parse_text(
       "vhdl_contextual_string_array_choice_control.vhd",
       R"(
@@ -675,6 +1242,46 @@ end architecture;
     }
   }
   assert(contextual_string_array_design.ok());
+
+  const auto nested_record_string = fsim::frontend::parse_text(
+      "vhdl_nested_record_string_positional_segment.vhd",
+      R"(
+entity Nested_Record_String_Segment is end entity;
+architecture rtl of nested_record_string_segment is
+  type Packet_T is record
+    Name : string(1 to 20);
+  end record;
+  signal Value : Packet_T;
+begin
+  Value <= (Name => ("hello", others => NUL));
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(nested_record_string.ok());
+  const auto nested_record_string_design = compile_and_elaborate(
+      nested_record_string.design,
+      "vhdl:work.nested_record_string_segment(rtl)");
+  if (!nested_record_string_design.ok()) {
+    for (const auto& diagnostic : nested_record_string_design.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message
+                << " at " << diagnostic.span.begin.line << ':'
+                << diagnostic.span.begin.column << '\n';
+    }
+  }
+  assert(nested_record_string_design.ok());
+  const auto nested_record_string_value
+      = nested_record_string_design.design->find_signal("value");
+  assert(nested_record_string_value);
+  auto nested_record_string_interpreter
+      = nested_record_string_design.design->create_interpreter();
+  const auto nested_record_string_run
+      = nested_record_string_interpreter->run();
+  assert(nested_record_string_run.status
+      == fsim::runtime::RunStatus::completed);
+  assert(nested_record_string_interpreter
+          ->signal_value(*nested_record_string_value).to_msb_string()
+      == std::string { "0110100001100101011011000110110001101111" }
+          + std::string(15U * 8U, '0'));
 
   const auto shadowed_logic_vector = fsim::frontend::parse_text(
       "vhdl_shadowed_std_logic_vector_string_context.vhd",
@@ -749,6 +1356,47 @@ begin
 end architecture;
 )",
       "FSIM-ELAB-VHAGG-014");
+  reject(
+      "vhdl_null_function_result_wrong_enum_row.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Glyph_T is (A, B);
+  type Rows_T is array (natural range <>) of bit_vector;
+  signal Source : Rows_T(0 to 1)(0 to 1);
+  function Empty_Rows(constant Value : in Rows_T) return Rows_T is
+  begin
+    return Value(1 to 0);
+  end function;
+begin
+  check: process
+  begin
+    assert Empty_Rows(Source) = (1 to 0 => (A, B)) severity failure;
+    wait;
+  end process;
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-014");
+  reject(
+      "vhdl_null_function_result_wrong_boolean_row.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Rows_T is array (natural range <>) of integer_vector;
+  signal Source : Rows_T(0 to 1)(0 to 1);
+  function Empty_Rows(constant Value : in Rows_T) return Rows_T is
+  begin
+    return Value(1 to 0);
+  end function;
+begin
+  check: process
+  begin
+    assert Empty_Rows(Source) = (1 to 0 => (true, false)) severity failure;
+    wait;
+  end process;
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-014");
   const auto null_array_segment_control = fsim::frontend::parse_text(
       "vhdl_null_array_range_empty_segment.vhd",
       R"(
@@ -876,6 +1524,740 @@ end architecture;
         != std::string_view::npos;
   }
   assert(constrained);
+
+  const auto slice_index_controls = fsim::frontend::parse_text(
+      "vhdl_slice_index_type_controls.vhd",
+      R"(
+entity Slice_Index_Type_Controls is end entity;
+architecture rtl of slice_index_type_controls is
+  type Index_T is range 0 to 3;
+  type Values_T is array (Index_T range <>) of bit;
+  signal Literal_Values, Typed_Values : Values_T(0 to 3);
+  constant Same_Left : Index_T := 0;
+  constant Same_Right : Index_T := 1;
+begin
+  Literal_Values(1 to 2) <= "10";
+  Typed_Values(Same_Left to Same_Right) <= "01";
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(slice_index_controls.ok());
+  const auto accepted_slice_index_controls = compile_and_elaborate(
+      slice_index_controls.design,
+      "vhdl:work.slice_index_type_controls(rtl)");
+  if (!accepted_slice_index_controls.ok()) {
+    for (const auto& diagnostic :
+         accepted_slice_index_controls.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(accepted_slice_index_controls.ok());
+
+  const auto package_slice_index_controls = fsim::frontend::parse_text(
+      "vhdl_package_slice_index_shadow_controls.vhd",
+      R"(
+package Index_Pkg is
+  type Index_T is range 0 to 3;
+  type Values_T is array (Index_T range <>) of bit;
+end package;
+
+entity Slice_Package_Index_Shadow is end entity;
+architecture rtl of slice_package_index_shadow is
+  type Index_T is range 0 to 3;
+  signal Value : work.Index_Pkg.Values_T(0 to 3);
+  constant Good_Left : work.Index_Pkg.Index_T := 0;
+  constant Good_Right : work.Index_Pkg.Index_T := 1;
+begin
+  Value(Good_Left to Good_Right) <= "10";
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(package_slice_index_controls.ok());
+  const auto accepted_package_slice_index_controls = compile_and_elaborate(
+      package_slice_index_controls.design,
+      "vhdl:work.slice_package_index_shadow(rtl)");
+  if (!accepted_package_slice_index_controls.ok()) {
+    for (const auto& diagnostic :
+         accepted_package_slice_index_controls.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(accepted_package_slice_index_controls.ok());
+
+  reject(
+      "vhdl_package_slice_index_local_shadow_rejected.vhd",
+      R"(
+package Index_Pkg is
+  type Index_T is range 0 to 3;
+  type Values_T is array (Index_T range <>) of bit;
+end package;
+
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Index_T is range 0 to 3;
+  signal Value : work.Index_Pkg.Values_T(0 to 3);
+  constant Bad_Left : Index_T := 0;
+  constant Bad_Right : Index_T := 1;
+begin
+  Value(Bad_Left to Bad_Right) <= "10";
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYSEL-006");
+
+  reject(
+      "vhdl_slice_bound_distinct_index_type.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Index_T is range 0 to 3;
+  type Other_Index_T is range 0 to 3;
+  type Values_T is array (Index_T range <>) of bit;
+  signal Value : Values_T(0 to 3);
+  constant Bad_Left : Other_Index_T := 0;
+  constant Bad_Right : Other_Index_T := 1;
+begin
+  Value(Bad_Left to Bad_Right) <= "10";
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYSEL-006");
+}
+
+}  // namespace fsim::tests::elaboration
+
+namespace fsim::tests::elaboration {
+
+void test_vhdl_bit_vector_array_segment_literals() {
+  const auto parsed = fsim::frontend::parse_text(
+      "vhdl_bit_vector_positional_literal_segments.vhd",
+      R"(
+entity Bit_Vector_Positional_Literal_Segments is end entity;
+architecture rtl of bit_vector_positional_literal_segments is
+  constant Prefix : bit_vector(3 downto 0) := X"2";
+  signal Bit_String_Value : bit_vector(7 downto 0);
+  signal Ordinary_String_Value : bit_vector(7 downto 0);
+begin
+  Bit_String_Value <= (Prefix, X"5");
+  Ordinary_String_Value <= (Prefix, "0101");
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(parsed.ok());
+  const auto design = compile_and_elaborate(
+      parsed.design,
+      "vhdl:work.bit_vector_positional_literal_segments(rtl)");
+  if (!design.ok()) {
+    for (const auto& diagnostic : design.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(design.ok());
+  const auto bit_string_value =
+      design.design->find_signal("bit_string_value");
+  const auto ordinary_string_value =
+      design.design->find_signal("ordinary_string_value");
+  assert(bit_string_value && ordinary_string_value);
+  auto interpreter = design.design->create_interpreter();
+  const auto run = interpreter->run();
+  assert(run.status == fsim::runtime::RunStatus::completed);
+  assert(
+      interpreter->signal_value(*bit_string_value).to_msb_string()
+          == "00100101"
+      && interpreter->signal_value(*ordinary_string_value).to_msb_string()
+          == "00100101");
+
+  const auto reject = [](
+      const std::string_view filename,
+      const std::string_view source,
+      const std::string_view code) {
+    const auto invalid = fsim::frontend::parse_text(
+        filename, source, fsim::frontend::Language::Vhdl2008);
+    assert(invalid.ok());
+    const auto result = compile_and_elaborate(
+        invalid.design, "vhdl:work.invalid(rtl)");
+    if (result.ok() || !has_diagnostic(result, code)) {
+      std::cerr << filename << " expected " << code << '\n';
+      for (const auto& diagnostic : result.diagnostics) {
+        std::cerr << diagnostic.code << ": " << diagnostic.message
+                  << " at " << diagnostic.span.begin.line << ':'
+                  << diagnostic.span.begin.column << '\n';
+      }
+    }
+    assert(!result.ok() && has_diagnostic(result, code));
+  };
+
+  reject(
+      "vhdl_bit_vector_positional_literal_invalid_character.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  constant Prefix : bit_vector(3 downto 0) := X"2";
+  signal Value : bit_vector(7 downto 0);
+begin
+  Value <= (Prefix, "0X01");
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-009");
+  reject(
+      "vhdl_bit_vector_positional_literal_wrong_nominal.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type Other_Bits_T is array (natural range <>) of bit;
+  signal Prefix : Other_Bits_T(3 downto 0);
+  signal Value : bit_vector(7 downto 0);
+begin
+  Value <= (Prefix, "0101");
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-009");
+  reject(
+      "vhdl_bit_vector_positional_literal_outside_range.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  constant Prefix : bit_vector(3 downto 0) := X"2";
+  signal Value : bit_vector(7 downto 0);
+begin
+  Value <= (Prefix, "01010");
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYAGG-003");
+}
+
+}  // namespace fsim::tests::elaboration
+
+namespace fsim::tests::elaboration {
+
+void test_vhdl_slice_index_range_propagation() {
+  const auto formal_range_index = fsim::frontend::parse_text(
+      "vhdl_formal_range_index_positive.vhd",
+      R"(
+entity Formal_Range_Index_Positive is end entity;
+architecture rtl of formal_range_index_positive is
+  procedure touch_range(signal source : in bit_vector) is
+    variable temporary : bit_vector(source'range);
+  begin
+    temporary(temporary'left) := not temporary(temporary'left);
+  end procedure;
+  signal Ascending : bit_vector(0 to 3) := "0000";
+  signal Descending : bit_vector(3 downto 0) := "0000";
+  signal Ascending_Singleton : bit_vector(2 to 2) := "0";
+  signal Descending_Singleton : bit_vector(2 downto 2) := "0";
+begin
+  check : process
+  begin
+    touch_range(Ascending);
+    touch_range(Descending);
+    touch_range(Ascending_Singleton);
+    touch_range(Descending_Singleton);
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(formal_range_index.ok());
+  const auto formal_range_index_design = compile_and_elaborate(
+      formal_range_index.design,
+      "vhdl:work.formal_range_index_positive(rtl)");
+  assert(formal_range_index_design.ok());
+
+  const auto positive = fsim::frontend::parse_text(
+      "vhdl_slice_index_range_positive.vhd",
+      R"(
+entity Slice_Index_Range_Positive is end entity;
+architecture rtl of slice_index_range_positive is
+  type idx is range 1 to 10;
+  type aray1 is array (idx) of bit;
+  type aray2 is array (idx range <>) of aray1;
+  type row_t is array (idx range <>) of bit;
+  type rows_t is array (idx range <>) of row_t;
+begin
+  check : process
+    variable v2 : aray1;
+    variable v3 : aray2(1 to 2);
+    variable row_value : row_t(4 to 5);
+    variable rows_value : rows_t(1 to 2)(4 to 5);
+  begin
+    v2 := v3(2 to 2)(2);
+    v2 := v3(v3'range)(2);
+    row_value := rows_value(2 to 2)(2);
+    row_value := rows_value(rows_value'range)(2);
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(positive.ok());
+  const auto positive_design = compile_and_elaborate(
+      positive.design, "vhdl:work.slice_index_range_positive(rtl)");
+  if (!positive_design.ok()) {
+    for (const auto& diagnostic : positive_design.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message
+                << " at " << diagnostic.span.begin.line << ':'
+                << diagnostic.span.begin.column << '\n';
+    }
+  }
+  assert(positive_design.ok());
+
+  const auto reject = [](
+      const std::string_view filename,
+      const std::string_view source,
+      const std::string_view code) {
+    const auto parsed = fsim::frontend::parse_text(
+        filename, source, fsim::frontend::Language::Vhdl2008);
+    assert(parsed.ok());
+    const auto result = compile_and_elaborate(
+        parsed.design, "vhdl:work.invalid(rtl)");
+    if (result.ok() || !has_diagnostic(result, code)) {
+      std::cerr << filename << " expected " << code << '\n';
+      for (const auto& diagnostic : result.diagnostics) {
+        std::cerr << diagnostic.code << ": " << diagnostic.message
+                  << " at " << diagnostic.span.begin.line << ':'
+                  << diagnostic.span.begin.column << '\n';
+      }
+    }
+    assert(!result.ok() && has_diagnostic(result, code));
+  };
+
+  reject(
+      "vhdl_slice_index_range_wrong_index.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type idx is range 1 to 10;
+  type aray1 is array (idx) of bit;
+  type aray2 is array (idx range <>) of aray1;
+begin
+  check : process
+    variable v2 : aray1;
+    variable v3 : aray2(1 to 2);
+  begin
+    v2 := v3(2 to 2)(1);
+    wait;
+  end process;
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYSEL-003");
+
+  reject(
+      "vhdl_slice_index_range_null.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type idx is range 1 to 10;
+  type aray1 is array (idx) of bit;
+  type aray2 is array (idx range <>) of aray1;
+begin
+  check : process
+    variable v2 : aray1;
+    variable v3 : aray2(1 to 2);
+  begin
+    v2 := v3(2 to 1)(2);
+    wait;
+  end process;
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYSEL-003");
+
+  reject(
+      "vhdl_slice_index_range_direction.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type idx is range 1 to 10;
+  type aray1 is array (idx) of bit;
+  type aray2 is array (idx range <>) of aray1;
+begin
+  check : process
+    variable v2 : aray1;
+    variable v3 : aray2(1 to 2);
+  begin
+    v2 := v3(2 downto 1)(2);
+    wait;
+  end process;
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYSEL-004");
+
+  reject(
+      "vhdl_slice_nested_reverse_range_direction.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type idx is range 1 to 10;
+  type aray1 is array (idx) of bit;
+  type aray2 is array (idx range <>) of aray1;
+begin
+  check : process
+    variable v2 : aray1;
+    variable v3 : aray2(1 to 2);
+  begin
+    v2 := v3(2 to 2)(v3(2 to 2)'reverse_range)(2);
+    wait;
+  end process;
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYSEL-004");
+
+  reject(
+      "vhdl_slice_index_range_nominal_index.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type idx is range 1 to 10;
+  type other_idx is range 1 to 10;
+  type aray1 is array (idx) of bit;
+  type aray2 is array (idx range <>) of aray1;
+begin
+  check : process
+    variable v2 : aray1;
+    variable v3 : aray2(1 to 2);
+    variable wrong_index : other_idx := 2;
+  begin
+    v2 := v3(2 to 2)(wrong_index);
+    wait;
+  end process;
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYSEL-006");
+
+  reject(
+      "vhdl_slice_index_range_attribute_wrong_index.vhd",
+      R"(
+entity Invalid is end entity;
+architecture rtl of invalid is
+  type idx is range 1 to 10;
+  type aray1 is array (idx) of bit;
+  type aray2 is array (idx range <>) of aray1;
+begin
+  check : process
+    variable v2 : aray1;
+    variable v3 : aray2(1 to 2);
+  begin
+    v2 := v3(v3'range)(3);
+    wait;
+  end process;
+end architecture;
+)",
+      "FSIM-ELAB-VHARRAYSEL-003");
+
+  const auto enumeration_index_choices = fsim::frontend::parse_text(
+      "vhdl_enumeration_index_aggregate_choices.vhd",
+      R"(
+entity Enumeration_Index_Aggregate_Choices is
+end entity;
+architecture rtl of enumeration_index_aggregate_choices is
+  type Index_T is ('U', 'X', '0', '1');
+  type Table_T is array (Index_T range <>) of bit;
+  constant Selected_Index : Index_T := 'X';
+  signal Values : Table_T('U' to '1');
+begin
+  drive : process
+  begin
+    Values <= ('U' => '1', Selected_Index => '0', '0' to '1' => '0');
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(enumeration_index_choices.ok());
+  const auto enumeration_index_design = compile_and_elaborate(
+      enumeration_index_choices.design,
+      "vhdl:work.enumeration_index_aggregate_choices(rtl)");
+  assert(enumeration_index_design.ok());
+  const auto enum_index_values
+      = enumeration_index_design.design->find_signal("values");
+  assert(enum_index_values);
+  auto enum_index_interpreter
+      = enumeration_index_design.design->create_interpreter();
+  const auto enum_index_run = enum_index_interpreter->run();
+  assert(enum_index_run.status == fsim::runtime::RunStatus::completed);
+  assert(
+      enum_index_interpreter->signal_value(*enum_index_values)
+          .to_msb_string()
+      == "1000");
+
+  const auto enumeration_constant_index_choices = fsim::frontend::parse_text(
+      "vhdl_enumeration_constant_index_aggregate_choices.vhd",
+      R"(
+entity Enumeration_Constant_Index_Aggregate_Choices is
+end entity;
+architecture rtl of enumeration_constant_index_aggregate_choices is
+  type Index_T is ('U', 'X', '0', '1');
+  type Table_T is array (Index_T range <>) of bit;
+  constant High_Index : Index_T := '1';
+  signal Values : Table_T('U' to High_Index);
+begin
+  drive : process
+  begin
+    Values <= (
+      'U' => '1', 'X' => '0', '0' => '0', High_Index => '0');
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(enumeration_constant_index_choices.ok());
+  const auto enumeration_constant_index_design = compile_and_elaborate(
+      enumeration_constant_index_choices.design,
+      "vhdl:work.enumeration_constant_index_aggregate_choices(rtl)");
+  assert(enumeration_constant_index_design.ok());
+  const auto enumeration_constant_index_values
+      = enumeration_constant_index_design.design->find_signal("values");
+  assert(enumeration_constant_index_values);
+  auto enumeration_constant_index_interpreter
+      = enumeration_constant_index_design.design->create_interpreter();
+  const auto enumeration_constant_index_run
+      = enumeration_constant_index_interpreter->run();
+  assert(
+      enumeration_constant_index_run.status
+      == fsim::runtime::RunStatus::completed);
+  assert(
+      enumeration_constant_index_interpreter
+          ->signal_value(*enumeration_constant_index_values)
+          .to_msb_string()
+      == "1000");
+
+  const auto enumeration_qualified_constant_index_choices
+      = fsim::frontend::parse_text(
+          "vhdl_enumeration_qualified_constant_index_aggregate_choices.vhd",
+          R"(
+entity Enumeration_Qualified_Constant_Index_Aggregate_Choices is
+end entity;
+architecture rtl of enumeration_qualified_constant_index_aggregate_choices is
+  type Index_T is ('U', 'X', '0', '1');
+  type Table_T is array (Index_T range <>) of bit;
+  constant High_Index : Index_T := Index_T'('1');
+  constant Selected_Index : Index_T := Index_T'('X');
+  signal Values : Table_T('U' to High_Index);
+begin
+  drive : process
+  begin
+    Values <= ('U' => '1', Selected_Index => '0', '0' to '1' => '0');
+    wait;
+  end process;
+end architecture;
+)",
+          fsim::frontend::Language::Vhdl2008);
+  assert(enumeration_qualified_constant_index_choices.ok());
+  const auto enumeration_qualified_constant_index_design
+      = compile_and_elaborate(
+          enumeration_qualified_constant_index_choices.design,
+          "vhdl:work.enumeration_qualified_constant_index_aggregate_choices(rtl)");
+  assert(enumeration_qualified_constant_index_design.ok());
+  const auto enumeration_qualified_constant_index_values
+      = enumeration_qualified_constant_index_design.design->find_signal(
+          "values");
+  assert(enumeration_qualified_constant_index_values);
+  auto enumeration_qualified_constant_index_interpreter
+      = enumeration_qualified_constant_index_design.design
+            ->create_interpreter();
+  const auto enumeration_qualified_constant_index_run
+      = enumeration_qualified_constant_index_interpreter->run();
+  assert(
+      enumeration_qualified_constant_index_run.status
+      == fsim::runtime::RunStatus::completed);
+  assert(
+      enumeration_qualified_constant_index_interpreter
+          ->signal_value(*enumeration_qualified_constant_index_values)
+          .to_msb_string()
+      == "1000");
+
+  const auto wrong_enumeration_index_choice =
+      fsim::frontend::parse_text(
+          "vhdl_wrong_nominal_enumeration_index_choice.vhd",
+          R"(
+entity Wrong_Nominal_Enumeration_Index_Choice is
+end entity;
+architecture rtl of wrong_nominal_enumeration_index_choice is
+  type Index_T is ('U', 'X', '0', '1');
+  type Other_Index_T is ('U', 'X', '0', '1');
+  type Table_T is array (Index_T range <>) of bit;
+  constant Wrong_Index : Other_Index_T := 'X';
+  signal Values : Table_T('U' to '1');
+begin
+  drive : process
+  begin
+    Values <= (Wrong_Index => '1', others => '0');
+    wait;
+  end process;
+end architecture;
+)",
+          fsim::frontend::Language::Vhdl2008);
+  assert(wrong_enumeration_index_choice.ok());
+  const auto rejected_wrong_enumeration_index_choice
+      = compile_and_elaborate(
+          wrong_enumeration_index_choice.design,
+          "vhdl:work.wrong_nominal_enumeration_index_choice(rtl)");
+  assert(
+      !rejected_wrong_enumeration_index_choice.ok()
+      && has_diagnostic(
+          rejected_wrong_enumeration_index_choice,
+          "FSIM-ELAB-DYNINDEX-002"));
+
+  const auto dynamic_enumeration_index_choice =
+      fsim::frontend::parse_text(
+          "vhdl_dynamic_enumeration_index_choice.vhd",
+          R"(
+entity Dynamic_Enumeration_Index_Choice is
+end entity;
+architecture rtl of dynamic_enumeration_index_choice is
+  type Index_T is ('U', 'X', '0', '1');
+  type Table_T is array (Index_T range <>) of bit;
+  signal Dynamic_Index : Index_T := 'X';
+  signal Values : Table_T('U' to '1');
+begin
+  drive : process
+  begin
+    Values <= (Dynamic_Index => '1', others => '0');
+    wait;
+  end process;
+end architecture;
+)",
+          fsim::frontend::Language::Vhdl2008);
+  assert(dynamic_enumeration_index_choice.ok());
+  const auto rejected_dynamic_enumeration_index_choice
+      = compile_and_elaborate(
+          dynamic_enumeration_index_choice.design,
+          "vhdl:work.dynamic_enumeration_index_choice(rtl)");
+  assert(
+      !rejected_dynamic_enumeration_index_choice.ok()
+      && has_diagnostic(
+          rejected_dynamic_enumeration_index_choice,
+          "FSIM-ELAB-DYNINDEX-002"));
+
+  const auto nonstatic_enumeration_constant_choice =
+      fsim::frontend::parse_text(
+          "vhdl_nonstatic_enumeration_constant_choice.vhd",
+          R"(
+entity Nonstatic_Enumeration_Constant_Choice is
+end entity;
+architecture rtl of nonstatic_enumeration_constant_choice is
+  type Index_T is ('U', 'X', '0', '1');
+  type Table_T is array (Index_T range <>) of bit;
+  signal Values : Table_T('U' to '1');
+begin
+  drive : process
+    variable Dynamic_Index : Index_T := 'X';
+    constant Captured_Index : Index_T := Dynamic_Index;
+  begin
+    Values <= (Captured_Index => '1', others => '0');
+    wait;
+  end process;
+end architecture;
+)",
+          fsim::frontend::Language::Vhdl2008);
+  assert(nonstatic_enumeration_constant_choice.ok());
+  const auto rejected_nonstatic_enumeration_constant_choice
+      = compile_and_elaborate(
+          nonstatic_enumeration_constant_choice.design,
+          "vhdl:work.nonstatic_enumeration_constant_choice(rtl)");
+  assert(
+      !rejected_nonstatic_enumeration_constant_choice.ok()
+      && has_diagnostic(
+          rejected_nonstatic_enumeration_constant_choice,
+          "FSIM-ELAB-DYNINDEX-002"));
+
+  const auto ieee_std_ulogic_index_choices = fsim::frontend::parse_text(
+      "vhdl_ieee_std_ulogic_index_choices.vhd",
+      R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity IEEE_Std_Ulogic_Index_Choices is
+end entity;
+architecture rtl of ieee_std_ulogic_index_choices is
+  type Table_T is array (std_ulogic) of bit;
+  signal Values : Table_T;
+begin
+  drive : process
+  begin
+    Values <= (
+      'U' => '1', 'X' => '0', '0' => '1', '1' => '0', 'Z' => '1',
+      'W' => '0', 'L' => '1', 'H' => '0', '-' => '1');
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(ieee_std_ulogic_index_choices.ok());
+  const auto ieee_std_ulogic_index_design = compile_and_elaborate(
+      ieee_std_ulogic_index_choices.design,
+      "vhdl:work.ieee_std_ulogic_index_choices(rtl)");
+  assert(ieee_std_ulogic_index_design.ok());
+  const auto ieee_std_ulogic_values
+      = ieee_std_ulogic_index_design.design->find_signal("values");
+  assert(ieee_std_ulogic_values);
+  auto ieee_std_ulogic_interpreter
+      = ieee_std_ulogic_index_design.design->create_interpreter();
+  const auto ieee_std_ulogic_run = ieee_std_ulogic_interpreter->run();
+  assert(ieee_std_ulogic_run.status == fsim::runtime::RunStatus::completed);
+  assert(
+      ieee_std_ulogic_interpreter->signal_value(*ieee_std_ulogic_values)
+          .to_msb_string()
+      == "101010101");
+
+  const auto invalid_ieee_std_ulogic_index_choice =
+      fsim::frontend::parse_text(
+          "vhdl_invalid_ieee_std_ulogic_index_choice.vhd",
+          R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity Invalid_IEEE_Std_Ulogic_Index_Choice is
+end entity;
+architecture rtl of invalid_ieee_std_ulogic_index_choice is
+  type Table_T is array (std_ulogic) of bit;
+  signal Values : Table_T;
+begin
+  drive : process
+  begin
+    Values <= ('Q' => '1', others => '0');
+    wait;
+  end process;
+end architecture;
+)",
+          fsim::frontend::Language::Vhdl2008);
+  assert(invalid_ieee_std_ulogic_index_choice.ok());
+  const auto rejected_invalid_ieee_std_ulogic_index_choice
+      = compile_and_elaborate(
+          invalid_ieee_std_ulogic_index_choice.design,
+          "vhdl:work.invalid_ieee_std_ulogic_index_choice(rtl)");
+  assert(
+      !rejected_invalid_ieee_std_ulogic_index_choice.ok()
+      && has_diagnostic(
+          rejected_invalid_ieee_std_ulogic_index_choice,
+          "FSIM-ELAB-VHARRAYAGG-003"));
+
+  const auto shadowed_std_ulogic_index_choice =
+      fsim::frontend::parse_text(
+          "vhdl_shadowed_std_ulogic_index_choice.vhd",
+          R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity Shadowed_Std_Ulogic_Index_Choice is
+end entity;
+architecture rtl of shadowed_std_ulogic_index_choice is
+  type std_ulogic is ('A', 'B');
+  type Table_T is array (std_ulogic) of bit;
+  signal Values : Table_T;
+begin
+  drive : process
+  begin
+    Values <= ('U' => '1', others => '0');
+    wait;
+  end process;
+end architecture;
+)",
+          fsim::frontend::Language::Vhdl2008);
+  assert(shadowed_std_ulogic_index_choice.ok());
+  const auto rejected_shadowed_std_ulogic_index_choice
+      = compile_and_elaborate(
+          shadowed_std_ulogic_index_choice.design,
+          "vhdl:work.shadowed_std_ulogic_index_choice(rtl)");
+  assert(
+      !rejected_shadowed_std_ulogic_index_choice.ok()
+      && has_diagnostic(
+          rejected_shadowed_std_ulogic_index_choice,
+          "FSIM-ELAB-VHARRAYAGG-003"));
 }
 
 }  // namespace fsim::tests::elaboration

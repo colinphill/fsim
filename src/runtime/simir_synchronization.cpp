@@ -150,8 +150,16 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
         const auto reader = mailbox.readers.front();
         mailbox.readers.pop_front();
         auto& target = get_process(reader.process);
-        if (target.halted) continue;
+        if (target.halted) {
+          if (target.cold().pending_mailbox_result == reader.destination) {
+            target.cold().pending_mailbox_result.reset();
+          }
+          continue;
+        }
         write_process_register(target, reader.destination, delivered);
+        if (target.cold().pending_mailbox_result == reader.destination) {
+          target.cold().pending_mailbox_result.reset();
+        }
         (void)wake(reader.process);
         if (!reader.peek) {
           consumed = true;
@@ -204,6 +212,7 @@ constexpr std::size_t maximum_synchronization_objects = 1U << 20U;
       write_bool(*get->result, false);
       process.status = ProcessStatus::running;
     } else {
+      process.cold().pending_mailbox_result = get->destination;
       mailbox.readers.push_back(
           {process.id, get->destination, get->peek});
       process.status = ProcessStatus::waiting;

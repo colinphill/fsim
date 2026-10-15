@@ -792,6 +792,8 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
 
       if (full_index_range) {
         // The bare discrete subtype contributes its own complete range.
+        // Preserve the subtype's direction as well as its endpoints;
+        // endpoint order alone loses descending singleton and null ranges.
         const auto bound = [&](const std::string_view attribute) {
           return Expression{
               ExpressionKind::Call, std::string{"'"} + std::string{attribute},
@@ -800,7 +802,8 @@ void VhdlParser::parse_type_declaration(DesignUnit &unit, const Token &start,
               dimension.index_span};
         };
         dimension.constraint = DiscreteRangeExpression{
-            bound("left"), bound("right"), dimension.index_span, false};
+            bound("left"), bound("right"), dimension.index_span, false,
+            true};
       } else if (!dimension.unconstrained) {
         // A range or a range attribute (`T range x'range`).
         auto range = parse_vhdl_discrete_range(false);

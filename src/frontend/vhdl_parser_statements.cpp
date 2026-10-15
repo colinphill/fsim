@@ -1410,13 +1410,9 @@ Statement VhdlParser::parse_vhdl_selected_assignment(
     statement.case_alternatives.push_back(
         std::move(alternative));
   } while (match(TokenKind::Comma));
-  if (!saw_others) {
-    error(
-        current(),
-        "FSIM-VHDL-SEM-029",
-        "the bounded selected-assignment form requires a final others "
-        "alternative");
-  }
+  // Selected assignments have the coverage rules of their equivalent case
+  // statement (IEEE 1076-2008 10.5.4). Coverage is checked after resolving the
+  // selector subtype; exhaustive explicit choices do not require others.
   expect(
       TokenKind::Semicolon,
       "';' after selected signal assignment",

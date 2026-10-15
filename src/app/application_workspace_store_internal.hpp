@@ -37,8 +37,15 @@ void collect_revisions(const std::filesystem::path& root,
     const Store&, std::string_view name, bool create, std::string& error);
 [[nodiscard]] std::unique_ptr<compiler::detail::CacheDirectoryLock> lock_directory(
     const std::filesystem::path&, std::string& error);
+
+enum class CatalogAccess {
+    read_only,
+    // Writer entrypoints hold this library's lock and may recover a hot journal.
+    writer_lock_held,
+};
+
 [[nodiscard]] std::optional<LibraryCatalog> load_catalog(
-    const LibraryLocation&, bool create, std::string& error);
+    const LibraryLocation&, bool create, CatalogAccess, std::string& error);
 [[nodiscard]] bool save_catalog(const LibraryCatalog&, std::string& error);
 [[nodiscard]] bool merge_records(LibraryCatalog&,
     const std::vector<ArtifactRecord>& replacements,

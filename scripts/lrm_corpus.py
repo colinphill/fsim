@@ -1088,6 +1088,11 @@ NVC_NONSTANDARD = {
         "applies scalar bound attributes to A'RANGE; RANGE denotes a range, "
         "not a scalar type or subtype (IEEE 1076-2008 16.2.2/16.2.3)"
     ),
+    "integer2": (
+        "expects INTEGER'HIGH + 1 to wrap to signed-64 INTEGER'LEFT; "
+        "out-of-range INTEGER arithmetic is erroneous "
+        "(IEEE 1076-2019 5.2.3.1)"
+    ),
     # `a ~& b` and `a ~| b` are not binary operators in IEEE 1364 or 1800.
     "binary8": "uses ~& and ~| as binary operators",
     "wide7": "uses ~& and ~| as binary operators",

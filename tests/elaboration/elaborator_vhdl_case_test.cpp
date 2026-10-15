@@ -195,6 +195,682 @@ end architecture;
   assert(has_diagnostic(
       packed_width_rejected, "FSIM-ELAB-VHDLCASE-002"));
 
+  const auto packed_array_choices = fsim::frontend::parse_text(
+      "vhdl_packed_array_case_choices.vhd",
+      R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+entity vhdl_packed_array_case_choices is
+  port (observed : out integer);
+end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+architecture rtl of vhdl_packed_array_case_choices is
+  constant descending_bits : bit_vector(15 downto 8) := "11110000";
+  constant ascending_bits : bit_vector(0 to 7) := "11001100";
+  constant case_prefix : bit_vector(3 downto 0) := X"2";
+  function source_bounds_preserved(value : unsigned) return boolean is
+  begin
+    return value'left = 10 and value'right = 3;
+  end function;
+begin
+  process
+    variable logic_selector : std_logic_vector(5 downto 3) := "010";
+    variable bit_selector : bit_vector(5 downto 2) := "1100";
+    variable reverse_selector : bit_vector(3 downto 0) := "1100";
+    variable numeric_source : std_logic_vector(10 downto 3) := "00101010";
+    variable meta_selector : std_logic_vector(31 downto 0) :=
+      "LHH-HWUL-LHZ0UHH01WXXWXUUZX-WXUU";
+    variable aggregate_selector : bit_vector(7 downto 0) := X"25";
+    variable value : integer := 0;
+  begin
+    assert source_bounds_preserved(unsigned(numeric_source))
+      report "numeric_std conversion did not preserve operand bounds"
+      severity failure;
+    case logic_selector is
+      when "010" => value := value + 1;
+      when others => value := -1;
+    end case;
+    case bit_selector is
+      when descending_bits(13 downto 10) => value := value + 10;
+      when others => value := -1;
+    end case;
+    case reverse_selector is
+      when ascending_bits(4 to 7) => value := value + 100;
+      when others => value := -1;
+    end case;
+    case unsigned(numeric_source) is
+      when to_unsigned(42, 8) => value := value + 1000;
+      when others => value := -1;
+    end case;
+    case signed(numeric_source) is
+      when to_signed(42, 8) => value := value + 100000;
+      when others => value := -1;
+    end case;
+    case meta_selector is
+      when "LHH-HWUL-LHZ0UHH01WXXWXUUZX-WXUU" =>
+        value := value + 10000;
+      when others => value := -1;
+    end case;
+    case aggregate_selector is
+      when (case_prefix, X"5") => value := value + 1000000;
+      when others => value := -1;
+    end case;
+    observed <= value;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(packed_array_choices.ok());
+  const auto packed_array_elaborated = compile_and_elaborate(
+      packed_array_choices.design,
+      "vhdl:work.vhdl_packed_array_case_choices(rtl)");
+  if (!packed_array_elaborated.ok()) {
+    for (const auto& diagnostic : packed_array_elaborated.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(packed_array_elaborated.ok());
+  const auto packed_array_observed
+      = packed_array_elaborated.design->find_signal("observed");
+  assert(packed_array_observed);
+  auto packed_array_interpreter
+      = packed_array_elaborated.design->create_interpreter();
+  (void)packed_array_interpreter->run();
+  assert(packed_array_interpreter->signal_value(*packed_array_observed)
+             .to_msb_string()
+         == "00000000000100001111010001000111");
+
+  const auto same_spelled_callable_unsigned = fsim::frontend::parse_text(
+      "vhdl_packed_array_case_callable_unsigned.vhd",
+      R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+entity vhdl_packed_array_case_callable_unsigned is
+  port (observed : out integer);
+end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+architecture rtl of vhdl_packed_array_case_callable_unsigned is
+  function unsigned(value : integer) return integer is
+  begin
+    return value;
+  end function;
+begin
+  process
+  begin
+    case unsigned(7) is
+      when 7 => observed <= 1;
+      when others => observed <= 0;
+    end case;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(same_spelled_callable_unsigned.ok());
+  const auto same_spelled_callable_unsigned_elaborated = compile_and_elaborate(
+      same_spelled_callable_unsigned.design,
+      "vhdl:work.vhdl_packed_array_case_callable_unsigned(rtl)");
+  if (!same_spelled_callable_unsigned_elaborated.ok()) {
+    for (const auto& diagnostic :
+         same_spelled_callable_unsigned_elaborated.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(same_spelled_callable_unsigned_elaborated.ok());
+  const auto same_spelled_callable_observed
+      = same_spelled_callable_unsigned_elaborated.design->find_signal(
+          "observed");
+  assert(same_spelled_callable_observed);
+  auto same_spelled_callable_interpreter
+      = same_spelled_callable_unsigned_elaborated.design
+            ->create_interpreter();
+  (void)same_spelled_callable_interpreter->run();
+  assert(same_spelled_callable_interpreter->signal_value(
+             *same_spelled_callable_observed)
+             .to_msb_string()
+         == "00000000000000000000000000000001");
+
+  const auto exhaustive_bit_vector_case = fsim::frontend::parse_text(
+      "vhdl_exhaustive_bit_vector_case.vhd",
+      R"(
+entity vhdl_exhaustive_bit_vector_case is
+  port (observed : out integer);
+end entity;
+architecture rtl of vhdl_exhaustive_bit_vector_case is
+begin
+  process
+    variable selector : bit_vector(0 to 0) := "1";
+    variable result : integer := 0;
+  begin
+    case selector is
+      when "0" => result := 0;
+      when "1" => result := 42;
+    end case;
+    observed <= result;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(exhaustive_bit_vector_case.ok());
+  const auto exhaustive_bit_vector_elaborated = compile_and_elaborate(
+      exhaustive_bit_vector_case.design,
+      "vhdl:work.vhdl_exhaustive_bit_vector_case(rtl)");
+  if (!exhaustive_bit_vector_elaborated.ok()) {
+    for (const auto& diagnostic :
+         exhaustive_bit_vector_elaborated.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(exhaustive_bit_vector_elaborated.ok());
+  const auto exhaustive_bit_vector_observed
+      = exhaustive_bit_vector_elaborated.design->find_signal("observed");
+  assert(exhaustive_bit_vector_observed);
+  auto exhaustive_bit_vector_interpreter
+      = exhaustive_bit_vector_elaborated.design->create_interpreter();
+  (void)exhaustive_bit_vector_interpreter->run();
+  assert(exhaustive_bit_vector_interpreter
+             ->signal_value(*exhaustive_bit_vector_observed)
+             .to_msb_string()
+         == "00000000000000000000000000101010");
+
+  const auto exhaustive_logic_vector_case = fsim::frontend::parse_text(
+      "vhdl_exhaustive_logic_vector_case.vhd",
+      R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity vhdl_exhaustive_logic_vector_case is
+  port (observed : out integer);
+end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+architecture rtl of vhdl_exhaustive_logic_vector_case is
+begin
+  process
+    variable selector : std_logic_vector(0 to 0) := "H";
+    variable result : integer := 0;
+  begin
+    case selector is
+      when "U" => result := 1;
+      when "X" => result := 2;
+      when "0" => result := 3;
+      when "1" => result := 4;
+      when "Z" => result := 5;
+      when "W" => result := 6;
+      when "L" => result := 7;
+      when "H" => result := 42;
+      when "-" => result := 9;
+    end case;
+    observed <= result;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(exhaustive_logic_vector_case.ok());
+  const auto exhaustive_logic_vector_elaborated = compile_and_elaborate(
+      exhaustive_logic_vector_case.design,
+      "vhdl:work.vhdl_exhaustive_logic_vector_case(rtl)");
+  if (!exhaustive_logic_vector_elaborated.ok()) {
+    for (const auto& diagnostic :
+         exhaustive_logic_vector_elaborated.diagnostics) {
+      std::cerr << diagnostic.code << ": " << diagnostic.message << '\n';
+    }
+  }
+  assert(exhaustive_logic_vector_elaborated.ok());
+  const auto exhaustive_logic_vector_observed
+      = exhaustive_logic_vector_elaborated.design->find_signal("observed");
+  assert(exhaustive_logic_vector_observed);
+  auto exhaustive_logic_vector_interpreter
+      = exhaustive_logic_vector_elaborated.design->create_interpreter();
+  (void)exhaustive_logic_vector_interpreter->run();
+  assert(exhaustive_logic_vector_interpreter
+             ->signal_value(*exhaustive_logic_vector_observed)
+             .to_msb_string()
+         == "00000000000000000000000000101010");
+
+  const auto incomplete_bit_vector_case = fsim::frontend::parse_text(
+      "vhdl_incomplete_bit_vector_case.vhd",
+      R"(
+entity vhdl_incomplete_bit_vector_case is end entity;
+architecture rtl of vhdl_incomplete_bit_vector_case is
+begin
+  process
+    variable selector : bit_vector(0 to 0) := "0";
+  begin
+    case selector is
+      when "0" => null;
+    end case;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(incomplete_bit_vector_case.ok());
+  const auto incomplete_bit_vector_rejected = compile_and_elaborate(
+      incomplete_bit_vector_case.design,
+      "vhdl:work.vhdl_incomplete_bit_vector_case(rtl)");
+  assert(!incomplete_bit_vector_rejected.ok());
+  assert(has_diagnostic(
+      incomplete_bit_vector_rejected, "FSIM-ELAB-VHDLCASE-005"));
+
+  const auto packed_array_range_choice = fsim::frontend::parse_text(
+      "vhdl_packed_array_case_range_choice.vhd",
+      R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity vhdl_packed_array_case_range_choice is end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+architecture rtl of vhdl_packed_array_case_range_choice is
+begin
+  process
+    variable selector : std_logic_vector(1 downto 0) := "01";
+  begin
+    case selector is
+      when "00" to "11" => null;
+      when others => null;
+    end case;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(packed_array_range_choice.ok());
+  const auto packed_array_range_rejected = compile_and_elaborate(
+      packed_array_range_choice.design,
+      "vhdl:work.vhdl_packed_array_case_range_choice(rtl)");
+  assert(!packed_array_range_rejected.ok());
+  assert(has_diagnostic(
+      packed_array_range_rejected, "FSIM-ELAB-VHDLCASE-001"));
+
+  const auto packed_array_nominal_mismatch = fsim::frontend::parse_text(
+      "vhdl_packed_array_case_nominal_mismatch.vhd",
+      R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity vhdl_packed_array_case_nominal_mismatch is end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+architecture rtl of vhdl_packed_array_case_nominal_mismatch is
+  type custom_logic_vector is array (natural range <>) of std_ulogic;
+  constant differently_typed : custom_logic_vector(2 downto 0) := "010";
+begin
+  process
+    variable selector : std_logic_vector(2 downto 0) := "010";
+  begin
+    case selector is
+      when differently_typed => null;
+      when others => null;
+    end case;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(packed_array_nominal_mismatch.ok());
+  const auto packed_array_nominal_rejected = compile_and_elaborate(
+      packed_array_nominal_mismatch.design,
+      "vhdl:work.vhdl_packed_array_case_nominal_mismatch(rtl)");
+  assert(!packed_array_nominal_rejected.ok());
+  assert(has_diagnostic(
+      packed_array_nominal_rejected, "FSIM-ELAB-VHDLCASE-001"));
+
+  const auto packed_array_dynamic_choice = fsim::frontend::parse_text(
+      "vhdl_packed_array_case_dynamic_choice.vhd",
+      R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity vhdl_packed_array_case_dynamic_choice is end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+architecture rtl of vhdl_packed_array_case_dynamic_choice is
+begin
+  process
+    variable selector : std_logic_vector(2 downto 0) := "010";
+    variable runtime_choice : std_logic_vector(2 downto 0) := "010";
+  begin
+    case selector is
+      when runtime_choice => null;
+      when others => null;
+    end case;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(packed_array_dynamic_choice.ok());
+  const auto packed_array_dynamic_rejected = compile_and_elaborate(
+      packed_array_dynamic_choice.design,
+      "vhdl:work.vhdl_packed_array_case_dynamic_choice(rtl)");
+  assert(!packed_array_dynamic_rejected.ok());
+  assert(has_diagnostic(
+      packed_array_dynamic_rejected, "FSIM-ELAB-VHDLCASE-001"));
+
+  const auto packed_array_user_function_choice = fsim::frontend::parse_text(
+      "vhdl_packed_array_case_user_function.vhd",
+      R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity vhdl_packed_array_case_user_function is end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+architecture rtl of vhdl_packed_array_case_user_function is
+  function user_defined_choice return std_logic_vector is
+  begin
+    return "010";
+  end function;
+begin
+  process
+    variable selector : std_logic_vector(2 downto 0) := "010";
+  begin
+    case selector is
+      when user_defined_choice => null;
+      when others => null;
+    end case;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(packed_array_user_function_choice.ok());
+  const auto packed_array_user_function_rejected = compile_and_elaborate(
+      packed_array_user_function_choice.design,
+      "vhdl:work.vhdl_packed_array_case_user_function(rtl)");
+  assert(!packed_array_user_function_rejected.ok());
+  assert(has_diagnostic(
+      packed_array_user_function_rejected, "FSIM-ELAB-VHDLCASE-001"));
+
+  const auto numeric_std_user_unary_not_builtin
+      = fsim::frontend::parse_text(
+          "vhdl_numeric_std_user_unary_not_builtin_batch59.vhd",
+          R"(
+library ieee;
+use ieee.numeric_std.all;
+entity vhdl_numeric_std_user_unary_not_builtin_batch59 is
+end entity;
+
+library ieee;
+use ieee.numeric_std.all;
+architecture test of vhdl_numeric_std_user_unary_not_builtin_batch59 is
+  type amount_t is range -10 to 10;
+  function "-" (value : amount_t) return integer is
+  begin
+    return 5;
+  end function;
+  constant amount : amount_t := 1;
+  signal selector : signed(7 downto 0);
+begin
+  check: process
+  begin
+    case selector is
+      when to_signed(-amount, 8) => null;
+      when others => null;
+    end case;
+    wait;
+  end process;
+end architecture;
+)",
+          fsim::frontend::Language::Vhdl2008);
+  assert(numeric_std_user_unary_not_builtin.ok());
+  const auto numeric_std_user_unary_not_builtin_rejected
+      = compile_and_elaborate(
+          numeric_std_user_unary_not_builtin.design,
+          "vhdl:work.vhdl_numeric_std_user_unary_not_builtin_batch59(test)");
+  assert(!numeric_std_user_unary_not_builtin_rejected.ok());
+  assert(has_diagnostic(
+      numeric_std_user_unary_not_builtin_rejected,
+      "FSIM-ELAB-VHDLCASE-001"));
+  assert(!has_diagnostic(
+      numeric_std_user_unary_not_builtin_rejected,
+      "FSIM-ELAB-VHDLCASE-011"));
+
+  const auto packed_array_shadow_to_unsigned = fsim::frontend::parse_text(
+      "vhdl_packed_array_case_shadow_to_unsigned.vhd",
+      R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.unsigned;
+entity vhdl_packed_array_case_shadow_to_unsigned is end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.unsigned;
+architecture rtl of vhdl_packed_array_case_shadow_to_unsigned is
+  function to_unsigned(value, size : natural) return integer is
+  begin
+    return value;
+  end function;
+begin
+  process
+    variable selector : unsigned(7 downto 0) := "00101010";
+  begin
+    case selector is
+      when to_unsigned(42, 8) => null;
+      when others => null;
+    end case;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(packed_array_shadow_to_unsigned.ok());
+  const auto packed_array_shadow_to_unsigned_rejected = compile_and_elaborate(
+      packed_array_shadow_to_unsigned.design,
+      "vhdl:work.vhdl_packed_array_case_shadow_to_unsigned(rtl)");
+  assert(!packed_array_shadow_to_unsigned_rejected.ok());
+  assert(has_diagnostic(
+      packed_array_shadow_to_unsigned_rejected,
+      "FSIM-ELAB-VHDLCASE-001"));
+
+  const auto packed_array_numeric_bit_conversion = fsim::frontend::parse_text(
+      "vhdl_packed_array_case_numeric_bit_conversion.vhd",
+      R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.unsigned;
+entity vhdl_packed_array_case_numeric_bit_conversion is end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.unsigned;
+architecture rtl of vhdl_packed_array_case_numeric_bit_conversion is
+begin
+  process
+    variable selector : unsigned(7 downto 0) := "00101010";
+  begin
+    case selector is
+      when ieee.numeric_bit.to_unsigned(42, 8) => null;
+      when others => null;
+    end case;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(packed_array_numeric_bit_conversion.ok());
+  const auto packed_array_numeric_bit_conversion_rejected
+      = compile_and_elaborate(
+          packed_array_numeric_bit_conversion.design,
+          "vhdl:work.vhdl_packed_array_case_numeric_bit_conversion(rtl)");
+  assert(!packed_array_numeric_bit_conversion_rejected.ok());
+  assert(has_diagnostic(
+      packed_array_numeric_bit_conversion_rejected,
+      "FSIM-ELAB-VHDLCASE-001"));
+
+  const auto packed_array_dynamic_numeric_size = fsim::frontend::parse_text(
+      "vhdl_packed_array_case_dynamic_numeric_size.vhd",
+      R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+entity vhdl_packed_array_case_dynamic_numeric_size is end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+architecture rtl of vhdl_packed_array_case_dynamic_numeric_size is
+begin
+  process
+    variable selector : unsigned(7 downto 0) := "00101010";
+    variable dynamic_size : natural := 8;
+  begin
+    case selector is
+      when to_unsigned(42, dynamic_size) => null;
+      when others => null;
+    end case;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(packed_array_dynamic_numeric_size.ok());
+  const auto packed_array_dynamic_numeric_size_rejected = compile_and_elaborate(
+      packed_array_dynamic_numeric_size.design,
+      "vhdl:work.vhdl_packed_array_case_dynamic_numeric_size(rtl)");
+  assert(!packed_array_dynamic_numeric_size_rejected.ok());
+  assert(has_diagnostic(
+      packed_array_dynamic_numeric_size_rejected,
+      "FSIM-ELAB-VHDLCASE-001"));
+
+  const auto packed_array_shadow_unsigned = fsim::frontend::parse_text(
+      "vhdl_packed_array_case_shadow_unsigned.vhd",
+      R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity vhdl_packed_array_case_shadow_unsigned is end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+architecture rtl of vhdl_packed_array_case_shadow_unsigned is
+  type unsigned is array (natural range <>) of std_ulogic;
+  type bit_vector is array (natural range <>) of bit;
+  constant bit_choice : bit_vector(2 downto 0) := "010";
+begin
+  process
+    variable selector : unsigned(2 downto 0) := "010";
+  begin
+    case selector is
+      when bit_choice => null;
+      when others => null;
+    end case;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(packed_array_shadow_unsigned.ok());
+  const auto packed_array_shadow_unsigned_rejected = compile_and_elaborate(
+      packed_array_shadow_unsigned.design,
+      "vhdl:work.vhdl_packed_array_case_shadow_unsigned(rtl)");
+  assert(!packed_array_shadow_unsigned_rejected.ok());
+  assert(has_diagnostic(
+      packed_array_shadow_unsigned_rejected, "FSIM-ELAB-VHDLCASE-001"));
+
+  const auto packed_array_shadow_bit_vector = fsim::frontend::parse_text(
+      "vhdl_packed_array_case_shadow_bit_vector.vhd",
+      R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity vhdl_packed_array_case_shadow_bit_vector is end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+architecture rtl of vhdl_packed_array_case_shadow_bit_vector is
+  type unsigned is array (natural range <>) of std_ulogic;
+  type bit_vector is array (natural range <>) of bit;
+  constant unsigned_choice : unsigned(2 downto 0) := "010";
+begin
+  process
+    variable selector : bit_vector(2 downto 0) := "010";
+  begin
+    case selector is
+      when unsigned_choice => null;
+      when others => null;
+    end case;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(packed_array_shadow_bit_vector.ok());
+  const auto packed_array_shadow_bit_vector_rejected = compile_and_elaborate(
+      packed_array_shadow_bit_vector.design,
+      "vhdl:work.vhdl_packed_array_case_shadow_bit_vector(rtl)");
+  assert(!packed_array_shadow_bit_vector_rejected.ok());
+  assert(has_diagnostic(
+      packed_array_shadow_bit_vector_rejected, "FSIM-ELAB-VHDLCASE-001"));
+
+  const auto packed_array_shadow_unresolved_unsigned
+      = fsim::frontend::parse_text(
+          "vhdl_packed_array_case_shadow_unresolved_unsigned.vhd",
+          R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity vhdl_packed_array_case_shadow_unresolved_unsigned is end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+architecture rtl of vhdl_packed_array_case_shadow_unresolved_unsigned is
+  type unresolved_unsigned is array (natural range <>) of std_ulogic;
+  constant custom_choice : unresolved_unsigned(2 downto 0) := "010";
+begin
+  process
+    variable selector : unsigned(2 downto 0) := "010";
+  begin
+    case selector is
+      when custom_choice => null;
+      when others => null;
+    end case;
+    wait;
+  end process;
+end architecture;
+)",
+          fsim::frontend::Language::Vhdl2008);
+  assert(packed_array_shadow_unresolved_unsigned.ok());
+  const auto packed_array_shadow_unresolved_unsigned_rejected
+      = compile_and_elaborate(
+          packed_array_shadow_unresolved_unsigned.design,
+          "vhdl:work.vhdl_packed_array_case_shadow_unresolved_unsigned(rtl)");
+  assert(!packed_array_shadow_unresolved_unsigned_rejected.ok());
+  assert(has_diagnostic(
+      packed_array_shadow_unresolved_unsigned_rejected,
+      "FSIM-ELAB-VHDLCASE-001"));
+
+  const auto packed_array_duplicate = fsim::frontend::parse_text(
+      "vhdl_packed_array_case_duplicate.vhd",
+      R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity vhdl_packed_array_case_duplicate is end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+architecture rtl of vhdl_packed_array_case_duplicate is
+begin
+  process
+    variable selector : std_logic_vector(2 downto 0) := "010";
+  begin
+    case selector is
+      when "010" => null;
+      when "010" => null;
+      when others => null;
+    end case;
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(packed_array_duplicate.ok());
+  const auto packed_array_duplicate_rejected = compile_and_elaborate(
+      packed_array_duplicate.design,
+      "vhdl:work.vhdl_packed_array_case_duplicate(rtl)");
+  assert(!packed_array_duplicate_rejected.ok());
+  assert(has_diagnostic(
+      packed_array_duplicate_rejected, "FSIM-ELAB-VHDLCASE-003"));
+
   const auto enum_loop_case = fsim::frontend::parse_text(
       "vhdl_enum_loop_case.vhd",
       R"(
@@ -440,6 +1116,26 @@ end architecture;
       restricted_incomplete_rejected, "FSIM-ELAB-VHDLCASE-002"));
   assert(has_diagnostic(
       restricted_incomplete_rejected, "FSIM-ELAB-VHDLCASE-005"));
+  const auto incomplete_selected = fsim::frontend::parse_text(
+      "vhdl_incomplete_selected_assignment.vhd",
+      R"(
+entity incomplete_selected is end entity;
+architecture rtl of incomplete_selected is
+  signal selector : bit_vector(1 downto 0) := "00";
+  signal result : integer;
+begin
+  with selector select result <= 0 when "00", 1 when "01";
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(incomplete_selected.ok());
+  const auto incomplete_selected_rejected = compile_and_elaborate(
+      incomplete_selected.design,
+      "vhdl:work.incomplete_selected(rtl)");
+  assert(!incomplete_selected_rejected.ok());
+  assert(has_diagnostic(
+      incomplete_selected_rejected, "FSIM-ELAB-VHDLCASE-005"));
+
 }
 
 }  // namespace fsim::tests::elaboration

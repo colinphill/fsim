@@ -245,7 +245,8 @@ std::unique_ptr<LibraryTransaction> Store::begin_library(
     impl->lock = detail::lock_directory(location->directory / ".writer-lock", error);
     if (!impl->lock)
         return nullptr;
-    auto catalog = detail::load_catalog(*location, !location->mapped, error);
+    auto catalog = detail::load_catalog(*location, !location->mapped,
+        detail::CatalogAccess::writer_lock_held, error);
     if (!catalog)
         return nullptr;
     impl->catalog = std::move(*catalog);
@@ -260,7 +261,8 @@ bool Store::delete_artifact(const std::string_view name,
     if (!location)
         return false;
     auto lock = detail::lock_directory(location->directory / ".writer-lock", error);
-    auto catalog = lock ? detail::load_catalog(*location, false, error) : std::nullopt;
+    auto catalog = lock ? detail::load_catalog(*location, false,
+        detail::CatalogAccess::writer_lock_held, error) : std::nullopt;
     if (!catalog)
         return false;
     const auto found = std::ranges::find(catalog->artifacts, artifact_id, &ArtifactRecord::id);
@@ -293,7 +295,8 @@ bool Store::delete_library(const std::string_view name, std::string& error) cons
     if (!location)
         return false;
     auto lock = detail::lock_directory(location->directory / ".writer-lock", error);
-    auto catalog = lock ? detail::load_catalog(*location, false, error) : std::nullopt;
+    auto catalog = lock ? detail::load_catalog(*location, false,
+        detail::CatalogAccess::writer_lock_held, error) : std::nullopt;
     if (!catalog)
         return false;
     // Publishing the empty catalog first keeps readers from observing stale

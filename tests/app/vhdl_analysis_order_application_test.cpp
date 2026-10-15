@@ -690,6 +690,270 @@ end package body;
         { package_declaration, package_body, package_body },
         "FSIM-FE-VHORDER-010");
 
+    const Source later_local_function {
+        "later_local_function.vhd", "libb", R"(
+entity later_local_function is
+end entity;
+architecture rtl of later_local_function is
+begin
+  testing: process
+    variable value : integer := local_function(1);
+    function local_function(argument : integer) return integer is
+    begin
+      return argument;
+    end function;
+  begin
+    wait;
+  end process;
+end architecture;
+)"
+    };
+    expect_code(
+        directory.path,
+        "later-local-function-use",
+        { later_local_function },
+        "FSIM-ELAB-VHNAME-001");
+
+    const Source earlier_local_function {
+        "earlier_local_function.vhd", "libb", R"(
+entity earlier_local_function is
+end entity;
+architecture rtl of earlier_local_function is
+begin
+  testing: process
+    function local_function(argument : integer) return integer is
+    begin
+      return argument;
+    end function;
+    variable value : integer := local_function(1);
+  begin
+    wait;
+  end process;
+end architecture;
+)"
+    };
+    const auto earlier_local_function_result = check(
+        directory.path, "earlier-local-function-use",
+        { earlier_local_function });
+    assert(earlier_local_function_result.accepted);
+    assert(earlier_local_function_result.codes.empty());
+
+    const Source prior_forward_declaration {
+        "prior_forward_declaration.vhd", "libb", R"(
+entity prior_forward_declaration is
+end entity;
+architecture rtl of prior_forward_declaration is
+begin
+  testing: process
+    function local_function(argument : integer) return integer;
+    variable value : integer := local_function(1);
+    function local_function(argument : integer) return integer is
+    begin
+      return argument;
+    end function;
+  begin
+    wait;
+  end process;
+end architecture;
+)"
+    };
+    const auto prior_forward_declaration_result = check(
+        directory.path, "prior-forward-declaration",
+        { prior_forward_declaration });
+    assert(prior_forward_declaration_result.accepted);
+    assert(prior_forward_declaration_result.codes.empty());
+
+    const Source sibling_subprogram_name {
+        "sibling_subprogram_name.vhd", "libb", R"(
+package sibling_name is
+  function FA(value : integer) return integer;
+  function FB(value : integer) return integer;
+end package;
+package body sibling_name is
+  function FA(value : integer) return integer is
+    constant C : integer := 6;
+  begin
+    return value;
+  end function;
+  function FB(value : integer) return integer is
+  begin
+    return C;
+  end function;
+end package body;
+)"
+    };
+    expect_code(
+        directory.path,
+        "sibling-subprogram-name",
+        { sibling_subprogram_name },
+        "FSIM-ELAB-VHNAME-002");
+
+    const Source package_visibility_controls {
+        "package_visibility_controls.vhd", "libb", R"(
+package package_visibility_controls is
+  constant C : integer := 5;
+  function FA(value : integer) return integer;
+  function FB(value : integer) return integer;
+  function FC(value : integer) return integer;
+end package;
+package body package_visibility_controls is
+  function FA(value : integer) return integer is
+    constant C : integer := 6;
+  begin
+    return C + value;
+  end function;
+  function FB(value : integer) return integer is
+  begin
+    return C + value;
+  end function;
+  function FC(value : integer) return integer is
+    constant C : integer := 7;
+  begin
+    return C + value;
+  end function;
+end package body;
+)"
+    };
+    const auto package_visibility_controls_result = check(
+        directory.path, "package-visibility-controls",
+        { package_visibility_controls });
+    assert(package_visibility_controls_result.accepted);
+    assert(package_visibility_controls_result.codes.empty());
+
+    const Source out_access_prefix_1993 {
+        "out_access_prefix_1993.vhd", "libb", R"(
+entity out_access_prefix_1993 is
+end entity;
+architecture rtl of out_access_prefix_1993 is
+begin
+  testing: process
+    type record_type is record
+      y : integer;
+    end record;
+    type pointer_type is access record_type;
+    procedure write_field(x : out pointer_type) is
+    begin
+      x.y := 1;
+    end procedure;
+  begin
+    wait;
+  end process;
+end architecture;
+)", fsim::project::Language::vhdl, "1993"
+    };
+    expect_code(
+        directory.path,
+        "out-access-prefix-1993",
+        { out_access_prefix_1993 },
+        "FSIM-ELAB-VHACCESS-034");
+
+    const Source inout_access_prefix_1993 {
+        "inout_access_prefix_1993.vhd", "libb", R"(
+entity inout_access_prefix_1993 is
+end entity;
+architecture rtl of inout_access_prefix_1993 is
+begin
+  testing: process
+    type record_type is record
+      y : integer;
+    end record;
+    type pointer_type is access record_type;
+    procedure write_field(x : inout pointer_type) is
+    begin
+      x.y := 1;
+    end procedure;
+  begin
+    wait;
+  end process;
+end architecture;
+)", fsim::project::Language::vhdl, "1993"
+    };
+    const auto inout_access_prefix_result = check(
+        directory.path, "inout-access-prefix-1993",
+        { inout_access_prefix_1993 });
+    assert(inout_access_prefix_result.accepted);
+    assert(inout_access_prefix_result.codes.empty());
+
+    const Source out_access_prefix_2008 {
+        "out_access_prefix_2008.vhd", "libb", R"(
+entity out_access_prefix_2008 is
+end entity;
+architecture rtl of out_access_prefix_2008 is
+begin
+  testing: process
+    type record_type is record
+      y : integer;
+    end record;
+    type pointer_type is access record_type;
+    procedure write_field(x : out pointer_type) is
+    begin
+      x.y := 1;
+    end procedure;
+  begin
+    wait;
+  end process;
+end architecture;
+)", fsim::project::Language::vhdl, "2008"
+    };
+    const auto out_access_prefix_2008_result = check(
+        directory.path, "out-access-prefix-2008",
+        { out_access_prefix_2008 });
+    assert(out_access_prefix_2008_result.accepted);
+    assert(out_access_prefix_2008_result.codes.empty());
+
+    const Source assign_out_access_1993 {
+        "assign_out_access_1993.vhd", "libb", R"(
+entity assign_out_access_1993 is
+end entity;
+architecture rtl of assign_out_access_1993 is
+begin
+  testing: process
+    type record_type is record
+      y : integer;
+    end record;
+    type pointer_type is access record_type;
+    procedure clear_pointer(x : out pointer_type) is
+    begin
+      x := null;
+    end procedure;
+  begin
+    wait;
+  end process;
+end architecture;
+)", fsim::project::Language::vhdl, "1993"
+    };
+    const auto assign_out_access_1993_result = check(
+        directory.path, "assign-out-access-1993",
+        { assign_out_access_1993 });
+    assert(assign_out_access_1993_result.accepted);
+    assert(assign_out_access_1993_result.codes.empty());
+
+    const Source out_record_field_1993 {
+        "out_record_field_1993.vhd", "libb", R"(
+entity out_record_field_1993 is
+end entity;
+architecture rtl of out_record_field_1993 is
+begin
+  testing: process
+    type record_type is record
+      y : integer;
+    end record;
+    procedure write_field(x : out record_type) is
+    begin
+      x.y := 1;
+    end procedure;
+  begin
+    wait;
+  end process;
+end architecture;
+)", fsim::project::Language::vhdl, "1993"
+    };
+    const auto out_record_field_1993_result = check(
+        directory.path, "out-record-field-1993",
+        { out_record_field_1993 });
+    assert(out_record_field_1993_result.accepted);
+    assert(out_record_field_1993_result.codes.empty());
+
     const auto extended_identity = check(
         directory.path,
         "case-sensitive-extended-identities",

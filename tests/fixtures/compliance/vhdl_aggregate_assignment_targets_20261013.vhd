@@ -13,6 +13,8 @@ architecture sim of vhdl_aggregate_assignment_targets is
   subtype word_t is bit_vector(1 downto 0);
   subtype char_pair_t is string(1 to 2);
   signal output_word : word_t := "00";
+  constant static_index : integer := 0;
+  signal constant_index_word : bit_vector(0 to 1) := "00";
   constant descending_input : bit_vector(9 downto 7) := "110";
   constant ascending_input : bit_vector(4 to 6) := "100";
 
@@ -105,9 +107,12 @@ begin
       report "FAIL named record target" severity error;
     end if;
 
+    (constant_index_word(static_index), constant_index_word(1)) <= bit_vector'("10")
+      after 1 ns;
     (output_word(1), output_word(0)) <= next_word after 1 ns;
     wait for 2 ns;
-    if output_word /= "10" or calls /= 4 then
+    if output_word /= "10" or constant_index_word /= "10"
+      or calls /= 4 then
       report "FAIL array signal target" severity error;
     else
       report "PASS";

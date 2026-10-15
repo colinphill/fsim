@@ -315,8 +315,9 @@ struct RangeConstraint {
     bool descending { };
     bool null { };
     SourceSpanId source;
-    // The direction follows the evaluated bounds (a range attribute or a
-    // subtype name used as a constraint).
+    // Direction is inherited from the referenced range (a range attribute
+    // or subtype name used as a constraint). Endpoint order alone cannot
+    // recover it, especially for singleton or null ranges.
     bool direction_from_bounds { };
 
     bool operator==(const RangeConstraint&) const = default;

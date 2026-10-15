@@ -208,6 +208,7 @@ checkpoint failures through typed `VhdlVhpi*Error` enums and the bounded
 | `FSIM-FE-VHORDER-004` | error | A VHDL use clause names a project package, or (`use lib.unit;`) a primary unit, that has not yet been analyzed; an architecture is not a primary unit. |
 | `FSIM-FE-VHORDER-005` | error | A VHDL configuration declaration appears before its configured entity. |
 | `FSIM-FE-VHCONFIG-001` | error | A block configuration names a label that is not a block or generate statement of the configured architecture (IEEE 1076-2008 3.4.2). |
+| `FSIM-FE-VHCONFIG-002` | error | A block configuration nested in an explicitly bound component names an architecture other than the one selected by that binding (IEEE 1076-1993 1.3.1). |
 | `FSIM-FE-VHORDER-006` | error | A VHDL configuration declaration or binding names an architecture that has not yet been analyzed. |
 | `FSIM-FE-VHORDER-007` | error | A VHDL entity binding names an entity that has not yet been analyzed. |
 | `FSIM-FE-VHORDER-008` | error | A VHDL configuration binding names a configuration that has not yet been analyzed. |
@@ -869,7 +870,6 @@ backannotation. See [SDF support](sdf.md) for the format and API contract.
 | `FSIM-VHDL-SEM-026` | error | A VHDL loop label duplicates another sequential label in the enclosing process. |
 | `FSIM-VHDL-SEM-027` | error | A selected assignment contains more than one `others` alternative. |
 | `FSIM-VHDL-SEM-028` | error | A selected-assignment alternative follows `others`. |
-| `FSIM-VHDL-SEM-029` | error | The bounded selected-assignment form has no final `others` alternative. |
 | `FSIM-VHDL-SEM-030` | error | The selected VHDL attribute is outside the bounded supported array-attribute set. |
 | `FSIM-VHDL-SEM-031` | error | A VHDL rejection limit is negative. |
 | `FSIM-VHDL-SEM-032` | error | A VHDL rejection limit exceeds the first waveform-element delay. |
@@ -2110,6 +2110,9 @@ scheduler.
 | `FSIM-ELAB-SVEVENT-009` | error | A named-event assignment does not have an event-variable target and an event-variable or `null` source. |
 | `FSIM-ELAB-SVEVENT-010` | error | A named-event alias assignment is nonblocking or has a procedural timing control. |
 | `FSIM-ELAB-SVEVENT-011` | error | A named event is passed to a task or function argument that is not an event (IEEE 1800-2017 6.17). |
+| `FSIM-ELAB-SVEVENT-012` | error | A constant index into a named event array is outside its declared range. |
+| `FSIM-ELAB-SVEVENT-013` | error | A named event-array index has no executable integral width. |
+| `FSIM-ELAB-SVEVENT-014` | error | A named event array does not use the supported fixed one-dimensional shape. |
 | `FSIM-ELAB-SVDELAY-001` | error | A SystemVerilog delay expression is not a known nonnegative locally constant integral value after specialization. |
 | `FSIM-ELAB-SVDELAY-002` | error | A specialized SystemVerilog delay expression overflows 64-bit simulation time after time-unit normalization. |
 | `FSIM-ELAB-SVDELAY-003` | error | Combined continuous-assignment and net-declaration transition delays overflow 64-bit simulation time. |
@@ -2142,6 +2145,7 @@ scheduler.
 | `FSIM-ELAB-VHFUNC-007` | error | A selected function actual has no executable body. |
 | `FSIM-ELAB-VHFUNC-008` | error | A selected function actual is impure in the bounded interface-function subset. |
 | `FSIM-ELAB-VHFUNC-009` | error | An interface-function binding conflicts with a child-local function name. |
+| `FSIM-ELAB-VHFUNC-010` | error | A signal-class function formal requires a compatible whole signal-name actual. |
 | `FSIM-ELAB-VHCONV-002` | error | A visible VHDL conversion target has no positive SimIR-representable executable width. |
 | `FSIM-ELAB-VHCONV-003` | error | A VHDL conversion operand is not a supported closely related type or would change packed width or state domain. |
 | `FSIM-ELAB-VHCONV-004` | error | A VHDL conversion result is incompatible with its contextual type. |
@@ -2151,6 +2155,7 @@ scheduler.
 | `FSIM-ELAB-VHASSIGN-002` | error | The target of a VHDL signal assignment is a variable or constant (IEEE 1076-2008 10.5.2.1). |
 | `FSIM-ELAB-VHASSIGN-003` | error | The target of a VHDL variable assignment is a signal, constant or constant-class formal (IEEE 1076-2008 10.6.2.1). |
 | `FSIM-ELAB-VHASSIGN-004` | error | A positional aggregate or string assigned to a static VHDL slice does not have the slice's length (IEEE 1076-2008 10.6.2.1). |
+| `FSIM-ELAB-VHASSIGN-005` | error | An element association of a VHDL aggregate assignment target is not a locally static name (IEEE 1076-2008 10.5.2.1, 10.6.2.1). |
 | `FSIM-ELAB-VHACCESS-030` | error | A VHDL signal, constant, port or generic is of an access type; only variables can be (IEEE 1076-2008 6.4.2.1). |
 | `FSIM-ELAB-VHACCESS-031` | error | The subtype indication of an allocator names an unconstrained array type without an index constraint (IEEE 1076-2008 9.3.7). |
 | `FSIM-ELAB-VHACCESS-032` | error | A VHDL access type designates a file type (IEEE 1076-2008 5.4.1). |
@@ -2456,6 +2461,7 @@ scheduler.
 | `FSIM-ELAB-VHARRAYAGG-009` | error | A VHDL array aggregate element value has an incompatible contextual subtype or state domain. |
 | `FSIM-ELAB-VHARRAYAGG-010` | error | An array-valued range choice has a direction different from the context-determined aggregate direction (IEEE 1076-2008 9.3.3.3). |
 | `FSIM-ELAB-VHARRAYAGG-011` | error | A VHDL array aggregate choice that is a null range is not its sole association with one choice (IEEE 1076-2008 9.3.3.3). |
+| `FSIM-ELAB-VHARRAYAGG-014` | error | A VHDL array aggregate element's resolved scalar type, including nominal identity, conflicts with the resolved array element type; a string-literal character is not a literal of its resolved enumeration element type. |
 | `FSIM-ELAB-VHARRAYSEL-001` | error | A multidimensional or composite VHDL array selection has no concrete executable packed layout or representable shape. |
 | `FSIM-ELAB-VHARRAYSEL-002` | error | A runtime multidimensional VHDL array index is not an integer-family signed 32-bit value with representable bounds. |
 | `FSIM-ELAB-VHARRAYSEL-003` | error | A multidimensional VHDL array read or target index is outside its selected source dimension. |

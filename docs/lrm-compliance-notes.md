@@ -5,6 +5,41 @@ Working notes for closing the language gaps found by the public compliance
 corpora (`scripts/lrm_corpus.py`). Progress and results are in
 [lrm-compliance-progress.md](lrm-compliance-progress.md).
 
+## Mandatory failure-cause gate (owner instruction, 2026-10-15)
+
+Prove the failure's cause before accepting a fix. A plausible source-level
+explanation, matching diagnostic code, or passing synthetic test is not enough.
+
+1. Preserve the original failing case, exact candidate identity, command,
+   phase, and raw output. Identify the actual failing producer/consumer path
+   and the condition that rejects or misinterprets the case.
+2. Record causal evidence from the original case: actual HIR or runtime state,
+   a trace or bounded observer, or a controlled experiment tied to the exact
+   source path. Distinguish observed facts from hypotheses. A compile or
+   elaborate phase alone does not identify which component emitted a diagnostic.
+3. Accept a functional patch for integration only after that evidence explains
+   why the proposed change corrects the observed failure. Keep unproven
+   candidates isolated. Diagnostic instrumentation may be integrated separately
+   to establish the cause; it is not a functional fix or qualification result.
+4. Make one bounded causal correction, then test the original failing case
+   first. A synthetic regression test must represent the actual failing shape
+   and supplements, rather than replaces, this check. If the original still
+   fails, return to diagnosis instead of stacking speculative fixes.
+5. After the original case passes, check relevant positive and negative controls
+   and both engines where applicable, then run the broader retention gates.
+   Record the cause evidence, patch identity, original-case result, and remaining
+   limits together before claiming closure.
+
+## Cleanup on closure (owner instruction, 2026-10-15)
+
+As each batch closes, clean up its obsolete build trees and batch scratch work.
+Before removal, retain the final source identity, required frozen candidate,
+validation results, causal evidence, and handoff needed to reproduce or audit
+closure. Check that no active process or later batch depends on the paths being
+removed. Record what was removed and what evidence was retained. Preserve
+corpora, required archives, original measurement data, and unrelated work.
+Cleanup is part of closing a batch; do not accumulate obsolete build trees.
+
 ## VHDL subprograms (map as of 2026-10-08)
 
 - Frontend: `FunctionArgument` (design_core.hpp) has no object class;

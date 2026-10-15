@@ -667,26 +667,31 @@ void Interpreter::Impl::spawn_fork(
     const auto shared_frame = parent.frame;
     const auto design_process = parent.cold().design_process;
     auto* const executor = parent.executor.get();
-    auto inherited_contexts = parent.cold().escaping_callable_contexts;
-    if (operation.join == ForkJoinKind::none
-        && !parent.cold().callable_frames.empty()) {
-        auto& callable = parent.cold().callable_frames.back();
-        if (!callable.escaping_context) {
-            auto context
-                = std::make_shared<ProcessState::CallableFrameState>();
-            context->identity = callable.identity;
-            context->packed_ids = callable.packed_ids;
-            context->string_ids = callable.string_ids;
-            context->container_ids = callable.container_ids;
-            capture_callable_values(parent, *context);
-            callable.escaping_context = std::move(context);
+    if (!operation.branches.empty()) {
+        if (!parent.cold().callable_frames.empty()) {
+            auto& callable = parent.cold().callable_frames.back();
+            if (!callable.escaping_context) {
+                auto context
+                    = std::make_shared<ProcessState::CallableFrameState>();
+                context->identity = callable.identity;
+                context->packed_ids = callable.packed_ids;
+                context->string_ids = callable.string_ids;
+                context->container_ids = callable.container_ids;
+                callable.escaping_context = std::move(context);
+            }
+            const auto& context = callable.escaping_context;
+            if (std::ranges::find(
+                    parent.cold().escaping_callable_contexts, context)
+                == parent.cold().escaping_callable_contexts.end()) {
+                parent.cold().escaping_callable_contexts.push_back(context);
+            }
         }
-        if (std::ranges::find(
-                inherited_contexts, callable.escaping_context)
-            == inherited_contexts.end()) {
-            inherited_contexts.push_back(callable.escaping_context);
+        if (!parent.cold().escaping_callable_contexts.empty()) {
+            capture_escaping_callable_contexts(parent);
         }
     }
+    const auto inherited_contexts
+        = parent.cold().escaping_callable_contexts;
 
     std::set<ProcessId> children;
     for (const auto branch : operation.branches) {
@@ -712,6 +717,8 @@ void Interpreter::Impl::spawn_fork(
         child.pc = branch;
         child.frame = shared_frame;
         child.cold().escaping_callable_contexts = inherited_contexts;
+        child.cold().callable_registers_suspended
+            = !inherited_contexts.empty();
         if (executor != nullptr) {
             const bool parent_access_complete_before_clone
                 = process_signal_access_is_complete(parent_id);

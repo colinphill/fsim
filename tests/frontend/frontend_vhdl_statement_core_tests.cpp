@@ -86,14 +86,8 @@ end architecture;
 )",
         Language::Vhdl2008);
     require(
-        !missing_others.ok()
-            && std::ranges::any_of(
-                missing_others.diagnostics,
-                [](const auto& diagnostic) {
-                    return diagnostic.code
-                        == "FSIM-VHDL-SEM-029";
-                }),
-        "bounded selected assignments without others must be diagnosed");
+        missing_others.ok(),
+        "selected assignment coverage requires the resolved selector subtype");
 
     const auto invalid_others = parse_text(
         "selected_invalid_others.vhd",

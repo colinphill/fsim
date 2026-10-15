@@ -437,6 +437,40 @@ class VunitParentStatusTests(unittest.TestCase):
         self.assertTrue(any(child["status"] == "fail" for child in children))
 
 
+class NvcScopeClassificationTests(unittest.TestCase):
+    def test_integer2_overflow_expectation_is_skipped_not_counted_as_pass(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            regress = root / "sources/nvc/test/regress"
+            regress.mkdir(parents=True)
+            (regress / "testlist.txt").write_text(
+                "integer2 normal,2019\nissue503 normal\n", encoding="utf-8"
+            )
+            for name in ("integer2", "issue503"):
+                write_source(regress / f"{name}.vhd")
+            cases = {case.id: case for case in lrm_corpus.nvc_cases(root)}
+
+            execution_dir = root / "would-run"
+            with patch.object(
+                lrm_corpus,
+                "run_command",
+                side_effect=AssertionError("a classified case must not execute"),
+            ):
+                record = lrm_corpus.run_case_once(
+                    cases["integer2"], Path("unused-fsim"), execution_dir,
+                    "interpreter", 1.0, False,
+                )
+
+        self.assertEqual(cases["integer2"].expect, "pass")
+        self.assertIn("out of scope", cases["integer2"].skip)
+        self.assertIn("INTEGER'HIGH + 1", cases["integer2"].skip)
+        self.assertIn("IEEE 1076-2019 5.2.3.1", cases["integer2"].skip)
+        self.assertIsNone(cases["issue503"].skip)
+        self.assertEqual(record["status"], "skip")
+        self.assertEqual(record["detail"], cases["integer2"].skip)
+        self.assertFalse(execution_dir.exists())
+
+
 class NvcExpectedRuntimeErrorTests(unittest.TestCase):
     expected = ("FSIM-RUN-0001", "VHDL integer subtype range check failed", 1)
 
