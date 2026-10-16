@@ -14,6 +14,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -100,12 +101,21 @@ void test_simir_runtime_value_delays() {
       negative_wait,
       Halt{},
   };
-  expect_failure(std::move(negative), "cannot be negative");
+  // IEEE 1800-2017 9.4.1 converts a negative delay to unsigned time.
+  Interpreter negative_interpreter;
+  (void)negative_interpreter.add_process(std::move(negative));
+  const auto negative_result = negative_interpreter.run();
+  require(
+      negative_result.status == RunStatus::completed
+          && negative_result.time
+              == std::numeric_limits<SimulationTick>::max(),
+      "negative delays convert to unsigned time values");
 
   Process overflow;
   overflow.name = "overflow-runtime-delay";
   overflow.register_count = 1;
   WaitFor overflow_wait;
+  // The scale multiplication itself exceeds the tick range here.
   overflow_wait.delay = 2;
   overflow_wait.source = 0;
   overflow_wait.source_width = 64;
@@ -123,6 +133,7 @@ void test_simir_runtime_value_delays() {
   admission.name = "admission-runtime-delay";
   admission.register_count = 1;
   WaitFor admission_wait;
+  // Keep scaling representable so the current-time addition check is reached.
   admission_wait.delay = 1;
   admission_wait.source = 0;
   admission_wait.source_width = 64;
@@ -721,7 +732,9 @@ void test_vital_delay_scheduling() {
                        const bool x_on = true,
                        const bool negative_preemption = false,
                        const bool reject_fast_path = false,
-                       const bool ignore_default_delay = false) {
+                       const bool ignore_default_delay = false,
+                       const std::optional<SimulationTick>
+                           explicit_input_change_time = std::nullopt) {
     Interpreter interpreter{{1000, 64}};
     const auto input = interpreter.add_signal(
         {"vital.input", PackedLogic4::from_logic9_msb_string("0"),
@@ -760,8 +773,15 @@ void test_vital_delay_scheduling() {
         PackedLogic4::from_logic9_msb_string(output_map)});
     delay_process.operations.emplace_back(LoadConstant{
         condition_register, PackedLogic4::from_aval_bval(1U, 1U, 0U)});
-    delay_process.operations.emplace_back(
-        SignalLastEvent{last_event_register, input});
+    if (explicit_input_change_time) {
+      delay_process.operations.emplace_back(LoadConstant{
+          last_event_register,
+          PackedLogic4::from_aval_bval(
+              64U, *explicit_input_change_time, 0U)});
+    } else {
+      delay_process.operations.emplace_back(
+          SignalLastEvent{last_event_register, input});
+    }
 
     VitalDelay delay;
     delay.kind = kind;
@@ -903,6 +923,29 @@ void test_vital_delay_scheduling() {
           == std::vector<std::pair<SimulationTick, std::string>>{
               {10, "0"}, {24, "1"}},
       "simultaneous VITAL candidates select the shortest effective path");
+
+  const auto direct_no_event = run(
+      VitalDelayKind::path, VitalDelayShape::single,
+      VitalGlitchMode::transport, {10, 0, 0, 0, 0, 0}, path_delays,
+      {{20, Logic9::one}}, "UX01ZWLH-", true, false, false, false,
+      std::numeric_limits<SimulationTick>::max());
+  require(
+      direct_no_event.changes
+          == std::vector<std::pair<SimulationTick, std::string>>{
+              {10, "0"}, {30, "1"}},
+      "legacy UINT64_MAX VITAL age uses the default path delay");
+
+  const auto large_real_age = run(
+      VitalDelayKind::path, VitalDelayShape::single,
+      VitalGlitchMode::transport, {10, 0, 0, 0, 0, 0}, path_delays, {},
+      "UX01ZWLH-", true, false, false, true,
+      static_cast<SimulationTick>(std::numeric_limits<std::int64_t>::max())
+          + 1U);
+  require(
+      large_real_age.changes
+          == std::vector<std::pair<SimulationTick, std::string>>{
+              {0, "0"}},
+      "a non-sentinel age above TIME'HIGH remains a real VITAL path age");
 
   const auto on_detect = run(
       VitalDelayKind::path, VitalDelayShape::single,

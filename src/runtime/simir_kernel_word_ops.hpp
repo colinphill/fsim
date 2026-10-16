@@ -570,9 +570,13 @@ struct Logic9Planes {
         return when_false;
     }
     const auto m = mask(width);
-    const auto same = ~((when_true.a ^ when_false.a) | (when_true.b ^ when_false.b))
+    // With an ambiguous condition, Table 11-20 preserves only equal known
+    // bits. Equal X or Z bits also produce X.
+    const auto same_known = ~(when_true.b | when_false.b
+                                | (when_true.a ^ when_false.a))
         & m;
-    return { (when_true.a & same) | (~same & m), (when_true.b & same) | (~same & m) };
+    const auto unknown = ~same_known & m;
+    return { (when_true.a & same_known) | unknown, unknown };
 }
 
 [[nodiscard]] constexpr Word to_two_state(const Word value) noexcept

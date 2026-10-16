@@ -99,6 +99,13 @@ struct GeneralPropertyActions {
   // `disable iff` aborts every running attempt and runs `abort`.
   std::optional<Expression> disable;
   std::vector<Statement> abort;
+  struct LocalState {
+      std::string name;
+      std::string type_spelling;
+      std::optional<Expression> initializer;
+  };
+  // Local values are stored per live attempt slot by the general evaluator.
+  std::vector<LocalState> locals;
   support::RareVector<Sensitivity> clock;
   SourceSpan span;
 };
@@ -350,6 +357,11 @@ class VerilogParser final : private detail::ParserBase {
   // returned statement runs one attempt from the current clock tick and
   // executes the success, failure, or vacuous statements.
   std::optional<Statement> general_property_evaluation(
+      std::span<const Token> tokens, const DesignUnit& unit,
+      const GeneralPropertyActions& actions);
+  // Validate attempt-local initialization and assigned-before-read flow
+  // without selecting the general automaton for a specialized property.
+  [[nodiscard]] bool general_property_local_flow_valid(
       std::span<const Token> tokens, const DesignUnit& unit,
       const GeneralPropertyActions& actions);
   // A boolean assertion operand parsed as an ordinary expression; empty
@@ -757,6 +769,8 @@ class VerilogParser final : private detail::ParserBase {
       const Token& task);
 
   std::optional<Statement> parse_statement();
+  [[gnu::noinline]] std::optional<Statement> parse_if_statement(
+      const Token& start);
   std::optional<Statement> parse_statement_unhoisted();
   std::optional<Type> import_interface_type(DesignUnit& unit);
   // The design being parsed; earlier units are visible to later ones.

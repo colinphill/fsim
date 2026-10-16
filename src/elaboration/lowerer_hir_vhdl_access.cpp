@@ -146,6 +146,29 @@ const semantic::vhdl::TypeDefinition* hir_vhdl_named_type(
     }
 }
 
+const semantic::vhdl::TypeDefinition* hir_vhdl_array_type(
+    const semantic::SpecializedHirUnit& unit,
+    semantic::TypeId type_id)
+{
+    std::unordered_set<std::uint32_t> visited;
+    while (type_id.valid() && visited.insert(type_id.value()).second) {
+        const auto type = unit.find_type(type_id);
+        if (!type || type->vhdl == nullptr) {
+            return nullptr;
+        }
+        const auto& definition = *type->vhdl;
+        if (definition.form == semantic::vhdl::TypeForm::array) {
+            return &definition;
+        }
+        if (definition.form != semantic::vhdl::TypeForm::subtype
+            && definition.form != semantic::vhdl::TypeForm::alias) {
+            return nullptr;
+        }
+        type_id = definition.base.type_mark.target;
+    }
+    return nullptr;
+}
+
 std::optional<std::size_t> hir_vhdl_subtype_width(
     const semantic::vhdl::SubtypeIndication& subtype)
 {
@@ -240,7 +263,11 @@ bool Lowerer::is_hir_vhdl_access_expression(
 
 Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
     const semantic::vhdl::TypeDefinition& type,
-    const frontend::SourceSpan& span)
+    const frontend::SourceSpan& span,
+    const semantic::vhdl::SubtypeIndication* const access_subtype,
+    const std::optional<semantic::ExpressionId> initializer,
+    const std::span<const semantic::vhdl::RangeConstraint>
+        allocator_constraints)
 {
     if (!type.designated_subtype) {
         report(
@@ -249,18 +276,393 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
             span);
         return nullptr;
     }
-    const auto designated = hir_effective_vhdl_subtype(
+
+    auto designated = hir_effective_vhdl_subtype(
         *type.designated_subtype).value_or(*type.designated_subtype);
-    const auto width = hir_vhdl_subtype_width(designated);
-    if (!width || *width == 0U
-        || *width > std::numeric_limits<std::uint32_t>::max()
-        || designated.domain == semantic::vhdl::ValueDomain::string) {
+    const auto* array = hir_vhdl_array_type(
+        *specialized_hir_unit_, designated.type_mark.target);
+
+    const bool string_payload
+        = designated.domain == semantic::vhdl::ValueDomain::string;
+    if (string_payload && !hir_vhdl_predefined_string_type(designated)) {
         report(
-            "FSIM-ELAB-VHACCESS-006",
-            "a bounded VHDL allocator requires a concrete nonempty packed designated subtype",
+            "FSIM-ELAB-VHACCESS-024",
+            "only the predefined VHDL STRING designated subtype has string storage",
             span);
         return nullptr;
     }
+
+    const auto normalize_range = [&](semantic::vhdl::RangeConstraint range)
+        -> std::optional<semantic::vhdl::RangeConstraint> {
+        if (range.kind != semantic::vhdl::RangeKind::array_index) {
+            return std::nullopt;
+        }
+        const auto left = hir_range_left(range);
+        const auto right = hir_range_right(range);
+        const auto direction = range.direction_from_bounds
+            ? hir_vhdl_range_direction(range, hir_process_scope_)
+            : std::optional { range.descending };
+        if (!left || !right || !direction) {
+            return std::nullopt;
+        }
+        range.left = *left;
+        range.right = *right;
+        range.left_expression.reset();
+        range.right_expression.reset();
+        range.descending = *direction;
+        range.direction_from_bounds = false;
+        range.null = *direction ? *left < *right : *left > *right;
+        return range;
+    };
+    const auto index_range = [&](const auto& constraints)
+        -> std::optional<semantic::vhdl::RangeConstraint> {
+        const auto found = std::ranges::find_if(
+            constraints, [](const semantic::vhdl::RangeConstraint& range) {
+                return range.kind
+                    == semantic::vhdl::RangeKind::array_index;
+            });
+        return found == constraints.end()
+            ? std::nullopt : normalize_range(*found);
+    };
+    const auto same_range = [](
+        const semantic::vhdl::RangeConstraint& left,
+        const semantic::vhdl::RangeConstraint& right) {
+        return left.left == right.left && left.right == right.right
+            && left.descending == right.descending
+            && left.null == right.null;
+    };
+
+    // A fixed multidimensional array has one packed storage value only when
+    // every declared dimension and its scalar leaf produce a complete layout.
+    // Keep open/ragged array-of-array allocation on the existing rejection
+    // path; it needs per-object recursive shape metadata.
+    std::vector<semantic::vhdl::RangeConstraint>
+        fixed_multidimensional_ranges;
+    std::optional<std::uint64_t> fixed_multidimensional_element_count;
+    if (array != nullptr && array->array_dimensions.size() > 1U) {
+        const auto element = array->element_subtype
+            ? hir_effective_vhdl_subtype(*array->element_subtype)
+            : std::nullopt;
+        const auto element_width = element
+            ? hir_vhdl_subtype_width(*element)
+            : std::nullopt;
+        const auto* nested_array = element
+                && element->type_mark.target.valid()
+            ? hir_vhdl_array_type(
+                  *specialized_hir_unit_, element->type_mark.target)
+            : nullptr;
+        auto index_constraints = std::vector<
+            semantic::vhdl::RangeConstraint> { };
+        for (const auto& constraint : designated.constraints) {
+            if (constraint.kind
+                == semantic::vhdl::RangeKind::array_index) {
+                index_constraints.push_back(constraint);
+            }
+        }
+        bool fixed_shape = array->element_subtype.has_value()
+            && element.has_value() && nested_array == nullptr && element_width
+            && *element_width != 0U
+            && element->domain != semantic::vhdl::ValueDomain::unknown
+            && element->domain != semantic::vhdl::ValueDomain::string
+            && element->domain != semantic::vhdl::ValueDomain::logic9
+            && index_constraints.size()
+                <= array->array_dimensions.size();
+        std::uint64_t element_count { 1U };
+        if (fixed_shape) {
+            fixed_multidimensional_ranges.reserve(
+                array->array_dimensions.size());
+            for (std::size_t dimension { };
+                 dimension < array->array_dimensions.size(); ++dimension) {
+                const auto& array_dimension
+                    = array->array_dimensions[dimension];
+                if (array_dimension.unconstrained) {
+                    fixed_shape = false;
+                    break;
+                }
+                const auto* source_range
+                    = dimension < index_constraints.size()
+                    ? &index_constraints[dimension]
+                    : array_dimension.constraint
+                    ? &*array_dimension.constraint
+                    : nullptr;
+                const auto range = source_range != nullptr
+                    ? normalize_range(*source_range)
+                    : std::nullopt;
+                if (!range || !range->left || !range->right
+                    || range->null) {
+                    fixed_shape = false;
+                    break;
+                }
+                const auto distance = index_distance(
+                    *range->left, *range->right);
+                if (distance
+                        == std::numeric_limits<std::uint64_t>::max()
+                    || distance + 1U == 0U
+                    || element_count
+                        > std::numeric_limits<std::uint64_t>::max()
+                            / (distance + 1U)) {
+                    fixed_shape = false;
+                    break;
+                }
+                element_count *= distance + 1U;
+                fixed_multidimensional_ranges.push_back(*range);
+            }
+        }
+        const auto designated_width = hir_vhdl_subtype_width(designated);
+        if (fixed_shape && designated_width
+            && element_count
+                <= std::numeric_limits<std::uint64_t>::max()
+                    / *element_width
+            && element_count * *element_width == *designated_width) {
+            fixed_multidimensional_element_count = element_count;
+        } else {
+            fixed_multidimensional_ranges.clear();
+            report(
+                "FSIM-ELAB-VHACCESS-024",
+                "a multidimensional VHDL access object requires one fully constrained packed layout",
+                span);
+            return nullptr;
+        }
+    }
+
+    std::vector<semantic::vhdl::RangeConstraint>
+        normalized_allocator_ranges;
+    normalized_allocator_ranges.reserve(allocator_constraints.size());
+    for (const auto& allocator_range : allocator_constraints) {
+        const auto normalized = normalize_range(allocator_range);
+        if (!normalized) {
+            report(
+                "FSIM-ELAB-VHACCESS-006",
+                "an explicit VHDL allocator range requires static array-index bounds",
+                span);
+            return nullptr;
+        }
+        normalized_allocator_ranges.push_back(*normalized);
+    }
+
+    const auto access_context = access_subtype != nullptr
+        ? hir_effective_vhdl_subtype(*access_subtype)
+        : std::nullopt;
+    const semantic::vhdl::TypeDefinition* contextual_access_type
+        = access_context
+        ? hir_vhdl_named_type(
+              *specialized_hir_unit_, *access_context,
+              semantic::vhdl::TypeForm::access)
+        : nullptr;
+    if (access_context != std::nullopt
+        && (contextual_access_type == nullptr
+            || contextual_access_type->id != type.id)) {
+        report(
+            "FSIM-ELAB-VHACCESS-023",
+            "the allocator's access subtype does not identify its resolved access type",
+            span);
+        return nullptr;
+    }
+
+    auto declared_range = index_range(designated.constraints);
+    auto context_range = access_context
+        ? index_range(access_context->constraints)
+        : std::nullopt;
+    if (!declared_range && array != nullptr
+        && !array->array_dimensions.empty()
+        && array->array_dimensions.front().constraint) {
+        declared_range = normalize_range(
+            *array->array_dimensions.front().constraint);
+    }
+    if (declared_range && context_range
+        && !same_range(*declared_range, *context_range)) {
+        report(
+            "FSIM-ELAB-VHACCESS-023",
+            "a single access type cannot use multiple fixed designated-object shapes in this representation",
+            span);
+        return nullptr;
+    }
+    auto object_range = declared_range ? declared_range : context_range;
+    if (!fixed_multidimensional_ranges.empty() && !object_range) {
+        object_range = fixed_multidimensional_ranges.front();
+    }
+    if (!normalized_allocator_ranges.empty()) {
+        const bool predefined_bit_vector
+            = !designated.type_mark.target.valid()
+            && designated.builtin_type
+                == semantic::vhdl::BuiltinTypeIdentity::
+                    std_standard_bit_vector;
+        if (!predefined_bit_vector
+            || normalized_allocator_ranges.size() != 1U) {
+            report(
+                "FSIM-ELAB-VHACCESS-006",
+                "explicit allocator bounds currently require one predefined BIT_VECTOR index range",
+                span);
+            return nullptr;
+        }
+        const auto& allocator_range = normalized_allocator_ranges.front();
+        const auto integer_index_base
+            = frontend::vhdl_predefined_integer_range(
+                vhdl_standard_, "integer");
+        const auto natural_index_subtype
+            = frontend::vhdl_predefined_integer_range(
+                vhdl_standard_, "natural");
+        const bool endpoints_in_integer_base
+            = allocator_range.left && allocator_range.right
+            && integer_index_base.contains(*allocator_range.left)
+            && integer_index_base.contains(*allocator_range.right);
+        const bool endpoints_in_natural
+            = allocator_range.left && allocator_range.right
+            && natural_index_subtype.contains(*allocator_range.left)
+            && natural_index_subtype.contains(*allocator_range.right);
+        if (!endpoints_in_integer_base
+            || (!allocator_range.null && !endpoints_in_natural)) {
+            report(
+                "FSIM-ELAB-VHACCESS-023",
+                "the BIT_VECTOR allocator bounds are outside its predefined NATURAL index subtype",
+                span);
+            return nullptr;
+        }
+        if (object_range && !same_range(*object_range, allocator_range)) {
+            report(
+                "FSIM-ELAB-VHACCESS-023",
+                "explicit VHDL allocator bounds do not match the designated subtype",
+                span);
+            return nullptr;
+        }
+        object_range = allocator_range;
+    }
+
+    const bool open_array = designated.unconstrained
+        || (array != nullptr
+            && !array->array_dimensions.empty()
+            && array->array_dimensions.front().unconstrained);
+    std::optional<std::size_t> initializer_width;
+    std::optional<semantic::vhdl::RangeConstraint> value_range;
+    if (initializer) {
+        const auto source = specialized_hir_unit_->find_expression(*initializer);
+        initializer_width = hir_expression_width(
+            *initializer, hir_process_scope_, &designated);
+        if (open_array && source && source->vhdl != nullptr) {
+            auto inference_expression = *initializer;
+            auto inference_source = source;
+            // The allocator operand is a qualified expression such as
+            // BIT_VECTOR'("1111"). Its positional value supplies bounds
+            // using the designated array's index subtype; do not ask the
+            // constant folder to erase that aggregate/value shape first.
+            for (std::size_t depth = 0U; depth < 16U; ++depth) {
+                if (!inference_source || inference_source->vhdl == nullptr
+                    || inference_source->vhdl->kind
+                        != semantic::vhdl::ExpressionKind::call
+                    || !inference_source->vhdl->text.starts_with(
+                        "@vhdl-qualified:")
+                    || inference_source->vhdl->operands.size() != 1U) {
+                    break;
+                }
+                const auto qualified_subtype
+                    = hir_vhdl_expression_subtype(inference_expression);
+                const auto* qualified_array = qualified_subtype
+                    ? hir_vhdl_named_type(
+                          *specialized_hir_unit_, *qualified_subtype,
+                          semantic::vhdl::TypeForm::array)
+                    : nullptr;
+                const auto* designated_array = hir_vhdl_named_type(
+                    *specialized_hir_unit_, designated,
+                    semantic::vhdl::TypeForm::array);
+                if (qualified_array == nullptr
+                    || designated_array == nullptr
+                    || qualified_array->id != designated_array->id) {
+                    break;
+                }
+                inference_expression
+                    = inference_source->vhdl->operands.front();
+                inference_source = specialized_hir_unit_->find_expression(
+                    inference_expression);
+            }
+            if (inference_source && inference_source->vhdl != nullptr) {
+                auto inference_subtype = *type.designated_subtype;
+                inference_subtype.constraints.clear();
+                inference_subtype.unconstrained = true;
+                semantic::vhdl::Declaration inferred_value;
+                inferred_value.scope = inference_source->vhdl->scope;
+                inferred_value.form
+                    = semantic::vhdl::DeclarationForm::constant;
+                inferred_value.subtype = inference_subtype;
+                inferred_value.initializer = inference_expression;
+                std::size_t proven_width { };
+                if (const auto inferred = hir_vhdl_unconstrained_constant_range(
+                        inferred_value,
+                        initializer_width.value_or(0U),
+                        hir_process_scope_,
+                        &proven_width)) {
+                    initializer_width = proven_width;
+                    semantic::vhdl::RangeConstraint range;
+                    range.kind = semantic::vhdl::RangeKind::array_index;
+                    range.left = inferred->left;
+                    range.right = inferred->right;
+                    range.descending = inferred->descending;
+                    range.source = inference_source->vhdl->source;
+                    range.null = false;
+                    value_range = std::move(range);
+                }
+            }
+        }
+    }
+
+    if (object_range && value_range
+        && !same_range(*object_range, *value_range)) {
+        report(
+            "FSIM-ELAB-VHACCESS-023",
+            "the qualified allocator value does not satisfy the fixed access-subtype bounds",
+            span);
+        return nullptr;
+    }
+    if (!object_range && value_range) {
+        object_range = value_range;
+    }
+    if (!object_range && !initializer) {
+        if (const auto found = hir_vhdl_access_heaps_.find(type.id.value());
+            found != hir_vhdl_access_heaps_.end()) {
+            return &found->second;
+        }
+    }
+    if (open_array && !object_range) {
+        report(
+            "FSIM-ELAB-VHACCESS-006",
+            "an unconstrained VHDL access object requires one statically resolved rank-one index range",
+            span);
+        return nullptr;
+    }
+    if (object_range) {
+        const auto current = index_range(designated.constraints);
+        if (current) {
+            const auto found = std::ranges::find_if(
+                designated.constraints,
+                [](const semantic::vhdl::RangeConstraint& range) {
+                    return range.kind
+                        == semantic::vhdl::RangeKind::array_index;
+                });
+            *found = *object_range;
+        } else {
+            designated.constraints.insert(
+                designated.constraints.begin(), *object_range);
+        }
+        designated.unconstrained = false;
+    }
+    if (!fixed_multidimensional_ranges.empty()) {
+        std::size_t dimension { };
+        for (auto& constraint : designated.constraints) {
+            if (constraint.kind
+                != semantic::vhdl::RangeKind::array_index) {
+                continue;
+            }
+            if (dimension >= fixed_multidimensional_ranges.size()) {
+                break;
+            }
+            constraint = fixed_multidimensional_ranges[dimension++];
+        }
+        while (dimension < fixed_multidimensional_ranges.size()) {
+            designated.constraints.push_back(
+                fixed_multidimensional_ranges[dimension++]);
+        }
+        designated.unconstrained = false;
+    }
+
     if (designated.domain == semantic::vhdl::ValueDomain::logic9) {
         report(
             "FSIM-ELAB-VHACCESS-007",
@@ -268,18 +670,161 @@ Lowerer::HirVhdlAccessHeap* Lowerer::hir_vhdl_access_heap(
             span);
         return nullptr;
     }
+
+    std::optional<std::size_t> width = hir_vhdl_subtype_width(designated);
+    const bool predefined_bit_vector
+        = !designated.type_mark.target.valid()
+        && designated.builtin_type
+            == semantic::vhdl::BuiltinTypeIdentity::
+                std_standard_bit_vector;
+    if (predefined_bit_vector && open_array && object_range
+        && object_range->left && object_range->right) {
+        const auto distance = index_distance(
+            *object_range->left, *object_range->right);
+        if (!object_range->null
+            && distance == std::numeric_limits<std::uint64_t>::max()) {
+            report(
+                "FSIM-ELAB-VHACCESS-006",
+                "the VHDL BIT_VECTOR access-object length exceeds the supported bound",
+                span);
+            return nullptr;
+        }
+        const auto extent = object_range->null
+            ? std::uint64_t { } : distance + 1U;
+        if (extent > std::numeric_limits<std::uint32_t>::max()) {
+            report(
+                "FSIM-ELAB-VHACCESS-006",
+                "the VHDL BIT_VECTOR access-object length exceeds the supported bound",
+                span);
+            return nullptr;
+        }
+        width = static_cast<std::size_t>(extent);
+        designated.executable_width = extent;
+    }
+    if (!string_payload && (open_array || !width) && initializer_width) {
+        width = initializer_width;
+        designated.executable_width = *width;
+    }
+    if (string_payload) {
+        if (!object_range) {
+            report(
+                "FSIM-ELAB-VHACCESS-006",
+                "a VHDL STRING access object requires a concrete index range",
+                span);
+            return nullptr;
+        }
+    } else if (!width || *width == 0U
+        || *width > std::numeric_limits<std::uint32_t>::max()) {
+        report(
+            "FSIM-ELAB-VHACCESS-006",
+            "a bounded VHDL allocator requires a concrete nonempty packed designated subtype",
+            span);
+        return nullptr;
+    }
+
+    if (object_range && !object_range->null && !string_payload
+        && array != nullptr && array->element_subtype) {
+        const auto element = hir_effective_vhdl_subtype(
+            *array->element_subtype);
+        const auto element_width = element
+            ? hir_vhdl_subtype_width(*element)
+            : std::nullopt;
+        const auto distance = index_distance(
+            *object_range->left, *object_range->right);
+        if (distance == std::numeric_limits<std::uint64_t>::max()) {
+            report(
+                "FSIM-ELAB-VHACCESS-023",
+                "the fixed VHDL access-object bounds exceed the supported extent",
+                span);
+            return nullptr;
+        }
+        const auto count = fixed_multidimensional_element_count
+            ? *fixed_multidimensional_element_count
+            : distance + 1U;
+        if (element_width && *element_width != 0U
+            && count <= std::numeric_limits<std::size_t>::max()
+                    / *element_width
+            && count * *element_width != *width) {
+            report(
+                "FSIM-ELAB-VHACCESS-023",
+                "the fixed VHDL access-object bounds do not match its packed width",
+                span);
+            return nullptr;
+        }
+    }
+
     if (const auto found = hir_vhdl_access_heaps_.find(type.id.value());
         found != hir_vhdl_access_heaps_.end()) {
+        const auto existing_range = index_range(
+            found->second.designated_subtype.constraints);
+        if (object_range && existing_range
+            && !same_range(*object_range, *existing_range)) {
+            report(
+                "FSIM-ELAB-VHACCESS-023",
+                "this access type is already represented with different fixed bounds",
+                span);
+            return nullptr;
+        }
+        if (!fixed_multidimensional_ranges.empty()) {
+            std::vector<semantic::vhdl::RangeConstraint>
+                existing_multidimensional_ranges;
+            for (const auto& constraint :
+                found->second.designated_subtype.constraints) {
+                if (constraint.kind
+                    != semantic::vhdl::RangeKind::array_index) {
+                    continue;
+                }
+                const auto normalized = normalize_range(constraint);
+                if (!normalized) {
+                    existing_multidimensional_ranges.clear();
+                    break;
+                }
+                existing_multidimensional_ranges.push_back(*normalized);
+            }
+            bool same_multidimensional_shape
+                = existing_multidimensional_ranges.size()
+                == fixed_multidimensional_ranges.size();
+            for (std::size_t dimension { };
+                 same_multidimensional_shape
+                     && dimension < fixed_multidimensional_ranges.size();
+                 ++dimension) {
+                same_multidimensional_shape = same_range(
+                    existing_multidimensional_ranges[dimension],
+                    fixed_multidimensional_ranges[dimension]);
+            }
+            if (!same_multidimensional_shape) {
+                report(
+                    "FSIM-ELAB-VHACCESS-023",
+                    "this access type is already represented with different multidimensional bounds",
+                    span);
+                return nullptr;
+            }
+        }
+        const auto existing_width
+            = hir_vhdl_subtype_width(found->second.designated_subtype);
+        if (!string_payload && width && existing_width
+            && *width != *existing_width) {
+            report(
+                "FSIM-ELAB-VHACCESS-023",
+                "this access type is already represented with a different packed width",
+                span);
+            return nullptr;
+        }
         return &found->second;
     }
+
     ContainerType objects_type;
-    objects_type.element_width = static_cast<std::uint32_t>(*width);
-    objects_type.two_state = is_two_state_domain(
-        hir_vhdl_domain(designated.domain));
+    objects_type.element_kind = string_payload
+        ? ContainerElementKind::String : ContainerElementKind::Packed;
+    objects_type.element_width = string_payload
+        ? 1U : static_cast<std::uint32_t>(*width);
+    objects_type.two_state = string_payload
+        || is_two_state_domain(hir_vhdl_domain(designated.domain));
     objects_type.signed_elements = designated.signed_value;
     objects_type.associative = true;
     objects_type.index_width = 32U;
     objects_type.two_state_indices = true;
+    objects_type.element_nominal_type = designated.type_mark.spelling;
     const auto maximum = std::min<std::uint64_t>(
         maximum_container_elements(objects_type),
         type.maximum_objects);
@@ -310,8 +855,11 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_object(
     if (type == nullptr || !type->designated_subtype) {
         return std::nullopt;
     }
-    auto* heap = hir_vhdl_access_heap(*type, span);
-    if (heap == nullptr) {
+    auto* heap = hir_vhdl_access_heap(
+        *type, span, &access_subtype);
+    if (heap == nullptr
+        || heap->designated_subtype.domain
+            == semantic::vhdl::ValueDomain::string) {
         return std::nullopt;
     }
     const auto width = hir_vhdl_subtype_width(heap->designated_subtype);
@@ -333,6 +881,60 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_object(
         *width, hir_vhdl_domain(heap->designated_subtype.domain));
     process_.operations.emplace_back(ContainerRead {
         result, heap->objects, handle, false });
+    return result;
+}
+
+std::optional<StringRegisterId>
+Lowerer::lower_hir_vhdl_access_string_object(
+    const semantic::ExpressionId dereference_id)
+{
+    const auto expression = specialized_hir_unit_ != nullptr
+        ? specialized_hir_unit_->find_expression(dereference_id)
+        : std::nullopt;
+    if (!expression || expression->vhdl == nullptr
+        || expression->vhdl->kind
+            != semantic::vhdl::ExpressionKind::call
+        || (expression->vhdl->text != "@vhdl-dereference"
+            && expression->vhdl->text != "@vhdl-member:all")
+        || expression->vhdl->operands.size() != 1U) {
+        return std::nullopt;
+    }
+    const auto prefix = expression->vhdl->operands.front();
+    const auto access_subtype = hir_vhdl_expression_subtype(prefix);
+    const auto* type = access_subtype
+        ? hir_vhdl_access_type_definition(*access_subtype)
+        : nullptr;
+    const auto designated = type != nullptr && type->designated_subtype
+        ? hir_effective_vhdl_subtype(*type->designated_subtype)
+        : std::nullopt;
+    if (type == nullptr || !designated
+        || designated->domain != semantic::vhdl::ValueDomain::string
+        || !hir_vhdl_predefined_string_type(*designated)) {
+        return std::nullopt;
+    }
+    const auto span = hir_source_span(expression->vhdl->source);
+    auto* heap = hir_vhdl_access_heap(
+        *type, span, &*access_subtype);
+    const auto handle = lower_hir_expression(prefix, 32U);
+    if (heap == nullptr || !handle
+        || heap->designated_subtype.domain
+            != semantic::vhdl::ValueDomain::string) {
+        return std::nullopt;
+    }
+    const auto live_result = allocate_register(
+        32U, frontend::ValueDomain::Bit2);
+    process_.operations.emplace_back(ContainerExists {
+        live_result, heap->objects, *handle, false });
+    const auto live = resize_register(live_result, 1U, false);
+    process_.operations.emplace_back(Assert {
+        live,
+        "VHDL access dereference used a null, stale, or foreign handle",
+        AssertionSeverity::failure,
+        hir_vhdl_source_location(span),
+    });
+    const auto result = allocate_string_register();
+    process_.operations.emplace_back(ContainerStringRead {
+        result, heap->objects, *handle, false, false, false, { } });
     return result;
 }
 
@@ -378,25 +980,160 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
         const semantic::CompiledDesignResolver resolver {
             *specialized_hir_unit_, hir_generic_binding_frames_
         };
-        const auto allocated_designated_type
-            = resolver.resolve_vhdl_named_type(
-                designated_name, source.scope);
-        const auto same_designated_subtype = [&](
-            const semantic::vhdl::SubtypeIndication& candidate) {
-            if (same_vhdl_name(
-                    candidate.type_mark.spelling, designated_name)) {
-                return true;
+        using BuiltinType = semantic::vhdl::BuiltinTypeIdentity;
+        using ScalarType = semantic::CompiledVhdlStandardScalarIdentity;
+        struct NominalTypeIdentity {
+            std::optional<semantic::TypeId> type;
+            BuiltinType builtin { BuiltinType::none };
+            ScalarType standard_scalar { ScalarType::none };
+        };
+        const auto nominal_base_type = [&](semantic::TypeId type_id)
+            -> std::optional<NominalTypeIdentity> {
+            std::unordered_set<std::uint32_t> visited;
+            while (type_id.valid()) {
+                if (!visited.insert(type_id.value()).second) {
+                    return std::nullopt;
+                }
+                const auto type = specialized_hir_unit_->find_type(type_id);
+                const auto& semantic_types
+                    = specialized_hir_unit_->design().semantics.types();
+                const auto semantic_type = std::ranges::find(
+                    semantic_types, type_id, &semantic::Type::id);
+                if (!type || type->vhdl == nullptr
+                    || semantic_type == semantic_types.end()) {
+                    return std::nullopt;
+                }
+                const auto& definition = *type->vhdl;
+                if (definition.form
+                        != semantic::vhdl::TypeForm::subtype
+                    && definition.form
+                        != semantic::vhdl::TypeForm::alias) {
+                    return NominalTypeIdentity { type_id,
+                        BuiltinType::none, ScalarType::none };
+                }
+                if (definition.form
+                        == semantic::vhdl::TypeForm::subtype
+                    && semantic_type->kind
+                        == semantic::TypeKind::declaration) {
+                    // A user-declared scalar integer type is HIR-subtype
+                    // shaped but remains a distinct nominal declaration.
+                    return NominalTypeIdentity {
+                        type_id, BuiltinType::none, ScalarType::none
+                    };
+                }
+                auto base_type = definition.base.type_mark.target;
+                if (!base_type.valid()) {
+                    const auto declaration
+                        = specialized_hir_unit_->find_declaration(
+                            definition.declaration);
+                    if (!declaration || declaration->vhdl == nullptr) {
+                        return std::nullopt;
+                    }
+                    const auto resolved = resolver.resolve_vhdl_type_identity(
+                        definition.base.type_mark.spelling,
+                        declaration->vhdl->scope);
+                    if (resolved.status
+                        != semantic::CompiledResolutionStatus::unique) {
+                        return std::nullopt;
+                    }
+                    if (resolved.builtin_type != BuiltinType::none) {
+                        return NominalTypeIdentity { std::nullopt,
+                            resolved.builtin_type, ScalarType::none };
+                    }
+                    if (resolved.standard_scalar_type != ScalarType::none) {
+                        return NominalTypeIdentity { std::nullopt,
+                            BuiltinType::none,
+                            resolved.standard_scalar_type };
+                    }
+                    if (!resolved.type) {
+                        return std::nullopt;
+                    }
+                    base_type = *resolved.type;
+                }
+                type_id = base_type;
             }
-            if (!allocated_designated_type) {
+            return std::nullopt;
+        };
+        const auto access_declaration_scope = [&](const auto& definition)
+            -> std::optional<semantic::ScopeId> {
+            const auto declaration = specialized_hir_unit_->find_declaration(
+                definition.declaration);
+            if (!declaration || declaration->vhdl == nullptr) {
+                return std::nullopt;
+            }
+            return declaration->vhdl->scope;
+        };
+        const auto allocated_designated_type
+            = resolver.resolve_vhdl_type_identity(
+                designated_name, source.scope);
+        const auto same_designated_base_type = [&](
+            const semantic::vhdl::SubtypeIndication& candidate,
+            const semantic::ScopeId candidate_scope) {
+            if (allocated_designated_type.status
+                != semantic::CompiledResolutionStatus::unique) {
                 return false;
             }
-            if (candidate.type_mark.target.valid()) {
-                return candidate.type_mark.target
-                    == *allocated_designated_type;
+            const auto allocated_identity
+                = allocated_designated_type.builtin_type
+                    != BuiltinType::none
+                ? std::optional<NominalTypeIdentity> {
+                    NominalTypeIdentity { std::nullopt,
+                        allocated_designated_type.builtin_type,
+                        ScalarType::none }
+                }
+                : allocated_designated_type.standard_scalar_type
+                        != ScalarType::none
+                ? std::optional<NominalTypeIdentity> {
+                    NominalTypeIdentity { std::nullopt,
+                        BuiltinType::none,
+                        allocated_designated_type.standard_scalar_type }
+                }
+                : allocated_designated_type.type
+                ? nominal_base_type(*allocated_designated_type.type)
+                : std::nullopt;
+            if (!allocated_identity) {
+                return false;
             }
-            const auto resolved = resolver.resolve_vhdl_named_type(
-                candidate.type_mark.spelling, source.scope);
-            return resolved && *resolved == *allocated_designated_type;
+            auto candidate_identity = candidate.builtin_type
+                    != BuiltinType::none
+                ? std::optional<NominalTypeIdentity> {
+                    NominalTypeIdentity { std::nullopt,
+                        candidate.builtin_type, ScalarType::none }
+                }
+                : std::nullopt;
+            auto candidate_type = candidate.type_mark.target;
+            if (!candidate_identity && !candidate_type.valid()) {
+                const auto resolved = resolver.resolve_vhdl_type_identity(
+                    candidate.type_mark.spelling, candidate_scope);
+                if (resolved.status
+                    != semantic::CompiledResolutionStatus::unique) {
+                    return false;
+                }
+                if (resolved.builtin_type != BuiltinType::none) {
+                    candidate_identity = NominalTypeIdentity {
+                        std::nullopt, resolved.builtin_type,
+                        ScalarType::none };
+                } else if (resolved.standard_scalar_type
+                    != ScalarType::none) {
+                    candidate_identity = NominalTypeIdentity {
+                        std::nullopt, BuiltinType::none,
+                        resolved.standard_scalar_type };
+                } else if (resolved.type) {
+                    candidate_type = *resolved.type;
+                }
+            }
+            // Subtype and alias declarations preserve the base type identity,
+            // while declared types remain nominal even when their HIR form is
+            // subtype-shaped (for example, a user-defined integer type).
+            if (!candidate_identity && candidate_type.valid()) {
+                candidate_identity = nominal_base_type(candidate_type);
+            }
+            return candidate_identity
+                && candidate_identity->builtin
+                    == allocated_identity->builtin
+                && candidate_identity->standard_scalar
+                    == allocated_identity->standard_scalar
+                && candidate_identity->type == allocated_identity->type;
         };
         const auto* contextual_type = expected_access_subtype != nullptr
             ? hir_vhdl_named_type(
@@ -404,10 +1141,15 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                   semantic::vhdl::TypeForm::access)
             : nullptr;
         if (contextual_type != nullptr
-            && contextual_type->designated_subtype
-            && same_designated_subtype(
-                *contextual_type->designated_subtype)) {
-            return contextual_type;
+            && contextual_type->designated_subtype) {
+            const auto candidate_scope
+                = access_declaration_scope(*contextual_type);
+            if (candidate_scope
+                && same_designated_base_type(
+                    *contextual_type->designated_subtype,
+                    *candidate_scope)) {
+                return contextual_type;
+            }
         }
         const semantic::vhdl::TypeDefinition* selected = nullptr;
         for (const auto& stored :
@@ -417,9 +1159,15 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
             if (!candidate || candidate->vhdl == nullptr
                 || candidate->vhdl->form
                     != semantic::vhdl::TypeForm::access
-                || !candidate->vhdl->designated_subtype
-                || !same_designated_subtype(
-                    *candidate->vhdl->designated_subtype)) {
+                || !candidate->vhdl->designated_subtype) {
+                continue;
+            }
+            const auto candidate_scope
+                = access_declaration_scope(*candidate->vhdl);
+            if (!candidate_scope
+                || !same_designated_base_type(
+                    *candidate->vhdl->designated_subtype,
+                    *candidate_scope)) {
                 continue;
             }
             if (selected != nullptr
@@ -485,12 +1233,179 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
                 span);
             return std::nullopt;
         }
-        auto* heap = hir_vhdl_access_heap(*type, span);
+        std::vector<semantic::vhdl::RangeConstraint> allocator_constraints;
+        const auto allocator_subtype = !source.operands.empty()
+            ? specialized_hir_unit_->find_expression(
+                  source.operands.front())
+            : std::nullopt;
+        const auto designated_subtype = type->designated_subtype
+            ? hir_effective_vhdl_subtype(*type->designated_subtype)
+            : std::nullopt;
+        const bool predefined_bit_vector
+            = designated_subtype
+            && !designated_subtype->type_mark.target.valid()
+            && designated_subtype->builtin_type
+                == semantic::vhdl::BuiltinTypeIdentity::
+                    std_standard_bit_vector;
+        if (predefined_bit_vector && allocator_subtype
+            && allocator_subtype->vhdl != nullptr) {
+            for (const auto bound_id : allocator_subtype->vhdl->operands) {
+                const auto bound = specialized_hir_unit_->find_expression(
+                    bound_id);
+                if (!bound || bound->vhdl == nullptr
+                    || bound->vhdl->kind
+                        != semantic::vhdl::ExpressionKind::binary
+                    || (bound->vhdl->text != "to"
+                        && bound->vhdl->text != "downto")
+                    || bound->vhdl->operands.size() != 2U) {
+                    report(
+                        "FSIM-ELAB-VHACCESS-006",
+                        "an explicit BIT_VECTOR allocator range requires one static to/downto constraint",
+                        span);
+                    return std::nullopt;
+                }
+                semantic::vhdl::RangeConstraint range;
+                range.kind = semantic::vhdl::RangeKind::array_index;
+                range.left_expression = bound->vhdl->operands[0];
+                range.right_expression = bound->vhdl->operands[1];
+                range.descending = bound->vhdl->text == "downto";
+                range.source = bound->vhdl->source;
+                allocator_constraints.push_back(std::move(range));
+            }
+            if (!allocator_constraints.empty()
+                && allocator_constraints.size() != 1U) {
+                report(
+                    "FSIM-ELAB-VHACCESS-006",
+                    "a predefined BIT_VECTOR allocator requires one index range",
+                    span);
+                return std::nullopt;
+            }
+        }
+        const auto allocator_initializer
+            = source.text == "@vhdl-new-qualified"
+                    && source.operands.size() == 2U
+            ? std::optional { source.operands[1] }
+            : std::nullopt;
+        auto* heap = hir_vhdl_access_heap(
+            *type, span, expected_access_subtype, allocator_initializer,
+            allocator_constraints);
         if (heap == nullptr) {
             return std::nullopt;
         }
+        if (heap->designated_subtype.domain
+            == semantic::vhdl::ValueDomain::string) {
+            if (source.text != "@vhdl-new-qualified"
+                || source.operands.size() != 2U) {
+                report(
+                    "FSIM-ELAB-VHACCESS-006",
+                    "a bounded VHDL STRING allocator requires one qualified initial value",
+                    span);
+                return std::nullopt;
+            }
+            const auto text = lower_hir_string_expression(
+                source.operands[1], &heap->designated_subtype);
+            if (!text) {
+                report(
+                    "FSIM-ELAB-VHACCESS-012",
+                    "a VHDL STRING allocator requires one executable STRING value",
+                    span);
+                return std::nullopt;
+            }
+            const auto range = std::ranges::find_if(
+                heap->designated_subtype.constraints,
+                [](const semantic::vhdl::RangeConstraint& constraint) {
+                    return constraint.kind
+                        == semantic::vhdl::RangeKind::array_index;
+                });
+            if (range == heap->designated_subtype.constraints.end()
+                || !range->left || !range->right) {
+                report(
+                    "FSIM-ELAB-VHACCESS-006",
+                    "a VHDL STRING allocator requires concrete index bounds",
+                    span);
+                return std::nullopt;
+            }
+            const auto extent = range->null
+                ? std::uint64_t { }
+                : index_distance(*range->left, *range->right) + 1U;
+            if (extent > std::numeric_limits<std::uint32_t>::max()) {
+                report(
+                    "FSIM-ELAB-VHACCESS-006",
+                    "the VHDL STRING access-object length exceeds the supported bound",
+                    span);
+                return std::nullopt;
+            }
+            const auto actual_length = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                StringLength { actual_length, *text });
+            const auto required_length = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(LoadConstant {
+                required_length, unsigned_value(extent, 32U) });
+            const auto correct_length = allocate_register(
+                1U, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::equal,
+                correct_length,
+                actual_length,
+                required_length,
+            });
+            process_.operations.emplace_back(Assert {
+                correct_length,
+                "VHDL STRING allocator value does not satisfy its designated range",
+                AssertionSeverity::failure,
+                hir_vhdl_source_location(span),
+            });
+            const auto issued_size = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(ContainerSize {
+                issued_size, heap->issued_handles });
+            const auto live_size = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(ContainerSize {
+                live_size, heap->objects });
+            const auto maximum = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(LoadConstant {
+                maximum,
+                unsigned_value(heap->maximum_live_objects, 32U) });
+            const auto within_limit = allocate_register(
+                1U, frontend::ValueDomain::Boolean);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::less_unsigned,
+                within_limit,
+                live_size,
+                maximum });
+            process_.operations.emplace_back(Assert {
+                within_limit,
+                "VHDL access allocation exceeded its owning-storage limit",
+                AssertionSeverity::failure,
+                hir_vhdl_source_location(span),
+            });
+            const auto one = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                LoadConstant { one, unsigned_value(1U, 32U) });
+            const auto handle = allocate_register(
+                32U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(Binary {
+                BinaryOperator::add_unsigned, handle, issued_size, one });
+            process_.operations.emplace_back(ContainerStringWrite {
+                heap->objects, handle, *text, false, false, false, { } });
+            const auto token = allocate_register(
+                1U, frontend::ValueDomain::Bit2);
+            process_.operations.emplace_back(
+                LoadConstant { token, unsigned_value(1U, 1U) });
+            process_.operations.emplace_back(PushContainer {
+                heap->issued_handles, token, false, std::nullopt });
+            return handle;
+        }
         const auto width = hir_vhdl_subtype_width(
             heap->designated_subtype);
+        if (!width || *width == 0U) {
+            return std::nullopt;
+        }
         std::optional<RegisterId> value;
         if (source.text == "@vhdl-new-qualified"
             && source.operands.size() == 2U) {
@@ -592,8 +1507,12 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
         return std::nullopt;
     }
     const auto* type = access_type(source.operands.front());
+    const auto source_access_subtype = hir_vhdl_expression_subtype(
+        source.operands.front());
     auto* heap = type != nullptr
-        ? hir_vhdl_access_heap(*type, span)
+        ? hir_vhdl_access_heap(
+              *type, span,
+              source_access_subtype ? &*source_access_subtype : nullptr)
         : nullptr;
     const auto handle = lower_hir_expression(
         source.operands.front(), 32U);
@@ -611,7 +1530,14 @@ std::optional<RegisterId> Lowerer::lower_hir_vhdl_access_expression(
         AssertionSeverity::failure,
         hir_vhdl_source_location(span),
     });
+    if (heap->designated_subtype.domain
+        == semantic::vhdl::ValueDomain::string) {
+        return std::nullopt;
+    }
     const auto width = hir_vhdl_subtype_width(heap->designated_subtype);
+    if (!width || *width == 0U) {
+        return std::nullopt;
+    }
     const auto result = allocate_register(
         *width, hir_vhdl_domain(heap->designated_subtype.domain));
     process_.operations.emplace_back(ContainerRead {
@@ -911,10 +1837,6 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
                 return true;
             }
         }
-        auto* heap = type != nullptr
-            ? hir_vhdl_access_heap(
-                  *type, hir_source_span(target->vhdl->source))
-            : nullptr;
         const auto contextual_allocator
             = assigned_expression && assigned_expression->vhdl != nullptr
             && assigned_expression->vhdl->kind
@@ -927,6 +1849,11 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
                   *statement->vhdl->value, 32U,
                   subtype ? &*subtype : nullptr)
             : lower_hir_expression(*statement->vhdl->value, 32U);
+        auto* heap = type != nullptr
+            ? hir_vhdl_access_heap(
+                  *type, hir_source_span(target->vhdl->source),
+                  subtype ? &*subtype : nullptr)
+            : nullptr;
         if (!binding || !binding->local || type == nullptr
             || heap == nullptr || !assigned) {
             return false;
@@ -994,7 +1921,8 @@ bool Lowerer::lower_hir_vhdl_access_assignment(
         return true;
     }
     auto* heap = hir_vhdl_access_heap(
-        *type, hir_source_span(target->vhdl->source));
+        *type, hir_source_span(target->vhdl->source),
+        subtype ? &*subtype : nullptr);
     const auto designated = hir_effective_vhdl_subtype(
         *type->designated_subtype).value_or(*type->designated_subtype);
     const auto width = hir_vhdl_subtype_width(designated);
@@ -1155,7 +2083,7 @@ bool Lowerer::lower_hir_vhdl_access_deallocation(
     // the empty heap here so the same runtime container is shared with those
     // later allocations.
     auto* heap = hir_vhdl_access_heap(
-        *type, hir_source_span(statement->vhdl->source));
+        *type, hir_source_span(statement->vhdl->source), &*subtype);
     if (heap == nullptr) {
         return false;
     }

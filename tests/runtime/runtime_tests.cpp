@@ -34,6 +34,8 @@ int main(const int argc, const char* const* argv)
                 test_generic_queue_ordering_control();
             } else if (selection == "generic_update_region") {
                 test_generic_update_region_runtime();
+            } else if (selection == "package_static_startup") {
+                test_package_static_startup_runtime();
             } else if (selection == "resolved_driver_slots") {
                 test_resolved_driver_slots();
             } else if (selection == "aggregate_proxy_native_fallback") {
@@ -149,6 +151,7 @@ int main(const int argc, const char* const* argv)
         test_fused_static_cohorts();
         test_fused_projected_cohorts();
         test_generic_update_region_runtime();
+        test_package_static_startup_runtime();
         test_scheduler_stop_resume();
         test_scheduler_ownership_and_failure_containment();
         test_scheduler_batch_contract();

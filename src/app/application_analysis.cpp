@@ -3,6 +3,7 @@
 #include "fsim/support/native_filesystem.hpp"
 #include "fsim/support/path.hpp"
 
+#include <algorithm>
 #include <functional>
 #include <mutex>
 #include <optional>
@@ -834,26 +835,60 @@ std::shared_ptr<systemc::HierarchyRegistry> load_systemc_plugin(
       std::move(registry));
 }
 
+namespace {
+
+std::string vhdl_form_key(const std::string_view name, const bool extended)
+{
+  return std::string { extended ? "extended:" : "basic:" } + std::string { name };
+}
+
+std::string vhdl_identifier_spelling(
+    const std::string_view name, const bool extended)
+{
+  if (!extended) {
+    return std::string { name };
+  }
+  std::string result { "\\" };
+  result.reserve(name.size() + 2U);
+  for (const auto character : name) {
+    result.push_back(character);
+    if (character == '\\') {
+      result.push_back('\\');
+    }
+  }
+  result.push_back('\\');
+  return result;
+}
+
+} // namespace
+
 std::string unit_key(const frontend::DesignUnit& unit)  {
   switch (unit.kind) {
     case frontend::UnitKind::VhdlEntity:
-      return "vhdl:" + unit.library + ":entity:" + unit.name;
+      return "vhdl:" + unit.library + ":entity:"
+          + vhdl_form_key(unit.name, unit.vhdl_extended_name);
     case frontend::UnitKind::VhdlArchitecture:
       return "vhdl:" + unit.library + ":architecture:"
-          + unit.primary_name + ':' + unit.name;
+          + vhdl_form_key(unit.primary_name, unit.vhdl_extended_primary_name)
+          + ':' + vhdl_form_key(unit.name, unit.vhdl_extended_name);
     case frontend::UnitKind::VhdlConfiguration:
       return "vhdl:" + unit.library + ":configuration:"
-          + unit.name;
+          + vhdl_form_key(unit.name, unit.vhdl_extended_name);
     case frontend::UnitKind::VhdlPackage:
       return "vhdl:" + unit.library
           + (unit.primary_name.empty()
                  ? ":package:"
                  : ":package-body:")
-          + unit.name;
+          + vhdl_form_key(unit.name, unit.vhdl_extended_name)
+          + (unit.primary_name.empty() ? std::string { }
+             : ':' + vhdl_form_key(
+                   unit.primary_name, unit.vhdl_extended_primary_name));
     case frontend::UnitKind::VhdlContext:
-      return "vhdl:" + unit.library + ":context:" + unit.name;
+      return "vhdl:" + unit.library + ":context:"
+          + vhdl_form_key(unit.name, unit.vhdl_extended_name);
     case frontend::UnitKind::VhdlPslVerificationUnit:
-      return "vhdl:" + unit.library + ":psl-verification-unit:" + unit.name;
+      return "vhdl:" + unit.library + ":psl-verification-unit:"
+          + vhdl_form_key(unit.name, unit.vhdl_extended_name);
     case frontend::UnitKind::SystemVerilogPackage:
       return "systemverilog:" + unit.library + ":package:"
           + unit.name;
@@ -948,11 +983,20 @@ std::vector<library::UnitIndexEntry> compiled_unit_metadata_entries(
             }
             return { };
         }();
-        result.push_back({ "vhdl", kind, unit.name, unit.primary_name,
+        library::UnitIndexEntry entry { "vhdl", kind, unit.name, unit.primary_name,
             unit.kind == semantic::vhdl::UnitKind::architecture
                 ? unit.name
                 : std::string { },
-            { }, { }, unit.standard, unit.compatibility_profile });
+            { }, { }, unit.standard, unit.compatibility_profile };
+        entry.name_form = unit.extended_name
+            ? library::VhdlIdentifierForm::extended
+            : library::VhdlIdentifierForm::basic;
+        entry.primary_name_form = unit.primary_name.empty()
+            ? library::VhdlIdentifierForm::unknown
+            : unit.extended_primary_name
+                ? library::VhdlIdentifierForm::extended
+                : library::VhdlIdentifierForm::basic;
+        result.push_back(std::move(entry));
     }
     return result;
 }
@@ -963,7 +1007,9 @@ std::string compiled_unit_metadata_key(
 {
     return entry.language + ':' + std::string { library } + ':' + entry.kind
         + ':' + entry.primary_name + ':' + entry.name + ':'
-        + entry.architecture;
+        + entry.architecture + ':'
+        + std::to_string(static_cast<std::uint8_t>(entry.name_form)) + ':'
+        + std::to_string(static_cast<std::uint8_t>(entry.primary_name_form));
 }
 
 std::string compiled_udp_key(
@@ -1120,6 +1166,10 @@ std::vector<project::ProjectSection::TopLevel> selected_tops(
     const semantic::CompiledDesign& compiled,
     diagnostic::Engine& diagnostics)  {
   const auto default_alias = [](const std::string_view target) {
+    if (const auto parsed = parse_binding_target(target);
+        parsed && parsed->language == "vhdl") {
+      return parsed->unit;
+    }
     auto spelling = target;
     if (const auto colon = spelling.find(':');
         colon != std::string_view::npos) {
@@ -1163,8 +1213,11 @@ std::vector<project::ProjectSection::TopLevel> selected_tops(
             ? std::string_view { "work" }
             : std::string_view { unit.library };
         candidates.push_back(
-            "vhdl:" + std::string { library } + "." + unit.primary_name
-            + "(" + unit.name + ")");
+            "vhdl:" + std::string { library } + "."
+            + vhdl_identifier_spelling(
+                unit.primary_name, unit.extended_primary_name)
+            + "(" + vhdl_identifier_spelling(
+                unit.name, unit.extended_name) + ")");
       }
     }
     std::sort(candidates.begin(), candidates.end());
@@ -1231,18 +1284,92 @@ std::optional<BindingTarget> parse_binding_target(std::string_view target)  {
   BindingTarget result;
   result.language = std::string(target.substr(0, colon));
   auto remainder = target.substr(colon + 1);
-  if (const auto dot = remainder.rfind('.'); dot != std::string_view::npos) {
-    result.qualifier = std::string(remainder.substr(0, dot));
-    remainder.remove_prefix(dot + 1);
-  }
-  if (const auto architecture = remainder.find('(');
-      architecture != std::string_view::npos) {
-    remainder = remainder.substr(0, architecture);
+  if (result.language == "vhdl") {
+    const auto decode_identifier = [](std::string_view spelling) {
+      const bool extended = spelling.size() >= 2U
+          && spelling.front() == '\\' && spelling.back() == '\\';
+      if (!extended) {
+        std::string result { spelling };
+        std::ranges::transform(result, result.begin(), [](const char value) {
+          return value >= 'A' && value <= 'Z'
+              ? static_cast<char>(value - 'A' + 'a') : value;
+        });
+        return result;
+      }
+      spelling.remove_prefix(1U);
+      spelling.remove_suffix(1U);
+      std::string result;
+      result.reserve(spelling.size());
+      for (std::size_t index = 0; index < spelling.size(); ++index) {
+        result.push_back(spelling[index]);
+        if (spelling[index] == '\\' && index + 1U < spelling.size()
+            && spelling[index + 1U] == '\\') {
+          ++index;
+        }
+      }
+      return result;
+    };
+    bool extended = false;
+    auto architecture_open = std::string_view::npos;
+    for (std::size_t index = 0; index < remainder.size(); ++index) {
+      if (remainder[index] == '\\') {
+        if (extended && index + 1U < remainder.size()
+            && remainder[index + 1U] == '\\') {
+          ++index;
+        } else {
+          extended = !extended;
+        }
+      } else if (remainder[index] == '(' && !extended) {
+        architecture_open = index;
+      }
+    }
+    if (architecture_open != std::string_view::npos) {
+      if (remainder.back() != ')') {
+        return std::nullopt;
+      }
+      const auto spelling = remainder.substr(architecture_open + 1U,
+          remainder.size() - architecture_open - 2U);
+      result.architecture_extended = spelling.size() >= 2U
+          && spelling.front() == '\\' && spelling.back() == '\\';
+      result.architecture = decode_identifier(spelling);
+      remainder = remainder.substr(0U, architecture_open);
+    }
+    std::size_t library_separator = std::string_view::npos;
+    extended = false;
+    for (std::size_t index = 0; index < remainder.size(); ++index) {
+      if (remainder[index] == '\\') {
+        if (extended && index + 1U < remainder.size()
+            && remainder[index + 1U] == '\\') {
+          ++index;
+        } else {
+          extended = !extended;
+        }
+      } else if (remainder[index] == '.' && !extended) {
+        library_separator = index;
+      }
+    }
+    if (library_separator != std::string_view::npos) {
+      result.qualifier = decode_identifier(
+          remainder.substr(0U, library_separator));
+      remainder.remove_prefix(library_separator + 1U);
+    }
+    result.unit_extended = remainder.size() >= 2U
+        && remainder.front() == '\\' && remainder.back() == '\\';
+    result.unit = decode_identifier(remainder);
+  } else {
+    if (const auto dot = remainder.rfind('.'); dot != std::string_view::npos) {
+      result.qualifier = std::string(remainder.substr(0, dot));
+      remainder.remove_prefix(dot + 1);
+    }
+    if (const auto architecture = remainder.find('(');
+        architecture != std::string_view::npos) {
+      remainder = remainder.substr(0, architecture);
+    }
+    result.unit = std::string(remainder);
   }
   if (remainder.empty()) {
     return std::nullopt;
   }
-  result.unit = std::string(remainder);
   return result;
 }
 
@@ -1537,7 +1664,8 @@ void validate_bindings(
           compiled.vhdl_hir.units(),
           [&](const semantic::vhdl::Unit& unit) {
             return unit.kind == semantic::vhdl::UnitKind::architecture
-                && unit.primary_name == target->unit;
+                && unit.primary_name == target->unit
+                && unit.extended_primary_name == target->unit_extended;
           });
     } else if (target->language == "systemc") {
       if (target->qualifier.empty()) {

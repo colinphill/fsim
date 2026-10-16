@@ -106,7 +106,7 @@ foreach(FSIM_DOMAIN IN LISTS FSIM_EXPECTED_DOMAINS)
     message(FATAL_ERROR "v3 schema freeze domain is missing: ${FSIM_DOMAIN}")
   endif()
 endforeach()
-if(NOT FSIM_TOTAL_ROWS EQUAL 264)
+if(NOT FSIM_TOTAL_ROWS EQUAL 268)
   message(FATAL_ERROR "v3 schema freeze row total changed: ${FSIM_TOTAL_ROWS}")
 endif()
 
@@ -137,25 +137,25 @@ fsim_require_schema_tokens(include/fsim/runtime/svdpi_bridge.h
 fsim_require_schema_tokens(include/fsim/runtime/acc_handle_bridge.h
   "FSIM_ACC_STANDARD_QUERY_ABI_VERSION 3u")
 fsim_require_schema_tokens(include/fsim/artifact/object.hpp
-  "kObjectFormatVersion = 8")
+  "kObjectFormatVersion = 9")
 fsim_require_schema_tokens(include/fsim/library/artifact.hpp
-  "kFormatVersion = 6"
-  "kPortableSchemaVersion = 15"
-  "kCompiledHirSchemaVersion = 1")
+  "kFormatVersion = 7"
+  "kPortableSchemaVersion = 16"
+  "kCompiledHirSchemaVersion = 3")
 fsim_require_schema_tokens(include/fsim/artifact/design.hpp
   "kDesignFormatVersion = 14")
 fsim_require_schema_tokens(include/fsim/app/design_artifact.hpp
-  "kRuntimeStateSchema = 64"
+  "kRuntimeStateSchema = 85"
   "kSemanticStateSchema = 4"
   "kDesignIrStateSchema = 5"
-  "kCompiledHirBundleSchema = 1"
-  "kSystemVerilogConstraintHirStateSchema = 8"
+  "kCompiledHirBundleSchema = 3"
+  "kSystemVerilogConstraintHirStateSchema = 14"
   "kSystemVerilogCoverageStateSchema = 7"
   "kSystemVerilogUvmStateSchema = 3"
-  "kVhdlHirStateSchema = 6")
+  "kVhdlHirStateSchema = 8")
 fsim_require_schema_tokens(src/compiler/native_cache_schema.hpp
   "fsim-llvm-native-object-v169")
 
 file(SHA256 "${FSIM_LEDGER}" FSIM_LEDGER_DIGEST)
 message(STATUS
-  "v3 schema freeze passed: domains=6 owner-rows=264 manifest=3 object=8/15/1 design=14/6 checkpoint=64/8/6 cache=v169 digest=${FSIM_LEDGER_DIGEST}")
+  "v3 schema freeze passed: domains=6 owner-rows=268 manifest=3 object=9/16/3 design=14/85 checkpoint=2/1/2 cache=v169 digest=${FSIM_LEDGER_DIGEST}")

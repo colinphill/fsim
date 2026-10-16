@@ -8,6 +8,7 @@
 #include "fsim/support/path.hpp"
 #include "fsim/support/sha256.hpp"
 
+#include <algorithm>
 #include <map>
 #include <set>
 
@@ -46,6 +47,52 @@ std::optional<std::string> read_object_payload(
 std::filesystem::path object_source_root(
     const artifact::ObjectMetadata& metadata) {
   return std::filesystem::path{"objects"} / metadata.compilation_digest;
+}
+
+bool is_concrete_vhdl_identifier_form(
+    const library::VhdlIdentifierForm form) {
+  return form == library::VhdlIdentifierForm::basic
+      || form == library::VhdlIdentifierForm::extended;
+}
+
+bool metadata_vhdl_form_matches(
+    const library::VhdlIdentifierForm indexed,
+    const library::VhdlIdentifierForm compiled) {
+  return indexed == library::VhdlIdentifierForm::unknown
+      || indexed == compiled;
+}
+
+bool compiled_unit_identity_compatible(
+    const library::UnitIndexEntry& indexed,
+    const library::UnitIndexEntry& compiled) {
+  if (indexed.language != compiled.language
+      || indexed.kind != compiled.kind
+      || indexed.name != compiled.name
+      || indexed.primary_name != compiled.primary_name
+      || indexed.architecture != compiled.architecture
+      || indexed.artifact != compiled.artifact
+      || indexed.checksum != compiled.checksum
+      || indexed.standard != compiled.standard
+      || indexed.compatibility_profile != compiled.compatibility_profile) {
+    return false;
+  }
+  if (indexed.language != "vhdl") {
+    return indexed.name_form == compiled.name_form
+        && indexed.primary_name_form == compiled.primary_name_form;
+  }
+  if (!is_concrete_vhdl_identifier_form(compiled.name_form)
+      || !metadata_vhdl_form_matches(indexed.name_form, compiled.name_form)) {
+    return false;
+  }
+  if (compiled.primary_name.empty()) {
+    return indexed.primary_name_form
+            == library::VhdlIdentifierForm::unknown
+        && compiled.primary_name_form
+            == library::VhdlIdentifierForm::unknown;
+  }
+  return is_concrete_vhdl_identifier_form(compiled.primary_name_form)
+      && metadata_vhdl_form_matches(
+          indexed.primary_name_form, compiled.primary_name_form);
 }
 
 }  // namespace
@@ -307,16 +354,21 @@ application_detail::load_object_workspace(
             metadata->compiled_hir_checksum);
         continue;
       }
-      const auto expected = std::ranges::find(
-          remaining_compiled_units, indexed);
+      const auto expected = std::ranges::find_if(
+          remaining_compiled_units, [&](const auto& compiled) {
+            return compiled_unit_identity_compatible(indexed, compiled);
+          });
       if (expected == remaining_compiled_units.end()) {
         diagnostics.error(
             "FSIM-ART-0005",
             ".fsimobj unit identity does not match its compiled-HIR index");
         return std::nullopt;
       }
+      // Duplicate detection must use the resolved HIR identity. Legacy
+      // metadata may omit identifier forms, but basic and extended HIR names
+      // remain distinct and must reach the normal ambiguity check.
       const auto key = compiled_unit_metadata_key(
-          indexed, metadata->library);
+          *expected, metadata->library);
       if (!known_units.insert(key).second) {
         diagnostics.error(
             "FSIM-ART-0005",

@@ -164,7 +164,16 @@ std::optional<Statement> VerilogParser::parse_statement()
     // through here, so the block construction stays out of this frame.
     const auto mark = hoisted_statements_.size();
     ++statement_hoist_depth_;
-    auto statement = parse_statement_unhoisted();
+    if (verilog_attribute_instance_start()) {
+        parse_verilog_attribute_instances();
+    }
+    std::optional<Statement> statement;
+    if (keyword("if")) {
+        const auto start = advance();
+        statement = parse_if_statement(start);
+    } else {
+        statement = parse_statement_unhoisted();
+    }
     --statement_hoist_depth_;
     if (hoisted_statements_.size() != mark) {
         prepend_hoisted_statements(statement, mark);
@@ -199,6 +208,102 @@ void VerilogParser::prepend_hoisted_statements(
     block->statements = std::move(hoisted);
     block->statements.push_back(std::move(*statement));
     statement = std::move(*block);
+}
+
+[[gnu::noinline]] std::optional<Statement>
+VerilogParser::parse_if_statement(const Token& start)
+{
+    // `if (e matches p [&&& g]) s1 else s2` (IEEE 1800-2017 12.6.2) is the
+    // case statement `case (e) matches p [&&& g]: s1 default: s2`.
+    if (language_ == Language::SystemVerilog2017 && at(TokenKind::LeftParen)) {
+        std::size_t depth { };
+        std::optional<std::size_t> matches_offset;
+        std::size_t offset { };
+        for (;; ++offset) {
+            const auto& token = current(offset);
+            if (token.kind == TokenKind::EndOfFile) {
+                break;
+            }
+            if (token.kind == TokenKind::LeftParen) {
+                ++depth;
+            } else if (token.kind == TokenKind::RightParen) {
+                if (--depth == 0U) {
+                    break;
+                }
+            } else if (depth == 1U && token.kind == TokenKind::Identifier
+                && token.text == "matches" && !matches_offset) {
+                matches_offset = offset;
+            }
+        }
+        if (matches_offset && current(offset).kind == TokenKind::RightParen) {
+            std::vector<Token> tokens = synthetic_tokens("case (", start.span);
+            for (std::size_t index = 1U; index < *matches_offset; ++index) {
+                tokens.push_back(current(index));
+            }
+            for (auto& token : synthetic_tokens(") matches", start.span)) {
+                tokens.push_back(std::move(token));
+            }
+            for (std::size_t index = *matches_offset + 1U; index < offset; ++index) {
+                tokens.push_back(current(index));
+            }
+            for (auto& token : synthetic_tokens(": ; endcase", start.span)) {
+                tokens.push_back(std::move(token));
+            }
+            index_ += offset + 1U;
+            auto selection = parse_generated_statement(std::move(tokens), start.span);
+            if (selection && selection->kind == StatementKind::Case
+                && selection->case_alternatives.size() == 1U) {
+                auto& matched = selection->case_alternatives.front();
+                matched.statements.clear();
+                if (auto true_branch = parse_statement()) {
+                    matched.statements.push_back(std::move(*true_branch));
+                }
+                if (match_keyword("else")) {
+                    CaseAlternative otherwise;
+                    otherwise.is_default = true;
+                    if (auto false_branch = parse_statement()) {
+                        otherwise.statements.push_back(std::move(*false_branch));
+                    }
+                    selection->case_alternatives.push_back(std::move(otherwise));
+                }
+                selection->span = span_from(start, previous());
+                return *selection;
+            }
+            error(start, "FSIM-SV-PARSE-019", "malformed if-matches statement");
+            return std::nullopt;
+        }
+    }
+    Statement statement;
+    statement.kind = StatementKind::If;
+    expect(TokenKind::LeftParen, "'(' after if", "FSIM-SV-PARSE-018");
+    statement.condition = parse_expression();
+    expect(TokenKind::RightParen, "')' after if condition",
+        "FSIM-SV-PARSE-019");
+    if (auto true_branch = parse_statement()) {
+        if (true_branch->kind == StatementKind::Block
+            && true_branch->label.empty()
+            && true_branch->declarations.empty()
+            && true_branch->systemverilog_imports.empty()) {
+            statement.statements = std::move(true_branch->statements);
+        } else {
+            statement.statements.push_back(std::move(*true_branch));
+        }
+    }
+    if (match_keyword("else")) {
+        if (auto false_branch = parse_statement()) {
+            if (false_branch->kind == StatementKind::Block
+                && false_branch->label.empty()
+                && false_branch->declarations.empty()
+                && false_branch->systemverilog_imports.empty()) {
+                statement.else_statements = std::move(false_branch->statements);
+            } else {
+                statement.else_statements.push_back(
+                    std::move(*false_branch));
+            }
+        }
+    }
+    statement.span = span_from(start, previous());
+    return statement;
 }
 
 std::optional<Statement> VerilogParser::parse_statement_unhoisted()
@@ -780,97 +885,7 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
 
     if (match_keyword("if")) {
         const auto start = previous();
-        // `if (e matches p [&&& g]) s1 else s2` (IEEE 1800-2017 12.6.2) is the
-        // case statement `case (e) matches p [&&& g]: s1 default: s2`.
-        if (language_ == Language::SystemVerilog2017 && at(TokenKind::LeftParen)) {
-            std::size_t depth { };
-            std::optional<std::size_t> matches_offset;
-            std::size_t offset { };
-            for (;; ++offset) {
-                const auto& token = current(offset);
-                if (token.kind == TokenKind::EndOfFile) {
-                    break;
-                }
-                if (token.kind == TokenKind::LeftParen) {
-                    ++depth;
-                } else if (token.kind == TokenKind::RightParen) {
-                    if (--depth == 0U) {
-                        break;
-                    }
-                } else if (depth == 1U && token.kind == TokenKind::Identifier
-                    && token.text == "matches" && !matches_offset) {
-                    matches_offset = offset;
-                }
-            }
-            if (matches_offset && current(offset).kind == TokenKind::RightParen) {
-                std::vector<Token> tokens = synthetic_tokens("case (", start.span);
-                for (std::size_t index = 1U; index < *matches_offset; ++index) {
-                    tokens.push_back(current(index));
-                }
-                for (auto& token : synthetic_tokens(") matches", start.span)) {
-                    tokens.push_back(std::move(token));
-                }
-                for (std::size_t index = *matches_offset + 1U; index < offset; ++index) {
-                    tokens.push_back(current(index));
-                }
-                for (auto& token : synthetic_tokens(": ; endcase", start.span)) {
-                    tokens.push_back(std::move(token));
-                }
-                index_ += offset + 1U;
-                auto selection = parse_generated_statement(std::move(tokens), start.span);
-                if (selection && selection->kind == StatementKind::Case
-                    && selection->case_alternatives.size() == 1U) {
-                    auto& matched = selection->case_alternatives.front();
-                    matched.statements.clear();
-                    if (auto true_branch = parse_statement()) {
-                        matched.statements.push_back(std::move(*true_branch));
-                    }
-                    if (match_keyword("else")) {
-                        CaseAlternative otherwise;
-                        otherwise.is_default = true;
-                        if (auto false_branch = parse_statement()) {
-                            otherwise.statements.push_back(std::move(*false_branch));
-                        }
-                        selection->case_alternatives.push_back(std::move(otherwise));
-                    }
-                    selection->span = span_from(start, previous());
-                    return *selection;
-                }
-                error(start, "FSIM-SV-PARSE-019", "malformed if-matches statement");
-                return std::nullopt;
-            }
-        }
-        Statement statement;
-        statement.kind = StatementKind::If;
-        expect(TokenKind::LeftParen, "'(' after if", "FSIM-SV-PARSE-018");
-        statement.condition = parse_expression();
-        expect(TokenKind::RightParen, "')' after if condition",
-            "FSIM-SV-PARSE-019");
-        if (auto true_branch = parse_statement()) {
-            if (true_branch->kind == StatementKind::Block
-                && true_branch->label.empty()
-                && true_branch->declarations.empty()
-                && true_branch->systemverilog_imports.empty()) {
-                statement.statements = std::move(true_branch->statements);
-            } else {
-                statement.statements.push_back(std::move(*true_branch));
-            }
-        }
-        if (match_keyword("else")) {
-            if (auto false_branch = parse_statement()) {
-                if (false_branch->kind == StatementKind::Block
-                    && false_branch->label.empty()
-                    && false_branch->declarations.empty()
-                    && false_branch->systemverilog_imports.empty()) {
-                    statement.else_statements = std::move(false_branch->statements);
-                } else {
-                    statement.else_statements.push_back(
-                        std::move(*false_branch));
-                }
-            }
-        }
-        statement.span = span_from(start, previous());
-        return statement;
+        return parse_if_statement(start);
     }
 
     if (match(TokenKind::At)) {
@@ -1762,7 +1777,82 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
             statement.span = span_from(start, previous());
             return statement;
         }
-        if (at(TokenKind::LeftParen, lookahead) || at(TokenKind::Semicolon, lookahead)) {
+        const auto contains_top_level_assignment = [&](const std::size_t start_index) {
+            const auto is_assignment_operator = [](const TokenKind kind) {
+                switch (kind) {
+                case TokenKind::Assign:
+                case TokenKind::LessEqual:
+                case TokenKind::PlusAssign:
+                case TokenKind::MinusAssign:
+                case TokenKind::StarAssign:
+                case TokenKind::SlashAssign:
+                case TokenKind::PercentAssign:
+                case TokenKind::AmpersandAssign:
+                case TokenKind::PipeAssign:
+                case TokenKind::CaretAssign:
+                case TokenKind::ShiftLeftAssign:
+                case TokenKind::ShiftRightAssign:
+                case TokenKind::ArithmeticShiftLeftAssign:
+                case TokenKind::ArithmeticShiftRightAssign:
+                    return true;
+                default:
+                    return false;
+                }
+            };
+
+            std::size_t parenthesis_depth { };
+            std::size_t square_depth { };
+            std::size_t brace_depth { };
+            for (auto token_index = start_index;
+                token_index < tokens_.size();
+                ++token_index) {
+                const auto kind = tokens_[token_index].kind;
+                if (kind == TokenKind::EndOfFile) {
+                    return false;
+                }
+                if (parenthesis_depth == 0U && square_depth == 0U
+                    && brace_depth == 0U) {
+                    if (kind == TokenKind::Semicolon) {
+                        return false;
+                    }
+                    if (is_assignment_operator(kind)) {
+                        return true;
+                    }
+                }
+                switch (kind) {
+                case TokenKind::LeftParen:
+                    ++parenthesis_depth;
+                    break;
+                case TokenKind::RightParen:
+                    if (parenthesis_depth != 0U) {
+                        --parenthesis_depth;
+                    }
+                    break;
+                case TokenKind::LeftBracket:
+                    ++square_depth;
+                    break;
+                case TokenKind::RightBracket:
+                    if (square_depth != 0U) {
+                        --square_depth;
+                    }
+                    break;
+                case TokenKind::LeftBrace:
+                    ++brace_depth;
+                    break;
+                case TokenKind::RightBrace:
+                    if (brace_depth != 0U) {
+                        --brace_depth;
+                    }
+                    break;
+                default:
+                    break;
+                }
+            }
+            return false;
+        };
+        if ((at(TokenKind::LeftParen, lookahead)
+                || at(TokenKind::Semicolon, lookahead))
+            && !contains_top_level_assignment(index_)) {
             const auto task_start_index = index_;
             const auto start = advance();
             std::string name = start.text;
@@ -1877,40 +1967,66 @@ std::optional<Statement> VerilogParser::parse_statement_unhoisted()
 
     const auto potential_complex_call = [&]() {
         // Parentheses inside an index (`a[(i)] <= #1 v`) are not a call.
+        bool saw_call { };
+        std::size_t parenthesis_depth { };
         std::size_t square_depth { };
+        std::size_t brace_depth { };
         for (std::size_t lookahead = 1U;
-            !at(TokenKind::Semicolon, lookahead)
-            && !at(TokenKind::EndOfFile, lookahead);
+            !at(TokenKind::EndOfFile, lookahead);
             ++lookahead) {
-            if (at(TokenKind::LeftBracket, lookahead)) {
+            const auto kind = current(lookahead).kind;
+            if (parenthesis_depth == 0U && square_depth == 0U
+                && brace_depth == 0U) {
+                if (kind == TokenKind::Semicolon) {
+                    return saw_call;
+                }
+                if (kind == TokenKind::Assign
+                    || kind == TokenKind::LessEqual
+                    || kind == TokenKind::PlusAssign
+                    || kind == TokenKind::MinusAssign
+                    || kind == TokenKind::StarAssign
+                    || kind == TokenKind::SlashAssign
+                    || kind == TokenKind::PercentAssign
+                    || kind == TokenKind::AmpersandAssign
+                    || kind == TokenKind::PipeAssign
+                    || kind == TokenKind::CaretAssign
+                    || kind == TokenKind::ShiftLeftAssign
+                    || kind == TokenKind::ShiftRightAssign
+                    || kind == TokenKind::ArithmeticShiftLeftAssign
+                    || kind == TokenKind::ArithmeticShiftRightAssign) {
+                    return false;
+                }
+                if (kind == TokenKind::LeftParen) {
+                    saw_call = true;
+                }
+            }
+            switch (kind) {
+            case TokenKind::LeftParen:
+                ++parenthesis_depth;
+                break;
+            case TokenKind::RightParen:
+                if (parenthesis_depth != 0U) {
+                    --parenthesis_depth;
+                }
+                break;
+            case TokenKind::LeftBracket:
                 ++square_depth;
-                continue;
-            }
-            if (at(TokenKind::RightBracket, lookahead) && square_depth != 0U) {
-                --square_depth;
-                continue;
-            }
-            if (square_depth != 0U) {
-                continue;
-            }
-            if (at(TokenKind::Assign, lookahead)
-                || at(TokenKind::LessEqual, lookahead)
-                || at(TokenKind::PlusAssign, lookahead)
-                || at(TokenKind::MinusAssign, lookahead)
-                || at(TokenKind::StarAssign, lookahead)
-                || at(TokenKind::SlashAssign, lookahead)
-                || at(TokenKind::PercentAssign, lookahead)
-                || at(TokenKind::AmpersandAssign, lookahead)
-                || at(TokenKind::PipeAssign, lookahead)
-                || at(TokenKind::CaretAssign, lookahead)
-                || at(TokenKind::ShiftLeftAssign, lookahead)
-                || at(TokenKind::ShiftRightAssign, lookahead)
-                || at(TokenKind::ArithmeticShiftLeftAssign, lookahead)
-                || at(TokenKind::ArithmeticShiftRightAssign, lookahead)) {
-                return false;
-            }
-            if (at(TokenKind::LeftParen, lookahead)) {
-                return true;
+                break;
+            case TokenKind::RightBracket:
+                if (square_depth != 0U) {
+                    --square_depth;
+                }
+                break;
+            case TokenKind::LeftBrace:
+                ++brace_depth;
+                break;
+            case TokenKind::RightBrace:
+                if (brace_depth != 0U) {
+                    --brace_depth;
+                }
+                break;
+            default:
+                break;
             }
         }
         return false;

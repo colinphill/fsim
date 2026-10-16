@@ -2170,7 +2170,9 @@ void check_compiled_logic9_subset(
     if (condition == 1U) {
         return when_true;
     }
-    return when_true == when_false ? when_true : 2U;
+    // The full-expression equivalence exception applies only when logical
+    // equality is true; X and Z operands do not satisfy that comparison.
+    return when_true == when_false && when_true < 2U ? when_true : 2U;
 }
 
 void check_compiled_conditional_select(
@@ -2183,11 +2185,11 @@ void check_compiled_conditional_select(
     require(executor != nullptr,
         "the generated ConditionalSelect kernel has a verified executable body");
     for (std::uint8_t condition = 0U;
-         condition < logic4_codes.size(); ++condition) {
+        condition < logic4_codes.size(); ++condition) {
         for (std::uint8_t when_true = 0U;
-             when_true < logic4_codes.size(); ++when_true) {
+            when_true < logic4_codes.size(); ++when_true) {
             for (std::uint8_t when_false = 0U;
-                 when_false < logic4_codes.size(); ++when_false) {
+                when_false < logic4_codes.size(); ++when_false) {
                 const auto result = conditional_select_result(
                     condition, when_true, when_false);
                 run_operator_case(1U, kernel, *executor,
@@ -2210,7 +2212,16 @@ void check_compiled_conditional_select(
     run_operator_case(width, wide_kernel, *wide_executor,
         { logic4_input(0U, 1U, 2U),
             RegionFrontierSignalInput { 1U, z_arm },
-            RegionFrontierSignalInput { 2U, z_arm } }, z_arm);
+            RegionFrontierSignalInput { 2U, z_arm } },
+        repeated_logic4(width, 2U));
+    const auto known_equal_arm = repeated_logic4(width, 1U);
+    for (const auto condition : { std::uint8_t { 2U }, std::uint8_t { 3U } }) {
+        run_operator_case(width, wide_kernel, *wide_executor,
+            { logic4_input(0U, 1U, condition),
+                RegionFrontierSignalInput { 1U, known_equal_arm },
+                RegionFrontierSignalInput { 2U, known_equal_arm } },
+            known_equal_arm);
+    }
     run_operator_case(width, wide_kernel, *wide_executor,
         { logic4_input(0U, 1U, 3U),
             logic4_input(1U, width, 1U),

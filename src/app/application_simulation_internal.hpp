@@ -262,21 +262,31 @@ struct Simulation::Impl {
         std::vector<std::string>& string_actuals,
         const std::span<const std::string> actual_names,
         const std::span<const std::uint8_t> actual_directions,
-        const bool virtual_dispatch);
+        const bool virtual_dispatch,
+        application_detail::SystemVerilogClassHirExecution::ActualReferences
+            actual_references = {},
+        std::optional<runtime::simir::ProcessId> report_process
+            = std::nullopt);
 
     [[nodiscard]] runtime::PackedLogic4 invoke_source_static_function(
         const std::string_view canonical_identity,
         std::vector<runtime::PackedLogic4>& actuals,
         std::vector<std::string>& string_actuals,
         const std::span<const std::string> actual_names,
-        const std::span<const std::uint8_t> actual_directions);
+        const std::span<const std::uint8_t> actual_directions,
+        application_detail::SystemVerilogClassHirExecution::ActualReferences
+            actual_references = {},
+        std::optional<runtime::simir::ProcessId> report_process
+            = std::nullopt);
 
     void invoke_source_constructor(
         const semantic::sv::ClassSpecialization& specialization,
         const runtime::SystemVerilogClassHandle handle,
         const std::span<const runtime::PackedLogic4> actuals,
         const std::span<const std::string> string_actuals,
-        const std::span<const std::string> actual_names);
+        const std::span<const std::string> actual_names,
+        std::optional<runtime::simir::ProcessId> report_process
+            = std::nullopt);
 
     [[nodiscard]] runtime::SystemVerilogClassHandle allocate_class(
         const std::string_view specialization_identity,
@@ -293,7 +303,9 @@ struct Simulation::Impl {
         const runtime::SystemVerilogUvmRootHandle requested_root = 0,
         const std::optional<runtime::simir::ProcessId> owner_design_process
             = std::nullopt,
-        const runtime::SystemVerilogClassHandle owner_context_handle = 0U);
+        const runtime::SystemVerilogClassHandle owner_context_handle = 0U,
+        std::optional<runtime::simir::ProcessId> report_process
+            = std::nullopt);
 
     using PackedSnapshot = std::map<
         std::pair<runtime::SystemVerilogClassHandle, std::string>,
@@ -354,6 +366,10 @@ struct Simulation::Impl {
         const runtime::SystemVerilogVpiValueStateUpdate& update);
 
     void publish_vpi_stored_signal(const SignalId signal);
+
+    void publish_vpi_package_startup_values();
+
+    void start_interpreter();
 
     void publish_vpi_driver(
         const runtime::simir::ProcessId process,
@@ -421,7 +437,17 @@ struct Simulation::Impl {
     std::vector<std::pair<runtime::simir::SignalId, semantic::ExpressionId>>
         package_class_handle_initializers;
 
+    std::vector<elaboration::SystemVerilogPackageClassInitializerInfo>
+        package_class_startup_initializers;
+
+    std::vector<elaboration::SystemVerilogPackageClassStaticInitializerInfo>
+        package_static_class_startup_initializers;
+
+    std::vector<SignalId> package_static_startup_signal_ids;
+
     bool vpi_runtime_updates_enabled { true };
+
+    bool package_static_startup_values_published { };
 
     runtime::SystemVerilogClassHeap class_heap;
     // Value-container class properties (unpacked arrays, queues and
@@ -777,6 +803,8 @@ struct Simulation::Impl {
     bool concurrent_assertion_failure_actions_enabled { true };
 
     ClassPropertyChangeHook class_property_change_hook;
+
+    std::size_t source_function_dispatch_depth { };
 
     ClassStaticPropertyChangeHook class_static_property_change_hook;
 

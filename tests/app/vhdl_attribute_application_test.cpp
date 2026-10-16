@@ -24,7 +24,7 @@ struct TemporaryDirectory {
 
 struct Capture {
   fsim::runtime::RunResult result;
-  std::array<std::string, 8> values;
+  std::array<std::string, 11> values;
   std::size_t compiled_processes{};
   std::size_t compiled_modules{};
   fsim::app::NativeCacheStatistics cache;
@@ -71,7 +71,7 @@ Capture run_once(
   capture.compiled_processes = simulation.compiled_process_count();
   capture.compiled_modules = simulation.compiled_module_count();
   capture.cache = simulation.native_cache_statistics();
-  constexpr std::array<std::string_view, 8> paths{
+  constexpr std::array<std::string_view, 11> paths{
       "attribute_execution.scalar_result",
       "attribute_execution.bound_result",
       "attribute_execution.nested_result",
@@ -79,7 +79,10 @@ Capture run_once(
       "attribute_execution.loop_result",
       "attribute_execution.boolean_result",
       "attribute_execution.bit_position",
-      "attribute_execution.dynamic_result"};
+      "attribute_execution.dynamic_result",
+      "attribute_execution.distinct_view_result",
+      "attribute_execution.same_view_result",
+      "attribute_execution.neighbor_view_result"};
   std::array<fsim::runtime::simir::SignalId, paths.size()> signals{};
   for (std::size_t index = 0; index < paths.size(); ++index) {
     const auto signal = simulation.find_signal(paths[index]);
@@ -105,9 +108,10 @@ void verify_capture(const Capture& capture) {
     return bits;
   };
   assert(capture.result.status == fsim::runtime::RunStatus::completed);
-  assert((capture.values == std::array<std::string, 8>{
+  assert((capture.values == std::array<std::string, 11>{
       integer(1), integer(6), integer(3), integer(7), integer(14),
-      "1", integer(1), integer(std::numeric_limits<std::uint32_t>::max())}));
+      "1", integer(1), integer(std::numeric_limits<std::uint32_t>::max()),
+      "1", "0", "0"}));
 }
 
 std::string run_dynamic_failure(
@@ -169,6 +173,28 @@ architecture rtl of attribute_execution is
   signal Bit_Position : integer;
   signal Dynamic_Source : Count_T;
   signal Dynamic_Result : integer;
+  signal Selected_Source : bit_vector(1 downto 0) := "00";
+  signal Neighbor_Source : bit_vector(1 downto 0) := "01";
+  signal Selected_View_Observed : bit := '0';
+  signal Selected_View_Function_Result : bit := '0';
+  signal Distinct_View_Result : bit := '0';
+  signal Same_View_Result : bit := '0';
+  signal Neighbor_View_Result : bit := '0';
+
+  procedure capture(signal value : in bit;
+                    signal result : out bit) is
+  begin
+    result <= value;
+  end procedure;
+
+  impure function capture_pair(signal first : in bit;
+                                signal second : in bit)
+      return bit is
+  begin
+    capture(first, Selected_View_Observed);
+    capture(second, Selected_View_Observed);
+    return '0';
+  end function;
 begin
   drive : process
     variable Count : integer := 0;
@@ -191,6 +217,28 @@ begin
       Count := Count + 1;
     end loop;
     Loop_Result <= Count;
+
+    Selected_Source(0) <= '0';
+    Selected_Source(1) <= '1';
+    Neighbor_Source(0) <= '1';
+    wait for 0 ns;
+
+    Selected_View_Function_Result <= capture_pair(
+      Selected_Source(0), Selected_Source(1));
+    wait for 0 ns;
+    Distinct_View_Result <= Selected_View_Observed;
+    wait for 0 ns;
+
+    Selected_View_Function_Result <= capture_pair(
+      Selected_Source(0), Selected_Source(0));
+    wait for 0 ns;
+    Same_View_Result <= Selected_View_Observed;
+    wait for 0 ns;
+
+    Selected_View_Function_Result <= capture_pair(
+      Neighbor_Source(0), Neighbor_Source(1));
+    wait for 0 ns;
+    Neighbor_View_Result <= Selected_View_Observed;
     wait;
   end process;
 end architecture;

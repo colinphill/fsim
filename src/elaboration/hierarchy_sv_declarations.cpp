@@ -6,6 +6,7 @@
 #include "hierarchy_sv_constant_evaluator.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -900,7 +901,8 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         pending_virtual_interface_initializers,
     const SystemVerilogPackedTypeResolver& packed_type_resolver,
     const SystemVerilogPackedDefaultResolver& packed_default_resolver,
-    const SystemVerilogPackedFallbackResolver& packed_fallback_resolver)
+    const SystemVerilogPackedFallbackResolver& packed_fallback_resolver,
+    const bool runtime_package_initializer)
 {
     const auto whole_alias_signal = [&](
                                         const SystemVerilogHirMaterialization& value,
@@ -966,6 +968,9 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
         = materialization.declared_signal_names;
     const auto& working_specialization
         = *materialization.specialization;
+    const semantic::CompiledDesignResolver net_legality_type_resolver {
+        working_specialization
+    };
     const auto& materialized_path = materialization.path;
     using Form = semantic::sv::DeclarationForm;
     if (declaration.callable) {
@@ -1147,6 +1152,263 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
             read_only_strings,
             compiled_port_direction(declaration),
             compiled_source_span(*compiled_, declaration.source));
+    }
+    const auto builtin_net_kind = declaration.type
+        ? net_type_for(declaration, *declaration.type)
+        : std::string_view { };
+    const auto is_builtin_net_kind = [](const std::string_view kind) {
+        constexpr std::array<std::string_view, 12> kinds {
+            "wire", "tri", "tri0", "tri1", "wand", "triand",
+            "wor", "trior", "trireg", "uwire", "supply0", "supply1"
+        };
+        return std::ranges::find(kinds, kind) != kinds.end();
+    };
+    if (declaration.type
+        && is_builtin_net_kind(builtin_net_kind)) {
+        struct BuiltinNetTypeProperties final {
+            bool packed_integral { };
+            bool four_state { };
+            bool valid_net_type { };
+        };
+        std::vector<semantic::TypeId> active_types;
+        const auto classify_net_type = [&](const auto& self,
+                                           const semantic::sv::TypeReference& input,
+                                           const semantic::ScopeId scope)
+            -> BuiltinNetTypeProperties {
+            const auto effective
+                = net_legality_type_resolver.effective_systemverilog_type(input, scope)
+                      .value_or(input);
+            const auto effective_definition = effective.target.target.valid()
+                ? working_specialization.find_type(
+                      effective.target.target)
+                : std::nullopt;
+            const auto resolved
+                = net_legality_type_resolver.underlying_systemverilog_type(
+                                   effective, scope)
+                      .value_or(effective);
+            const auto definition = resolved.target.target.valid()
+                ? working_specialization.find_type(
+                      resolved.target.target)
+                : std::nullopt;
+            auto form = resolved.value_form.value_or(
+                semantic::sv::TypeForm::unresolved);
+            if (form == semantic::sv::TypeForm::unresolved
+                && definition && definition->systemverilog != nullptr) {
+                form = definition->systemverilog->form;
+            }
+            if (form == semantic::sv::TypeForm::unresolved) {
+                form = effective.value_form.value_or(
+                    effective_definition
+                            && effective_definition->systemverilog != nullptr
+                        ? effective_definition->systemverilog->form
+                        : semantic::sv::TypeForm::unresolved);
+            }
+            // The resolver unwraps an enum to its base type, but the inline
+            // base can still carry the source enum form. Recover a builtin
+            // only when that resolved base has no nominal type target; named
+            // unresolved types remain fail-closed.
+            if (form == semantic::sv::TypeForm::unresolved
+                || (form == semantic::sv::TypeForm::enumeration
+                    && !resolved.target.target.valid())) {
+                const auto& spelling = resolved.target.spelling;
+                if (spelling == "bit" || spelling == "logic"
+                    || spelling == "reg" || spelling == "byte"
+                    || spelling == "shortint" || spelling == "int"
+                    || spelling == "integer" || spelling == "longint"
+                    || spelling == "time") {
+                    form = semantic::sv::TypeForm::packed_integral;
+                }
+            }
+            const auto invalid = BuiltinNetTypeProperties { };
+
+            const bool is_fixed_array
+                = resolved.container_form
+                    == semantic::sv::TypeForm::static_array
+                || effective.container_form
+                    == semantic::sv::TypeForm::static_array
+                || !resolved.unpacked_dimensions.empty()
+                || !effective.unpacked_dimensions.empty()
+                || form == semantic::sv::TypeForm::static_array;
+            if (is_fixed_array) {
+                const auto& dimensions = effective.unpacked_dimensions.empty()
+                    ? resolved.unpacked_dimensions
+                    : effective.unpacked_dimensions;
+                const auto& array_element_types
+                    = effective.container_element_types.empty()
+                    ? resolved.container_element_types
+                    : effective.container_element_types;
+                const auto array_definition
+                    = form == semantic::sv::TypeForm::static_array
+                        && effective_definition
+                    ? effective_definition
+                    : definition;
+                if ((resolved.container_form
+                        && *resolved.container_form
+                            != semantic::sv::TypeForm::static_array)
+                    || (effective.container_form
+                        && *effective.container_form
+                            != semantic::sv::TypeForm::static_array)
+                    || (form != semantic::sv::TypeForm::static_array
+                        && resolved.container_form
+                            != semantic::sv::TypeForm::static_array
+                        && effective.container_form
+                            != semantic::sv::TypeForm::static_array)
+                    || dimensions.empty()
+                    || !std::ranges::all_of(
+                        dimensions, [&](const semantic::sv::PackedRange& range) {
+                            // Static array dimensions may use parameters;
+                            // dynamic identifiers remain unresolved here.
+                            const auto left = range.left_expression
+                                ? working_specialization
+                                      .evaluate_integral_expression(
+                                          *range.left_expression)
+                                : range.left;
+                            const auto right = range.right_expression
+                                ? working_specialization
+                                      .evaluate_integral_expression(
+                                          *range.right_expression)
+                                : range.right;
+                            return left.has_value() && right.has_value();
+                        })) {
+                    return invalid;
+                }
+                const semantic::sv::TypeReference* element { };
+                if (array_element_types.size() == 1U) {
+                    element = &array_element_types.front();
+                } else if (array_element_types.empty()
+                    && array_definition
+                    && array_definition->systemverilog != nullptr) {
+                    element = &array_definition->systemverilog->base;
+                }
+                if (element == nullptr) {
+                    return invalid;
+                }
+                auto element_scope = scope;
+                if (array_definition
+                    && array_definition->systemverilog != nullptr) {
+                    const auto type_declaration
+                        = working_specialization.find_declaration(
+                            array_definition->systemverilog->declaration);
+                    if (type_declaration
+                        && type_declaration->systemverilog != nullptr) {
+                        element_scope
+                            = type_declaration->systemverilog->scope;
+                    }
+                }
+                const auto child = self(self, *element, element_scope);
+                return { false, false, child.valid_net_type };
+            }
+
+            if (form == semantic::sv::TypeForm::packed_structure
+                || form == semantic::sv::TypeForm::packed_union) {
+                if (!definition || definition->systemverilog == nullptr
+                    || definition->systemverilog->members.empty()
+                    || std::ranges::find(active_types,
+                        resolved.target.target) != active_types.end()) {
+                    return invalid;
+                }
+                active_types.push_back(resolved.target.target);
+                const auto type_declaration
+                    = working_specialization.find_declaration(
+                        definition->systemverilog->declaration);
+                const auto member_scope = type_declaration
+                        && type_declaration->systemverilog != nullptr
+                    ? type_declaration->systemverilog->scope
+                    : scope;
+                bool aggregate_four_state { };
+                bool members_are_integral = true;
+                for (const auto& member
+                     : definition->systemverilog->members) {
+                    const auto child = self(
+                        self, member.type, member_scope);
+                    if (!child.packed_integral) {
+                        members_are_integral = false;
+                        break;
+                    }
+                    aggregate_four_state
+                        = aggregate_four_state || child.four_state;
+                }
+                active_types.pop_back();
+                if (!members_are_integral) {
+                    return invalid;
+                }
+                return { true, aggregate_four_state,
+                    aggregate_four_state };
+            }
+
+            // IEEE 1800-2017 6.7.1 permits unpacked arrays and structures,
+            // but not unpacked unions, as built-in net data types.
+            if (form == semantic::sv::TypeForm::unpacked_structure) {
+                if (!definition || definition->systemverilog == nullptr
+                    || definition->systemverilog->members.empty()
+                    || std::ranges::find(active_types,
+                        resolved.target.target) != active_types.end()) {
+                    return invalid;
+                }
+                active_types.push_back(resolved.target.target);
+                const auto type_declaration
+                    = working_specialization.find_declaration(
+                        definition->systemverilog->declaration);
+                const auto member_scope = type_declaration
+                        && type_declaration->systemverilog != nullptr
+                    ? type_declaration->systemverilog->scope
+                    : scope;
+                bool members_are_net_types = true;
+                for (const auto& member
+                     : definition->systemverilog->members) {
+                    if (!self(self, member.type, member_scope)
+                             .valid_net_type) {
+                        members_are_net_types = false;
+                        break;
+                    }
+                }
+                active_types.pop_back();
+                return { false, false, members_are_net_types };
+            }
+
+            if (form == semantic::sv::TypeForm::packed_integral) {
+                bool four_state = resolved.four_state;
+                const auto& spelling = resolved.target.spelling;
+                if (spelling == "logic" || spelling == "reg"
+                    || spelling == "integer" || spelling == "time") {
+                    four_state = true;
+                } else if (spelling == "bit" || spelling == "byte"
+                    || spelling == "shortint" || spelling == "int"
+                    || spelling == "longint") {
+                    four_state = false;
+                }
+                return { true, four_state, four_state };
+            }
+
+            if (form == semantic::sv::TypeForm::enumeration
+                && definition && definition->systemverilog != nullptr) {
+                const auto type_declaration
+                    = working_specialization.find_declaration(
+                        definition->systemverilog->declaration);
+                const auto base_scope = type_declaration
+                        && type_declaration->systemverilog != nullptr
+                    ? type_declaration->systemverilog->scope
+                    : scope;
+                const auto base = self(self,
+                    definition->systemverilog->base, base_scope);
+                return { base.packed_integral, base.four_state,
+                    base.valid_net_type };
+            }
+
+            return invalid;
+        };
+        const auto net_type_properties = classify_net_type(
+            classify_net_type, *declaration.type, declaration.scope);
+        if (!net_type_properties.valid_net_type) {
+            report(
+                "FSIM-ELAB-SVNETTYPE-005",
+                "built-in net '" + declaration.name
+                    + "' requires a four-state integral data type or a "
+                      "fixed aggregate recursively composed of such types",
+                compiled_source_span(
+                    *compiled_, declaration.source));
+            return false;
+        }
     }
     const bool event_array
         = declaration.type
@@ -1880,7 +2142,7 @@ bool HierarchyBuilder::materialize_compiled_systemverilog_declaration(
                                 packed_fallback_resolver(
                                     *packed_type, width));
     }
-    if (declaration.initializer) {
+    if (declaration.initializer && !runtime_package_initializer) {
         const auto value
             = working_specialization.evaluate_integral_expression(
                 *declaration.initializer);

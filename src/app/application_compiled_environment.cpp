@@ -20,12 +20,35 @@ std::string_view library_name(const std::string_view library)
 }
 
 bool same_unit_identity(
-    const semantic::Unit& left, const semantic::Unit& right)
+    const semantic::Unit& left, const semantic::Unit& right,
+    const VhdlUnitIdentifierForms& left_vhdl_forms,
+    const VhdlUnitIdentifierForms& right_vhdl_forms)
 {
-    return left.language == right.language && left.kind == right.kind
+    const bool common_identity_matches
+        = left.language == right.language && left.kind == right.kind
         && library_name(left.library) == library_name(right.library)
         && left.name == right.name
         && left.secondary_name == right.secondary_name;
+    if (!common_identity_matches) {
+        return false;
+    }
+    return left.language != semantic::Language::vhdl
+        || (left_vhdl_forms.available && right_vhdl_forms.available
+            && left_vhdl_forms.name_extended
+                == right_vhdl_forms.name_extended
+            && left_vhdl_forms.primary_name_extended
+                == right_vhdl_forms.primary_name_extended);
+}
+
+VhdlUnitIdentifierForms vhdl_unit_identifier_forms(
+    const semantic::CompiledDesign& design, const semantic::UnitId id)
+{
+    const auto unit = std::ranges::find(
+        design.vhdl_hir.units(), id, &semantic::vhdl::Unit::id);
+    if (unit == design.vhdl_hir.units().end()) {
+        return { };
+    }
+    return { true, unit->extended_name, unit->extended_primary_name };
 }
 
 bool shared_compiler_package(const semantic::vhdl::Unit& left,
@@ -35,7 +58,9 @@ bool shared_compiler_package(const semantic::vhdl::Unit& left,
         && !right.standard_package_revision.empty()
         && left.kind == right.kind && left.library == right.library
         && left.name == right.name
-        && left.primary_name == right.primary_name;
+        && left.primary_name == right.primary_name
+        && left.extended_name == right.extended_name
+        && left.extended_primary_name == right.extended_primary_name;
 }
 
 bool external_unit(
@@ -111,7 +136,8 @@ std::vector<CompiledSourceUnitIdentity> compiled_source_unit_identities(
         if (libraries.contains(std::string { library_name(unit.library) })) {
             result.push_back({ unit, external_unit(checked, unit.id),
                 unit_source_owner(checked, unit.source, owners,
-                    config.base_directory) });
+                    config.base_directory),
+                vhdl_unit_identifier_forms(checked, unit.id) });
         }
     }
     checked.source_class_identities.clear();
@@ -191,26 +217,30 @@ bool install_compiled_environment(CompilationWorkspace& checked,
         });
         return key;
     };
-    std::set<std::tuple<semantic::vhdl::UnitKind, std::string, std::string,
-        std::string>> redefined;
-    std::set<std::pair<std::string, std::string>> replaced_primaries;
+    using VhdlUnitIdentity = std::tuple<semantic::vhdl::UnitKind,
+        std::string, std::string, std::string, bool, bool>;
+    std::set<VhdlUnitIdentity> redefined;
+    std::set<std::tuple<std::string, std::string, bool>> replaced_primaries;
     for (const auto& unit : checked.vhdl_hir.units()) {
         if (!unit.standard_package_revision.empty())
             continue;
         const auto library = library_key(unit.library);
-        redefined.emplace(unit.kind, library, unit.name, unit.primary_name);
+        redefined.emplace(unit.kind, library, unit.name, unit.primary_name,
+            unit.extended_name, unit.extended_primary_name);
         if (!secondary_unit(unit))
-            replaced_primaries.emplace(library, unit.name);
+            replaced_primaries.emplace(library, unit.name, unit.extended_name);
     }
     for (const auto& unit : imported.vhdl_hir.units()) {
         if (!unit.standard_package_revision.empty())
             continue;
         const auto library = library_key(unit.library);
         if (redefined.contains(
-                { unit.kind, library, unit.name, unit.primary_name })
+                { unit.kind, library, unit.name, unit.primary_name,
+                    unit.extended_name, unit.extended_primary_name })
             || (secondary_unit(unit)
                 && replaced_primaries.contains(
-                    { library, unit.primary_name }))) {
+                    { library, unit.primary_name,
+                        unit.extended_primary_name }))) {
             std::erase(selected, unit.id);
         }
     }
@@ -254,7 +284,9 @@ bool identify_compiled_source_units(CompilationWorkspace& checked,
     for (const auto& identity : identities) {
         const auto found = std::ranges::find_if(checked.semantics.units(),
             [&](const auto& unit) {
-                return same_unit_identity(unit, identity.unit)
+                return same_unit_identity(unit, identity.unit,
+                    vhdl_unit_identifier_forms(checked, unit.id),
+                    identity.vhdl_forms)
                     && external_unit(checked, unit.id) == identity.external;
             });
         if (found == checked.semantics.units().end()) {
@@ -280,8 +312,11 @@ void remember_compiled_references(const semantic::CompiledDesign& design,
             || reference.target->value() >= design.semantics.units().size()) {
             continue;
         }
-        identities.push_back({ design.semantics.units()[reference.owner.value()],
-            design.semantics.units()[reference.target->value()], reference });
+        identities.push_back({
+            design.semantics.units()[reference.owner.value()],
+            design.semantics.units()[reference.target->value()], reference,
+            vhdl_unit_identifier_forms(design, reference.owner),
+            vhdl_unit_identifier_forms(design, *reference.target) });
     }
 }
 
@@ -295,13 +330,18 @@ void restore_compiled_references(semantic::CompiledDesign& design,
     std::set<decltype(key(semantic::CompiledReference { }))> present;
     for (const auto& reference : design.references())
         present.insert(key(reference));
-    const auto find = [&](const semantic::Unit& identity) {
+    const auto find = [&](const semantic::Unit& identity,
+                          const VhdlUnitIdentifierForms& identity_forms) {
         return std::ranges::find_if(design.semantics.units(),
-            [&](const auto& unit) { return same_unit_identity(unit, identity); });
+            [&](const auto& unit) {
+                return same_unit_identity(unit, identity,
+                    vhdl_unit_identifier_forms(design, unit.id),
+                    identity_forms);
+            });
     };
     for (const auto& identity : identities) {
-        const auto owner = find(identity.owner);
-        const auto target = find(identity.target);
+        const auto owner = find(identity.owner, identity.owner_vhdl_forms);
+        const auto target = find(identity.target, identity.target_vhdl_forms);
         if (owner == design.semantics.units().end()
             || target == design.semantics.units().end()) {
             continue;

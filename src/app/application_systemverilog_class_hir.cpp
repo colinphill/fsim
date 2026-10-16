@@ -354,6 +354,14 @@ sv::TypeReference SystemVerilogHirBuilder::class_property_type(
             break;
         case frontend::SystemVerilogContainerKind::AssociativeArray:
             output.container_form = sv::TypeForm::associative_array;
+            if (input.systemverilog_container->associative_index_type) {
+                const auto index_type = class_property_type(
+                    *input.systemverilog_container->associative_index_type,
+                    type_source);
+                output.associative_index = index_type.target;
+                output.associative_index_metadata
+                    = sv::make_associative_index_metadata(index_type);
+            }
             break;
         case frontend::SystemVerilogContainerKind::StaticArray:
             output.container_form = sv::TypeForm::static_array;

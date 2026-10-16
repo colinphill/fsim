@@ -1024,6 +1024,9 @@ endmodule
     const auto generic_parsed = fsim::frontend::parse_text(
         "generic-specialization.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generic_counter is
   generic (
     width : positive := 8;
@@ -1037,6 +1040,9 @@ entity generic_counter is
   );
 end entity;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 architecture rtl of generic_counter is
   signal next_value : unsigned(last downto 0);
 begin
@@ -1053,6 +1059,9 @@ begin
   end process;
 end architecture;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity generic_top is
   port (
     clk : in std_logic;
@@ -1061,6 +1070,9 @@ entity generic_top is
   );
 end entity;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 architecture rtl of generic_top is
 begin
   four: entity work.generic_counter(rtl)
@@ -1434,6 +1446,9 @@ end architecture rtl;
         R"(
 entity invalid_selected_package_user is
 end entity invalid_selected_package_user;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of invalid_selected_package_user is
   signal first : std_logic;
   signal second : std_logic;

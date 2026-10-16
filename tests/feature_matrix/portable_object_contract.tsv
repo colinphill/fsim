@@ -3,9 +3,9 @@ kind	name	contract
 object	directory-suffix	.fsimobj,read-only-tree,atomic-sibling-stage-and-rename,no-overwrite
 object	metadata-file	fsim-object.bin
 object	metadata-magic	FSIMOBJ-NUL,8-bytes
-object	format	current-writer=8,exact-current-reader,little-endian-u32@8
-object	portable-schema	current-writer=15,exact-current-reader,little-endian-u32@12
-object	compiled-hir-schema	current-writer=1,exact-current-reader,little-endian-u32@16
+object	format	current-writer=9,legacy-reader=8-with-unknown-vhdl-forms,little-endian-u32@8
+object	portable-schema	current-writer=16,legacy-reader=15,little-endian-u32@12
+object	compiled-hir-schema	current-writer=3,exact-current-reader,little-endian-u32@16
 object	compiled-hir-index	contained-relative-artifact,lowercase-sha256,required-payload
 object	root-identities	producer,language,standard,compatibility-profile,library,compilation-unit,uvm-release
 object	root-digests	compilation-digest,trace-archive,lowercase-hex
@@ -13,8 +13,9 @@ object	defines	ordered,u64-count,u64-length-prefixed-strings
 object	include-roots	ordered,unique,normalized,relative,contained
 object	vhdl-dependencies	standard,predefined-environment,package,revision,source-sha256
 object	source-index	logical-name,relative-artifact,sha256,language,standard,compatibility-profile
-object	unit-index	language,kind,name,primary,architecture,standard,compatibility-profile,metadata-only,no-owning-payload
-object	compilation-digest	path-independent,all-explicit-inputs,complete-unit-index
+object	unit-index	language,kind,name,primary,architecture,standard,compatibility-profile,name-form,primary-name-form,metadata-only,no-owning-payload
+object	identifier-form-codec	little-endian-u32,unknown-basic-extended,unknown-only-for-legacy-or-non-vhdl-empty-primary
+object	compilation-digest	path-independent,all-explicit-inputs,complete-unit-index,v9-includes-forms,v8-legacy-domain
 object	rejection	stale,future,bad-magic,truncated,trailing,oversized,inconsistent,duplicate,absolute-path
 object	publication	validate-before-stage,checksum-before-publish,rollback-on-failure,no-partial-destination
 portable	integer-codec	all-integrals-canonical-little-endian-u64,range-checked-on-read

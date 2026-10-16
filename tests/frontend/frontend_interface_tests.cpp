@@ -1614,52 +1614,110 @@ endmodule
             && std::ranges::any_of(
                 local_process->statements,
                 [](const Statement& statement) {
-                    return statement.kind == StatementKind::Fork
-                        && statement.statements.size() >= 3U
-                        && statement.statements[0].kind
+                    if (statement.kind != StatementKind::Fork
+                        || !statement.fork_isolate_register_frame
+                        || statement.fork_join_kind != ForkJoinKind::None
+                        || statement.statements.size() != 1U) {
+                        return false;
+                    }
+                    const auto& branch = statement.statements.front();
+                    return branch.kind == StatementKind::Block
+                        && branch.statements.size() >= 3U
+                        && branch.statements[0].kind
                         == StatementKind::Assignment
-                        && statement.statements[1].kind
-                        == StatementKind::Assignment;
+                        && branch.statements[1].kind
+                        == StatementKind::Assignment
+                        && branch.statements.back().kind
+                        == StatementKind::Assert;
                 }),
         "property locals retain arbitrary-width types and per-attempt initializer assignments"
             + local_failure);
+    const auto is_reactive_sequence_evaluation = [](const Statement& evaluation) {
+        return evaluation.kind == StatementKind::Assert
+            && evaluation.statements.size() >= 6U
+            && std::ranges::count(
+                   evaluation.statements,
+                   StatementKind::Assignment,
+                   &Statement::kind)
+            == 3
+            && evaluation.statements[0].kind == StatementKind::Display
+            && evaluation.statements[0].output_text.starts_with(
+                "\x1f"
+                "fsim.concurrent-assertion|")
+            && evaluation.statements[1].kind == StatementKind::Display
+            && evaluation.statements[1].output_text.starts_with(
+                "\x1f"
+                "fsim.concurrent-assertion-action-region|")
+            && evaluation.statements[2].target.text == "match_count"
+            && evaluation.statements[3].value.kind
+            == ExpressionKind::Binary
+            && evaluation.statements[4].value.kind
+            == ExpressionKind::Binary
+            && evaluation.statements[5].kind == StatementKind::TaskCall
+            && evaluation.statements[5].task_name == "record_match";
+    };
+    const auto statement_tree_has_reactive_sequence_evaluation
+        = [&](const auto& self, const Statement& statement) -> bool {
+        if (is_reactive_sequence_evaluation(statement)) {
+            return true;
+        }
+        return std::ranges::any_of(
+                   statement.statements,
+                   [&](const Statement& child) {
+                       return self(self, child);
+                   })
+            || std::ranges::any_of(
+                statement.else_statements,
+                [&](const Statement& child) {
+                    return self(self, child);
+                });
+    };
+    const auto statement_tree_has_local_sequence_attempt
+        = [&](const auto& self, const Statement& statement) -> bool {
+        if (statement.kind == StatementKind::Fork
+            && statement.fork_isolate_register_frame
+            && statement.fork_join_kind == ForkJoinKind::None
+            && statement.statements.size() == 1U
+            && statement.statements.front().kind == StatementKind::Block) {
+            const auto& branch = statement.statements.front();
+            const auto initializer = std::ranges::find_if(
+                branch.statements,
+                [](const Statement& child) {
+                    return child.kind == StatementKind::Assignment
+                        && child.target.text == "match_count";
+                });
+            const auto evaluation = std::ranges::find_if(
+                branch.statements,
+                [&](const Statement& child) {
+                    return statement_tree_has_reactive_sequence_evaluation(
+                        statement_tree_has_reactive_sequence_evaluation, child);
+                });
+            if (initializer != branch.statements.end()
+                && evaluation != branch.statements.end()
+                && initializer < evaluation) {
+                return true;
+            }
+        }
+        return std::ranges::any_of(
+                   statement.statements,
+                   [&](const Statement& child) {
+                       return self(self, child);
+                   })
+            || std::ranges::any_of(
+                statement.else_statements,
+                [&](const Statement& child) {
+                    return self(self, child);
+                });
+    };
     require(
         sequence_process != nullptr
             && sequence_process->variables.size() == 1U
             && sequence_process->variables.front().name == "match_count"
             && std::ranges::any_of(
                 sequence_process->statements,
-                [](const Statement& statement) {
-                    if (statement.kind != StatementKind::Fork
-                        || statement.statements.size() < 2U) {
-                        return false;
-                    }
-                    const auto& evaluation = statement.statements.back();
-                    return evaluation.kind == StatementKind::Assert
-                        && evaluation.statements.size() >= 6U
-                        && std::ranges::count(
-                               evaluation.statements,
-                               StatementKind::Assignment,
-                               &Statement::kind)
-                        == 3
-                        && evaluation.statements[0].kind
-                        == StatementKind::Display
-                        && evaluation.statements[0].output_text.starts_with(
-                            "\x1f"
-                            "fsim.concurrent-assertion|")
-                        && evaluation.statements[1].kind
-                        == StatementKind::Display
-                        && evaluation.statements[1].output_text.starts_with(
-                            "\x1f"
-                            "fsim.concurrent-assertion-action-region|")
-                        && evaluation.statements[2].target.text == "match_count"
-                        && evaluation.statements[3].value.kind
-                        == ExpressionKind::Binary
-                        && evaluation.statements[4].value.kind
-                        == ExpressionKind::Binary
-                        && evaluation.statements[5].kind
-                        == StatementKind::TaskCall
-                        && evaluation.statements[5].task_name == "record_match";
+                [&](const Statement& statement) {
+                    return statement_tree_has_local_sequence_attempt(
+                        statement_tree_has_local_sequence_attempt, statement);
                 }),
         "sequence first_match assignments, updates, and calls execute in the reactive action region after the observed outcome");
     const auto statement_tree_has_target

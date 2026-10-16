@@ -46,14 +46,14 @@ namespace {
 void ApplicationTestFixture::test_artifact_phase_semantics()
 {
     install_governed_process_address_space_ceiling();
-    static_assert(app::kRuntimeStateSchema == 81);
+    static_assert(app::kRuntimeStateSchema == 85);
     static_assert(app::kSemanticStateSchema == 4);
     static_assert(app::kDesignIrStateSchema == 5);
-    static_assert(app::kCompiledHirBundleSchema == 1);
-    static_assert(app::kSystemVerilogConstraintHirStateSchema == 11);
+    static_assert(app::kCompiledHirBundleSchema == 3);
+    static_assert(app::kSystemVerilogConstraintHirStateSchema == 14);
     static_assert(app::kSystemVerilogCoverageStateSchema == 7);
     static_assert(app::kSystemVerilogUvmStateSchema == 3);
-    static_assert(app::kVhdlHirStateSchema == 7);
+    static_assert(app::kVhdlHirStateSchema == 8);
     const auto copy_artifact_tree = [](
                                         const std::filesystem::path& source_root,
                                         const std::filesystem::path& destination) {
@@ -473,10 +473,10 @@ end architecture;
         [](const auto& diagnostic) {
             return diagnostic.code == "FSIM-ART-0001"
                 && diagnostic.message
-                == "unsupported .fsimobj identity: found format 9, "
-                   "portable-unit schema 15, and compiled-HIR schema 1; "
-                   "required format 8, portable-unit schema 15, and "
-                   "compiled-HIR schema 1; regenerate .fsimobj with this "
+                == "unsupported .fsimobj identity: found format 10, "
+                   "portable-unit schema 16, and compiled-HIR schema 3; "
+                   "required format 9, portable-unit schema 16, and "
+                   "compiled-HIR schema 3; regenerate .fsimobj with this "
                    "fsim build";
         }));
     output.str({ });
@@ -1022,7 +1022,7 @@ end architecture;
         vhdl_hir_codec_diagnostics);
     assert(repeated_vhdl_hir == vhdl_hir_bytes);
 
-    // Exercise the schema-6 provenance fields independently of whatever the
+    // Exercise the schema-8 provenance fields independently of whatever the
     // frontend happens to infer for this broader artifact fixture.
     auto vhdl_hir_with_builtin_identities = coverage_checkpoint->vhdl_hir;
     assert(!vhdl_hir_with_builtin_identities.types().empty());
@@ -1061,6 +1061,30 @@ end architecture;
                coverage_checkpoint->semantics,
                vhdl_hir_identity_codec_diagnostics)
         == vhdl_hir_identity_bytes);
+
+    constexpr std::array standard_array_builtin_type_identities {
+        semantic::vhdl::BuiltinTypeIdentity::std_standard_string,
+        semantic::vhdl::BuiltinTypeIdentity::std_standard_bit_vector,
+        semantic::vhdl::BuiltinTypeIdentity::std_standard_boolean_vector,
+        semantic::vhdl::BuiltinTypeIdentity::std_standard_integer_vector,
+        semantic::vhdl::BuiltinTypeIdentity::std_standard_real_vector,
+        semantic::vhdl::BuiltinTypeIdentity::std_standard_time_vector
+    };
+    for (const auto identity : standard_array_builtin_type_identities) {
+        auto candidate_hir = coverage_checkpoint->vhdl_hir;
+        candidate_hir.mutable_types().front().base.builtin_type = identity;
+        diagnostic::Engine identity_diagnostics;
+        const auto identity_bytes = app::serialize_vhdl_hir_state(
+            candidate_hir, coverage_checkpoint->semantics,
+            identity_diagnostics);
+        assert(identity_bytes && !identity_diagnostics.has_error());
+        const auto restored_identity_hir = app::deserialize_vhdl_hir_state(
+            *identity_bytes, "standard-array-identities.bin",
+            coverage_checkpoint->semantics, identity_diagnostics);
+        assert(restored_identity_hir && !identity_diagnostics.has_error());
+        assert(restored_identity_hir->types().front().base.builtin_type
+            == identity);
+    }
 
     auto vhdl_2019_hir = *restored_vhdl_hir;
     assert(

@@ -905,10 +905,17 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
           "declare and instantiate a component in VHDL-87");
       const auto first = expect_identifier("entity name");
       instance.unit_name = vhdl_name(first.text);
+      instance.vhdl_unit_name_spelling = first.text;
+      instance.vhdl_extended_unit_name = first.text.size() >= 2U
+          && first.text.front() == '\\' && first.text.back() == '\\';
       if (match(TokenKind::Dot)) {
           const auto unit = expect_identifier("entity name after library");
           instance.unit_name += '.';
           instance.unit_name += vhdl_name(unit.text);
+          instance.vhdl_unit_name_spelling += '.';
+          instance.vhdl_unit_name_spelling += unit.text;
+          instance.vhdl_extended_unit_name = unit.text.size() >= 2U
+              && unit.text.front() == '\\' && unit.text.back() == '\\';
       }
     if (match(TokenKind::LeftParen)) {
       const auto architecture =
@@ -916,6 +923,11 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
       instance.unit_name += '(';
       instance.unit_name += vhdl_name(architecture.text);
       instance.unit_name += ')';
+      instance.vhdl_architecture_name_spelling = architecture.text;
+      instance.vhdl_extended_architecture_name
+          = architecture.text.size() >= 2U
+              && architecture.text.front() == '\\'
+              && architecture.text.back() == '\\';
       expect(TokenKind::RightParen, "')' after architecture name",
              "FSIM-VHDL-PARSE-036");
     }
@@ -927,10 +939,17 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
           "declare and instantiate a component in VHDL-87");
       const auto first = expect_identifier("configuration name");
       instance.unit_name = vhdl_name(first.text);
+      instance.vhdl_unit_name_spelling = first.text;
+      instance.vhdl_extended_unit_name = first.text.size() >= 2U
+          && first.text.front() == '\\' && first.text.back() == '\\';
       if (match(TokenKind::Dot)) {
           const auto unit = expect_identifier("configuration name after library");
           instance.unit_name += '.';
           instance.unit_name += vhdl_name(unit.text);
+          instance.vhdl_unit_name_spelling += '.';
+          instance.vhdl_unit_name_spelling += unit.text;
+          instance.vhdl_extended_unit_name = unit.text.size() >= 2U
+              && unit.text.front() == '\\' && unit.text.back() == '\\';
       }
     instance.vhdl_configuration_instance = true;
   } else {
@@ -944,11 +963,18 @@ Instance VhdlParser::parse_vhdl_instance(const Token& label) {
     }
     const auto component = expect_identifier("component name");
     instance.unit_name = vhdl_name(component.text);
+    instance.vhdl_unit_name_spelling = component.text;
+    instance.vhdl_extended_unit_name = component.text.size() >= 2U
+        && component.text.front() == '\\' && component.text.back() == '\\';
     while (match(TokenKind::Dot)) {
       const auto selected = expect_identifier(
           "selected component name after package");
       instance.unit_name += '.';
       instance.unit_name += vhdl_name(selected.text);
+      instance.vhdl_unit_name_spelling += '.';
+      instance.vhdl_unit_name_spelling += selected.text;
+      instance.vhdl_extended_unit_name = selected.text.size() >= 2U
+          && selected.text.front() == '\\' && selected.text.back() == '\\';
     }
     instance.vhdl_component_instance = true;
   }

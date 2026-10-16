@@ -9,6 +9,9 @@ void test_selection_vhdl_runtime_rejections()
         fsim::frontend::parse_text(
             "invalid_vhdl_runtime_loop.vhd",
             R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity invalid_vhdl_runtime_loop is
   port (condition : in std_logic);
 end entity;
@@ -38,6 +41,9 @@ end architecture;
         fsim::frontend::parse_text(
             "invalid_condition.vhd",
             R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity invalid_condition is
   port (gate : in std_logic);
 end entity;

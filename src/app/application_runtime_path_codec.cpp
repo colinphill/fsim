@@ -14,6 +14,7 @@
 #include <limits>
 #include <new>
 #include <ranges>
+#include <set>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -81,6 +82,298 @@ void report_error(
     }
     diagnostics.error(std::string { kCode }, std::move(message),
         { std::string { source_name }, { 1, 1, 0 }, { 1, 1, 0 } });
+}
+
+template <typename IdRange>
+[[nodiscard]] bool canonical_ids_within(
+    const IdRange& ids, const std::size_t limit) noexcept
+{
+    std::optional<std::uint32_t> previous;
+    for (const auto id : ids) {
+        if (id >= limit || (previous && id <= *previous)) {
+            return false;
+        }
+        previous = id;
+    }
+    return true;
+}
+
+template <typename ProcessRows>
+[[nodiscard]] bool validate_package_startup_rows(
+    const State& state,
+    const ProcessRows& process_rows,
+    diagnostic::Engine& diagnostics,
+    const std::string_view source_name = { })
+{
+    const auto& handle_initializers
+        = state.systemverilog_package_class_initializers;
+    const auto& static_initializers
+        = state.systemverilog_package_class_static_initializers;
+    using namespace runtime::simir;
+    std::set<std::uint64_t> startup_orders;
+    for (const auto& row : process_rows) {
+        const auto& process = row.instance;
+        const bool package_initializer
+            = process.startup_phase
+                == ProcessStartupPhase::package_static_initializer;
+        if (process.startup_phase != ProcessStartupPhase::ordinary
+            && !package_initializer) {
+            report_error(diagnostics,
+                "runtime process has an invalid startup phase", source_name);
+            return false;
+        }
+        if (package_initializer
+            && !startup_orders.insert(process.startup_order).second) {
+            report_error(diagnostics,
+                "runtime package startup order is duplicated", source_name);
+            return false;
+        }
+        if (!package_initializer) {
+            if (process.startup_package_owner_id != 0U
+                || !process.startup_writable_string_object_ids.empty()
+                || !process.startup_writable_container_object_ids.empty()) {
+                report_error(diagnostics,
+                    "ordinary runtime process carries package object permissions",
+                    source_name);
+                return false;
+            }
+            continue;
+        }
+        if (process.startup_package_owner_id == 0U
+            || !canonical_ids_within(
+                process.startup_writable_string_object_ids,
+                state.string_objects.size())
+            || !canonical_ids_within(
+                process.startup_writable_container_object_ids,
+                state.container_objects.size())) {
+            report_error(diagnostics,
+                "runtime package process object permissions are invalid",
+                source_name);
+            return false;
+        }
+        std::vector<StringObjectId> operation_string_writes;
+        std::vector<ContainerObjectId> operation_container_writes;
+        for (const auto& operation : process.operations) {
+            if (const auto* string_write
+                = operation_get_if<WriteStringObject>(&operation)) {
+                operation_string_writes.push_back(string_write->object);
+            } else if (const auto* container_write
+                = operation_get_if<WriteContainerObject>(&operation)) {
+                if (container_write->nonblocking
+                    || container_write->transaction_signal) {
+                    report_error(diagnostics,
+                        "runtime package process contains a deferred container write",
+                        source_name);
+                    return false;
+                }
+                operation_container_writes.push_back(container_write->object);
+            } else if (operation_holds<WriteContainerObjectElement>(
+                           operation)) {
+                report_error(diagnostics,
+                    "runtime package process contains an element container write",
+                    source_name);
+                return false;
+            }
+        }
+        const auto canonicalize = [](auto& ids) {
+            std::ranges::sort(ids);
+            ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+        };
+        canonicalize(operation_string_writes);
+        canonicalize(operation_container_writes);
+        if (operation_string_writes
+                != process.startup_writable_string_object_ids
+            || operation_container_writes
+                != process.startup_writable_container_object_ids) {
+            report_error(diagnostics,
+                "runtime package process object permissions do not match its writes",
+                source_name);
+            return false;
+        }
+        for (const auto object : process.startup_writable_string_object_ids) {
+            if (object >= state.string_object_info.size()
+                || object >= state.string_objects.size()) {
+                report_error(diagnostics,
+                    "runtime package process string permission is out of range",
+                    source_name);
+                return false;
+            }
+            const auto& info = state.string_object_info[object];
+            if (info.id != object || info.is_port
+                || info.name != state.string_objects[object].name
+                || state.string_objects[object].package_owner_id
+                    != process.startup_package_owner_id) {
+                report_error(diagnostics,
+                    "runtime package process string permission has a foreign owner",
+                    source_name);
+                return false;
+            }
+        }
+        for (const auto object : process.startup_writable_container_object_ids) {
+            if (object >= state.container_object_info.size()
+                || object >= state.container_objects.size()) {
+                report_error(diagnostics,
+                    "runtime package process container permission is out of range",
+                    source_name);
+                return false;
+            }
+            const auto& info = state.container_object_info[object];
+            const bool has_signal_alias
+                = std::ranges::any_of(state.container_signal_aliases,
+                      [object](const auto& alias) {
+                          return alias.object == object;
+                      })
+                || std::ranges::any_of(
+                    state.container_aggregate_signal_aliases,
+                    [object](const auto& alias) {
+                        return alias.object == object;
+                    })
+                || std::ranges::any_of(
+                    state.container_element_signal_aliases,
+                    [object](const auto& alias) {
+                        return alias.object == object;
+                    });
+            if (info.id != object || info.is_port || info.slice_alias
+                || state.container_objects[object].slice_alias
+                || info.name != state.container_objects[object].name
+                || state.container_objects[object].package_owner_id
+                    != process.startup_package_owner_id
+                || has_signal_alias) {
+                report_error(diagnostics,
+                    "runtime package process container permission is not direct owned storage",
+                    source_name);
+                return false;
+            }
+        }
+    }
+    for (const auto& row : handle_initializers) {
+        if (!row.unit.valid() || !row.declaration.valid()
+            || !row.initializer.valid()
+            || row.signal >= state.signals.size()
+            || !startup_orders.insert(row.startup_order).second
+            || !std::ranges::binary_search(
+                row.writable_signal_ids, row.signal)
+            || !canonical_ids_within(
+                row.writable_signal_ids, state.signals.size())
+            || !canonical_ids_within(
+                row.writable_string_object_ids, state.string_objects.size())
+            || !canonical_ids_within(
+                row.writable_container_object_ids,
+                state.container_objects.size())) {
+            report_error(diagnostics,
+                "runtime package class-handle initializer metadata is invalid",
+                source_name);
+            return false;
+        }
+    }
+    for (const auto& row : static_initializers) {
+        if (!row.unit.valid() || row.class_identity.empty()
+            || row.specialization_identity.empty()
+            || !row.property_declaration.valid() || row.property_name.empty()
+            || row.canonical_identity.empty() || !row.initializer.valid()
+            || !startup_orders.insert(row.startup_order).second
+            || !canonical_ids_within(
+                row.writable_signal_ids, state.signals.size())
+            || !canonical_ids_within(
+                row.writable_string_object_ids, state.string_objects.size())
+            || !canonical_ids_within(
+                row.writable_container_object_ids,
+                state.container_objects.size())) {
+            report_error(diagnostics,
+                "runtime package static-property initializer metadata is invalid",
+                source_name);
+            return false;
+        }
+    }
+    return true;
+}
+
+template <typename ProcessTable>
+[[nodiscard]] bool validate_typed_mailbox_operations(
+    const ProcessTable& process_table,
+    diagnostic::Engine& diagnostics,
+    const std::string_view source_name = { })
+{
+    using namespace runtime::simir;
+    for (const auto& row : process_table.rows) {
+        if (row.template_id >= process_table.templates.size()
+            || !process_table.templates[row.template_id]) {
+            report_error(diagnostics,
+                "runtime mailbox validation found an invalid process template",
+                source_name);
+            return false;
+        }
+        const auto& process_template
+            = *process_table.templates[row.template_id];
+        for (const auto& operation : row.instance.operations) {
+            bool valid = true;
+            std::string_view error;
+            const auto valid_kind_width = [](
+                const MailboxElementKind kind,
+                const std::uint32_t width) {
+                return (kind == MailboxElementKind::packed && width != 0U)
+                    || (kind == MailboxElementKind::string && width == 0U);
+            };
+            visit_operation(
+                [&](const auto& item) {
+                    using Type = std::remove_cvref_t<decltype(item)>;
+                    if constexpr (std::is_same_v<Type, MailboxCreate>) {
+                        valid = valid_kind_width(
+                                    item.element_kind, item.element_width)
+                            && item.destination
+                                < process_template.register_count
+                            && item.capacity
+                                < process_template.register_count;
+                        error = "MailboxCreate has invalid typed registers or shape";
+                    } else if constexpr (
+                        std::is_same_v<Type, MailboxPut>) {
+                        valid = valid_kind_width(
+                                    item.element_kind, item.element_width)
+                            && item.receiver
+                                < process_template.register_count
+                            && (!item.result
+                                || *item.result
+                                    < process_template.register_count)
+                            && (item.element_kind == MailboxElementKind::packed
+                                ? item.source < process_template.register_count
+                                : item.string_source
+                                    < process_template.string_register_count);
+                        error = "MailboxPut has invalid typed registers or shape";
+                    } else if constexpr (
+                        std::is_same_v<Type, MailboxGet>) {
+                        valid = valid_kind_width(
+                                    item.element_kind, item.element_width)
+                            && item.receiver
+                                < process_template.register_count
+                            && (!item.result
+                                || *item.result
+                                    < process_template.register_count)
+                            && (item.element_kind == MailboxElementKind::packed
+                                ? item.destination
+                                    < process_template.register_count
+                                : item.string_destination
+                                    < process_template.string_register_count);
+                        error = "MailboxGet has invalid typed registers or shape";
+                    } else if constexpr (
+                        std::is_same_v<Type, MailboxNum>) {
+                        valid = item.receiver
+                                    < process_template.register_count
+                            && item.destination
+                                < process_template.register_count;
+                        error = "MailboxNum has an invalid register ID";
+                    }
+                },
+                operation);
+            if (!valid) {
+                report_error(diagnostics,
+                    "runtime process contains an invalid typed mailbox operation: "
+                        + std::string { error },
+                    source_name);
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 [[nodiscard]] std::string_view path_codec_error(
@@ -373,7 +666,9 @@ bool visit_runtime_paths(StateType& state, Callback&& callback)
         state.verilog_timing_checks, state.systemc_instances,
         state.systemc_processes, state.systemc_objects,
         state.signal_names, state.string_names, state.container_names,
-        state.code_coverage_inventory, state.signal_driver_inventory
+        state.code_coverage_inventory, state.signal_driver_inventory,
+        state.systemverilog_package_class_initializers,
+        state.systemverilog_package_class_static_initializers
     };
 }
 
@@ -511,6 +806,14 @@ process_table_from_design(
         if (next_template_id != process_table->templates.size()) {
             report_error(diagnostics,
                 "runtime process template table contains an unused entry");
+            return std::nullopt;
+        }
+        if (!validate_typed_mailbox_operations(
+                *process_table, diagnostics)) {
+            return std::nullopt;
+        }
+        if (!validate_package_startup_rows(
+                state, process_table->rows, diagnostics)) {
             return std::nullopt;
         }
 
@@ -758,6 +1061,10 @@ std::optional<DecodedRuntimeProgramState> read_runtime_state(
             "runtime state is missing its process-row table", source_name);
         return std::nullopt;
     }
+    if (!validate_package_startup_rows(
+            dto.state, mutable_process_table->rows, diagnostics, source_name)) {
+        return std::nullopt;
+    }
     if (reader.remaining() != 0U) {
         report_error(diagnostics,
             "runtime state contains trailing bytes", source_name);
@@ -870,6 +1177,10 @@ std::optional<DecodedRuntimeProgramState> read_runtime_state(
         report_error(diagnostics,
             "runtime process template table contains an unused entry",
             source_name);
+        return std::nullopt;
+    }
+    if (!validate_typed_mailbox_operations(
+            *mutable_process_table, diagnostics, source_name)) {
         return std::nullopt;
     }
     dto.process_table = std::move(mutable_process_table);

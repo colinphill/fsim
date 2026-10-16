@@ -51,6 +51,8 @@ void Interpreter::Impl::stage_update_unrouted(
         offset,
         { },
         value_index });
+    stage_selected_signal_transaction(
+        signal, offset.value_or(0U), pending_update_values.back().width());
     schedule_update_commit();
 }
 

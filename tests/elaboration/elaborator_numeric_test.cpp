@@ -8,6 +8,10 @@ const auto vhdl_signed_arithmetic =
         fsim::frontend::parse_text(
             "vhdl_signed_arithmetic.vhd",
             R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
 entity vhdl_signed_arithmetic is
   port (
     lhs : in signed(7 downto 0);
@@ -211,6 +215,9 @@ end architecture;
         fsim::frontend::parse_text(
             "dynamic_vhdl_shift.vhd",
             R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity dynamic_vhdl_shift is
   port (
     value : in std_logic_vector(7 downto 0);
@@ -1496,6 +1503,9 @@ endmodule
         fsim::frontend::parse_text(
             "invalid_vhdl_shift.vhd",
             R"(
+library ieee;
+use ieee.numeric_std.all;
+
 entity invalid_vhdl_shift is
   port (
     lhs : in signed(7 downto 0);
@@ -1522,6 +1532,9 @@ end architecture;
         fsim::frontend::parse_text(
             "invalid_vhdl_abs.vhd",
             R"(
+library ieee;
+use ieee.numeric_std.all;
+
 entity invalid_vhdl_abs is
   port (
     lhs : in unsigned(7 downto 0);
@@ -1613,6 +1626,9 @@ end architecture;
         fsim::frontend::parse_text(
             "mixed_vhdl_arithmetic.vhd",
             R"(
+library ieee;
+use ieee.numeric_std.all;
+
 entity mixed_vhdl_arithmetic is
   port (
     lhs : in signed(7 downto 0);

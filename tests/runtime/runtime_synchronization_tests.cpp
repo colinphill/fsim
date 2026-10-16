@@ -71,6 +71,102 @@ void test_mailbox_nonblocking_operations() {
       "typed bounded mailbox try, peek, get, and num operations");
 }
 
+void test_mailbox_string_nonblocking_operations() {
+  Interpreter interpreter;
+  Process process;
+  process.id = 0;
+  process.name = "mailbox_string_nonblocking";
+  process.register_count = 5;
+  process.string_register_count = 4;
+  for (RegisterId id = 0; id < process.register_count; ++id) {
+    const auto width = id == 1 ? 64U : 32U;
+    process.debug_locals.push_back(
+        debug_local("register_" + std::to_string(id), id, width));
+  }
+  process.debug_string_locals = {
+      DebugStringLocal { "source", 0, { } },
+      DebugStringLocal { "failed_get", 1, { } },
+      DebugStringLocal { "failed_peek", 2, { } },
+      DebugStringLocal { "received", 3, { } },
+  };
+  process.operations = {
+      LoadConstant{0, PackedLogic4::from_aval_bval(32, 1, 0)},
+      MailboxCreate{1, 0, 0, MailboxElementKind::string},
+      LoadStringConstant{0, "source-value"},
+      MailboxPut{
+          1, 0, 0, std::nullopt, MailboxElementKind::string, 0},
+      LoadStringConstant{0, "mutated-source"},
+      LoadStringConstant{1, "get-sentinel"},
+      LoadStringConstant{2, "peek-sentinel"},
+      MailboxPut{1, 0, 0, 2, MailboxElementKind::string, 0},
+      MailboxGet{1, 0, 0, 3, true, MailboxElementKind::string, 3},
+      MailboxNum{4, 1},
+      MailboxGet{1, 0, 0, 2, false, MailboxElementKind::string, 3},
+      MailboxNum{4, 1},
+      MailboxGet{1, 0, 0, 2, false, MailboxElementKind::string, 1},
+      MailboxGet{1, 0, 0, 3, true, MailboxElementKind::string, 2},
+      Halt{},
+  };
+  (void)interpreter.add_process(std::move(process));
+  const auto result = interpreter.run();
+  require(
+      result.status == RunStatus::completed
+          && debug_value(interpreter, 2) == 0
+          && debug_value(interpreter, 3) == 0
+          && debug_value(interpreter, 4) == 0
+          && interpreter.read_debug_string_local(0, 0) == "mutated-source"
+          && interpreter.read_debug_string_local(0, 1) == "get-sentinel"
+          && interpreter.read_debug_string_local(0, 2) == "peek-sentinel"
+          && interpreter.read_debug_string_local(0, 3) == "source-value",
+      "typed string mailbox owns messages, preserves FIFO/peek, and leaves failed try outputs unchanged");
+}
+
+void test_mailbox_string_malformed_operations_fail_safely() {
+  {
+    Interpreter interpreter;
+    Process process;
+    process.id = 0;
+    process.name = "mailbox_string_invalid_width";
+    process.register_count = 2;
+    process.operations = {
+        LoadConstant{0, PackedLogic4::from_aval_bval(32, 1, 0)},
+        MailboxCreate{1, 0, 8, MailboxElementKind::string},
+        Halt{},
+    };
+    bool rejected { };
+    try {
+      (void)interpreter.add_process(std::move(process));
+    } catch (const std::invalid_argument&) {
+      rejected = true;
+    }
+    require(rejected,
+        "typed string mailbox rejects a nonzero packed width");
+  }
+  {
+    Interpreter interpreter;
+    Process process;
+    process.id = 0;
+    process.name = "mailbox_string_invalid_register";
+    process.register_count = 3;
+    process.string_register_count = 1;
+    process.operations = {
+        LoadConstant{0, PackedLogic4::from_aval_bval(32, 0, 0)},
+        MailboxCreate{1, 0, 0, MailboxElementKind::string},
+        MailboxGet{
+            1, 0, 0, 2, true, MailboxElementKind::string, 1},
+        Halt{},
+    };
+    bool rejected { };
+    try {
+      (void)interpreter.add_process(std::move(process));
+    } catch (const std::invalid_argument&) {
+      rejected = true;
+    }
+    require(rejected,
+        "typed string mailbox rejects an out-of-range string register safely");
+  }
+}
+
 void test_mailbox_waiter_fairness() {
   {
     Interpreter interpreter;
@@ -269,6 +365,8 @@ void test_simir_synchronization_objects() {
     }
   };
   run("mailbox nonblocking", test_mailbox_nonblocking_operations);
+  run("mailbox string nonblocking", test_mailbox_string_nonblocking_operations);
+  run("mailbox string malformed", test_mailbox_string_malformed_operations_fail_safely);
   run("mailbox fairness", test_mailbox_waiter_fairness);
   run("semaphore", test_semaphore_operations_and_fairness);
 }

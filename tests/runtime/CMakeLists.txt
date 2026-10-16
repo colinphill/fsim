@@ -64,6 +64,7 @@ add_executable(
   runtime_unicode_string_tests.cpp
   runtime_vhdl_psl_tests.cpp
   runtime_execution_tests.cpp
+  runtime_package_static_startup_tests.cpp
   runtime_execution_services_tests.cpp
   runtime_execution_lifecycle.cpp
   runtime_synchronization_tests.cpp
@@ -198,6 +199,12 @@ set_tests_properties(
     LABELS "fast;runtime;region;generic-update;systemverilog;windows;linux"
     # Certified regions are opt-in; this witness exercises that route.
     ENVIRONMENT "FSIM_ENABLE_SV_REGION_KERNEL=1")
+add_test(
+  NAME fsim.runtime.package_static_startup
+  COMMAND fsim_runtime_tests package_static_startup)
+set_tests_properties(
+  fsim.runtime.package_static_startup
+  PROPERTIES LABELS "fast;runtime;simir;startup;windows;linux")
 add_executable(
   fsim_runtime_generic_update_allocation_failure_tests
   runtime_generic_update_region_tests.cpp

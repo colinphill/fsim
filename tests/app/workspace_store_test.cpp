@@ -104,9 +104,76 @@ void execute_sql(const fs::path& path, const char* sql)
 {
     sqlite3* database = nullptr;
     assert(sqlite3_open_v2(fsim::support::path_to_utf8(path).c_str(), &database,
-        SQLITE_OPEN_READWRITE, nullptr) == SQLITE_OK);
+        SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE, nullptr) == SQLITE_OK);
     assert(sqlite3_exec(database, sql, nullptr, nullptr, nullptr) == SQLITE_OK);
     assert(sqlite3_close(database) == SQLITE_OK);
+}
+
+std::string sql_literal(const std::string_view value)
+{
+    std::string result { "'" };
+    for (const char character : value) {
+        result += character;
+        if (character == '\'')
+            result += '\'';
+    }
+    result += '\'';
+    return result;
+}
+
+std::string legacy_unit_identity(const fsim::library::UnitIndexEntry& unit)
+{
+    std::string result;
+    for (const auto* field : { &unit.language, &unit.kind, &unit.name,
+             &unit.primary_name, &unit.architecture }) {
+        result += std::to_string(field->size()) + ":" + *field;
+    }
+    return result;
+}
+
+void write_v1_database(const fs::path& path,
+    const workspace::LibraryLocation& location,
+    const workspace::ArtifactRecord& record)
+{
+    assert(record.units.size() == 1U);
+    const auto& owned = record.units.front();
+    const auto& unit_entry = owned.unit;
+    const std::string schema =
+        "CREATE TABLE metadata(version INTEGER NOT NULL, library TEXT NOT NULL);"
+        "CREATE TABLE artifacts(id TEXT PRIMARY KEY NOT NULL, kind INTEGER NOT NULL, "
+        "path TEXT NOT NULL, fingerprint TEXT NOT NULL);"
+        "CREATE TABLE sources(owner TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, "
+        "source TEXT NOT NULL, PRIMARY KEY(owner, source));"
+        "CREATE TABLE units(identity TEXT PRIMARY KEY NOT NULL, "
+        "owner TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, "
+        "language TEXT NOT NULL, kind TEXT NOT NULL, name TEXT NOT NULL, "
+        "primary_name TEXT NOT NULL, architecture TEXT NOT NULL, artifact TEXT NOT NULL, "
+        "checksum TEXT NOT NULL, standard TEXT NOT NULL, profile TEXT NOT NULL, source TEXT NOT NULL);"
+        "CREATE TABLE dependencies(owner TEXT NOT NULL REFERENCES artifacts(id) ON DELETE CASCADE, "
+        "ordinal INTEGER NOT NULL, library TEXT NOT NULL, language TEXT NOT NULL, kind TEXT NOT NULL, "
+        "name TEXT NOT NULL, primary_name TEXT NOT NULL, architecture TEXT NOT NULL, "
+        "artifact TEXT NOT NULL, checksum TEXT NOT NULL, standard TEXT NOT NULL, profile TEXT NOT NULL, "
+        "fingerprint TEXT NOT NULL, PRIMARY KEY(owner, ordinal));";
+    std::string inserts = "INSERT INTO metadata VALUES(1, "
+        + sql_literal(location.name) + "); INSERT INTO artifacts VALUES("
+        + sql_literal(record.id) + ", "
+        + std::to_string(static_cast<int>(record.kind)) + ", "
+        + sql_literal(fsim::support::path_to_utf8(record.path)) + ", "
+        + sql_literal(record.fingerprint) + "); INSERT INTO sources VALUES("
+        + sql_literal(record.id) + ", " + sql_literal(owned.source_key)
+        + "); INSERT INTO units VALUES(" + sql_literal(legacy_unit_identity(unit_entry))
+        + ", " + sql_literal(record.id) + ", "
+        + sql_literal(unit_entry.language) + ", " + sql_literal(unit_entry.kind)
+        + ", " + sql_literal(unit_entry.name) + ", "
+        + sql_literal(unit_entry.primary_name) + ", "
+        + sql_literal(unit_entry.architecture) + ", "
+        + sql_literal(fsim::support::path_to_utf8(unit_entry.artifact)) + ", "
+        + sql_literal(unit_entry.checksum) + ", "
+        + sql_literal(unit_entry.standard) + ", "
+        + sql_literal(unit_entry.compatibility_profile) + ", "
+        + sql_literal(owned.source_key) + ");";
+    const auto sql = schema + inserts;
+    execute_sql(path, sql.c_str());
 }
 
 std::string encode_path(const fs::path& path)
@@ -160,7 +227,7 @@ int leave_hot_journal(const fs::path& database_path)
         return 10;
     }
     const int updated = sqlite3_exec(database,
-        "BEGIN IMMEDIATE; UPDATE metadata SET version=99 WHERE version=1",
+        "BEGIN IMMEDIATE; UPDATE metadata SET version=99 WHERE version=2",
         nullptr, nullptr, nullptr);
     if (updated != SQLITE_OK || sqlite3_changes(database) != 1
         || sqlite3_db_cacheflush(database) != SQLITE_OK) {
@@ -307,6 +374,90 @@ void test_source_replacement_and_group_selection()
     assert(!fs::exists(catalog->location.directory / second.path));
 }
 
+void test_vhdl_identifier_form_round_trip_and_v1_migration()
+{
+    TemporaryWorkspace temporary;
+    workspace::Store store { temporary.root };
+    std::string error;
+
+    auto basic = unit("ctx");
+    basic.language = "vhdl";
+    basic.kind = "context";
+    basic.standard = "2008";
+    basic.compatibility_profile = "ieee-1076-standard:2008:fsim-v3";
+    basic.name_form = fsim::library::VhdlIdentifierForm::basic;
+    auto extended = basic;
+    extended.name_form = fsim::library::VhdlIdentifierForm::extended;
+    assert(workspace::unit_identity(basic) != workspace::unit_identity(extended));
+
+    auto transaction = store.begin_library("work", error);
+    assert(transaction && error.empty());
+    auto pair = artifact(*transaction, { "contexts.vhd" }, { });
+    pair.units = { { basic, "contexts.vhd" }, { extended, "contexts.vhd" } };
+    assert(transaction->commit(std::move(pair), error));
+    transaction.reset();
+
+    auto catalog = store.read_library("work", error);
+    assert(catalog && error.empty() && catalog->artifacts.size() == 1U);
+    const auto& stored_units = catalog->artifacts.front().units;
+    assert(stored_units.size() == 2U);
+    assert(std::ranges::any_of(stored_units, [&](const auto& owned) {
+        return owned.unit.name_form == fsim::library::VhdlIdentifierForm::basic;
+    }));
+    assert(std::ranges::any_of(stored_units, [&](const auto& owned) {
+        return owned.unit.name_form == fsim::library::VhdlIdentifierForm::extended;
+    }));
+    const auto database = catalog->location.directory / "library.sqlite3";
+    execute_sql(database,
+        "UPDATE units SET name_form=3 WHERE name='ctx' AND name_form=1");
+    assert(!store.read_library("work", error));
+    assert(error.find("invalid VHDL identifier form") != std::string::npos);
+
+    TemporaryWorkspace legacy_temporary;
+    workspace::Store legacy_store { legacy_temporary.root };
+    auto legacy_unit = extended;
+    auto legacy_transaction = legacy_store.begin_library("work", error);
+    assert(legacy_transaction && error.empty());
+    auto original = artifact(*legacy_transaction, { "legacy.vhd" },
+        { { legacy_unit, "legacy.vhd" } });
+    const auto old_database
+        = legacy_transaction->catalog().location.directory / "library.sqlite3";
+    const auto old_location = legacy_transaction->catalog().location;
+    assert(legacy_transaction->commit(original, error));
+    legacy_transaction.reset();
+    assert(fs::remove(old_database));
+    write_v1_database(old_database, old_location, original);
+
+    auto legacy_catalog = legacy_store.read_library("work", error);
+    assert(legacy_catalog && error.empty());
+    assert(legacy_catalog->artifacts.front().units.front().unit.name_form
+        == fsim::library::VhdlIdentifierForm::unknown);
+    assert(legacy_catalog->artifacts.front().units.front().unit.primary_name_form
+        == fsim::library::VhdlIdentifierForm::unknown);
+
+    legacy_transaction = legacy_store.begin_library("work", error);
+    assert(legacy_transaction && error.empty());
+    auto next = unit("next");
+    next.language = "vhdl";
+    next.kind = "context";
+    next.standard = "2008";
+    next.compatibility_profile = "ieee-1076-standard:2008:fsim-v3";
+    next.name_form = fsim::library::VhdlIdentifierForm::basic;
+    auto replacement = artifact(*legacy_transaction, { "next.vhd" },
+        { { next, "next.vhd" } });
+    assert(legacy_transaction->commit(std::move(replacement), error));
+    legacy_transaction.reset();
+    legacy_catalog = legacy_store.read_library("work", error);
+    assert(legacy_catalog && error.empty() && legacy_catalog->artifacts.size() == 2U);
+    const auto retained_legacy = std::ranges::find_if(
+        legacy_catalog->artifacts, [](const auto& record) {
+            return !record.units.empty() && record.units.front().unit.name == "ctx";
+        });
+    assert(retained_legacy != legacy_catalog->artifacts.end());
+    assert(retained_legacy->units.front().unit.name_form
+        == fsim::library::VhdlIdentifierForm::unknown);
+}
+
 void test_collision_failure_and_sql_rollback()
 {
     TemporaryWorkspace temporary;
@@ -410,11 +561,11 @@ void test_mapping_and_corrupt_metadata()
     const auto modified = fs::last_write_time(database);
     assert(!consumer.read_library("work", error));
     assert(fs::last_write_time(database) == modified);
-    execute_sql(database, "UPDATE metadata SET version=1; CREATE TABLE foreign_data(value TEXT)");
+    execute_sql(database, "UPDATE metadata SET version=2; CREATE TABLE foreign_data(value TEXT)");
     assert(!consumer.read_library("work", error));
     assert(error.find("schema") != std::string::npos);
     execute_sql(database, "DROP TABLE foreign_data");
-    execute_sql(database, "UPDATE metadata SET version=1; UPDATE artifacts SET path='../outside'");
+    execute_sql(database, "UPDATE metadata SET version=2; UPDATE artifacts SET path='../outside'");
     assert(!consumer.read_library("work", error));
     assert(error.find("unsafe") != std::string::npos);
     assert(!consumer.delete_library("work", error));
@@ -545,6 +696,7 @@ int main(int argc, char** argv)
     }
     assert(argc == 1);
     test_source_replacement_and_group_selection();
+    test_vhdl_identifier_form_round_trip_and_v1_migration();
     test_collision_failure_and_sql_rollback();
     test_native_invalidation_and_delete();
     test_mapping_and_corrupt_metadata();

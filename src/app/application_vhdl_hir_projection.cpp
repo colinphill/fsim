@@ -115,11 +115,18 @@ std::optional<std::int64_t> VhdlHirBuilder::static_integer(
         || value.kind == frontend::ExpressionKind::Binary) {
         constexpr auto qualified_prefix
             = std::string_view { "@vhdl-qualified:" };
-        const auto spelling = value.text.starts_with(qualified_prefix)
-            ? std::string_view { value.text }.substr(
-                  qualified_prefix.size())
-            : std::string_view { value.text };
+        auto spelling = value.text.starts_with(qualified_prefix)
+            ? std::string { std::string_view { value.text }.substr(
+                  qualified_prefix.size()) }
+            : value.text;
+        if (value.selected_operator_prefix) {
+            spelling = *value.selected_operator_prefix + "." + value.text;
+        }
         output.referenced_name = name(spelling, value.span, scope);
+        if (value.vhdl_selected_name_spelling) {
+            output.referenced_name->spelling
+                = *value.vhdl_selected_name_spelling;
+        }
     }
     output.argument_names = value.call_argument_names;
     for (const auto& operand : value.operands) {
@@ -300,9 +307,13 @@ void VhdlHirBuilder::add_disconnection_specifications(
 [[nodiscard]] semantic::TypeId VhdlHirBuilder::find_type(
     const semantic::ScopeId scope,
     const std::string_view name_value,
-    const std::optional<semantic::SourceSpanId> exact_source)
+    const std::optional<semantic::SourceSpanId> exact_source,
+    bool* const ambiguous)
     const noexcept
 {
+    if (ambiguous != nullptr) {
+        *ambiguous = false;
+    }
     const auto canonical = canonical_vhdl_name(
         std::string { name_value });
     const auto separator = name_value.find_last_of(".:");
@@ -324,6 +335,9 @@ void VhdlHirBuilder::add_disconnection_specifications(
                 continue;
             }
             if (selected.valid() && selected != type.id) {
+                if (ambiguous != nullptr) {
+                    *ambiguous = true;
+                }
                 return { };
             }
             selected = type.id;
@@ -383,6 +397,9 @@ void VhdlHirBuilder::add_disconnection_specifications(
                     continue;
                 }
                 if (selected.valid() && selected != type.id) {
+                    if (ambiguous != nullptr) {
+                        *ambiguous = true;
+                    }
                     return { };
                 }
                 selected = type.id;
@@ -394,7 +411,8 @@ void VhdlHirBuilder::add_disconnection_specifications(
     }
 
     const auto package_type = [&](const std::string_view library_name,
-                                  const std::string_view package_name) {
+                                  const std::string_view package_name,
+                                  bool* const package_ambiguous = nullptr) {
         semantic::TypeId selected;
         for (const auto& unit : model_.units()) {
             const auto unit_library = canonical_vhdl_name(
@@ -415,6 +433,9 @@ void VhdlHirBuilder::add_disconnection_specifications(
                     continue;
                 }
                 if (selected.valid() && selected != type.id) {
+                    if (package_ambiguous != nullptr) {
+                        *package_ambiguous = true;
+                    }
                     return semantic::TypeId { };
                 }
                 selected = type.id;
@@ -468,6 +489,9 @@ void VhdlHirBuilder::add_disconnection_specifications(
                     continue;
                 }
                 if (selected.valid() && selected != type.id) {
+                    if (ambiguous != nullptr) {
+                        *ambiguous = true;
+                    }
                     return { };
                 }
                 selected = type.id;
@@ -485,9 +509,17 @@ void VhdlHirBuilder::add_disconnection_specifications(
     if (current_unit_ != nullptr
         && separator == std::string_view::npos) {
         semantic::TypeId selected;
-        for (const auto& item : current_unit_->context) {
+        bool context_lookup_failed { };
+        const auto mark_ambiguous = [&] {
+            context_lookup_failed = true;
+            if (ambiguous != nullptr) {
+                *ambiguous = true;
+            }
+        };
+        const auto append_use_clause = [&](const vh::ContextItem& item,
+                                           const std::string_view owner_library) {
             if (item.kind != vh::ContextKind::use_clause) {
-                continue;
+                return;
             }
             for (const auto& imported : item.selected_names) {
                 const auto imported_name = canonical_vhdl_name(
@@ -508,19 +540,165 @@ void VhdlHirBuilder::add_disconnection_specifications(
                 }
                 auto library = imported_name.substr(0U, first_dot);
                 if (library == "work") {
-                    library = current_library;
+                    library = owner_library;
                 }
                 const auto package = imported_name.substr(
                     first_dot + 1U, second_dot - first_dot - 1U);
-                const auto imported_type = package_type(library, package);
+                bool package_ambiguous { };
+                const auto imported_type = package_type(
+                    library, package, &package_ambiguous);
+                if (package_ambiguous) {
+                    mark_ambiguous();
+                    return;
+                }
                 if (!imported_type.valid()) {
                     continue;
                 }
                 if (selected.valid() && selected != imported_type) {
-                    return { };
+                    mark_ambiguous();
+                    return;
                 }
                 selected = imported_type;
             }
+        };
+        std::vector<semantic::UnitId> visited_contexts;
+        std::vector<semantic::UnitId> active_contexts;
+        const auto visit_context = [&](const auto& self,
+                                       const vh::Unit& context_owner) -> void {
+            if (context_lookup_failed) {
+                return;
+            }
+            if (std::ranges::find(active_contexts, context_owner.id)
+                != active_contexts.end()) {
+                mark_ambiguous();
+                return;
+            }
+            if (std::ranges::find(visited_contexts, context_owner.id)
+                != visited_contexts.end()) {
+                return;
+            }
+            active_contexts.push_back(context_owner.id);
+            const auto owner_library = canonical_vhdl_name(
+                context_owner.library.empty()
+                    ? std::string { "work" }
+                    : context_owner.library);
+            for (const auto& item : context_owner.context) {
+                if (item.kind == vh::ContextKind::use_clause) {
+                    append_use_clause(item, owner_library);
+                    if (context_lookup_failed) {
+                        return;
+                    }
+                    continue;
+                }
+                if (item.kind != vh::ContextKind::context_reference) {
+                    continue;
+                }
+                for (const auto& reference : item.selected_names) {
+                    const auto reference_name = canonical_vhdl_name(
+                        reference.canonical.empty()
+                            ? reference.spelling
+                            : reference.canonical);
+                    const auto parts = vhdl_name_parts(reference_name);
+                    if (parts.empty()) {
+                        mark_ambiguous();
+                        return;
+                    }
+                    const auto simple_name = parts.back();
+                    const auto library = parts.size() >= 2U
+                        ? parts[parts.size() - 2U]
+                        : std::string_view { owner_library };
+                    const auto expected_library = library == "work"
+                        ? owner_library
+                        : std::string { library };
+                    const vh::Unit* referenced_context { };
+                    for (const auto& candidate : hir_.units()) {
+                        const auto candidate_library
+                            = canonical_vhdl_name(
+                                candidate.library.empty()
+                                    ? std::string { "work" }
+                                    : candidate.library);
+                        if (candidate.kind != vh::UnitKind::context
+                            || candidate_library != expected_library
+                            || !same_vhdl_unit_name(
+                                candidate, simple_name)) {
+                            continue;
+                        }
+                        if (referenced_context != nullptr
+                            && referenced_context->id != candidate.id) {
+                            mark_ambiguous();
+                            return;
+                        }
+                        referenced_context = &candidate;
+                    }
+                    if (referenced_context == nullptr) {
+                        // Do not let a missing or unresolved context reference
+                        // fall through to a compiler-owned Standard identity.
+                        mark_ambiguous();
+                        return;
+                    }
+                    self(self, *referenced_context);
+                    if (context_lookup_failed) {
+                        return;
+                    }
+                }
+            }
+            active_contexts.pop_back();
+            visited_contexts.push_back(context_owner.id);
+        };
+        visit_context(visit_context, *current_unit_);
+        if (!context_lookup_failed && current_unit_ != nullptr
+            && !current_unit_->primary_name.empty()) {
+            // A secondary unit inherits the context clause of its primary
+            // unit. The executable-HIR resolver already follows that rule;
+            // type identity must use the same visible context before applying
+            // a compiler-owned Standard fallback.
+            const bool architecture
+                = current_unit_->kind == vh::UnitKind::architecture;
+            const bool package_body
+                = current_unit_->kind == vh::UnitKind::package;
+            if (architecture || package_body) {
+                const auto primary_kind = architecture
+                    ? vh::UnitKind::entity
+                    : vh::UnitKind::package;
+                const auto primary_name = canonical_vhdl_name(
+                    current_unit_->primary_name);
+                const auto primary_library = canonical_vhdl_name(
+                    current_unit_->library.empty()
+                        ? std::string { "work" }
+                        : current_unit_->library);
+                const vh::Unit* primary_unit { };
+                for (const auto& candidate : hir_.units()) {
+                    const auto candidate_library = canonical_vhdl_name(
+                        candidate.library.empty()
+                            ? std::string { "work" }
+                            : candidate.library);
+                    if (candidate.kind != primary_kind
+                        || (package_body
+                            && !candidate.primary_name.empty())
+                        || candidate_library != primary_library
+                        || canonical_vhdl_name(candidate.name)
+                            != primary_name) {
+                        continue;
+                    }
+                    if (primary_unit != nullptr
+                        && primary_unit->id != candidate.id) {
+                        mark_ambiguous();
+                        break;
+                    }
+                    primary_unit = &candidate;
+                }
+                if (!context_lookup_failed && primary_unit == nullptr) {
+                    // A mapped primary may not be available during source
+                    // projection. Without its inherited context, selecting a
+                    // same-spelled Standard identity would be unsound.
+                    mark_ambiguous();
+                } else if (!context_lookup_failed) {
+                    visit_context(visit_context, *primary_unit);
+                }
+            }
+        }
+        if (context_lookup_failed) {
+            return { };
         }
         if (selected.valid()) {
             return selected;
@@ -642,6 +820,9 @@ void VhdlHirBuilder::add_disconnection_specifications(
                     continue;
                 }
                 if (selected.valid() && selected != candidate) {
+                    if (ambiguous != nullptr) {
+                        *ambiguous = true;
+                    }
                     return { };
                 }
                 selected = candidate;
@@ -672,6 +853,9 @@ void VhdlHirBuilder::add_disconnection_specifications(
                     continue;
                 }
                 if (selected.valid() && selected != type.id) {
+                    if (ambiguous != nullptr) {
+                        *ambiguous = true;
+                    }
                     return { };
                 }
                 selected = type.id;
@@ -827,7 +1011,21 @@ void VhdlHirBuilder::add_disconnection_specifications(
                 }
                 type_id = definition->base.type_mark.target;
             }
-            if (!type_id.valid() && result.unconstrained) {
+            const bool compiler_owned_standard_array
+                = result.builtin_type
+                    == vh::BuiltinTypeIdentity::std_standard_string
+                || result.builtin_type
+                    == vh::BuiltinTypeIdentity::std_standard_bit_vector
+                || result.builtin_type
+                    == vh::BuiltinTypeIdentity::std_standard_boolean_vector
+                || result.builtin_type
+                    == vh::BuiltinTypeIdentity::std_standard_integer_vector
+                || result.builtin_type
+                    == vh::BuiltinTypeIdentity::std_standard_real_vector
+                || result.builtin_type
+                    == vh::BuiltinTypeIdentity::std_standard_time_vector;
+            if (!type_id.valid()
+                && (result.unconstrained || compiler_owned_standard_array)) {
                 dimensions = 1U;
             }
             if (!has_index_constraint && dimensions != 0U) {
@@ -865,6 +1063,30 @@ void VhdlHirBuilder::add_disconnection_specifications(
     }
     vh::SubtypeIndication result;
     result.type_mark = type_reference(type, fallback, scope);
+    if (!result.type_mark.target.valid() && current_unit_ != nullptr) {
+        const auto& spelling = !type.vhdl_type_declaration.empty()
+            ? type.vhdl_type_declaration
+            : (!type.named_type.empty() ? type.named_type : type.spelling);
+        bool ambiguous_source_type { };
+        const auto source_type = [&](const std::string_view candidate) {
+            bool candidate_ambiguous { };
+            const auto found = find_type(
+                scope, candidate, std::nullopt, &candidate_ambiguous);
+            ambiguous_source_type
+                = ambiguous_source_type || candidate_ambiguous;
+            return found;
+        };
+        auto resolved = source_type(spelling);
+        if (!resolved.valid() && !type.nominal_type.empty()) {
+            resolved = source_type(type.nominal_type);
+        }
+        if (!resolved.valid() && !ambiguous_source_type) {
+            result.builtin_type
+                = semantic::vhdl::standard_array_builtin_type_identity(
+                    result.type_mark.spelling,
+                    current_unit_->predefined_environment);
+        }
+    }
     switch (type.domain) {
     case frontend::ValueDomain::Bit2:
         result.domain = vh::ValueDomain::bit2;
@@ -1044,11 +1266,20 @@ void VhdlHirBuilder::add_disconnection_specifications(
             separator != std::string::npos) {
             mark.erase(0U, separator + 1U);
         }
-        result.unconstrained = mark == "bit_vector"
-            || mark == "std_logic_vector"
-            || mark == "std_ulogic_vector"
-            || mark == "signed" || mark == "unsigned"
-            || mark == "string";
+        const auto identity = result.builtin_type;
+        const bool standard_array_identity
+            = identity
+                    >= vh::BuiltinTypeIdentity::std_standard_string
+            && identity
+                    <= vh::BuiltinTypeIdentity::std_standard_time_vector;
+        result.unconstrained = standard_array_identity
+            || identity
+                == vh::BuiltinTypeIdentity::
+                    ieee_std_logic_1164_std_logic_vector
+            || identity
+                == vh::BuiltinTypeIdentity::
+                    ieee_std_logic_1164_std_ulogic_vector
+            || mark == "signed" || mark == "unsigned";
     }
     return result;
 }

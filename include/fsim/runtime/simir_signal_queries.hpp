@@ -34,22 +34,36 @@ struct ReadSignal {
     std::optional<SignalId> gate { };
 };
 
-/// True only during the delta in which the signal most recently changed.
+/// A statically selected packed subelement of a composite signal.
+struct SignalSelection {
+    std::uint32_t offset { };
+    std::uint32_t width { };
+
+    friend bool operator==(const SignalSelection&, const SignalSelection&)
+        = default;
+};
+
+/// True only during the delta in which the signal (or selected range) changed.
 struct SignalEvent {
     RegisterId destination { };
     SignalId signal { };
+    std::optional<SignalSelection> selection { };
 };
 
-/// The effective value immediately before the signal's most recent event.
+/// The effective value immediately before the signal's (or selected range's)
+/// most recent event.
 struct SignalLastValue {
     RegisterId destination { };
     SignalId signal { };
+    std::optional<SignalSelection> selection { };
 };
 
-/// Elapsed ticks since the signal's latest event, or TIME'HIGH if none.
+/// Elapsed ticks since the signal's (or selected range's) latest event,
+/// or TIME'HIGH if none.
 struct SignalLastEvent {
     RegisterId destination { };
     SignalId signal { };
+    std::optional<SignalSelection> selection { };
 };
 
 /// Capture the current global simulation tick in a 64-bit two-state value.
@@ -61,26 +75,34 @@ struct ReadSimulationTime {
     RegisterId destination { };
 };
 
-/// True during the delta following any committed signal transaction.
+/// True during the delta following a transaction on the signal or selected
+/// range.
 struct SignalActive {
     RegisterId destination { };
     SignalId signal { };
+    std::optional<SignalSelection> selection { };
 };
 
-/// Elapsed ticks since the latest transaction, or TIME'HIGH if none.
+/// Elapsed ticks since the latest transaction on the signal or selected
+/// range, or TIME'HIGH if none.
 struct SignalLastActive {
     RegisterId destination { };
     SignalId signal { };
+    std::optional<SignalSelection> selection { };
 };
 
-/// True when the executing process owns a driver for the signal.
+/// True when the executing process owns a driver for the signal or selected
+/// range.
 struct SignalDriving {
     RegisterId destination { };
     SignalId signal { };
+    std::optional<SignalSelection> selection { };
 };
 
-/// The executing process's current driver contribution to the signal.
+/// The executing process's current driver contribution to the signal or
+/// selected range.
 struct SignalDrivingValue {
     RegisterId destination { };
     SignalId signal { };
+    std::optional<SignalSelection> selection { };
 };

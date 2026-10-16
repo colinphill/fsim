@@ -61,61 +61,26 @@ namespace fsim::app::application_detail {
         children.end(),
         declaration(id).callable->formals.begin(),
         declaration(id).callable->formals.end());
-    add_children(
-        input.constants,
+    const auto span = [](const auto& values) {
+        return std::span { values.data(), values.size() };
+    };
+    queue_vhdl_local_declarations(
+        span(input.constants),
+        span(input.type_aliases),
+        span(input.signal_aliases),
+        span(input.package_instances),
+        span(input.functions),
+        span(input.procedures),
+        span(input.variables),
+        span(input.vhdl_attributes),
+        span(input.vhdl_groups),
+        input.vhdl_return_identifier.empty()
+            ? std::nullopt
+            : std::optional<std::string_view> {
+                  input.vhdl_return_identifier },
         function_scope,
         declaration_origin,
-        children,
-        &VhdlHirBuilder::add_parameter);
-    for (const auto& alias : input.type_aliases) {
-        if (alias.name == input.vhdl_return_identifier) {
-            continue;
-        }
-        children.push_back(add_type_declaration(
-            alias, function_scope, declaration_origin));
-    }
-    add_children(
-        input.signal_aliases,
-        function_scope,
-        declaration_origin,
-        children,
-        &VhdlHirBuilder::add_alias);
-    add_children(
-        input.package_instances,
-        function_scope,
-        declaration_origin,
-        children,
-        &VhdlHirBuilder::add_package_instance);
-    add_children(
-        input.variables,
-        function_scope,
-        declaration_origin,
-        children,
-        &VhdlHirBuilder::add_variable);
-    add_children(
-        input.functions,
-        function_scope,
-        declaration_origin,
-        children,
-        &VhdlHirBuilder::add_function);
-    add_children(
-        input.procedures,
-        function_scope,
-        declaration_origin,
-        children,
-        &VhdlHirBuilder::add_procedure);
-    add_children(
-        input.vhdl_attributes,
-        function_scope,
-        declaration_origin,
-        children,
-        &VhdlHirBuilder::add_attribute);
-    add_children(
-        input.vhdl_groups,
-        function_scope,
-        declaration_origin,
-        children,
-        &VhdlHirBuilder::add_group);
+        children);
     declaration(id).children = std::move(children);
     add_statement_regions(
         input.statements, function_scope, declaration_origin);
@@ -160,60 +125,23 @@ namespace fsim::app::application_detail {
     }
     declaration(id).callable = std::move(profile);
     auto children = declaration(id).callable->formals;
-    add_children(
-        input.constants,
+    const auto span = [](const auto& values) {
+        return std::span { values.data(), values.size() };
+    };
+    queue_vhdl_local_declarations(
+        span(input.constants),
+        span(input.type_aliases),
+        span(input.signal_aliases),
+        span(input.package_instances),
+        span(input.functions),
+        span(input.procedures),
+        span(input.variables),
+        span(input.vhdl_attributes),
+        span(input.vhdl_groups),
+        std::nullopt,
         procedure_scope,
         declaration_origin,
-        children,
-        &VhdlHirBuilder::add_parameter);
-    add_children(
-        input.type_aliases,
-        procedure_scope,
-        declaration_origin,
-        children,
-        &VhdlHirBuilder::add_type_declaration);
-    add_children(
-        input.signal_aliases,
-        procedure_scope,
-        declaration_origin,
-        children,
-        &VhdlHirBuilder::add_alias);
-    add_children(
-        input.package_instances,
-        procedure_scope,
-        declaration_origin,
-        children,
-        &VhdlHirBuilder::add_package_instance);
-    add_children(
-        input.variables,
-        procedure_scope,
-        declaration_origin,
-        children,
-        &VhdlHirBuilder::add_variable);
-    add_children(
-        input.functions,
-        procedure_scope,
-        declaration_origin,
-        children,
-        &VhdlHirBuilder::add_function);
-    add_children(
-        input.procedures,
-        procedure_scope,
-        declaration_origin,
-        children,
-        &VhdlHirBuilder::add_procedure);
-    add_children(
-        input.vhdl_attributes,
-        procedure_scope,
-        declaration_origin,
-        children,
-        &VhdlHirBuilder::add_attribute);
-    add_children(
-        input.vhdl_groups,
-        procedure_scope,
-        declaration_origin,
-        children,
-        &VhdlHirBuilder::add_group);
+        children);
     declaration(id).children = std::move(children);
     add_statement_regions(
         input.statements, procedure_scope, declaration_origin);

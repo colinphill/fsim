@@ -79,11 +79,134 @@ void insert_force_value(
 
 } // namespace
 
+void Interpreter::Impl::initialize_package_static_signal(
+    const SignalId signal_id,
+    PackedLogic4 value)
+{
+    if (!package_static_initialization_active) {
+        throw std::logic_error {
+            "package static signal initialization is outside its startup phase"
+        };
+    }
+    if (started || region_graph || scheduler.has_pending()
+        || signal_id >= signals.size()
+        || signal_id >= driven_values.size()
+        || signal_id >= signal_last_values.size()
+        || signal_id >= signal_value_revisions.size()) {
+        throw std::logic_error {
+            "package static signal initialization is outside the startup baseline"
+        };
+    }
+    const bool callback_write_allowed
+        = package_static_initialization_callback_active
+        && package_static_initialization_callback_index
+            < package_static_startup_callbacks.size()
+        && std::ranges::binary_search(
+            package_static_startup_callbacks[
+                package_static_initialization_callback_index]
+                .writable_signal_ids,
+            signal_id);
+    const bool process_write_allowed
+        = package_static_initialization_process
+                != std::numeric_limits<ProcessId>::max()
+        && signal_id < package_static_startup_signal_processes.size()
+        && package_static_startup_signal_processes[signal_id]
+            == package_static_initialization_process;
+    if (!callback_write_allowed && !process_write_allowed) {
+        throw std::logic_error {
+            "package static startup action wrote outside its package write closure"
+        };
+    }
+    const auto& signal = signals[signal_id];
+    if (signal.resolution != ResolutionKind::none
+        || signal.systemverilog_scalar != SystemVerilogScalarKind::None
+        || signal.event_variable || signal.has_implicit_driver
+        || signal.has_charge_strength
+        || has_container_signal_alias(signal_id)
+        || delayed_net_initial_values.contains(signal_id)
+        || vhdl_resolvers.contains(signal_id)
+        || (signal_id < forced_values.size() && forced_values[signal_id])
+        || (signal_id < forced_masks.size() && forced_masks[signal_id])
+        || (signal_id < forced_driver_values.size()
+            && forced_driver_values[signal_id])
+        || (signal_id < forced_driver_masks.size()
+            && forced_driver_masks[signal_id])
+        || (signal_id < external_driver_values.size()
+            && external_driver_values[signal_id])
+        || (signal_id < signal_events.size() && signal_events[signal_id])
+        || (signal_id < signal_transactions.size()
+            && signal_transactions[signal_id])) {
+        throw std::logic_error {
+            "package static initializer wrote an unsupported signal shape"
+        };
+    }
+    if (driven_values[signal_id].width() == 0U
+        || driven_values[signal_id].width() != value.width()) {
+        throw std::invalid_argument {
+            "package static initializer signal assignment width mismatch"
+        };
+    }
+    value = normalize_signal_value(signal_id, std::move(value));
+    const bool changed = signals[signal_id].initial_value != value
+        || driven_values[signal_id] != value;
+    driven_values[signal_id] = value;
+    signals[signal_id].initial_value = value;
+    signal_last_values[signal_id] = value;
+    refresh_direct_signal_planes(signal_id);
+    if (value.is_logic9()) {
+        if (value.width() <= 64U) {
+            const auto word = value.logic9_low_word();
+            direct_signal_last_logic9_plane0.at(signal_id)
+                = word.planes[0];
+            direct_signal_last_logic9_plane1.at(signal_id)
+                = word.planes[1];
+            direct_signal_last_logic9_plane2.at(signal_id)
+                = word.planes[2];
+            direct_signal_last_logic9_plane3.at(signal_id)
+                = word.planes[3];
+        }
+    } else if (value.width() <= 64U) {
+        const auto word = value.unchecked_low_word();
+        direct_signal_last_aval.at(signal_id) = word.aval;
+        direct_signal_last_bval.at(signal_id) = word.bval;
+    }
+    if (signal_id < signal_selection_histories.size()) {
+        for (auto& history : signal_selection_histories[signal_id]) {
+            history.last_value = value.extract_bits(
+                history.selection.offset, history.selection.width);
+            history.last_event.reset();
+            history.last_transaction.reset();
+            history.transaction_pending = false;
+        }
+    }
+    if (signal_id < signal_selection_transaction_region_pending.size()) {
+        signal_selection_transaction_region_pending[signal_id] = 0U;
+    }
+    if (signal_id < signal_selection_transaction_pending_listed.size()) {
+        signal_selection_transaction_pending_listed[signal_id] = 0U;
+    }
+    if (signal_id < direct_signal_materialization_pending.size()) {
+        direct_signal_materialization_pending[signal_id] = 0U;
+    }
+    if (changed) {
+        ++signal_value_revisions[signal_id];
+        if (signal_value_revisions[signal_id] == 0U) {
+            signal_value_revisions[signal_id] = 1U;
+            std::ranges::fill(
+                container_materialized_revisions, std::nullopt);
+        }
+    }
+}
+
 void Interpreter::Impl::commit(
     const SignalId signal_id,
     PackedLogic4 value,
     const SignalChangeOrigin origin)
 {
+    if (package_static_initialization_active) {
+        initialize_package_static_signal(signal_id, std::move(value));
+        return;
+    }
     require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
     if (signal_id < signal_container_aggregate_aliases.size()
@@ -599,6 +722,11 @@ void Interpreter::Impl::force_slice(
     PackedLogic4 value,
     const std::size_t offset)
 {
+    if (package_static_initialization_active) {
+        throw std::logic_error {
+            "package static startup cannot force a signal slice"
+        };
+    }
     require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
     const auto& signal = get_signal(signal_id);
@@ -683,6 +811,11 @@ void Interpreter::Impl::release_slice(
     const std::size_t offset,
     const std::size_t width)
 {
+    if (package_static_initialization_active) {
+        throw std::logic_error {
+            "package static startup cannot release a signal slice force"
+        };
+    }
     require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
     const auto& signal = get_signal(signal_id);
@@ -843,6 +976,11 @@ void Interpreter::Impl::force_driver_slice(
     PackedLogic4 value,
     const std::size_t offset)
 {
+    if (package_static_initialization_active) {
+        throw std::logic_error {
+            "package static startup cannot force a driver signal slice"
+        };
+    }
     require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
     const auto& signal = get_signal(signal_id);
@@ -946,6 +1084,12 @@ void Interpreter::Impl::release_driver_slice(
     const std::size_t offset,
     const std::size_t width)
 {
+    if (package_static_initialization_active) {
+        throw std::logic_error {
+            "package static startup cannot release a driver signal "
+            "slice force"
+        };
+    }
     require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
     const auto& signal = get_signal(signal_id);
@@ -2589,6 +2733,10 @@ void Interpreter::Impl::commit_driver(
     const bool route_path,
     const bool allow_wide_single_owner_commit)
 {
+    if (package_static_initialization_active) {
+        initialize_package_static_signal(signal_id, std::move(value));
+        return;
+    }
     require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
     // A value reconnects a disconnected guarded driver.
@@ -3395,6 +3543,19 @@ void Interpreter::Impl::commit_slice(
     const std::size_t offset,
     const SignalChangeOrigin origin)
 {
+    if (package_static_initialization_active) {
+        if (signal_id >= driven_values.size()
+            || offset > driven_values[signal_id].width()
+            || value.width() > driven_values[signal_id].width() - offset) {
+            throw std::invalid_argument {
+                "package static initializer slice is outside its signal"
+            };
+        }
+        auto updated = insert_value(
+            driven_values[signal_id], value, offset);
+        initialize_package_static_signal(signal_id, std::move(updated));
+        return;
+    }
     require_region_forwarding_role_journal_flushed_for_signal(signal_id);
     require_writable_aggregate_signal(signal_id);
     if (get_signal(signal_id).systemverilog_scalar
@@ -3403,11 +3564,10 @@ void Interpreter::Impl::commit_slice(
             "SimIR scalar signals do not support partial assignment"
         };
     }
-    commit(
-        signal_id,
-        insert_value(
-            driven_values[signal_id], value, offset),
-        origin);
+    auto updated = insert_value(
+        driven_values[signal_id], value, offset);
+    stage_selected_signal_transaction(signal_id, offset, value.width());
+    commit(signal_id, std::move(updated), origin);
 }
 
 void Interpreter::Impl::commit_driver_slice(
@@ -3418,6 +3578,19 @@ void Interpreter::Impl::commit_driver_slice(
     const std::optional<SignalChangeOrigin> origin,
     const bool route_path)
 {
+    if (package_static_initialization_active) {
+        if (signal_id >= driven_values.size()
+            || offset > driven_values[signal_id].width()
+            || value.width() > driven_values[signal_id].width() - offset) {
+            throw std::invalid_argument {
+                "package static initializer slice is outside its signal"
+            };
+        }
+        auto updated = insert_value(
+            driven_values[signal_id], value, offset);
+        initialize_package_static_signal(signal_id, std::move(updated));
+        return;
+    }
     if (!vhdl_disconnected_drivers.empty()) {
         vhdl_disconnected_drivers.erase({ signal_id, process });
     }
@@ -3444,6 +3617,7 @@ void Interpreter::Impl::commit_driver_slice(
                 "SimIR driver slice is outside its aggregate signal"
             };
         }
+        stage_selected_signal_transaction(signal_id, offset, value.width());
         const auto end = offset + value.width();
         const auto& container = get_container_object(object).initial_value;
         const auto& type = container.type;
@@ -3552,6 +3726,14 @@ void Interpreter::Impl::commit_driver_slice(
             signal_id, std::move(value), offset, change_origin);
         return;
     }
+    if (offset > get_signal(signal_id).initial_value.width()
+        || value.width()
+            > get_signal(signal_id).initial_value.width() - offset) {
+        throw std::invalid_argument {
+            "SimIR driver slice is outside its signal"
+        };
+    }
+    stage_selected_signal_transaction(signal_id, offset, value.width());
     WideDisjointOwnerCommitContext wide_disjoint_context;
     if (prepare_wide_disjoint_owner_commit_context(
             process, signal_id, wide_disjoint_context)) {

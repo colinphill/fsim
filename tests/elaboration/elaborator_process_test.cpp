@@ -9,9 +9,15 @@ void test_process_and_wait_lowering() {
 const auto unsafe_edge = fsim::frontend::parse_text(
         "unsafe_edge.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity unsafe_edge is
   port (clk : in std_logic; q : out std_logic);
 end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of unsafe_edge is
 begin
   p: process(clk)
@@ -544,6 +550,9 @@ endmodule
     const auto default_values = fsim::frontend::parse_text(
         "default_values.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity default_values is
   port (
     bit_value : out bit;
@@ -582,6 +591,9 @@ end architecture;
     const auto nine_state_literals = fsim::frontend::parse_text(
         "nine_state_literals.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity nine_state_literals is
   port (value : out std_logic_vector(7 downto 0));
 end entity;
@@ -1247,6 +1259,9 @@ endmodule
             R"(
 entity native_std_logic_drivers is
 end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of native_std_logic_drivers is
   signal q : std_logic;
 begin
@@ -1489,6 +1504,9 @@ endmodule
         "vhdl_call_point.vhd",
         R"(
 entity vhdl_call_point is end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of vhdl_call_point is
   signal input_value : std_logic;
   signal result : boolean;
@@ -1520,15 +1538,21 @@ end architecture;
               && point->kind
                   == fsim::runtime::simir::DebugPointKind::call
               && point->source.path == "vhdl_call_point.vhd"
-              && point->source.line == 9;
+              && point->source.line == 12;
         }));
 
     const auto vhdl_local_variables = fsim::frontend::parse_text(
         "local_variables.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity local_variables is
   port (clk : in std_logic; q : out std_logic);
 end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of local_variables is begin
   worker: process(clk)
     variable state : std_logic := '0';
@@ -1590,6 +1614,9 @@ end architecture;
         "waits.vhd",
         R"(
 entity waits is end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of waits is
   signal trigger : std_logic;
   signal q : std_logic;
@@ -2049,6 +2076,9 @@ endmodule
             "invalid_condition_wait.vhd",
             R"(
 entity invalid_condition_wait is end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of invalid_condition_wait is
   signal trigger : std_logic;
 begin
@@ -2097,12 +2127,40 @@ endmodule
 )",
         fsim::frontend::Language::SystemVerilog2017);
     assert(vector_edge_wait.ok());
-    const auto rejected_vector_edge_wait =
+    const auto elaborated_vector_edge_wait =
         compile_and_elaborate(
             vector_edge_wait.design, "sv:work.vector_edge_wait");
-    assert(!rejected_vector_edge_wait.ok());
-    assert(has_diagnostic(
-        rejected_vector_edge_wait, "FSIM-ELAB-060"));
+    assert(elaborated_vector_edge_wait.ok());
+    const auto vector_edge_trigger =
+        elaborated_vector_edge_wait.design->find_signal("trigger");
+    assert(vector_edge_trigger);
+    const auto& vector_edge_processes =
+        elaborated_vector_edge_wait.design->processes();
+    assert(vector_edge_processes.size() == 1U);
+    const auto& vector_edge_process = vector_edge_processes.front();
+    const auto vector_edge_wait_count = std::ranges::count_if(
+        vector_edge_process.operations,
+        [](const Simir::Operation& operation) {
+            return Simir::operation_holds<Simir::WaitOn>(operation);
+        });
+    assert(vector_edge_wait_count == 1);
+    const auto vector_edge_wait_operation = std::ranges::find_if(
+        vector_edge_process.operations,
+        [](const Simir::Operation& operation) {
+            return Simir::operation_holds<Simir::WaitOn>(operation);
+        });
+    assert(vector_edge_wait_operation != vector_edge_process.operations.end());
+    const auto& vector_edge_wait_binding =
+        Simir::operation_get<Simir::WaitOn>(
+            *vector_edge_wait_operation);
+    assert(vector_edge_wait_binding.signals.size() == 1U);
+    assert(vector_edge_wait_binding.signals.front() == *vector_edge_trigger);
+    assert(vector_edge_wait_binding.edges.size() == 1U);
+    assert(
+        vector_edge_wait_binding.edges.front()
+        == Simir::EdgeKind::posedge);
+    // The scheduling fixture separately verifies that vector edge detection
+    // observes the packed expression's LSB, including four-state transitions.
 
     const auto wildcard_processes = fsim::frontend::parse_text(
         "wildcard.sv",

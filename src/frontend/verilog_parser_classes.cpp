@@ -170,9 +170,7 @@ bool VerilogParser::parse_class_property(
 
   Type common_type = virtual_interface
       ? parse_virtual_interface_type(start)
-      : built_in
-          ? parse_parameter_type()
-          : parse_named_type();
+      : parse_parameter_type();
   // An anonymous enumeration's literals are class constants (8.23).
   if (common_type.named_type.empty()
       && common_type.enumeration_literals.size()

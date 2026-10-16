@@ -48,15 +48,15 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "8fe1c4f19982fd277e7079c08cb12e2ee0c2c3d5d740e6722dce66c5c0199135")
+  "e5b59bbddce876e7bc019f17c4e6f3d2799117a452508b4f9d0565b35c705034")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "portable object contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
 endif()
 file(STRINGS "${FSIM_CONTRACT}" FSIM_ROWS)
 list(LENGTH FSIM_ROWS FSIM_ROW_COUNT)
-if(NOT FSIM_ROW_COUNT EQUAL 42)
-  message(FATAL_ERROR "portable object contract requires SPDX, header and 40 rows")
+if(NOT FSIM_ROW_COUNT EQUAL 43)
+  message(FATAL_ERROR "portable object contract requires SPDX, header and 41 rows")
 endif()
 list(GET FSIM_ROWS 0 FSIM_SPDX)
 list(GET FSIM_ROWS 1 FSIM_HEADER)
@@ -84,7 +84,7 @@ function(fsim_require_portable_object_tokens path)
 endfunction()
 
 fsim_require_portable_object_tokens("${FSIM_OBJECT_HEADER}"
-  "kObjectFormatVersion = 8"
+  "kObjectFormatVersion = 9"
   "kObjectMetadataFilename = \"fsim-object.bin\""
   "portable_schema{library::kPortableSchemaVersion}"
   "compiled_hir_schema{library::kCompiledHirSchemaVersion}"
@@ -93,10 +93,10 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_HEADER}"
   "Canonical little-endian metadata codec"
   "installed .fsimobj tree is read-only")
 fsim_require_portable_object_tokens("${FSIM_LIBRARY_HEADER}"
-  "kPortableSchemaVersion = 15"
-  "kCompiledHirSchemaVersion = 1")
+  "kPortableSchemaVersion = 16"
+  "kCompiledHirSchemaVersion = 3")
 fsim_require_portable_object_tokens("${FSIM_BUNDLE_HEADER}"
-  "kCompiledHirBundleSchema = 1"
+  "kCompiledHirBundleSchema = 3"
   "serialize_compiled_hir_bundle("
   "deserialize_compiled_hir_bundle(")
 
@@ -106,6 +106,7 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_CODEC}"
   "writer.u32(library::kPortableSchemaVersion)"
   "writer.u32(library::kCompiledHirSchemaVersion)"
   "fsim-object-compilation-v8-compiled-hir"
+  "fsim-object-compilation-v9-compiled-hir"
   "unsupported_artifact_identity("
   "\".fsimobj\""
   "portable-unit schema"
@@ -113,7 +114,8 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_CODEC}"
   "truncated .fsimobj compiled-HIR index"
   "trailing object metadata bytes"
   "object compilation digest does not match"
-  "object output already exists or cannot be inspected")
+  "object output already exists or cannot be inspected"
+  "cannot serialize .fsimobj metadata with unsupported identity")
 fsim_require_portable_object_tokens("${FSIM_BUNDLE_CODEC}"
   "serialize_compiled_hir_bundle("
   "deserialize_compiled_hir_bundle("
@@ -126,11 +128,11 @@ fsim_require_portable_object_tokens("${FSIM_BUNDLE_CODEC}"
   "compiled HIR bundle is structurally invalid")
 
 fsim_require_portable_object_tokens("${FSIM_OBJECT_TEST}"
-  "kObjectFormatVersion == 8U"
+  "kObjectFormatVersion == 9U"
   "kCodeCoverageArtifactDiagnostic"
   "stale-coverage"
-  "kPortableSchemaVersion == 15U"
-  "kCompiledHirSchemaVersion == 1U"
+  "kPortableSchemaVersion == 16U"
+  "kCompiledHirSchemaVersion == 3U"
   "corrupt-magic"
   "stale-format"
   "future-format"
@@ -141,7 +143,12 @@ fsim_require_portable_object_tokens("${FSIM_OBJECT_TEST}"
   "stale-publication"
   "truncated-header"
   "oversized-root"
-  "inconsistent-digest")
+  "inconsistent-digest"
+  "expect_direct_serializer_identity_rejection"
+  "current_format_old_schema"
+  "old_format_current_schema"
+  "stale_compiled_hir_identity"
+  "legacy_stale_compiled_hir_identity")
 fsim_require_portable_object_tokens("${FSIM_PORTABLE_TEST}"
   "units/stage.fsimir"
   "units/invert.fsimudp"
@@ -158,4 +165,4 @@ fsim_require_portable_object_tokens("${FSIM_TEST_BUILD}"
   "CheckPortableObjectFreeze.cmake")
 
 message(STATUS
-  "portable .fsimobj schema freeze passed: rows=40 digest=${FSIM_CONTRACT_DIGEST}")
+  "portable .fsimobj schema freeze passed: rows=41 digest=${FSIM_CONTRACT_DIGEST}")

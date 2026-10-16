@@ -34,6 +34,8 @@ using runtime::simir::EdgeKind;
 using runtime::simir::Halt;
 using runtime::simir::LoadConstant;
 using runtime::simir::Process;
+using runtime::simir::ProcessSchedulingDomain;
+using runtime::simir::ProcessStartupPhase;
 using runtime::simir::ReadSignal;
 using runtime::simir::SignalId;
 using runtime::simir::ValueKind;
@@ -172,6 +174,103 @@ inline std::optional<std::string> encode_source_design()
     return bytes;
 }
 
+inline ElaboratedDesignState make_startup_metadata_state()
+{
+    auto state = make_state();
+    state.processes[0U].startup_phase
+        = ProcessStartupPhase::package_static_initializer;
+    state.processes[0U].scheduling_domain
+        = ProcessSchedulingDomain::systemverilog;
+    state.processes[0U].static_sensitivity.clear();
+    state.processes[0U].startup_order = 0xfedcba9876543210ULL;
+    state.processes[0U].startup_package_owner_id = 8U;
+    fsim::elaboration::StringObjectInfo string_info;
+    string_info.id = 0U;
+    string_info.name = "top.startup_string";
+    state.string_object_info.push_back(string_info);
+    state.string_objects.push_back(
+        { "top.startup_string", "startup value", 8U });
+    state.string_names.emplace_back("top.startup_string", 0U);
+
+    fsim::runtime::simir::ContainerType container_type;
+    container_type.fixed = true;
+    container_type.index_left = 0;
+    container_type.index_right = 0;
+    container_type.dimensions = { { 0, 0 } };
+    fsim::elaboration::ContainerObjectInfo container_info;
+    container_info.id = 0U;
+    container_info.name = "top.startup_container";
+    container_info.type = container_type;
+    state.container_object_info.push_back(container_info);
+    state.container_objects.push_back({ "top.startup_container",
+        { container_type,
+            { fsim::runtime::PackedLogic4 { 1U, Logic4::zero } }, { } },
+        std::nullopt, 8U });
+    state.container_names.emplace_back("top.startup_container", 0U);
+
+    auto& startup = state.processes[0U];
+    startup.string_register_count = 1U;
+    startup.container_register_count = 1U;
+    startup.container_register_types.push_back(container_type);
+    startup.startup_writable_string_object_ids = { 0U };
+    startup.startup_writable_container_object_ids = { 0U };
+    startup.operations = {
+        ReadSignal { 0U, 0U },
+        WriteUpdate { 2U, 0U },
+        runtime::simir::DebugPoint {
+            runtime::simir::DebugPointKind::statement,
+            runtime::simir::SourceLocation {
+                "direct_rows.sv", 7U, 3U },
+            "top.first_scope" },
+        runtime::simir::LoadStringConstant { 0U, "roundtrip text" },
+        runtime::simir::WriteStringObject { 0U, 0U },
+        runtime::simir::ReadContainerObject { 0U, 0U },
+        runtime::simir::WriteContainerObject {
+            0U, 0U, std::nullopt, false },
+        Halt { },
+    };
+
+    elaboration::SystemVerilogPackageClassInitializerInfo handle;
+    handle.unit = fsim::semantic::UnitId::from_index(7U);
+    handle.declaration = fsim::semantic::DeclarationId::from_index(11U);
+    handle.signal = 1U;
+    handle.initializer = fsim::semantic::ExpressionId::from_index(21U);
+    handle.startup_order = 41U;
+    handle.writable_signal_ids = { 0U, 1U, 4U };
+    handle.writable_string_object_ids = { 0U };
+    handle.writable_container_object_ids = { 0U };
+    state.systemverilog_package_class_initializers.push_back(handle);
+
+    elaboration::SystemVerilogPackageClassStaticInitializerInfo property;
+    property.unit = fsim::semantic::UnitId::from_index(8U);
+    property.class_identity = "work::startup_pkg::owner";
+    property.specialization_identity = "work::startup_pkg::owner<>";
+    property.property_declaration
+        = fsim::semantic::DeclarationId::from_index(12U);
+    property.property_name = "item";
+    property.canonical_identity =
+        "work::startup_pkg::owner::item";
+    property.initializer = fsim::semantic::ExpressionId::from_index(22U);
+    property.startup_order = 42U;
+    property.writable_signal_ids = { 2U, 4U };
+    property.writable_string_object_ids = { 0U };
+    property.writable_container_object_ids = { 0U };
+    state.systemverilog_package_class_static_initializers.push_back(
+        std::move(property));
+    return state;
+}
+
+inline std::optional<std::string> encode_startup_metadata_design()
+{
+    auto state = make_startup_metadata_state();
+    auto design = ElaboratedDesign::from_state(std::move(state));
+    assert(design.has_value());
+    diagnostic::Engine diagnostics;
+    auto bytes = serialize_runtime_state(*design, diagnostics);
+    assert(bytes.has_value() && !diagnostics.has_error());
+    return bytes;
+}
+
 // Read and rewrite the runtime envelope by semantic fields so corruption
 // tests can preserve its hierarchy binding without depending on row offsets.
 struct RuntimeWirePayload {
@@ -274,19 +373,46 @@ inline void assert_view_rows(const ElaboratedDesign& design)
     assert(Access::process_count(design) == 3U);
     const auto table = Access::process_table(design);
     assert(table != nullptr);
-    assert(table->templates.size() == 2U);
     assert(table->rows.size() == 3U);
-    assert(table->rows[0U].template_id == 0U);
-    assert(table->rows[1U].template_id == 0U);
-    assert(table->rows[2U].template_id == 1U);
 
     const auto first = Access::process_view(design, 0U);
     const auto second = Access::process_view(design, 1U);
     const auto independent = Access::process_view(design, 2U);
     assert(first.valid() && second.valid() && independent.valid());
-    assert(first.common_identity() == second.common_identity());
+    const bool package_startup
+        = first.startup_phase()
+        == ProcessStartupPhase::package_static_initializer;
+    if (package_startup) {
+        assert(table->templates.size() == 3U);
+        assert(table->rows[0U].template_id == 0U);
+        assert(table->rows[1U].template_id == 1U);
+        assert(table->rows[2U].template_id == 2U);
+        assert(first.scheduling_domain()
+            == ProcessSchedulingDomain::systemverilog);
+        assert(first.static_sensitivity().empty());
+        assert(first.common_identity() != second.common_identity());
+    } else {
+        assert(first.startup_phase() == ProcessStartupPhase::ordinary);
+        assert(table->templates.size() == 2U);
+        assert(table->rows[0U].template_id == 0U);
+        assert(table->rows[1U].template_id == 0U);
+        assert(table->rows[2U].template_id == 1U);
+        assert(first.scheduling_domain() == ProcessSchedulingDomain::generic);
+        assert(first.static_sensitivity().size() == 1U);
+        assert(first.static_sensitivity().front().signal == 0U);
+        assert(first.common_identity() == second.common_identity());
+    }
+    assert(second.scheduling_domain() == ProcessSchedulingDomain::generic);
+    assert(independent.scheduling_domain() == ProcessSchedulingDomain::generic);
+    assert(second.common_identity() != independent.common_identity());
     assert(first.common_identity() != independent.common_identity());
-    assert(first.operations().body_identity() == second.operations().body_identity());
+    if (package_startup) {
+        assert(first.operations().body_identity()
+            != second.operations().body_identity());
+    } else {
+        assert(first.operations().body_identity()
+            == second.operations().body_identity());
+    }
     assert(first.name() == "top.first");
     assert(second.name() == "top.second");
     assert(independent.name() == "top.independent");
@@ -295,7 +421,7 @@ inline void assert_view_rows(const ElaboratedDesign& design)
     assert(first.debug_locals().size() == 1U);
     assert(first.debug_locals()[0U].name == "sample");
     assert(independent.debug_locals()[0U].name == "independent_sample");
-    assert(first.static_sensitivity().front().signal == 0U);
+    assert(second.static_sensitivity().size() == 1U);
     assert(second.static_sensitivity().front().signal == 1U);
     assert(first.driver_regions().front().signal == 2U);
     assert(second.driver_regions().front().signal == 3U);
@@ -347,6 +473,94 @@ inline void assert_facade_rows(const std::vector<Process>& processes)
     auto second_debug_operation = processes[1U].operations.expanded(2U);
     const auto* second_debug = operation_get_if<DebugPoint>(&second_debug_operation);
     assert(second_debug != nullptr && second_debug->scope == "top.second_scope");
+}
+
+inline void assert_startup_metadata_view_rows(const ElaboratedDesign& design)
+{
+    using Access = elaboration::detail::ElaboratedDesignProcessAccess;
+    using runtime::simir::operation_get_if;
+    const auto first = Access::process_view(design, 0U);
+    const auto second = Access::process_view(design, 1U);
+    const auto independent = Access::process_view(design, 2U);
+    assert(first.startup_phase()
+        == ProcessStartupPhase::package_static_initializer);
+    assert(first.startup_order() == 0xfedcba9876543210ULL);
+    assert(first.startup_package_owner_id() == 8U);
+    assert((first.startup_writable_string_object_ids()
+        == std::vector<runtime::simir::StringObjectId> { 0U }));
+    assert((first.startup_writable_container_object_ids()
+        == std::vector<runtime::simir::ContainerObjectId> { 0U }));
+    auto string_write_operation = first.operations().expanded(4U);
+    const auto* string_write
+        = operation_get_if<runtime::simir::WriteStringObject>(
+            &string_write_operation);
+    assert(string_write != nullptr && string_write->object == 0U);
+    auto container_write_operation = first.operations().expanded(6U);
+    const auto* container_write
+        = operation_get_if<runtime::simir::WriteContainerObject>(
+            &container_write_operation);
+    assert(container_write != nullptr && container_write->object == 0U
+        && !container_write->nonblocking
+        && !container_write->transaction_signal);
+    assert(second.startup_phase() == ProcessStartupPhase::ordinary);
+    assert(second.startup_order() == 0U);
+    assert(independent.startup_phase() == ProcessStartupPhase::ordinary);
+    assert(independent.startup_order() == 0U);
+}
+
+inline void assert_package_startup_sidecar_rows(const ElaboratedDesign& design)
+{
+    const auto handles = design.systemverilog_package_class_initializers();
+    assert(handles.size() == 1U);
+    assert(handles.front().unit.value() == 7U);
+    assert(handles.front().declaration.value() == 11U);
+    assert(handles.front().signal == 1U);
+    assert(handles.front().initializer.value() == 21U);
+    assert(handles.front().startup_order == 41U);
+    assert((handles.front().writable_signal_ids
+        == std::vector<SignalId> { 0U, 1U, 4U }));
+    assert((handles.front().writable_string_object_ids
+        == std::vector<runtime::simir::StringObjectId> { 0U }));
+    assert((handles.front().writable_container_object_ids
+        == std::vector<runtime::simir::ContainerObjectId> { 0U }));
+
+    const auto properties
+        = design.systemverilog_package_class_static_initializers();
+    assert(properties.size() == 1U);
+    assert(properties.front().unit.value() == 8U);
+    assert(properties.front().class_identity == "work::startup_pkg::owner");
+    assert(properties.front().specialization_identity
+        == "work::startup_pkg::owner<>");
+    assert(properties.front().property_declaration.value() == 12U);
+    assert(properties.front().property_name == "item");
+    assert(properties.front().canonical_identity
+        == "work::startup_pkg::owner::item");
+    assert(properties.front().initializer.value() == 22U);
+    assert(properties.front().startup_order == 42U);
+    assert((properties.front().writable_signal_ids
+        == std::vector<SignalId> { 2U, 4U }));
+    assert((properties.front().writable_string_object_ids
+        == std::vector<runtime::simir::StringObjectId> { 0U }));
+    assert((properties.front().writable_container_object_ids
+        == std::vector<runtime::simir::ContainerObjectId> { 0U }));
+}
+
+inline void assert_startup_metadata_facade_rows(
+    const std::vector<Process>& processes)
+{
+    assert(processes.size() == 3U);
+    assert(processes[0U].startup_phase
+        == ProcessStartupPhase::package_static_initializer);
+    assert(processes[0U].startup_order == 0xfedcba9876543210ULL);
+    assert(processes[0U].startup_package_owner_id == 8U);
+    assert((processes[0U].startup_writable_string_object_ids
+        == std::vector<runtime::simir::StringObjectId> { 0U }));
+    assert((processes[0U].startup_writable_container_object_ids
+        == std::vector<runtime::simir::ContainerObjectId> { 0U }));
+    assert(processes[1U].startup_phase == ProcessStartupPhase::ordinary);
+    assert(processes[1U].startup_order == 0U);
+    assert(processes[2U].startup_phase == ProcessStartupPhase::ordinary);
+    assert(processes[2U].startup_order == 0U);
 }
 
 inline bool facade_materialized(runtime::simir::Interpreter& interpreter,

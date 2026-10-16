@@ -2651,6 +2651,120 @@ void test_simir_containers()
             && memory.elements[3].to_msb_string()
                 == "00000011",
         "$readmemb optional bounds use declared indices and retain Z bits");
+    auto selected_memory_type = memory_type;
+    selected_memory_type.index_left = 0;
+    selected_memory_type.index_right = 7;
+    auto selected_memory = default_container_value(selected_memory_type);
+    for (std::size_t index = 0;
+         index < selected_memory.elements.size(); ++index) {
+        selected_memory.elements[index] = value(
+            8, static_cast<std::uint64_t>(0xa0U + index));
+    }
+    const auto selected_load = load_memory_text_with_status(
+        selected_memory, "00 01 02 03 04 05 06 07", true, 0, 3);
+    require(
+        selected_load.word_count_mismatch
+            && selected_memory.elements
+                == std::vector<PackedLogic4> {
+                    value(8, 0), value(8, 1), value(8, 2), value(8, 3),
+                    value(8, 0xa4), value(8, 0xa5), value(8, 0xa6),
+                    value(8, 0xa7) },
+        "$readmemh loads the selected range, warns for extra data, and leaves "
+        "the remaining words unchanged");
+    auto binary_memory = default_container_value(selected_memory_type);
+    for (std::size_t index = 0;
+         index < binary_memory.elements.size(); ++index) {
+        binary_memory.elements[index] = value(
+            8, static_cast<std::uint64_t>(0xb0U + index));
+    }
+    const auto binary_load = load_memory_text_with_status(
+        binary_memory,
+        "0000_0000 0000_0001 000__0_0010 0000_0011 "
+        "0000_0100 0000_0101 0000_0110 0000_0111",
+        false, 0, 3);
+    require(
+        binary_load.word_count_mismatch
+            && binary_memory.elements
+                == std::vector<PackedLogic4> {
+                    value(8, 0), value(8, 1), value(8, 2), value(8, 3),
+                    value(8, 0xb4), value(8, 0xb5), value(8, 0xb6),
+                    value(8, 0xb7) },
+        "$readmemb loads only the selected range and preserves later words");
+    auto descending_memory = default_container_value(selected_memory_type);
+    for (std::size_t index = 0;
+         index < descending_memory.elements.size(); ++index) {
+        descending_memory.elements[index] = value(
+            8, static_cast<std::uint64_t>(0xc0U + index));
+    }
+    const auto descending_load = load_memory_text_with_status(
+        descending_memory, "03 02 01 00 04", true, 3, 0);
+    require(
+        descending_load.word_count_mismatch
+            && descending_memory.elements
+                == std::vector<PackedLogic4> {
+                    value(8, 0), value(8, 1), value(8, 2), value(8, 3),
+                    value(8, 0xc4), value(8, 0xc5), value(8, 0xc6),
+                    value(8, 0xc7) },
+        "$readmemh follows descending explicit bounds and warns on extra data");
+    const auto partial_load = load_memory_text_with_status(
+        selected_memory, "11 22", true, 0, 3);
+    require(
+        partial_load.word_count_mismatch
+            && selected_memory.elements
+                == std::vector<PackedLogic4> {
+                    value(8, 0x11), value(8, 0x22), value(8, 2),
+                    value(8, 3), value(8, 0xa4), value(8, 0xa5),
+                    value(8, 0xa6), value(8, 0xa7) },
+        "$readmemh warns for missing data and preserves unspecified words");
+    const auto addressed_load = load_memory_text_with_status(
+        selected_memory, "@0 aa @2 cc", true, 0, 3);
+    require(
+        !addressed_load.word_count_mismatch
+            && selected_memory.elements
+                == std::vector<PackedLogic4> {
+                    value(8, 0xaa), value(8, 0x22), value(8, 0xcc),
+                    value(8, 3), value(8, 0xa4), value(8, 0xa5),
+                    value(8, 0xa6), value(8, 0xa7) },
+        "file @addresses retain their explicit selection without a count "
+        "warning");
+    const auto before_invalid_address = selected_memory.elements;
+    try {
+        (void)load_memory_text_with_status(
+            selected_memory, "@0 33 44 55 66 @4 77", true, 0, 3);
+        require(false, "@address outside the selected range must fail");
+    } catch (const std::out_of_range&) {
+        require(
+            selected_memory.elements == before_invalid_address,
+            "invalid @address leaves the complete target unchanged");
+    }
+    try {
+        (void)load_memory_text_with_status(
+            selected_memory, "00 01 02 03 04 @4 05", true, 0, 3);
+        require(false, "later out-of-range @address must still be checked");
+    } catch (const std::out_of_range&) {
+        require(
+            selected_memory.elements == before_invalid_address,
+            "later invalid @address still aborts the complete load");
+    }
+    try {
+        (void)load_memory_text_with_status(
+            selected_memory, "@0 00 01 02 03 04", true, 0, 3);
+        require(false, "addressed data beyond the task range must fail");
+    } catch (const std::out_of_range&) {
+        require(
+            selected_memory.elements == before_invalid_address,
+            "addressed sequential overflow aborts atomically");
+    }
+    const auto before_invalid_excess = selected_memory.elements;
+    try {
+        (void)load_memory_text_with_status(
+            selected_memory, "00 01 02 03 invalid", true, 0, 3);
+        require(false, "ignored over-range words must still be parsed");
+    } catch (const std::invalid_argument&) {
+        require(
+            selected_memory.elements == before_invalid_excess,
+            "invalid excess data leaves the complete target unchanged");
+    }
     require(
         write_memory_text(memory, true)
             == "03\n0x\nxx\n0f\n",
@@ -2821,16 +2935,82 @@ void test_simir_containers()
             PushContainer { 0, 0, false },
             Halt { } },
         "dynamic array");
-    expect_failure(
-        queue_type,
-        { PopContainer { 0, 0, true }, Halt { } },
-        "empty queue");
-    expect_failure(
-        queue_type,
-        { LoadConstant { 0, value(8, 1) },
-            LoadConstant { 1, value(32, 1) },
-            PushContainer { 0, 0, false, 1 }, Halt { } },
-        "insert index is out of range");
+    Interpreter empty_queue_pop;
+    const auto pop_front_value = empty_queue_pop.add_signal(
+        { "container.empty_pop_front", PackedLogic4(8, Logic4::zero) });
+    const auto pop_back_value = empty_queue_pop.add_signal(
+        { "container.empty_pop_back", PackedLogic4(8, Logic4::zero) });
+    const auto empty_queue_size = empty_queue_pop.add_signal(
+        { "container.empty_pop_size", PackedLogic4(32, Logic4::zero) });
+    const auto empty_queue_object = empty_queue_pop.add_container_object(
+        { "container.empty_pop_queue",
+            ContainerValue { queue_type, { }, { } }, std::nullopt });
+    Process empty_queue_pop_process;
+    empty_queue_pop_process.id = 0;
+    empty_queue_pop_process.name = "empty_queue_pop_contract";
+    empty_queue_pop_process.register_count = 2;
+    empty_queue_pop_process.container_register_count = 1;
+    empty_queue_pop_process.container_register_types = { queue_type };
+    empty_queue_pop_process.operations = {
+        ReadContainerObject { 0, empty_queue_object },
+        PopContainer { 0, 0, true },
+        WriteBlocking { pop_front_value, 0 },
+        PopContainer { 0, 0, false },
+        WriteBlocking { pop_back_value, 0 },
+        ContainerSize { 1, 0 },
+        WriteBlocking { empty_queue_size, 1 },
+        WriteContainerObject { empty_queue_object, 0, std::nullopt },
+        Halt { }
+    };
+    (void)empty_queue_pop.add_process(std::move(empty_queue_pop_process));
+    require(
+        empty_queue_pop.run().status == RunStatus::completed
+            && empty_queue_pop.signal_value(pop_front_value)
+                == PackedLogic4::from_msb_string("XXXXXXXX")
+            && empty_queue_pop.signal_value(pop_back_value)
+                == PackedLogic4::from_msb_string("XXXXXXXX")
+            && empty_queue_pop.signal_value(empty_queue_size) == value(32, 0)
+            && empty_queue_pop.container_object_value(empty_queue_object)
+                .elements.empty(),
+        "empty queue pops return the nonexistent-element value and leave the "
+        "queue unchanged");
+
+    Interpreter queue_insert_noop;
+    const auto size_after_empty_insert = queue_insert_noop.add_signal(
+        { "container.queue_size_after_empty_insert",
+            PackedLogic4(32, Logic4::zero) });
+    const auto queue_insert_object = queue_insert_noop.add_container_object(
+        { "container.queue_insert_noop",
+            ContainerValue { queue_type, { }, { } }, std::nullopt });
+    Process queue_insert_process;
+    queue_insert_process.id = 0;
+    queue_insert_process.name = "queue_insert_noop_contract";
+    queue_insert_process.register_count = 3;
+    queue_insert_process.container_register_count = 1;
+    queue_insert_process.container_register_types = { queue_type };
+    queue_insert_process.operations = {
+        ReadContainerObject { 0, queue_insert_object },
+        LoadConstant { 0, value(8, 1) },
+        LoadConstant { 1, value(32, 1) },
+        PushContainer { 0, 0, false, 1 },
+        ContainerSize { 2, 0 },
+        WriteBlocking { size_after_empty_insert, 2 },
+        LoadConstant { 0, value(8, 0x11) },
+        PushContainer { 0, 0, false },
+        LoadConstant { 0, value(8, 0x22) },
+        LoadConstant { 1, value(32, 2) },
+        PushContainer { 0, 0, false, 1 },
+        WriteContainerObject { queue_insert_object, 0, std::nullopt },
+        Halt { }
+    };
+    (void)queue_insert_noop.add_process(std::move(queue_insert_process));
+    require(
+        queue_insert_noop.run().status == RunStatus::completed
+            && queue_insert_noop.signal_value(size_after_empty_insert)
+                == value(32, 0)
+            && queue_insert_noop.container_object_value(queue_insert_object)
+                .elements == std::vector<PackedLogic4> { value(8, 0x11) },
+        "out-of-range queue inserts are no-ops for empty and populated queues");
     expect_failure(
         associative_type,
         { LoadConstant {

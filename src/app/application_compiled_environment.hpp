@@ -27,16 +27,25 @@ struct ParsedSourceUnitOwner {
     std::filesystem::path source;
 };
 
+struct VhdlUnitIdentifierForms {
+    bool available { };
+    bool name_extended { };
+    bool primary_name_extended { };
+};
+
 struct CompiledSourceUnitIdentity {
     semantic::Unit unit;
     bool external { };
     std::filesystem::path source;
+    VhdlUnitIdentifierForms vhdl_forms;
 };
 
 struct CompiledReferenceIdentity {
     semantic::Unit owner;
     semantic::Unit target;
     semantic::CompiledReference reference;
+    VhdlUnitIdentifierForms owner_vhdl_forms;
+    VhdlUnitIdentifierForms target_vhdl_forms;
 };
 
 [[nodiscard]] bool compiled_package_has_member(const semantic::CompiledDesign&,

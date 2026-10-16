@@ -42,10 +42,22 @@ bool merge_records(LibraryCatalog& catalog,
     // secondary units of a replaced primary unit, and objects that depend on
     // a replaced or obsolete unit, are obsolete and leave the catalog.
     const auto secondary = [](const library::UnitIndexEntry& unit) {
-        return unit.kind == "architecture" || unit.kind == "package_body";
+        return unit.kind == "architecture" || unit.kind == "package_body"
+            || (unit.kind == "package" && !unit.primary_name.empty());
     };
     std::set<std::string> gone;
     std::set<std::string> replaced_primaries;
+    const auto primary_identity = [](const library::UnitIndexEntry& unit) {
+        auto primary = unit;
+        primary.kind = "primary";
+        primary.name = unit.primary_name.empty() ? unit.name : unit.primary_name;
+        primary.primary_name.clear();
+        primary.architecture.clear();
+        primary.name_form = unit.primary_name.empty()
+            ? unit.name_form : unit.primary_name_form;
+        primary.primary_name_form = library::VhdlIdentifierForm::unknown;
+        return unit_identity(primary);
+    };
     std::set<std::string> emptied;
     for (const auto& record : replacements) {
         for (const auto& owned : record.units) {
@@ -53,7 +65,7 @@ bool merge_records(LibraryCatalog& catalog,
                 continue;
             gone.insert(unit_identity(owned.unit));
             if (!secondary(owned.unit))
-                replaced_primaries.insert(owned.unit.name);
+                replaced_primaries.insert(primary_identity(owned.unit));
         }
     }
     if (!gone.empty()) {
@@ -64,8 +76,7 @@ bool merge_records(LibraryCatalog& catalog,
                 return owned.unit.language == "vhdl"
                     && (gone.contains(unit_identity(owned.unit))
                         || (secondary(owned.unit)
-                            && replaced_primaries.contains(
-                                owned.unit.primary_name)));
+                            && replaced_primaries.contains(primary_identity(owned.unit))));
             });
             if (removed != 0U && record.units.empty())
                 emptied.insert(record.id);

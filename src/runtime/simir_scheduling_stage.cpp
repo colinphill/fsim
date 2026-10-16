@@ -375,6 +375,12 @@ void Interpreter::Impl::schedule_update_commit()
             };
             const std::unique_ptr<void, decltype(clear_provenance)>
                 clear_provenance_on_exit(this, clear_provenance);
+            const auto clear_selected_transactions = [this](void*) noexcept {
+                clear_pending_selected_signal_transactions();
+            };
+            const std::unique_ptr<void, decltype(clear_selected_transactions)>
+                clear_selected_transactions_on_exit(
+                    this, clear_selected_transactions);
             if (native_update_profile_enabled) {
                 ++native_update_profile_commits;
             }
@@ -2645,13 +2651,9 @@ void Interpreter::Impl::notify_region_local_value_change(
     state->fanout().mark_transition(signal, previous, current,
         EdgeKind::any, state->readiness());
     Interpreter::Impl::StaticTransitionMatches transition { };
-    if (previous.width() == 1U && current.width() == 1U) {
-        const auto low_logic4 = [](const PackedLogic4& value) {
-            return value.is_logic9()
-                ? to_logic4(value.get_logic9(0U)) : value.get(0U);
-        };
+    if (previous.width() != 0U && current.width() != 0U) {
         transition = decode_static_transition(
-            low_logic4(previous), low_logic4(current));
+            edge_value(previous), edge_value(current));
         if (transition.posedge) {
             state->fanout().mark_transition(signal, previous, current,
                 EdgeKind::posedge, state->readiness());
@@ -3472,10 +3474,14 @@ void Interpreter::Impl::stage_update_words(
                 offset,
                 { },
                 value_index });
+            stage_selected_signal_transaction(
+                update.signal, offset.value_or(0U), update.value.width);
         } else {
             block_native_logic9_update_before_generic(update.signal);
             pending_updates.push_back(PendingUpdate {
                 update.signal, process, offset, update.value, std::nullopt });
+            stage_selected_signal_transaction(
+                update.signal, offset.value_or(0U), update.value.width);
         }
         staged = true;
     }
@@ -3624,6 +3630,8 @@ void Interpreter::Impl::stage_validated_update_words(
                 offset,
                 { },
                 value_index });
+            stage_selected_signal_transaction(
+                update.signal, offset.value_or(0U), update.value.width);
             if (native_update_profile_enabled) {
                 ++native_update_profile_word_scalar;
             }
@@ -3679,6 +3687,8 @@ void Interpreter::Impl::stage_validated_update_words(
             if (native_update_profile_enabled) {
                 ++native_update_profile_word_direct;
             }
+            stage_selected_signal_transaction(
+                update.signal, offset.value_or(0U), update.value.width);
             staged_any = true;
             continue;
         }
@@ -3709,6 +3719,8 @@ void Interpreter::Impl::stage_validated_update_words(
                     if (native_update_profile_enabled) {
                         ++native_update_profile_word_direct;
                     }
+                    stage_selected_signal_transaction(
+                        update.signal, offset.value_or(0U), update.value.width);
                     staged_any = true;
                     continue;
                 }
@@ -3725,6 +3737,8 @@ void Interpreter::Impl::stage_validated_update_words(
             if (native_update_profile_enabled) {
                 ++native_update_profile_word_direct;
             }
+            stage_selected_signal_transaction(
+                update.signal, offset.value_or(0U), update.value.width);
             staged_any = true;
             continue;
         }
@@ -3786,6 +3800,8 @@ void Interpreter::Impl::stage_validated_update_words(
                     if (native_update_profile_enabled) {
                         ++native_update_profile_word_unresolved;
                     }
+                    stage_selected_signal_transaction(
+                        update.signal, offset.value_or(0U), update.value.width);
                     staged_any = true;
                     continue;
                 }
@@ -3825,6 +3841,8 @@ void Interpreter::Impl::stage_validated_update_words(
                     if (native_update_profile_enabled) {
                         ++native_update_profile_word_resolved;
                     }
+                    stage_selected_signal_transaction(
+                        update.signal, offset.value_or(0U), update.value.width);
                     staged_any = true;
                     continue;
                 }
@@ -3860,6 +3878,8 @@ void Interpreter::Impl::stage_validated_update_words(
                 ++native_update_profile_word_resolved;
             }
         }
+        stage_selected_signal_transaction(
+            update.signal, offset.value_or(0U), update.value.width);
         staged_any = true;
     }
     if (staged_any) {
@@ -4141,6 +4161,11 @@ bool Interpreter::Impl::stage_validated_update_slot_batches_impl(
                     ++native_update_profile_direct_word;
                 }
                 staged_any = true;
+                stage_selected_signal_transaction_mask(
+                    slot.signal,
+                    std::span<const std::uint64_t> {
+                        slot.mask, slot.word_count
+                    });
                 consume_slot(slot);
                 return;
             }
@@ -4180,6 +4205,11 @@ bool Interpreter::Impl::stage_validated_update_slot_batches_impl(
                     ++native_update_profile_direct_packed;
                 }
                 staged_any = true;
+                stage_selected_signal_transaction_mask(
+                    slot.signal,
+                    std::span<const std::uint64_t> {
+                        slot.mask, slot.word_count
+                    });
                 consume_slot(slot);
                 return;
             }
@@ -4235,6 +4265,11 @@ bool Interpreter::Impl::stage_validated_update_slot_batches_impl(
                     ++native_update_profile_unresolved;
                 }
                 staged_any = true;
+                stage_selected_signal_transaction_mask(
+                    slot.signal,
+                    std::span<const std::uint64_t> {
+                        slot.mask, slot.word_count
+                    });
                 consume_slot(slot);
                 return;
             }
@@ -4271,6 +4306,11 @@ bool Interpreter::Impl::stage_validated_update_slot_batches_impl(
                         ++native_update_profile_changed_owned;
                     }
                     staged_any = true;
+                    stage_selected_signal_transaction_mask(
+                        slot.signal,
+                        std::span<const std::uint64_t> {
+                            slot.mask, slot.word_count
+                        });
                 }
                 consume_slot(slot);
                 return;
@@ -4323,6 +4363,11 @@ bool Interpreter::Impl::stage_validated_update_slot_batches_impl(
                 ++native_update_profile_resolved;
             }
             staged_any = true;
+            stage_selected_signal_transaction_mask(
+                slot.signal,
+                std::span<const std::uint64_t> {
+                    slot.mask, slot.word_count
+                });
             consume_slot(slot);
         });
         std::ranges::fill(batch.active_words, UINT64_C(0));
@@ -4568,6 +4613,8 @@ bool Interpreter::Impl::stage_validated_logic9_update_batches(
         }
         staged.mask |= mask;
         staged_any = true;
+        const std::array<std::uint64_t, 1U> mask_words { mask };
+        stage_selected_signal_transaction_mask(slot.signal, mask_words);
         if (logic9_batch_profile_enabled) {
             ++profile.changed_slots;
             ++profile.consumed_slots;

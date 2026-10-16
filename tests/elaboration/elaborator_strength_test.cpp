@@ -187,6 +187,9 @@ endmodule
       "strength-parent.vhd",
       R"(
 entity strength_parent is end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of strength_parent is
   component strength_top is port (q : out std_logic); end component;
   signal observed : std_logic;

@@ -9,6 +9,8 @@
 #include "fsim/compiler/static_kernel_codegen.hpp"
 #endif
 
+#include <algorithm>
+#include <exception>
 #include <limits>
 
 namespace fsim::app {
@@ -17,6 +19,50 @@ namespace {
 
 using PackageClassHandleInitializer = std::pair<
     runtime::simir::SignalId, semantic::ExpressionId>;
+
+[[nodiscard]] std::vector<elaboration::SystemVerilogPackageClassInitializerInfo>
+copy_package_class_startup_initializers(const BuiltProject& built)
+{
+    const auto rows = built.design.systemverilog_package_class_initializers();
+    return { rows.begin(), rows.end() };
+}
+
+[[nodiscard]] std::vector<
+    elaboration::SystemVerilogPackageClassStaticInitializerInfo>
+copy_package_static_class_startup_initializers(const BuiltProject& built)
+{
+    const auto rows
+        = built.design.systemverilog_package_class_static_initializers();
+    return { rows.begin(), rows.end() };
+}
+
+[[nodiscard]] std::vector<runtime::simir::SignalId>
+collect_package_static_startup_signal_ids(const BuiltProject& built)
+{
+    std::vector<runtime::simir::SignalId> result;
+    for (const auto& process : built.design.processes()) {
+        if (process.startup_phase
+            != runtime::simir::ProcessStartupPhase::package_static_initializer) {
+            continue;
+        }
+        for (const auto& region : process.driver_regions) {
+            result.push_back(region.signal);
+        }
+    }
+    const auto append_writable_signals = [&result](const auto& rows) {
+        for (const auto& row : rows) {
+            result.insert(result.end(), row.writable_signal_ids.begin(),
+                row.writable_signal_ids.end());
+        }
+    };
+    append_writable_signals(
+        built.design.systemverilog_package_class_initializers());
+    append_writable_signals(
+        built.design.systemverilog_package_class_static_initializers());
+    std::ranges::sort(result);
+    result.erase(std::unique(result.begin(), result.end()), result.end());
+    return result;
+}
 
 [[nodiscard]] std::vector<PackageClassHandleInitializer>
 compiled_systemverilog_package_class_handle_initializers(
@@ -86,6 +132,170 @@ compiled_systemverilog_package_class_handle_initializers(
         }
     }
     return result;
+}
+
+[[nodiscard]] const semantic::sv::Unit* package_unit_for_class(
+    const BuiltProject& built,
+    const semantic::sv::ClassSpecialization& specialization)
+{
+    const auto scope = std::ranges::find(
+        built.semantics.scopes(), specialization.declaration_scope,
+        &semantic::Scope::id);
+    if (scope == built.semantics.scopes().end()) {
+        throw std::logic_error {
+            "compiled class initializer has no exact semantic scope"
+        };
+    }
+    const auto unit = std::ranges::find(
+        built.systemverilog_hir.units(), scope->unit,
+        &semantic::sv::Unit::id);
+    return unit == built.systemverilog_hir.units().end() ? nullptr : &*unit;
+}
+
+void validate_package_class_startup_initializers(
+    const BuiltProject& built,
+    const std::vector<PackageClassHandleInitializer>& expected_handles,
+    const std::vector<elaboration::SystemVerilogPackageClassInitializerInfo>&
+        handle_rows,
+    const std::vector<
+        elaboration::SystemVerilogPackageClassStaticInitializerInfo>&
+        static_rows)
+{
+    if (expected_handles.size() != handle_rows.size()) {
+        throw std::logic_error {
+            "package class-handle startup metadata does not cover every HIR initializer"
+        };
+    }
+    std::set<std::uint32_t> seen_handle_declarations;
+    for (const auto& row : handle_rows) {
+        if (!row.unit.valid() || !row.declaration.valid()
+            || !row.initializer.valid()
+            || !seen_handle_declarations.insert(row.declaration.value()).second) {
+            throw std::logic_error {
+                "package class-handle startup metadata has an invalid identity"
+            };
+        }
+        const auto unit = std::ranges::find(
+            built.systemverilog_hir.units(), row.unit,
+            &semantic::sv::Unit::id);
+        const auto declaration = std::ranges::find(
+            built.systemverilog_hir.declarations(), row.declaration,
+            &semantic::sv::Declaration::id);
+        const auto initializer = std::ranges::find(
+            built.systemverilog_hir.expressions(), row.initializer,
+            &semantic::sv::Expression::id);
+        if (unit == built.systemverilog_hir.units().end()
+            || unit->kind != semantic::sv::UnitKind::package
+            || declaration == built.systemverilog_hir.declarations().end()
+            || declaration->scope != unit->scope
+            || declaration->form != semantic::sv::DeclarationForm::variable
+            || declaration->initializer != row.initializer
+            || !declaration->declared_value
+            || initializer == built.systemverilog_hir.expressions().end()
+            || initializer->kind
+                != semantic::sv::ExpressionKind::class_allocation) {
+            throw std::logic_error {
+                "package class-handle startup metadata does not match its HIR declaration"
+            };
+        }
+        if (std::ranges::count_if(expected_handles,
+                [&](const auto& candidate) {
+                    return candidate.first == row.signal
+                        && candidate.second == row.initializer;
+                }) != 1) {
+            throw std::logic_error {
+                "package class-handle startup metadata has no unique runtime binding"
+            };
+        }
+    }
+
+    const auto property_row = [&](const std::string_view specialization,
+                                  const semantic::DeclarationId declaration) {
+        return std::ranges::find_if(static_rows, [&](const auto& row) {
+            return row.specialization_identity == specialization
+                && row.property_declaration == declaration;
+        });
+    };
+    std::set<std::pair<std::string, std::uint32_t>> seen_static_properties;
+    for (const auto& row : static_rows) {
+        if (!row.unit.valid() || row.class_identity.empty()
+            || row.specialization_identity.empty()
+            || !row.property_declaration.valid() || row.property_name.empty()
+            || row.canonical_identity.empty() || !row.initializer.valid()
+            || !seen_static_properties.emplace(row.specialization_identity,
+                   row.property_declaration.value()).second) {
+            throw std::logic_error {
+                "package static-property startup metadata has an invalid identity"
+            };
+        }
+        const auto specialization = std::ranges::find(
+            built.compiled_systemverilog_class_specializations,
+            row.specialization_identity,
+            &semantic::sv::ClassSpecialization::specialization_identity);
+        if (specialization
+                == built.compiled_systemverilog_class_specializations.end()
+            || specialization->declaration_identity != row.class_identity) {
+            throw std::logic_error {
+                "package static-property startup metadata has no exact class specialization"
+            };
+        }
+        const auto* unit = package_unit_for_class(built, *specialization);
+        if (unit == nullptr || unit->kind != semantic::sv::UnitKind::package
+            || unit->id != row.unit) {
+            throw std::logic_error {
+                "package static-property startup metadata has the wrong owning package"
+            };
+        }
+        const auto property = std::ranges::find(
+            specialization->properties, row.property_declaration,
+            &semantic::sv::SpecializedClassProperty::declaration);
+        const auto initializer = std::ranges::find(
+            built.systemverilog_hir.expressions(), row.initializer,
+            &semantic::sv::Expression::id);
+        if (property == specialization->properties.end()
+            || !property->static_storage || property->name != row.property_name
+            || property->canonical_identity != row.canonical_identity
+            || property->initializer != row.initializer
+            || initializer == built.systemverilog_hir.expressions().end()
+            || initializer->kind
+                != semantic::sv::ExpressionKind::class_allocation) {
+            throw std::logic_error {
+                "package static-property startup metadata does not match its HIR initializer"
+            };
+        }
+    }
+
+    for (const auto& specialization :
+        built.compiled_systemverilog_class_specializations) {
+        const auto* unit = package_unit_for_class(built, specialization);
+        if (unit == nullptr || unit->kind != semantic::sv::UnitKind::package) {
+            continue;
+        }
+        for (const auto& property : specialization.properties) {
+            if (!property.static_storage || !property.initializer) {
+                continue;
+            }
+            const auto initializer = std::ranges::find(
+                built.systemverilog_hir.expressions(), *property.initializer,
+                &semantic::sv::Expression::id);
+            if (initializer == built.systemverilog_hir.expressions().end()
+                || initializer->kind
+                    != semantic::sv::ExpressionKind::class_allocation) {
+                continue;
+            }
+            const auto row = property_row(
+                specialization.specialization_identity, property.declaration);
+            if (row == static_rows.end() || row->unit != unit->id
+                || row->initializer != *property.initializer
+                || row->class_identity != specialization.declaration_identity
+                || row->property_name != property.name
+                || row->canonical_identity != property.canonical_identity) {
+                throw std::logic_error {
+                    "package static class allocation is missing exact startup metadata"
+                };
+            }
+        }
+    }
 }
 
 #if defined(FSIM_HAS_LLVM)
@@ -369,6 +579,12 @@ Simulation::Impl::Impl(
     : built(std::move(project))
     , package_class_handle_initializers(
           compiled_systemverilog_package_class_handle_initializers(built))
+    , package_class_startup_initializers(
+          copy_package_class_startup_initializers(built))
+    , package_static_class_startup_initializers(
+          copy_package_static_class_startup_initializers(built))
+    , package_static_startup_signal_ids(
+          collect_package_static_startup_signal_ids(built))
     , vpi_runtime_updates_enabled(
           vpi_runtime_updates == SystemVerilogVpiRuntimeUpdates::enabled)
     , class_heap(
@@ -456,6 +672,9 @@ Simulation::Impl::Impl(
           class_heap)
     , interpreter(create_simulation_interpreter(built, max_deltas))
 {
+    validate_package_class_startup_initializers(built,
+        package_class_handle_initializers, package_class_startup_initializers,
+        package_static_class_startup_initializers);
     uvm_components.set_post_destroy_hook(
         [this](const runtime::SystemVerilogUvmComponentSnapshot& object) {
             class_owner_parameter_values.erase(object.object);
@@ -580,17 +799,72 @@ Simulation::Impl::Impl(
             }
             return false;
         });
+    class_hir_execution.set_class_property_container_read_service(
+        [this](const runtime::SystemVerilogClassHandle handle,
+            const std::string_view property)
+            -> std::optional<runtime::simir::ContainerValue> {
+            const auto found = class_value_containers.find(
+                { handle, std::string { property } });
+            return found == class_value_containers.end()
+                ? std::nullopt
+                : std::optional<runtime::simir::ContainerValue> {
+                      found->second };
+        });
+    const auto invoke_source_with_notifications = [this](auto&& invoke) {
+        const bool outermost = source_function_dispatch_depth == 0U;
+        const auto before = outermost
+            ? packed_class_snapshot() : PackedSnapshot { };
+        const auto static_before = outermost
+            ? packed_static_snapshot() : StaticPackedSnapshot { };
+        ++source_function_dispatch_depth;
+        runtime::PackedLogic4 result;
+        try {
+            result = invoke();
+        } catch (...) {
+            --source_function_dispatch_depth;
+            if (outermost) {
+                // HIR property writes are direct store updates. If a nested
+                // invocation failed after changing state, publish the final
+                // diff once at the outer dispatch boundary while preserving
+                // the original invocation exception.
+                try {
+                    notify_class_changes(before);
+                } catch (...) {
+                }
+                try {
+                    notify_static_changes(static_before);
+                } catch (...) {
+                }
+            }
+            throw;
+        }
+        --source_function_dispatch_depth;
+        if (outermost) {
+            notify_class_changes(before);
+            notify_static_changes(static_before);
+        }
+        return result;
+    };
     class_hir_execution.set_runtime_services(
-        [this](const auto handle, const auto identity, auto& actuals,
+        [this, invoke_source_with_notifications](
+            const auto handle, const auto identity, auto& actuals,
             auto& string_actuals, const auto names, const auto directions,
-            const bool virtual_dispatch) {
-            return invoke_source_function(handle, identity, actuals,
-                string_actuals, names, directions, virtual_dispatch);
+            const bool virtual_dispatch, const auto actual_references) {
+            return invoke_source_with_notifications([&] {
+                return invoke_source_function(handle, identity, actuals,
+                    string_actuals, names, directions, virtual_dispatch,
+                    actual_references);
+            });
         },
-        [this](const auto identity, auto& actuals, auto& string_actuals,
-            const auto names, const auto directions) {
-            return invoke_source_static_function(
-                identity, actuals, string_actuals, names, directions);
+        [this, invoke_source_with_notifications](
+            const auto identity, auto& actuals, auto& string_actuals,
+            const auto names, const auto directions,
+            const auto actual_references) {
+            return invoke_source_with_notifications([&] {
+                return invoke_source_static_function(
+                    identity, actuals, string_actuals, names, directions,
+                    actual_references);
+            });
         },
         [this](const auto handle, const auto property) {
             return packed_property_value(class_heap.property(handle, property));
@@ -608,6 +882,166 @@ Simulation::Impl::Impl(
             const auto [owner, name] = static_property_parts(property);
             assign_property_value(
                 class_static_store.property(owner, name), property, value);
+        });
+    class_hir_execution.set_class_handle_container_write_service(
+        [this](const auto owner, const auto property, const auto key,
+            const auto value) {
+            auto& storage = class_heap.property(owner, property);
+            if (!storage.handle_container
+                || storage.handle_container->kind()
+                    != runtime::SystemVerilogClassContainerKind::AssociativeArray) {
+                throw std::invalid_argument {
+                    "class property is not an associative handle container"
+                };
+            }
+            storage.handle_container->set(
+                class_heap, std::string { key }, value);
+        });
+    class_hir_execution.set_class_handle_fixed_array_write_service(
+        [this](const auto owner, const auto property, const auto index,
+            const auto value) {
+            auto& storage = class_heap.property(owner, property);
+            if (!storage.handle_container
+                || storage.handle_container->kind()
+                    != runtime::SystemVerilogClassContainerKind::FixedArray) {
+                throw std::invalid_argument {
+                    "class property is not a fixed class-handle array"
+                };
+            }
+            storage.handle_container->set(class_heap, index, value);
+        });
+    class_hir_execution.set_static_property_value_read_service(
+        [this](const std::string_view identity)
+            -> std::optional<runtime::SystemVerilogClassPropertyValue> {
+            try {
+                const auto [owner, name] = static_property_parts(identity);
+                return class_static_store.property(owner, name);
+            } catch (const std::exception&) {
+                return std::nullopt;
+            }
+        });
+    const auto package_variable = [this](
+        const semantic::DeclarationId declaration_id)
+        -> const semantic::sv::Declaration* {
+        const auto found = std::ranges::find(
+            built.systemverilog_hir.declarations(), declaration_id,
+            &semantic::sv::Declaration::id);
+        if (found == built.systemverilog_hir.declarations().end()
+            || (found->form != semantic::sv::DeclarationForm::variable
+                && found->form != semantic::sv::DeclarationForm::net)) {
+            return nullptr;
+        }
+        const bool package_member = std::ranges::any_of(
+            built.systemverilog_hir.units(), [&](const auto& unit) {
+                return unit.kind == semantic::sv::UnitKind::package
+                    && unit.scope == found->scope
+                    && std::ranges::find(unit.declarations, declaration_id)
+                        != unit.declarations.end();
+            });
+        return package_member ? &*found : nullptr;
+    };
+    const auto package_runtime_object = [this, package_variable](
+        const semantic::DeclarationId declaration_id,
+        const semantic::design::ObjectKind kind)
+        -> std::optional<std::uint64_t> {
+        const auto* declaration = package_variable(declaration_id);
+        if (declaration == nullptr || !declaration->declared_value) {
+            return std::nullopt;
+        }
+        std::optional<std::uint64_t> runtime_index;
+        for (const auto& object : built.design_ir.objects()) {
+            if (object.kind != kind
+                || object.declaration_value != declaration->declared_value) {
+                continue;
+            }
+            if (runtime_index && *runtime_index != object.runtime_index) {
+                throw std::logic_error {
+                    "package declaration has multiple runtime storage identities"
+                };
+            }
+            runtime_index = object.runtime_index;
+        }
+        return runtime_index;
+    };
+    class_hir_execution.set_package_global_services(
+        [this, package_runtime_object](const semantic::DeclarationId id)
+            -> std::optional<runtime::PackedLogic4> {
+            const auto index = package_runtime_object(
+                id, semantic::design::ObjectKind::signal);
+            if (!index
+                || *index > std::numeric_limits<runtime::simir::SignalId>::max()) {
+                return std::nullopt;
+            }
+            return interpreter->signal_value_snapshot(
+                static_cast<runtime::simir::SignalId>(*index));
+        },
+        [this, package_runtime_object](
+            const semantic::DeclarationId id,
+            const runtime::PackedLogic4& value) {
+            const auto index = package_runtime_object(
+                id, semantic::design::ObjectKind::signal);
+            if (!index
+                || *index > std::numeric_limits<runtime::simir::SignalId>::max()) {
+                return false;
+            }
+            const auto signal = static_cast<runtime::simir::SignalId>(*index);
+            const auto current = interpreter->signal_value_snapshot(signal);
+            interpreter->deposit_signal(signal,
+                application_detail::SystemVerilogClassExecution::resize_packed(
+                    value, current.width()));
+            return true;
+        },
+        [this, package_runtime_object](const semantic::DeclarationId id)
+            -> std::optional<std::string> {
+            const auto index = package_runtime_object(
+                id, semantic::design::ObjectKind::string);
+            if (!index
+                || *index
+                    > std::numeric_limits<runtime::simir::StringObjectId>::max()) {
+                return std::nullopt;
+            }
+            return interpreter->string_object_value(
+                static_cast<runtime::simir::StringObjectId>(*index));
+        },
+        [this, package_runtime_object](
+            const semantic::DeclarationId id, const std::string_view value) {
+            const auto index = package_runtime_object(
+                id, semantic::design::ObjectKind::string);
+            if (!index
+                || *index
+                    > std::numeric_limits<runtime::simir::StringObjectId>::max()) {
+                return false;
+            }
+            interpreter->deposit_string_object(
+                static_cast<runtime::simir::StringObjectId>(*index), value);
+            return true;
+        },
+        [this, package_runtime_object](const semantic::DeclarationId id)
+            -> std::optional<runtime::simir::ContainerValue> {
+            const auto index = package_runtime_object(
+                id, semantic::design::ObjectKind::container);
+            if (!index
+                || *index > std::numeric_limits<
+                    runtime::simir::ContainerObjectId>::max()) {
+                return std::nullopt;
+            }
+            return interpreter->container_object_value_snapshot(
+                static_cast<runtime::simir::ContainerObjectId>(*index));
+        },
+        [this, package_runtime_object](
+            const semantic::DeclarationId id,
+            runtime::simir::ContainerValue value) {
+            const auto index = package_runtime_object(
+                id, semantic::design::ObjectKind::container);
+            if (!index
+                || *index > std::numeric_limits<
+                    runtime::simir::ContainerObjectId>::max()) {
+                return false;
+            }
+            interpreter->deposit_container_object(
+                static_cast<runtime::simir::ContainerObjectId>(*index),
+                std::move(value));
+            return true;
         });
     const auto resolution = application_detail::magnitude_and_unit(
         built.time_resolution);
@@ -739,8 +1173,9 @@ Simulation::Impl::Impl(
         built.compiled_systemverilog_class_specializations, uvm_objects);
     register_systemverilog_uvm_registry_types(
         built.compiled_systemverilog_class_specializations, uvm_registry);
-    interpreter->set_class_allocate_hook(
-        [this](const runtime::simir::ProcessId owner_design_process,
+    interpreter->set_class_allocate_context_hook(
+        [this](const runtime::simir::ProcessId report_process,
+            const runtime::simir::ProcessId owner_design_process,
             const std::string_view scope,
             const std::string_view specialization,
             const std::string_view declared_type,
@@ -749,7 +1184,8 @@ Simulation::Impl::Impl(
             const std::span<const std::string> actual_names) {
             return construct_class(
                 specialization, declared_type, actuals, string_actuals,
-                actual_names, scope, 0U, owner_design_process);
+                actual_names, scope, 0U, owner_design_process, 0U,
+                report_process);
         });
     // A string class property read or written from a process travels as
     // the single string actual of a reserved method identity,
@@ -806,8 +1242,10 @@ Simulation::Impl::Impl(
                 class_heap.property(handle, property), property, value);
             notify_class_changes(before);
         });
-    interpreter->set_class_method_call_hook(
-        [this, access_string_property](const std::uint64_t handle,
+    interpreter->set_class_method_call_context_hook(
+        [this, access_string_property, invoke_source_with_notifications](
+            const runtime::simir::ProcessId report_process,
+            const std::uint64_t handle,
             const std::string_view method,
             std::vector<runtime::PackedLogic4>& actuals,
             std::vector<std::string>& string_actuals,
@@ -816,79 +1254,75 @@ Simulation::Impl::Impl(
             const std::span<const runtime::SystemVerilogConstraintTemplate>
                 inline_constraints,
             const bool virtual_dispatch) {
-            const auto before = packed_class_snapshot();
-            const auto static_before = packed_static_snapshot();
-            // `new handle` copies the object's properties into a new object
-            // of the same class (IEEE 1800-2017 8.12).
-            if (method == "@shallow-copy") {
-                if (handle == 0U) {
-                    throw std::invalid_argument {
-                        "shallow copy of a null class handle"
-                    };
-                }
-                const auto source = class_heap.object(handle);
-                const auto copy = allocate_class(
-                    source.specialization_identity, source.declared_type,
-                    source.random_root_identity);
-                try {
-                    class_heap.object(copy).properties = source.properties;
-                    const auto owner = class_owner_parameter_values.find(handle);
-                    if (owner != class_owner_parameter_values.end()) {
-                        const bool inserted = class_owner_parameter_values
-                            .emplace(copy, owner->second).second;
-                        if (!inserted) {
-                            throw std::logic_error {
-                                "shallow copy reused a live owner context handle"
-                            };
-                        }
+            return invoke_source_with_notifications([&] {
+                // `new handle` copies the object's properties into a new object
+                // of the same class (IEEE 1800-2017 8.12).
+                if (method == "@shallow-copy") {
+                    if (handle == 0U) {
+                        throw std::invalid_argument {
+                            "shallow copy of a null class handle"
+                        };
                     }
-                } catch (...) {
-                    class_owner_parameter_values.erase(copy);
-                    (void)class_heap.release(copy);
-                    throw;
+                    const auto source = class_heap.object(handle);
+                    const auto copy = allocate_class(
+                        source.specialization_identity, source.declared_type,
+                        source.random_root_identity);
+                    try {
+                        class_heap.object(copy).properties = source.properties;
+                        const auto owner = class_owner_parameter_values.find(handle);
+                        if (owner != class_owner_parameter_values.end()) {
+                            const bool inserted = class_owner_parameter_values
+                                .emplace(copy, owner->second).second;
+                            if (!inserted) {
+                                throw std::logic_error {
+                                    "shallow copy reused a live owner context handle"
+                                };
+                            }
+                        }
+                    } catch (...) {
+                        class_owner_parameter_values.erase(copy);
+                        (void)class_heap.release(copy);
+                        throw;
+                    }
+                    return runtime::PackedLogic4::from_aval_bval(64U, copy, 0U);
                 }
-                notify_class_changes(before);
-                return runtime::PackedLogic4::from_aval_bval(64U, copy, 0U);
-            }
-            // `obj.srandom(seed)` (IEEE 1800-2017 18.13.3).
-            if (method == "@object-srandom") {
-                if (handle == 0U) {
-                    throw std::invalid_argument {
-                        "srandom of a null class handle"
-                    };
+                // `obj.srandom(seed)` (IEEE 1800-2017 18.13.3).
+                if (method == "@object-srandom") {
+                    if (handle == 0U) {
+                        throw std::invalid_argument {
+                            "srandom of a null class handle"
+                        };
+                    }
+                    const auto seed = actuals.empty()
+                        ? std::uint64_t { }
+                        : actuals.front().low_word().aval;
+                    class_heap.reseed_random(handle, seed);
+                    return runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
                 }
-                const auto seed = actuals.empty()
-                    ? std::uint64_t { }
-                    : actuals.front().low_word().aval;
-                class_heap.reseed_random(handle, seed);
-                return runtime::PackedLogic4::from_aval_bval(1U, 0U, 0U);
-            }
-            if (method.starts_with(string_property_prefix)) {
-                auto result = access_string_property(
-                    class_heap.property(handle,
-                        method.substr(method.find(':') + 1U)),
-                    method, string_actuals);
-                notify_class_changes(before);
+                if (method.starts_with(string_property_prefix)) {
+                    auto result = access_string_property(
+                        class_heap.property(handle,
+                            method.substr(method.find(':') + 1U)),
+                        method, string_actuals);
+                    return result;
+                }
+                auto result = method.starts_with("@container-")
+                    ? invoke_class_container(handle, method, actuals)
+                    : method.starts_with("@checked-cast:")
+                    ? invoke_checked_class_cast(handle, method)
+                    : method == "@builtin-randomize"
+                    ? invoke_source_randomize(
+                          handle, names, inline_constraints)
+                    : method.starts_with("@builtin-rand-mode:")
+                        || method.starts_with("@builtin-constraint-mode:")
+                    ? invoke_source_randomization_mode(
+                          handle, method, actuals)
+                    : invoke_source_function(
+                          handle, method, actuals, string_actuals,
+                          names, directions, virtual_dispatch, {},
+                          report_process);
                 return result;
-            }
-            auto result = method.starts_with("@container-")
-                ? invoke_class_container(handle, method, actuals)
-                : method.starts_with("@checked-cast:")
-                ? invoke_checked_class_cast(handle, method)
-                : method == "@builtin-randomize"
-                ? invoke_source_randomize(
-                      handle, names, inline_constraints)
-                : method.starts_with("@builtin-rand-mode:")
-                    || method.starts_with("@builtin-constraint-mode:")
-                ? invoke_source_randomization_mode(
-                      handle, method, actuals)
-                : invoke_source_function(
-                      handle, method, actuals, string_actuals,
-                      names, directions,
-                      virtual_dispatch);
-            notify_class_changes(before);
-            notify_static_changes(static_before);
-            return result;
+            });
         });
     interpreter->set_class_static_property_read_hook(
         [this](const std::string_view property) {
@@ -905,28 +1339,27 @@ Simulation::Impl::Impl(
                 class_static_store.property(owner, name), property, value);
             notify_static_changes(before);
         });
-    interpreter->set_class_static_method_call_hook(
-        [this, access_string_property](const std::string_view method,
+    interpreter->set_class_static_method_call_context_hook(
+        [this, access_string_property, invoke_source_with_notifications](
+            const runtime::simir::ProcessId report_process,
+            const std::string_view method,
             std::vector<runtime::PackedLogic4>& actuals,
             std::vector<std::string>& string_actuals,
             const std::span<const std::string> names,
             const std::span<const std::uint8_t> directions) {
-            const auto class_before = packed_class_snapshot();
-            const auto static_before = packed_static_snapshot();
-            if (method.starts_with(string_property_prefix)) {
-                const auto [owner, name] = static_property_parts(
-                    method.substr(method.find(':') + 1U));
-                auto result = access_string_property(
-                    class_static_store.property(owner, name),
-                    method, string_actuals);
-                notify_static_changes(static_before);
-                return result;
-            }
-            auto result = invoke_source_static_function(
-                method, actuals, string_actuals, names, directions);
-            notify_class_changes(class_before);
-            notify_static_changes(static_before);
-            return result;
+            return invoke_source_with_notifications([&] {
+                if (method.starts_with(string_property_prefix)) {
+                    const auto [owner, name] = static_property_parts(
+                        method.substr(method.find(':') + 1U));
+                    auto result = access_string_property(
+                        class_static_store.property(owner, name),
+                        method, string_actuals);
+                    return result;
+                }
+                return invoke_source_static_function(
+                    method, actuals, string_actuals, names, directions, {},
+                    report_process);
+            });
         });
     interpreter->set_coverage_sample_hook(
         [this](const std::string_view identity,
@@ -1167,10 +1600,47 @@ Simulation::Impl::Impl(
         class_static_store.register_specialization(std::move(descriptor));
     }
     class_static_store.initialize_all();
-    // A static class-handle property initialized by `new` constructs its
-    // object before any process runs (IEEE 1800-2017 8.9).
+    for (const auto& row : package_class_startup_initializers) {
+        interpreter->register_package_static_startup_callback(
+            row.startup_order, row.writable_signal_ids,
+            row.writable_string_object_ids, row.writable_container_object_ids,
+            [this, signal = row.signal, initializer = row.initializer] {
+                const auto value
+                    = class_hir_execution.evaluate_initializer(initializer);
+                if (!value || value->width() != 64U) {
+                    throw std::logic_error {
+                        "compiled package class-handle initializer could not be evaluated"
+                    };
+                }
+                interpreter->deposit_signal(signal, *value);
+            });
+    }
+    for (const auto& row : package_static_class_startup_initializers) {
+        interpreter->register_package_static_startup_callback(
+            row.startup_order, row.writable_signal_ids,
+            row.writable_string_object_ids, row.writable_container_object_ids,
+            [this, specialization = row.specialization_identity,
+                property = row.property_name,
+                canonical = row.canonical_identity,
+                initializer = row.initializer] {
+                const auto value
+                    = class_hir_execution.evaluate_initializer(initializer);
+                if (!value) {
+                    throw std::logic_error {
+                        "compiled package static class-property initializer could not be evaluated"
+                    };
+                }
+                assign_property_value(
+                    class_static_store.property(specialization, property),
+                    canonical, *value);
+            });
+    }
+    // Nonpackage static class properties retain their eager pre-process
+    // construction. Package-owned `new` initializers are registered above so
+    // their effects share declaration order with package variable initializers.
     for (const auto& specialization :
         built.compiled_systemverilog_class_specializations) {
+        const auto* owner_unit = package_unit_for_class(built, specialization);
         for (const auto& property : specialization.properties) {
             if (!property.static_storage || !property.initializer
                 || property.type.class_identity.empty()
@@ -1185,6 +1655,23 @@ Simulation::Impl::Impl(
                     != semantic::sv::ExpressionKind::class_allocation) {
                 continue;
             }
+            if (owner_unit != nullptr
+                && owner_unit->kind == semantic::sv::UnitKind::package) {
+                const auto row = std::ranges::find_if(
+                    package_static_class_startup_initializers,
+                    [&](const auto& candidate) {
+                        return candidate.specialization_identity
+                                == specialization.specialization_identity
+                            && candidate.property_declaration
+                                == property.declaration;
+                    });
+                if (row == package_static_class_startup_initializers.end()) {
+                    throw std::logic_error {
+                        "package static class allocation is missing startup callback metadata"
+                    };
+                }
+                continue;
+            }
             if (const auto value = class_hir_execution.evaluate_initializer(
                     *property.initializer)) {
                 assign_property_value(
@@ -1193,17 +1680,6 @@ Simulation::Impl::Impl(
                     property.canonical_identity, *value);
             }
         }
-    }
-    for (const auto& [signal, initializer] :
-        package_class_handle_initializers) {
-        const auto value
-            = class_hir_execution.evaluate_initializer(initializer);
-        if (!value || value->width() != 64U) {
-            throw std::logic_error {
-                "compiled package class-handle initializer could not be evaluated"
-            };
-        }
-        interpreter->deposit_signal(signal, *value);
     }
     interpreter->set_file_root(built.file_root);
     if (vpi_runtime_updates
@@ -1952,42 +2428,80 @@ Simulation::Impl::Impl(
     // The interpreter-level hook filters on app-owned state only, so it is a
     // trusted text sink; it prepares observation itself before any user hook
     // that may inspect simulation state.
+    const auto dispatch_report = [this](
+        const std::optional<runtime::simir::ProcessId> invoking_process,
+        const std::string_view message,
+        const runtime::simir::AssertionSeverity severity,
+        const runtime::simir::SourceLocation& source,
+        const SimulationTick time,
+        const std::uint64_t delta) {
+        const auto process = invoking_process.value_or(
+            std::numeric_limits<runtime::simir::ProcessId>::max());
+        if (invoking_process) {
+            const auto suppressed
+                = concurrent_assertion_actions_suppressed.find(process);
+            if (suppressed != concurrent_assertion_actions_suppressed.end()
+                && suppressed->second) {
+                return;
+            }
+        }
+        constexpr std::string_view numeric_metavalue_message
+            = "numeric_std.to_integer detected a metavalue and returned zero";
+        if (severity == runtime::simir::AssertionSeverity::warning
+            && message == numeric_metavalue_message
+            && !numeric_metavalue_reports.emplace(
+                                             process,
+                                             source.path,
+                                             source.line,
+                                             source.column)
+                .second) {
+            return;
+        }
+        if (report_hook) {
+            if (!trusted_text_report_hook) {
+                interpreter->prepare_output_callback_observation();
+            }
+            report_hook(
+                process, message, severity, source, time, delta);
+        }
+    };
     runtime::simir::InterpreterProgramAccess::set_trusted_text_report_hook(
         *interpreter,
-        [this](
+        [dispatch_report](
             const runtime::simir::ProcessId process,
             const std::string_view message,
             const runtime::simir::AssertionSeverity severity,
             const runtime::simir::SourceLocation& source,
             const SimulationTick time,
             const std::uint64_t delta) {
-            if (concurrent_assertion_actions_suppressed[process]) {
-                return;
-            }
-            constexpr std::string_view numeric_metavalue_message
-                = "numeric_std.to_integer detected a metavalue and returned zero";
-            if (severity == runtime::simir::AssertionSeverity::warning
-                && message == numeric_metavalue_message
-                && !numeric_metavalue_reports.emplace(
-                                                 process,
-                                                 source.path,
-                                                 source.line,
-                                                 source.column)
-                    .second) {
-                return;
-            }
-            if (report_hook) {
-                if (!trusted_text_report_hook) {
-                    interpreter->prepare_output_callback_observation();
+            dispatch_report(process, message, severity, source, time, delta);
+        });
+    class_hir_execution.set_report_service(
+        [this, dispatch_report](
+            const std::optional<runtime::simir::ProcessId> process,
+            const std::string_view message,
+            const runtime::simir::AssertionSeverity severity,
+            const semantic::SourceSpanId source_span) {
+            runtime::simir::SourceLocation source;
+            const auto& spans = built.semantics.source_spans();
+            if (source_span.value() < spans.size()) {
+                const auto& span = spans[source_span.value()];
+                auto path = span.logical_name;
+                const auto& files = built.semantics.source_files();
+                if (path.empty() && span.file.value() < files.size()) {
+                    path = files[span.file.value()].physical_name;
                 }
-                report_hook(
-                    process,
-                    message,
-                    severity,
-                    source,
-                    time,
-                    delta);
+                source = runtime::simir::SourceLocation {
+                    std::move(path), span.begin.line, span.begin.column
+                };
             }
+            dispatch_report(
+                process,
+                message,
+                severity,
+                source,
+                interpreter->scheduler().now(),
+                interpreter->scheduler().delta());
         });
     interpreter->scheduler().set_safe_point_hook(
         [this](

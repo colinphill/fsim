@@ -11,6 +11,36 @@ namespace {
         && detail::ascii_lower(token.text) == word;
 }
 
+[[nodiscard]] std::string context_identifier(const std::string_view spelling)
+{
+    if (spelling.size() >= 2U && spelling.front() == '\\'
+        && spelling.back() == '\\') {
+        return std::string { spelling };
+    }
+    return detail::vhdl_name(spelling);
+}
+
+[[nodiscard]] std::size_t selected_name_part_count(
+    const std::string_view spelling)
+{
+    std::size_t count { 1U };
+    bool in_extended_identifier { };
+    for (std::size_t index { }; index < spelling.size(); ++index) {
+        if (spelling[index] == '\\') {
+            if (in_extended_identifier && index + 1U < spelling.size()
+                && spelling[index + 1U] == '\\') {
+                ++index;
+                continue;
+            }
+            in_extended_identifier = !in_extended_identifier;
+        } else if (spelling[index] == '.'
+            && !in_extended_identifier) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 // A generic subprogram declares its generic clause after the designator
 // (`function f generic (...) parameter (...) return t`; IEEE 1076-2008
 // 4.2.1). The parser reads a generic clause that precedes the subprogram
@@ -267,7 +297,7 @@ std::optional<VhdlContextItem> VhdlParser::parse_context_item()
             if (!selected_name.empty() && selected_name.back() != '.') {
                 malformed = true;
             } else {
-                selected_name += vhdl_name(identifier.text);
+                selected_name += context_identifier(identifier.text);
             }
             continue;
         }
@@ -284,7 +314,7 @@ std::optional<VhdlContextItem> VhdlParser::parse_context_item()
     }
     std::vector<std::string> unique_names;
     for (const auto& name : item.selected_names) {
-        const auto part_count = static_cast<std::size_t>(std::ranges::count(name, '.')) + 1;
+        const auto part_count = selected_name_part_count(name);
         const bool valid_shape = context_kind == VhdlContextItemKind::LibraryClause ? part_count == 1
             : context_kind == VhdlContextItemKind::UseClause                        ? part_count >= 2
                                                                                     : part_count == 2;

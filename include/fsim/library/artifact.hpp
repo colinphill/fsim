@@ -13,10 +13,19 @@
 
 namespace fsim::library {
 
-inline constexpr std::uint32_t kFormatVersion = 6;
-inline constexpr std::uint32_t kPortableSchemaVersion = 15;
-inline constexpr std::uint32_t kCompiledHirSchemaVersion = 1;
+inline constexpr std::uint32_t kFormatVersion = 7;
+inline constexpr std::uint32_t kPortableSchemaVersion = 16;
+inline constexpr std::uint32_t kCompiledHirSchemaVersion = 3;
 inline constexpr std::string_view kMetadataFilename = "fsim-library.toml";
+
+// Portable metadata cannot reconstruct whether a normalized VHDL designator
+// came from a basic or extended identifier unless this form is retained.
+// `unknown` is used only when importing older metadata that omitted the form.
+enum class VhdlIdentifierForm : std::uint8_t {
+  unknown,
+  basic,
+  extended,
+};
 
 struct LanguageStandard {
   std::string language;
@@ -53,6 +62,8 @@ struct UnitIndexEntry {
   std::string checksum;
   std::string standard;
   std::string compatibility_profile { "none" };
+  VhdlIdentifierForm name_form { VhdlIdentifierForm::unknown };
+  VhdlIdentifierForm primary_name_form { VhdlIdentifierForm::unknown };
 
   friend bool operator==(const UnitIndexEntry&, const UnitIndexEntry&) = default;
 };

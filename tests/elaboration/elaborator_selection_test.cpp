@@ -490,6 +490,9 @@ endmodule
         fsim::frontend::parse_text(
             "vhdl_select_concat.vhd",
             R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity vhdl_select_concat is
   port (
     descending : in std_logic_vector(7 downto 4);
@@ -577,6 +580,9 @@ end architecture;
 entity vhdl_selected_assignment is
 end entity;
 
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of vhdl_selected_assignment is
   signal trigger : std_logic;
   signal descending : std_logic_vector(15 downto 8);
@@ -654,6 +660,9 @@ end architecture;
         fsim::frontend::parse_text(
             "reversed_vhdl_select.vhd",
             R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity reversed_vhdl_select is
   port (
     value : in std_logic_vector(2 to 5);
@@ -1114,6 +1123,9 @@ entity conditional_flow is
   );
 end entity;
 
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of conditional_flow is
   signal trigger : std_logic;
 begin
@@ -1188,6 +1200,9 @@ end architecture;
         fsim::frontend::parse_text(
             "sequential_loops.vhd",
             R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity sequential_loops is
   port (
     kick : in std_logic;
@@ -1259,6 +1274,9 @@ end architecture;
         fsim::frontend::parse_text(
             "invalid_sequential_loops.vhd",
             R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity invalid_sequential_loops is
   port (dynamic_bound : in std_logic);
 end entity;
@@ -1704,6 +1722,9 @@ endmodule
         fsim::frontend::parse_text(
             "vhdl_runtime_loop.vhd",
             R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity vhdl_runtime_loop is
   port (
     trigger : in std_logic;
@@ -1753,6 +1774,9 @@ end architecture;
         fsim::frontend::parse_text(
             "vhdl_loop_control.vhd",
             R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity vhdl_loop_control is
   port (
     trigger : in std_logic;
@@ -1854,6 +1878,9 @@ end architecture;
         fsim::frontend::parse_text(
             "orphan_vhdl_loop_target.vhd",
             R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity orphan_vhdl_loop_target is
   port (trigger : in std_logic);
 end entity;
@@ -1941,6 +1968,9 @@ endmodule
         fsim::frontend::parse_text(
             "unconditional_vhdl_loop.vhd",
             R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity unconditional_vhdl_loop is
   port (
     trigger : in std_logic;

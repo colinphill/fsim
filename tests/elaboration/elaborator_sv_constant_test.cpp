@@ -1366,7 +1366,7 @@ module scalar_profile_child(
 endmodule
 
 module scalar_profile_top;
-  wire real source;
+  real source;
   shortreal narrowed;
   wire time ticks;
   chandle foreign;

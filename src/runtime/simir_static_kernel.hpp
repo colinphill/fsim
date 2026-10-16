@@ -244,7 +244,8 @@ struct StaticKernelRuntimeSpec {
             || std::is_same_v<T, TimeDisplay>) {
             return !value.postponed;
         } else if constexpr (std::is_same_v<T, Fork>) {
-            return !value.branches.empty();
+            return !value.isolate_register_frame
+                && !value.branches.empty();
         } else if constexpr (std::is_same_v<T, ContainerWrite>) {
             // Process-private fixed arrays (see the planner).
             return !value.string_index;

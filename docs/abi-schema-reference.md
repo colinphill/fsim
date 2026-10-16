@@ -13,8 +13,19 @@ fsim v3 distinguishes public native ABIs from persisted development artifacts:
 
 - Public C and plug-in records are versioned, size-prefixed where specified,
   and append-only. A consumer validates the required prefix before using it.
-- Portable and native artifact readers are exact-current readers. They do not
-  migrate, downgrade, infer omitted legacy fields, or dual-write old formats.
+- Current writers emit only the current artifact formats. The `.fsimlib`
+  reader accepts format 6/schema 15 as a legacy index with unknown VHDL
+  identifier forms; the `.fsimobj` reader accepts format 8/schema 15 with the
+  same unknown-form rule. Neither reader guesses a missing form. A legacy
+  index can regain a form only from its checksummed compiled-HIR bundle after
+  one unique identity match; an ambiguous match fails closed. Workspace top
+  selection and dependency matching first narrow possible legacy VHDL records
+  by library, kind, and name, then hydrate from that evidence in memory. Missing
+  or ambiguous HIR prevents selection or dependency publication; it never
+  widens identifier matching.
+- Workspace library catalog schema 1 is readable with unknown forms and is
+  rebuilt as schema 2 on the next successful catalog write inside the same
+  SQLite transaction. Other unsupported or mixed schemas are rejected.
 - Portable payloads are independent of the producer host when all declared
   language, standard, compatibility, schema, and content identities match.
 - Native payloads and caches require the exact producer identity. They are
@@ -147,12 +158,28 @@ type information.
 | Family | Current identity | Top-level content |
 | --- | --- | --- |
 | `fsim.toml` (retained SDK reader) | project schema 3 | low-level project configuration; public CLI commands use the current-directory workspace and do not read this file |
-| `.fsimobj` | `FSIMOBJ\0`, format 8, portable schema 15, compiled-HIR bundle 1 | canonical metadata, v3 code-coverage identity, compiled semantic/SV/VHDL HIR, and optional source payloads |
+| `.fsimobj` | `FSIMOBJ\0`, format 9, portable schema 16, compiled-HIR bundle 3 | canonical metadata, v3 code-coverage identity, compiled semantic/SV/VHDL HIR, and optional source payloads |
 | `.fsimdesign` | `FSIMDES\0`, format 14, runtime ABI 1 | roots/bindings/provenance, v3 code-coverage identity, one checksummed hierarchy-path table shared by runtime and DesignIR, and checksummed runtime, semantic, DesignIR, HIR, coverage, UVM, SDF, trace, SystemC, and SCV state |
-| `.fsimlib` | canonical TOML format 6, portable schema 15, compiled-HIR bundle 1 | logical-library metadata, compiled semantic/SV/VHDL HIR, optional sources, and optional exact native accelerators |
+| `.fsimlib` | canonical TOML format 7, portable schema 16, compiled-HIR bundle 3 | logical-library metadata, compiled semantic/SV/VHDL HIR, optional sources, and optional exact native accelerators |
+| Workspace library catalog | SQLite schema 2 | artifact and dependency indexes with VHDL identifier-form columns; schema 1 reads as unknown and upgrades on a successful write |
 | `.fsimscobj` | `FSIMSCO\0`, format 2, runtime ABI 1, SystemC ABI 4 | one C++20 translation unit, dependency identity, and native object |
 | `.fsimscplugin` | format 2, runtime ABI 1, SystemC ABI 4 | ordered object identities, link settings, sorted factory schema, and native shared library |
-| Object cache envelope | `FSIM-OBJECT-CACHE-V1`; LLVM key schema `fsim-llvm-native-object-v169`; ordinary payload compiled-HIR bundle 1 | checksum-framed payload used by native-object and compiled-HIR caches; canonical schema-bearing lowercase SHA-256 key; 256 MiB read/write ceiling |
+| Object cache envelope | `FSIM-OBJECT-CACHE-V1`; LLVM key schema `fsim-llvm-native-object-v169`; ordinary payload compiled-HIR bundle 3 | checksum-framed payload used by native-object and compiled-HIR caches; canonical schema-bearing lowercase SHA-256 key; 256 MiB read/write ceiling |
+
+`UnitIndexEntry` is a public C++ metadata record. Appending the two
+`VhdlIdentifierForm` members changes its object layout. The public C++
+`VhdlBindingIndication`, `VhdlBlockConfiguration`, and `Instance` records also
+gain VHDL spelling and form fields in `design_core.hpp`. C++ SDK consumers must
+rebuild against these headers. The C API and plug-in record layouts do not
+change. `.fsimlib` format 7/schema 16 writes `name_form` and
+`primary_name_form` as `unknown`, `basic`, or `extended` for each unit index.
+`.fsimobj` format 9/schema 16 writes the corresponding two little-endian
+32-bit enum values per unit and includes them in compilation identity. Its
+format 8/schema 15 reader omits those fields and checks the legacy v8 digest
+domain. The compiled-HIR schema remains 3 because the HIR already carries the
+identifier form. SQLite schema 2 stores both forms as checked integer values;
+schema 1 reads them as unknown and is transactionally rebuilt when a catalog
+write succeeds.
 
 All numeric binary fields are canonical little-endian. Artifact payload paths
 are relative, normalized, contained, and unique within their artifact. Trees
@@ -166,11 +193,27 @@ Objects, designs, design-cache records, and LLVM native-object keys retain the
 schema-3 code-coverage configuration and model identity. Disabled coverage uses
 model `none`; enabled foundation coverage uses
 `fsim-code-coverage-foundation-v3`. Versioned v2 objects and designs are
-rejected directly; there is no compatibility reader or migration.
+rejected directly. The bounded previous-version readers above do not extend
+to older object or design identities.
 
-The compiled-HIR bundle is schema 1 and embeds semantic schema 4,
-SystemVerilog HIR schema 11, and VHDL HIR schema 7. The standalone design's
-other current state schemas are runtime 81, DesignIR 5, coverage 7, and UVM 3.
+The compiled-HIR bundle is schema 3 and embeds semantic schema 4,
+SystemVerilog HIR schema 14, and VHDL HIR schema 8. The standalone design's
+other current state schemas are runtime 85, DesignIR 5, coverage 7, and UVM 3.
+The standalone `FSIMSVCH` constraint-HIR state is schema 14. Runtime schema 85
+carries opaque design-local package owner IDs on package
+string/container objects and initializer process rows. Elaboration derives the
+same token as `UnitId.value() + 1` for both sides, reserving zero for unowned
+objects and ordinary processes; runtime
+admission requires exact owner equality plus canonical per-process object-ID
+closures. Ownership does not depend on library, package, or escaped-member
+display spelling. The closure currently covers direct string writes and
+synchronous whole-container writes emitted by the initializer call graph,
+including source forms lowered as temporary container read/modify/write
+followed by a guarded whole-object write. Deferred container writes and direct
+`WriteContainerObjectElement` operations remain outside this support boundary.
+This does not establish support for every source-level element, member,
+dynamic-part, or associative update. Startup callbacks retain their separate
+typed allowlists.
 Runtime and DesignIR references use the canonical `FSIMHPT1` hierarchy-path
 table, schema 1, stored at `state/hierarchy-paths.bin`; standalone DesignIR
 and runtime payloads carry their own inline schema-1 table when serialized
@@ -249,9 +292,14 @@ a destination/staging tree.
 
 ## Regeneration and rebuild workflows
 
-There is no supported in-place migration command and no legacy compatibility
-reader. Recover from an identity mismatch by rebuilding from the nearest
-available source or portable boundary with the current fsim build:
+There is no supported in-place migration command. The bounded `.fsimlib`,
+`.fsimobj`, and workspace-catalog compatibility paths described above apply
+only to their listed identities. Artifact writers publish current formats; a
+schema-1 catalog is refreshed as schema 2 only on its next successful
+transactional write. These bounded paths do not provide a command to migrate
+arbitrary artifacts in place. Recover other older or ambiguous metadata by
+rebuilding from the nearest available source or portable boundary with the
+current fsim build:
 
 ```sh
 # Replace this source's managed HDL units in work.

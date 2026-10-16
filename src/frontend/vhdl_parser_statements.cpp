@@ -417,28 +417,18 @@ std::optional<Statement> VhdlParser::parse_sequential_statement(
     } else if (statement.loop_initial.kind == ExpressionKind::Identifier
                && keyword("loop", 0, true)) {
       // A discrete type mark iterates its whole range (IEEE 1076-2008
-      // 10.10).
+      // 10.10). Preserve the inherited direction with the range profile.
       const auto mark = statement.loop_initial;
       statement.loop_initial = Expression{
-          ExpressionKind::Call, "'left", {mark}, mark.span};
-      statement.loop_descending = false;
-      statement.loop_limit = Expression{
-          ExpressionKind::Call, "'right", {mark}, mark.span};
+          ExpressionKind::Call, "'range", {mark}, mark.span};
     }
-    const bool type_mark_range =
-        statement.loop_initial.kind == ExpressionKind::Call
-        && statement.loop_initial.text == "'left"
-        && statement.loop_limit.kind == ExpressionKind::Call
-        && statement.loop_limit.text == "'right";
     const bool attribute_range =
         statement.loop_initial.kind
             == ExpressionKind::Call
         && (statement.loop_initial.text == "'range"
             || statement.loop_initial.text
                 == "'reverse_range");
-    if (type_mark_range) {
-      // Bounds were synthesized from the type mark above.
-    } else if (attribute_range) {
+    if (attribute_range) {
       statement.loop_limit = Expression{
           ExpressionKind::Invalid,
           {},

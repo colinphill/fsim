@@ -87,6 +87,15 @@ void Interpreter::set_class_allocate_hook(ClassAllocateHook hook)
 {
     impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->class_allocate_hook = std::move(hook);
+    impl_->class_allocate_context_hook = { };
+}
+
+void Interpreter::set_class_allocate_context_hook(
+    ClassAllocateContextHook hook)
+{
+    impl_->require_all_region_forwarding_role_journals_flushed();
+    impl_->class_allocate_context_hook = std::move(hook);
+    impl_->class_allocate_hook = { };
 }
 
 void Interpreter::set_coverage_sample_hook(CoverageSampleHook hook)
@@ -155,6 +164,15 @@ void Interpreter::set_class_method_call_hook(ClassMethodCallHook hook)
 {
     impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->class_method_call_hook = std::move(hook);
+    impl_->class_method_call_context_hook = { };
+}
+
+void Interpreter::set_class_method_call_context_hook(
+    ClassMethodCallContextHook hook)
+{
+    impl_->require_all_region_forwarding_role_journals_flushed();
+    impl_->class_method_call_context_hook = std::move(hook);
+    impl_->class_method_call_hook = { };
 }
 
 void Interpreter::set_class_static_property_read_hook(
@@ -176,6 +194,15 @@ void Interpreter::set_class_static_method_call_hook(
 {
     impl_->require_all_region_forwarding_role_journals_flushed();
     impl_->class_static_method_call_hook = std::move(hook);
+    impl_->class_static_method_call_context_hook = { };
+}
+
+void Interpreter::set_class_static_method_call_context_hook(
+    ClassStaticMethodCallContextHook hook)
+{
+    impl_->require_all_region_forwarding_role_journals_flushed();
+    impl_->class_static_method_call_context_hook = std::move(hook);
+    impl_->class_static_method_call_hook = { };
 }
 
 void Interpreter::set_dpi_function_call_hook(DpiFunctionCallHook hook)
@@ -186,7 +213,7 @@ void Interpreter::set_dpi_function_call_hook(DpiFunctionCallHook hook)
 
 SignalId Interpreter::add_signal(Signal signal)
 {
-    if (impl_->started) {
+    if (impl_->started || impl_->start_in_progress) {
         throw std::logic_error("cannot add a SimIR signal after start");
     }
     const auto id = static_cast<SignalId>(impl_->signals.size());
@@ -267,6 +294,9 @@ SignalId Interpreter::add_signal(Signal signal)
             ? std::make_unique<PackedLogic4>(signal.initial_value)
             : nullptr);
     impl_->signal_last_values.push_back(signal.initial_value);
+    impl_->signal_selection_histories.emplace_back();
+    impl_->signal_selection_transaction_region_pending.push_back(0U);
+    impl_->signal_selection_transaction_pending_listed.push_back(0U);
     impl_->signal_container_aggregate_aliases.emplace_back(std::nullopt);
     impl_->aggregate_signal_current_projection.emplace_back(std::nullopt);
     impl_->aggregate_signal_stored_projection.emplace_back(std::nullopt);
@@ -410,7 +440,7 @@ SignalId Interpreter::add_signal(Signal signal)
 
 StringObjectId Interpreter::add_string_object(StringObject object)
 {
-    if (impl_->started) {
+    if (impl_->started || impl_->start_in_progress) {
         throw std::logic_error {
             "cannot add a SimIR string object after start"
         };
@@ -431,7 +461,7 @@ StringObjectId Interpreter::add_string_object(StringObject object)
 ContainerObjectId Interpreter::add_container_object(
     ContainerObject object)
 {
-    if (impl_->started) {
+    if (impl_->started || impl_->start_in_progress) {
         throw std::logic_error {
             "cannot add a SimIR container object after start"
         };
@@ -1265,7 +1295,8 @@ const PackedLogic4& Interpreter::Impl::logical_signal_last_value(
 
 void Interpreter::reserve_process_capacity(const std::size_t capacity)
 {
-    if (impl_->started || !impl_->processes.empty()) {
+    if (impl_->started || impl_->start_in_progress
+        || !impl_->processes.empty()) {
         throw std::logic_error {
             "process capacity must be reserved before registration and start"
         };
@@ -1275,11 +1306,73 @@ void Interpreter::reserve_process_capacity(const std::size_t capacity)
 
 ProcessId Interpreter::add_process(Process process)
 {
+    if (impl_->start_in_progress) {
+        throw std::logic_error {
+            "cannot add a SimIR process during startup actions"
+        };
+    }
     if (impl_->validation_only) {
         throw std::logic_error(
             "cannot add an executable SimIR process to a validation-only interpreter");
     }
     return add_process_impl(process, &process);
+}
+
+void Interpreter::register_package_static_startup_callback(
+    const std::uint64_t startup_order,
+    const std::span<const SignalId> writable_signal_ids,
+    const std::span<const StringObjectId> writable_string_object_ids,
+    const std::span<const ContainerObjectId> writable_container_object_ids,
+    std::function<void()> callback)
+{
+    if (impl_->started || impl_->package_static_startup_registration_closed) {
+        throw std::logic_error {
+            "package static startup callbacks must be registered before start"
+        };
+    }
+    if (impl_->validation_only || !callback) {
+        throw std::invalid_argument {
+            "invalid package static startup callback"
+        };
+    }
+    if (std::ranges::any_of(
+            impl_->package_static_startup_callbacks,
+            [&](const auto& existing) {
+                return existing.startup_order == startup_order;
+            })) {
+        throw std::invalid_argument {
+            "package static startup callback order is not unique"
+        };
+    }
+    const auto copy_ordered_ids = []<typename Id>(
+        const std::span<const Id> source,
+        const std::size_t limit,
+        const char* message) {
+        std::vector<Id> result(source.begin(), source.end());
+        std::ranges::sort(result);
+        if (std::ranges::adjacent_find(result) != result.end()
+            || std::ranges::any_of(result, [&](const auto id) {
+                   return static_cast<std::size_t>(id) >= limit;
+               })) {
+            throw std::invalid_argument { message };
+        }
+        return result;
+    };
+    auto registration = Impl::PackageStaticStartupCallback {
+        .startup_order = startup_order,
+        .writable_signal_ids = copy_ordered_ids(
+            writable_signal_ids, impl_->signals.size(),
+            "package static startup callback has an invalid signal allowlist"),
+        .writable_string_object_ids = copy_ordered_ids(
+            writable_string_object_ids, impl_->string_objects.size(),
+            "package static startup callback has an invalid string allowlist"),
+        .writable_container_object_ids = copy_ordered_ids(
+            writable_container_object_ids, impl_->container_objects.size(),
+            "package static startup callback has an invalid container allowlist"),
+        .callback = std::move(callback),
+    };
+    impl_->package_static_startup_callbacks.push_back(
+        std::move(registration));
 }
 
 ProcessId Interpreter::validate_process(const Process& process)
@@ -1430,6 +1523,128 @@ ProcessId Interpreter::Impl::add_process_program_impl(
         throw std::invalid_argument(
             "a SimIR final process cannot initialize at time zero");
     }
+    const bool package_static_initializer
+        = process.startup_phase()
+            == ProcessStartupPhase::package_static_initializer;
+    if (process.startup_phase() != ProcessStartupPhase::ordinary
+        && !package_static_initializer) {
+        throw std::invalid_argument {
+            "invalid SimIR process startup phase"
+        };
+    }
+    if ((!package_static_initializer && process.startup_order() != 0U)
+        || (package_static_initializer
+            && (!process.initialize() || process.final()
+                || process.scheduling_domain()
+                    != ProcessSchedulingDomain::systemverilog
+                || !process.static_sensitivity().empty()
+                || process.operations().empty()
+                || process.driver_regions().empty()
+                || process.observed() || process.reactive()
+                || process.postponed() || process.program_owner()
+                || process.switch_source() || process.switch_target()
+                || process.switch_control()
+                || process.switch_bidirectional()))) {
+        throw std::invalid_argument {
+            "invalid SimIR package static initializer process metadata"
+        };
+    }
+    const auto& string_write_closure
+        = process.startup_writable_string_object_ids();
+    const auto& container_write_closure
+        = process.startup_writable_container_object_ids();
+    const auto package_owner_id = process.startup_package_owner_id();
+    if (!package_static_initializer) {
+        if (package_owner_id != 0U || !string_write_closure.empty()
+            || !container_write_closure.empty()) {
+            throw std::invalid_argument {
+                "ordinary SimIR process carries package startup object permissions"
+            };
+        }
+    } else {
+        const auto canonical_ids = [](const auto& values,
+                                      const std::size_t limit) {
+            std::optional<std::uint32_t> previous;
+            for (const auto id : values) {
+                if (id >= limit || (previous && id <= *previous)) {
+                    return false;
+                }
+                previous = id;
+            }
+            return true;
+        };
+        if (package_owner_id == 0U
+            || !canonical_ids(string_write_closure, string_objects.size())
+            || !canonical_ids(container_write_closure,
+                container_objects.size())) {
+            throw std::invalid_argument {
+                "SimIR package startup object permissions are not canonical"
+            };
+        }
+        std::vector<StringObjectId> operation_string_writes;
+        std::vector<ContainerObjectId> operation_container_writes;
+        for (const auto& operation : process.operations()) {
+            if (const auto* string_write
+                = operation_get_if<WriteStringObject>(&operation)) {
+                operation_string_writes.push_back(string_write->object);
+            } else if (const auto* container_write
+                = operation_get_if<WriteContainerObject>(&operation)) {
+                if (container_write->nonblocking
+                    || container_write->transaction_signal) {
+                    throw std::invalid_argument {
+                        "SimIR package startup cannot defer a whole-container write"
+                    };
+                }
+                operation_container_writes.push_back(container_write->object);
+            } else if (operation_holds<WriteContainerObjectElement>(
+                           operation)) {
+                throw std::invalid_argument {
+                    "SimIR package startup cannot use direct container-element writes"
+                };
+            }
+        }
+        const auto canonicalize_ids = [](auto& values) {
+            std::ranges::sort(values);
+            values.erase(std::unique(values.begin(), values.end()),
+                values.end());
+        };
+        canonicalize_ids(operation_string_writes);
+        canonicalize_ids(operation_container_writes);
+        if (operation_string_writes != string_write_closure
+            || operation_container_writes != container_write_closure) {
+            throw std::invalid_argument {
+                "SimIR package startup object permissions do not match process writes"
+            };
+        }
+        for (const auto object : string_write_closure) {
+            if (string_objects[object].package_owner_id != package_owner_id) {
+                throw std::invalid_argument {
+                    "SimIR package startup string permission has a foreign owner"
+                };
+            }
+        }
+        for (const auto object : container_write_closure) {
+            const auto& target = container_objects[object];
+            const bool has_signal_alias
+                = (object < container_signal_aliases.size()
+                    && container_signal_aliases[object])
+                || (object < container_aggregate_signal_aliases.size()
+                    && container_aggregate_signal_aliases[object])
+                || (object < container_element_signal_aliases.size()
+                    && std::ranges::any_of(
+                        container_element_signal_aliases[object],
+                        [](const auto& alias) {
+                            return alias.has_value();
+                        }));
+            if (target.package_owner_id != package_owner_id
+                || target.slice_alias
+                || has_signal_alias) {
+                throw std::invalid_argument {
+                    "SimIR package startup container permission is not direct owned storage"
+                };
+            }
+        }
+    }
     const auto scheduling_regions = static_cast<unsigned>(process.observed())
         + static_cast<unsigned>(process.reactive())
         + static_cast<unsigned>(process.postponed());
@@ -1461,6 +1676,13 @@ ProcessId Interpreter::Impl::add_process_program_impl(
             };
         }
     };
+    const auto register_signal_selection = [&](
+        const SignalId signal,
+        const std::optional<SignalSelection>& selection) {
+        if (selection) {
+            this->register_signal_selection(signal, *selection);
+        }
+    };
     for (std::size_t sensitivity_index = 0;
          sensitivity_index < process.static_sensitivity().size();
          ++sensitivity_index) {
@@ -1478,9 +1700,10 @@ ProcessId Interpreter::Impl::add_process_program_impl(
             throw std::invalid_argument("process sensitivity has an invalid range");
         }
         if (signal.edge != EdgeKind::any
-            && signal.edge != EdgeKind::transaction && signals[signal.signal].initial_value.width() != 1) {
+            && signal.edge != EdgeKind::transaction
+            && signal_width == 0U) {
             throw std::invalid_argument(
-                "edge sensitivity currently requires a scalar signal");
+                "edge sensitivity requires a non-empty signal");
         }
         if (signal.edge == EdgeKind::transaction) {
             observe_signal_transaction(signal.signal);
@@ -1493,13 +1716,95 @@ ProcessId Interpreter::Impl::add_process_program_impl(
          instruction < process.operations().size();
          ++instruction) {
         const auto& operation = process.operations()[instruction];
+        const auto valid_mailbox_kind = [](const MailboxElementKind kind) {
+            return kind == MailboxElementKind::packed
+                || kind == MailboxElementKind::string;
+        };
+        const auto valid_mailbox_shape = [&](
+            const MailboxElementKind kind,
+            const std::uint32_t width) {
+            return valid_mailbox_kind(kind)
+                && (kind == MailboxElementKind::packed
+                    ? width != 0U
+                    : width == 0U);
+        };
+        if (const auto* create = operation_get_if<MailboxCreate>(&operation)) {
+            if (!valid_mailbox_shape(
+                    create->element_kind, create->element_width)
+                || create->destination >= process.register_count()
+                || create->capacity >= process.register_count()) {
+                throw std::invalid_argument {
+                    "SimIR MailboxCreate has invalid typed registers or shape"
+                };
+            }
+        } else if (const auto* put = operation_get_if<MailboxPut>(&operation)) {
+            if (!valid_mailbox_shape(put->element_kind, put->element_width)
+                || put->receiver >= process.register_count()
+                || (put->result
+                    && *put->result >= process.register_count())
+                || (put->element_kind == MailboxElementKind::packed
+                    ? put->source >= process.register_count()
+                    : put->string_source >= process.string_register_count())) {
+                throw std::invalid_argument {
+                    "SimIR MailboxPut has invalid typed registers or shape"
+                };
+            }
+        } else if (const auto* get = operation_get_if<MailboxGet>(&operation)) {
+            if (!valid_mailbox_shape(get->element_kind, get->element_width)
+                || get->receiver >= process.register_count()
+                || (get->result
+                    && *get->result >= process.register_count())
+                || (get->element_kind == MailboxElementKind::packed
+                    ? get->destination >= process.register_count()
+                    : get->string_destination
+                        >= process.string_register_count())) {
+                throw std::invalid_argument {
+                    "SimIR MailboxGet has invalid typed registers or shape"
+                };
+            }
+        } else if (const auto* num = operation_get_if<MailboxNum>(&operation)) {
+            if (num->receiver >= process.register_count()
+                || num->destination >= process.register_count()) {
+                throw std::invalid_argument {
+                    "SimIR MailboxNum has an invalid register ID"
+                };
+            }
+        }
         if (const auto* active = operation_get_if<SignalActive>(&operation)) {
-            observe_signal_transaction(
-                process.operations().signal(active->signal));
+            const auto signal = process.operations().signal(active->signal);
+            observe_signal_transaction(signal);
+            register_signal_selection(signal, active->selection);
         } else if (const auto* last_active
                    = operation_get_if<SignalLastActive>(&operation)) {
-            observe_signal_transaction(
-                process.operations().signal(last_active->signal));
+            const auto signal
+                = process.operations().signal(last_active->signal);
+            observe_signal_transaction(signal);
+            register_signal_selection(signal, last_active->selection);
+        } else if (const auto* event
+                   = operation_get_if<SignalEvent>(&operation)) {
+            register_signal_selection(
+                process.operations().signal(event->signal),
+                event->selection);
+        } else if (const auto* last_value
+                   = operation_get_if<SignalLastValue>(&operation)) {
+            register_signal_selection(
+                process.operations().signal(last_value->signal),
+                last_value->selection);
+        } else if (const auto* last_event
+                   = operation_get_if<SignalLastEvent>(&operation)) {
+            register_signal_selection(
+                process.operations().signal(last_event->signal),
+                last_event->selection);
+        } else if (const auto* driving
+                   = operation_get_if<SignalDriving>(&operation)) {
+            register_signal_selection(
+                process.operations().signal(driving->signal),
+                driving->selection);
+        } else if (const auto* driving_value
+                   = operation_get_if<SignalDrivingValue>(&operation)) {
+            register_signal_selection(
+                process.operations().signal(driving_value->signal),
+                driving_value->selection);
         }
         const auto* wait = operation_get_if<WaitOn>(&operation);
         if (wait == nullptr) {
@@ -1594,7 +1899,7 @@ ProcessId Interpreter::Impl::add_process_program_impl(
             || operation_holds<WriteInertialSlice>(operation);
     }
     for (const auto& [signal, regions] : outputs) {
-        if (!switch_connection) {
+        if (!switch_connection && !package_static_initializer) {
             auto& writer_count = signal_writer_counts[signal];
             if (writer_count != std::numeric_limits<std::uint32_t>::max()) {
                 ++writer_count;
@@ -1698,7 +2003,8 @@ ProcessId Interpreter::Impl::add_process_program_impl(
     }
     const auto program = program_owner.program();
     std::optional<Impl::ConstantDriverStartupEntry> compact_shape;
-    if (executable) {
+    if (executable
+        && program.startup_phase() == ProcessStartupPhase::ordinary) {
         compact_shape
             = recognize_constant_driver_startup(id, program);
     }
@@ -2374,7 +2680,7 @@ void Interpreter::set_process_executor(
     const ProcessId process,
     std::unique_ptr<ProcessExecutor> executor)
 {
-    if (impl_->started) {
+    if (impl_->started || impl_->start_in_progress) {
         throw std::logic_error(
             "cannot install a SimIR process executor after start");
     }
@@ -2771,10 +3077,35 @@ void Interpreter::start()
     if (impl_->started) {
         return;
     }
+    if (impl_->start_in_progress) {
+        throw std::logic_error {
+            "SimIR interpreter startup cannot be reentered"
+        };
+    }
+    if (impl_->package_static_startup_actions_entered) {
+        throw std::logic_error {
+            "SimIR startup cannot be retried after package startup actions ran"
+        };
+    }
+    struct StartAttemptGuard {
+        bool& active;
+        ~StartAttemptGuard() { active = false; }
+    };
+    impl_->start_in_progress = true;
+    const StartAttemptGuard start_attempt_guard { impl_->start_in_progress };
+    impl_->package_static_startup_registration_closed = true;
     // Aggregate registration validates complete proxy families; sparse
     // element-only alias maps remain supported. Promote retained aggregate
     // authority before any process can observe the simulation state.
     impl_->promote_all_container_alias_authorities();
+    const auto selected_signal_count = static_cast<std::size_t>(
+        std::ranges::count_if(
+            impl_->signal_selection_histories,
+            [](const auto& histories) { return !histories.empty(); }));
+    if (selected_signal_count != 0U) {
+        impl_->signal_selection_pending_transaction_signals.reserve(
+            selected_signal_count);
+    }
     impl_->rebuild_static_fanout();
     impl_->build_native_signal_dependency_masks();
     impl_->build_native_signal_publication_shape_certificate();
@@ -2783,6 +3114,140 @@ void Interpreter::start()
         impl_->direct_signal_read_owner_token
             = allocate_direct_signal_read_owner_token();
     }
+    // Complete sampled-history preallocation before start becomes committed,
+    // so an allocation failure can be retried without a partially started run.
+    impl_->prepare_systemverilog_update_pool();
+    // The cold process sidecars now own every template reference. Drop the
+    // startup interning buckets before entering the execution lifecycle.
+    impl_->process_program_templates.clear();
+    // Cohort and scheduler setup may retain references to individual state
+    // fields. Publish initial records through their address-stable owner
+    // before creating any such bindings.
+    impl_->processes.freeze_initial_storage();
+    struct PackageStartupAction {
+        std::uint64_t order { };
+        ProcessId process { std::numeric_limits<ProcessId>::max() };
+        std::size_t callback { std::numeric_limits<std::size_t>::max() };
+    };
+    std::vector<PackageStartupAction> package_startup_actions;
+    package_startup_actions.reserve(
+        impl_->processes.size()
+        + impl_->package_static_startup_callbacks.size());
+    for (ProcessId id = 0U; id < impl_->processes.size(); ++id) {
+        const auto program = impl_->processes.program_view(id);
+        if (program.startup_phase()
+            == ProcessStartupPhase::package_static_initializer) {
+            if (impl_->processes.is_compact_constant(id)) {
+                throw std::logic_error {
+                    "package static initializer was compacted as a scheduled write"
+                };
+            }
+            package_startup_actions.push_back({
+                program.startup_order(), id,
+                std::numeric_limits<std::size_t>::max() });
+        }
+    }
+    for (std::size_t index = 0U;
+         index < impl_->package_static_startup_callbacks.size();
+         ++index) {
+        package_startup_actions.push_back({
+            impl_->package_static_startup_callbacks[index].startup_order,
+            std::numeric_limits<ProcessId>::max(), index });
+    }
+    std::ranges::sort(package_startup_actions, [](const auto& left,
+                                                  const auto& right) {
+        return left.order < right.order;
+    });
+    for (std::size_t index = 1U;
+         index < package_startup_actions.size();
+         ++index) {
+        if (package_startup_actions[index - 1U].order
+            == package_startup_actions[index].order) {
+            throw std::logic_error {
+                "package static startup action order is not unique"
+            };
+        }
+    }
+    if (!package_startup_actions.empty()) {
+        impl_->package_static_startup_signal_processes.assign(
+            impl_->signals.size(), std::numeric_limits<ProcessId>::max());
+    }
+    if (!package_startup_actions.empty() && impl_->scheduler.has_pending()) {
+        throw std::logic_error {
+            "package static initialization started with pending scheduler work"
+        };
+    }
+    for (const auto& action : package_startup_actions) {
+        if (impl_->scheduler.has_pending() || impl_->stopped_by_design) {
+            throw std::logic_error {
+                "package static initialization encountered deferred startup work"
+            };
+        }
+        impl_->package_static_startup_actions_entered = true;
+        impl_->package_static_initialization_active = true;
+        if (action.callback
+            != std::numeric_limits<std::size_t>::max()) {
+            impl_->package_static_initialization_callback_active = true;
+            impl_->package_static_initialization_callback_index
+                = action.callback;
+            try {
+                impl_->package_static_startup_callbacks.at(
+                    action.callback).callback();
+            } catch (...) {
+                impl_->package_static_initialization_callback_active = false;
+                impl_->package_static_initialization_callback_index
+                    = std::numeric_limits<std::size_t>::max();
+                impl_->package_static_initialization_active = false;
+                throw;
+            }
+            impl_->package_static_initialization_callback_active = false;
+            impl_->package_static_initialization_callback_index
+                = std::numeric_limits<std::size_t>::max();
+        } else {
+            const auto id = action.process;
+            const auto program = impl_->processes.program_view(id);
+            for (const auto& region : program.driver_regions()) {
+                if (region.signal >= impl_->signals.size()) {
+                    impl_->package_static_initialization_active = false;
+                    throw std::logic_error {
+                        "package static initializer has an invalid write signal"
+                    };
+                }
+                impl_->package_static_startup_signal_processes[
+                    region.signal] = id;
+            }
+            impl_->package_static_initialization_process = id;
+            try {
+                impl_->execute(id);
+            } catch (...) {
+                impl_->package_static_initialization_active = false;
+                impl_->package_static_initialization_process
+                    = std::numeric_limits<ProcessId>::max();
+                throw;
+            }
+            impl_->package_static_initialization_process
+                = std::numeric_limits<ProcessId>::max();
+        }
+        impl_->package_static_initialization_active = false;
+        if (action.process != std::numeric_limits<ProcessId>::max()) {
+            const auto& process = impl_->get_process(action.process);
+            if (!process.halted || process.suspended
+                || process.status != ProcessStatus::finished) {
+                throw std::logic_error {
+                    "package static initializer did not finish synchronously"
+                };
+            }
+        }
+        if (impl_->scheduler.has_pending() || impl_->stopped_by_design) {
+            throw std::logic_error {
+                "package static startup action created deferred work"
+            };
+        }
+    }
+    impl_->package_static_startup_callbacks.clear();
+    // The startup assignments above establish the simulation baseline. Build
+    // active runtime inventories and sampled defaults only after that baseline
+    // is final, before ordinary time-zero processes are prearmed or queued.
     impl_->build_region_graph();
     if (impl_->requires_sampled_values) {
         if (impl_->sampled_value_dependency_mask.size()
@@ -2809,16 +3274,6 @@ void Interpreter::start()
         }
         impl_->build_sampled_history_clock_index();
     }
-    // Complete sampled-history preallocation before start becomes committed,
-    // so an allocation failure can be retried without a partially started run.
-    impl_->prepare_systemverilog_update_pool();
-    // The cold process sidecars now own every template reference. Drop the
-    // startup interning buckets before entering the execution lifecycle.
-    impl_->process_program_templates.clear();
-    // Cohort and scheduler setup may retain references to individual state
-    // fields. Publish initial records through their address-stable owner
-    // before creating any such bindings.
-    impl_->processes.freeze_initial_storage();
     impl_->started = true;
     impl_->initialize_vhdl_resolutions();
     // Switch networks are solved when a member's drivers change; implicit
@@ -2889,6 +3344,10 @@ void Interpreter::start()
             continue;
         }
         const auto program = impl_->processes.program_view(id);
+        if (program.startup_phase()
+            != ProcessStartupPhase::ordinary) {
+            continue;
+        }
         if (!program.initialize() || program.final()
             || program.static_sensitivity().empty()
             || program.operations().empty()
@@ -2912,7 +3371,8 @@ void Interpreter::start()
             return false;
         }
         const auto program = impl_->processes.program_view(id);
-        return program.scheduling_domain()
+        return program.startup_phase() == ProcessStartupPhase::ordinary
+            && program.scheduling_domain()
                 == ProcessSchedulingDomain::systemverilog
             && program.static_sensitivity().empty()
             && program.name().find(".$declaration_initializer_")
@@ -2938,6 +3398,10 @@ void Interpreter::start()
                 continue;
             }
             const auto program = impl_->processes.program_view(id);
+            if (program.startup_phase()
+                != ProcessStartupPhase::ordinary) {
+                continue;
+            }
             if (!program.static_sensitivity().empty()
                 || program.name().find(".port_actual_")
                     != std::string::npos) {
@@ -2977,6 +3441,10 @@ void Interpreter::start()
                 continue;
             }
             const auto program = impl_->processes.program_view(id);
+            if (program.startup_phase()
+                != ProcessStartupPhase::ordinary) {
+                continue;
+            }
             if (!program.initialize() || program.final()
                 || prearmed_static_waits[id] || starts_late(id) != late) {
                 continue;
@@ -2989,6 +3457,11 @@ void Interpreter::start()
         }
     }
     impl_->fused_static_bindings_open = true;
+}
+
+bool Interpreter::package_static_initialization_active() const noexcept
+{
+    return impl_->package_static_initialization_active;
 }
 
 RunResult Interpreter::run(std::optional<SimulationTick> until)
@@ -3100,6 +3573,11 @@ void Interpreter::deposit_scalar_signal(
 
 void Interpreter::force_signal(SignalId signal, PackedLogic4 value)
 {
+    if (impl_->package_static_initialization_active) {
+        throw std::logic_error {
+            "package static startup cannot force a signal"
+        };
+    }
     impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     const auto width = impl_->get_signal(signal).initial_value.width();
     if (width != value.width()) {
@@ -3126,6 +3604,11 @@ void Interpreter::force_scalar_signal(
 
 void Interpreter::release_signal(SignalId signal)
 {
+    if (impl_->package_static_initialization_active) {
+        throw std::logic_error {
+            "package static startup cannot release a signal force"
+        };
+    }
     impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     const auto width = impl_->get_signal(signal).initial_value.width();
     impl_->release_slice(signal, 0, width);
@@ -3136,6 +3619,11 @@ void Interpreter::force_signal_slice(
     PackedLogic4 value,
     const std::size_t offset)
 {
+    if (impl_->package_static_initialization_active) {
+        throw std::logic_error {
+            "package static startup cannot force a signal slice"
+        };
+    }
     impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     impl_->force_slice(signal, std::move(value), offset);
 }
@@ -3145,6 +3633,11 @@ void Interpreter::release_signal_slice(
     const std::size_t offset,
     const std::size_t width)
 {
+    if (impl_->package_static_initialization_active) {
+        throw std::logic_error {
+            "package static startup cannot release a signal slice force"
+        };
+    }
     impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     impl_->release_slice(signal, offset, width);
 }
@@ -3167,6 +3660,11 @@ bool Interpreter::signal_is_forced(const SignalId signal) const
 void Interpreter::schedule_signal_at(SignalId signal, PackedLogic4 value,
     SimulationTick time, StableOrder order)
 {
+    if (impl_->package_static_initialization_active) {
+        throw std::logic_error {
+            "package static startup cannot schedule a signal write"
+        };
+    }
     impl_->require_region_forwarding_role_journal_flushed_for_signal(signal);
     impl_->require_writable_aggregate_signal(signal);
     // Validate eagerly so a malformed drive does not fail much later.
@@ -3203,6 +3701,11 @@ void Interpreter::schedule_signal_after(SignalId signal, PackedLogic4 value,
     SimulationTick delay,
     StableOrder order)
 {
+    if (impl_->package_static_initialization_active) {
+        throw std::logic_error {
+            "package static startup cannot schedule a signal write"
+        };
+    }
     if (delay > std::numeric_limits<SimulationTick>::max() - impl_->scheduler.now()) {
         throw std::overflow_error("simulation time overflow scheduling signal");
     }
@@ -3351,10 +3854,71 @@ const std::string& Interpreter::string_object_value(
     return impl_->get_string_object(object).initial_value;
 }
 
+void Interpreter::Impl::initialize_package_static_string_object(
+    const StringObjectId object_id,
+    const std::string_view value,
+    const std::optional<ProcessId> process)
+{
+    if (!package_static_initialization_active
+        || started || region_graph || scheduler.has_pending()
+        || object_id >= string_objects.size()) {
+        throw std::logic_error {
+            "package static string write is outside startup actions"
+        };
+    }
+    if (process) {
+        if (package_static_initialization_callback_active
+            || *process != package_static_initialization_process) {
+            throw std::logic_error {
+                "package static string process identity is not active"
+            };
+        }
+        const auto program = processes.program_view(*process);
+        if (program.startup_phase()
+                != ProcessStartupPhase::package_static_initializer
+            || program.startup_package_owner_id() == 0U
+            || program.startup_package_owner_id()
+                != string_objects[object_id].package_owner_id
+            || !std::ranges::binary_search(
+                program.startup_writable_string_object_ids(), object_id)) {
+            throw std::logic_error {
+                "package static process wrote outside its direct string closure"
+            };
+        }
+    } else {
+        if (!package_static_initialization_callback_active
+            || package_static_initialization_callback_index
+                >= package_static_startup_callbacks.size()) {
+            throw std::logic_error {
+                "package static string write is outside its startup callback"
+            };
+        }
+        const auto& callback = package_static_startup_callbacks[
+            package_static_initialization_callback_index];
+        if (!std::ranges::binary_search(
+                callback.writable_string_object_ids, object_id)) {
+            throw std::logic_error {
+                "package static callback wrote outside its string closure"
+            };
+        }
+    }
+    if (value.size() > maximum_string_bytes) {
+        throw std::length_error {
+            "SimIR string object exceeds byte limit"
+        };
+    }
+    (void)systemverilog_string_length(value);
+    string_objects[object_id].initial_value = value;
+}
+
 void Interpreter::deposit_string_object(
     const StringObjectId object,
     const std::string_view value)
 {
+    if (impl_->package_static_initialization_active) {
+        impl_->initialize_package_static_string_object(object, value);
+        return;
+    }
     if (value.size() > maximum_string_bytes) {
         throw std::length_error {
             "SimIR string object exceeds byte limit"
@@ -3382,6 +3946,10 @@ void Interpreter::deposit_container_object(
     const ContainerObjectId object,
     ContainerValue value)
 {
+    if (impl_->package_static_initialization_active) {
+        impl_->initialize_package_static_container_object(object, value);
+        return;
+    }
     impl_->write_container_object_value(object, value);
 }
 
@@ -3390,6 +3958,22 @@ void Interpreter::deposit_container_object_element(
     const std::size_t ordinal,
     PackedLogic4 value)
 {
+    if (impl_->package_static_initialization_active) {
+        const auto& target = impl_->get_container_object(object);
+        if (ordinal >= target.initial_value.elements.size()
+            || value.width() != target.initial_value.type.element_width
+            || value.is_logic9()
+            || (target.initial_value.type.two_state && has_unknown(value))) {
+            throw std::invalid_argument {
+                "SimIR container element deposit type or ordinal mismatch"
+            };
+        }
+        auto replacement = target.initial_value;
+        replacement.elements[ordinal] = std::move(value);
+        impl_->initialize_package_static_container_object(
+            object, replacement);
+        return;
+    }
     if (impl_->region_forwarding_role_journal_nonempty_components != 0U) {
         auto selected = object;
         for (std::size_t depth = 0U;

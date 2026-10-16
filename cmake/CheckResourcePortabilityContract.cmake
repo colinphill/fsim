@@ -4162,8 +4162,8 @@ foreach(FSIM_SYSTEMVERILOG_2023_POLICY IN ITEMS
     "random distribution exceeded the bounded draw limit"
     "operation_holds<RandomDistribution>(operation)"
     "source-path"
-    "kRuntimeStateSchema = 64"
-    "kRuntimeStateSchema == 64"
+    "kRuntimeStateSchema = 85"
+    "kRuntimeStateSchema == 85"
     "$dist_erlang(dist_seed, 1000001, 1)"
     "SystemVerilogAnnexConstruct"
     "FSIM-SV-DEPR-001"
@@ -4239,7 +4239,7 @@ foreach(FSIM_SYSTEMVERILOG_2023_POLICY IN ITEMS
     "static_reference"
     "FSIM-ELAB-SVFUNC-013"
     "FSIM-ELAB-SVTASK-015"
-    "kCompiledHirBundleSchema = 1"
+    "kCompiledHirBundleSchema = 3"
     "visit_clocking_delays"
     "FSIM-ELAB-CLOCK-008"
     "FSIM-ELAB-CLOCK-009"
@@ -5288,10 +5288,10 @@ foreach(FSIM_VHDL_2019_FRONTEND_CORPUS_POLICY IN ITEMS
 endforeach()
 
 foreach(FSIM_VHDL_2019_ARTIFACT_POLICY IN ITEMS
-    "kPortableSchemaVersion = 15"
-    "kCompiledHirBundleSchema = 1"
-    "kRuntimeStateSchema = 64"
-    "kVhdlHirStateSchema = 6"
+    "kPortableSchemaVersion = 16"
+    "kCompiledHirBundleSchema = 3"
+    "kRuntimeStateSchema = 85"
+    "kVhdlHirStateSchema = 8"
     "vhdl_2019_type.base.predefined_attribute"
     "vhdl_2019_declaration.interface_view.emplace()"
     "DeclarationForm::mode_view"
@@ -5299,7 +5299,7 @@ foreach(FSIM_VHDL_2019_ARTIFACT_POLICY IN ITEMS
     "vhdl-2019-round-trip"
     "vhdl-2019-hir.bin"
     "vhdl_mode_view_bindings"
-    "compiled-HIR schema 1")
+    "compiled-HIR schema 3")
   string(FIND
     "${FSIM_VHDL_2019_ARTIFACT_LIBRARY_HEADER_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_PORTABLE_HEADER_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_DESIGN_HEADER_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_PORTABLE_CODEC_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_DESIGN_CODEC_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_PORTABLE_TEST_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_DESIGN_TEST_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_PORTABLE_CONTRACT_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_NESTED_CONTRACT_CONTENTS}${FSIM_VHDL_2019_ARTIFACT_STALE_CONTRACT_CONTENTS}"
     "${FSIM_VHDL_2019_ARTIFACT_POLICY}" FSIM_INDEX)

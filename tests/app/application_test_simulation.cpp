@@ -2244,12 +2244,145 @@ void check_application_region_forwarding_provider_wide_values()
     }
 }
 
+void check_fork_container_register_snapshots()
+{
+    using namespace fsim::runtime;
+    using namespace fsim::runtime::simir;
+    using fsim::compiler::JitOptimizationLevel;
+    using fsim::compiler::JitProcessHandle;
+    using fsim::compiler::LlvmJit;
+    using fsim::compiler::LlvmJitOptions;
+
+    const std::array<std::uint32_t, 4U> signal_widths {
+        32U, 32U, 32U, 32U
+    };
+    const std::array<ValueKind, 4U> signal_kinds {
+        ValueKind::logic4, ValueKind::logic4,
+        ValueKind::logic4, ValueKind::logic4
+    };
+    const std::array<ResolutionKind, 4U> signal_resolutions {
+        ResolutionKind::none, ResolutionKind::none,
+        ResolutionKind::none, ResolutionKind::none
+    };
+
+    const auto check_outputs = [](const Interpreter& interpreter,
+                                   const std::array<SignalId, 4U>& outputs,
+                                   const std::array<std::uint64_t, 4U>& expected) {
+        for (std::size_t index = 0U; index < outputs.size(); ++index) {
+            assert(interpreter.signal_value(outputs[index])
+                == PackedLogic4::from_aval_bval(32U, expected[index], 0U));
+        }
+    };
+
+    const auto run_case = [&](const bool isolated, const bool compiled) {
+        Interpreter interpreter;
+        const std::array<SignalId, 4U> outputs {
+            interpreter.add_signal({ "fork_container.parent_second", PackedLogic4(32U, Logic4::zero) }),
+            interpreter.add_signal({ "fork_container.parent_first", PackedLogic4(32U, Logic4::zero) }),
+            interpreter.add_signal({ "fork_container.child_second", PackedLogic4(32U, Logic4::zero) }),
+            interpreter.add_signal({ "fork_container.child_first", PackedLogic4(32U, Logic4::zero) }),
+        };
+
+        ContainerType container_type;
+        container_type.element_width = 32U;
+        container_type.fixed = false;
+
+        Process process;
+        process.id = 0U;
+        process.name = isolated
+            ? "tagged_fork_container_snapshot"
+            : "ordinary_fork_container_shared";
+        process.register_count = 6U;
+        process.register_value_kinds.assign(
+            process.register_count, ValueKind::logic4);
+        process.container_register_count = 1U;
+        process.container_register_types = { container_type };
+        if (isolated) {
+            process.operations = {
+                LoadConstant { 1U, PackedLogic4::from_aval_bval(32U, 1U, 0U) },
+                AppendContainer { 0U, false, std::nullopt, 1U, std::nullopt },
+                Fork { { 12U }, ForkJoinKind::none, true },
+                LoadConstant { 1U, PackedLogic4::from_aval_bval(32U, 9U, 0U) },
+                AppendContainer { 0U, false, std::nullopt, 1U, std::nullopt },
+                LoadConstant { 0U, PackedLogic4(32U, Logic4::zero) },
+                ContainerRead { 2U, 0U, 0U, true, false, false },
+                LoadConstant { 0U, PackedLogic4::from_aval_bval(32U, 1U, 0U) },
+                ContainerRead { 3U, 0U, 0U, true, false, false },
+                WriteBlocking { outputs[0U], 3U },
+                WriteBlocking { outputs[1U], 2U },
+                Halt { },
+                WaitFor { 1U },
+                LoadConstant { 1U, PackedLogic4::from_aval_bval(32U, 2U, 0U) },
+                AppendContainer { 0U, false, std::nullopt, 1U, std::nullopt },
+                LoadConstant { 0U, PackedLogic4::from_aval_bval(32U, 1U, 0U) },
+                ContainerRead { 4U, 0U, 0U, true, false, false },
+                LoadConstant { 0U, PackedLogic4(32U, Logic4::zero) },
+                ContainerRead { 5U, 0U, 0U, true, false, false },
+                WriteBlocking { outputs[2U], 4U },
+                WriteBlocking { outputs[3U], 5U },
+                ForkEnd { },
+            };
+        } else {
+            process.operations = {
+                LoadConstant { 1U, PackedLogic4::from_aval_bval(32U, 1U, 0U) },
+                AppendContainer { 0U, false, std::nullopt, 1U, std::nullopt },
+                Fork { { 7U }, ForkJoinKind::all, false },
+                LoadConstant { 0U, PackedLogic4::from_aval_bval(32U, 1U, 0U) },
+                ContainerRead { 2U, 0U, 0U, true, false, false },
+                WriteBlocking { outputs[0U], 2U },
+                Halt { },
+                LoadConstant { 1U, PackedLogic4::from_aval_bval(32U, 7U, 0U) },
+                AppendContainer { 0U, false, std::nullopt, 1U, std::nullopt },
+                ForkEnd { },
+            };
+        }
+
+        std::unique_ptr<LlvmJit> jit;
+        std::optional<JitProcessHandle> handle;
+        if (compiled) {
+            LlvmJitOptions options;
+            options.optimization = JitOptimizationLevel::o2;
+            options.debug_instrumentation = false;
+            jit = std::make_unique<LlvmJit>(std::move(options));
+            assert(jit->supports_process(
+                process, signal_widths, signal_kinds));
+            jit->add_process(
+                process.name, process, signal_widths, signal_kinds);
+            handle = jit->lookup(process.name);
+            assert(handle);
+        }
+
+        const auto process_id = interpreter.add_process(std::move(process));
+        if (compiled) {
+            interpreter.set_process_executor(
+                process_id,
+                std::make_unique<fsim::app::application_detail::LlvmProcessExecutor>(
+                    *jit, *handle, interpreter.process_program(process_id),
+                    signal_widths, signal_kinds, signal_resolutions));
+        }
+        const auto result = interpreter.run();
+        assert(result.status == RunStatus::completed);
+        if (isolated) {
+            check_outputs(interpreter, outputs, { 9U, 1U, 2U, 1U });
+        } else {
+            assert(interpreter.signal_value(outputs[0U])
+                == PackedLogic4::from_aval_bval(32U, 7U, 0U));
+        }
+    };
+
+    for (const bool compiled : { false, true }) {
+        run_case(true, compiled);
+        run_case(false, compiled);
+    }
+}
+
 } // namespace
 #endif
 
 void ApplicationTestFixture::test_simulation_semantics()
 {
 #if defined(FSIM_HAS_LLVM)
+    check_fork_container_register_snapshots();
     check_application_region_constant_variant_selection();
     check_application_logic9_constant_variant_selection();
     check_application_region_forwarding_provider();
@@ -3441,10 +3574,10 @@ void ApplicationTestFixture::test_simulation_semantics()
     const decltype(vhdl_wait_reference.changes)
         expected_vhdl_wait_changes = {
             { *vhdl_wait_q, "0", 0, 0 },
-            { *vhdl_wait_q, "1", 1, 0 },
-            { *vhdl_wait_q, "0", 2, 0 },
-            { *vhdl_wait_q, "1", 3, 0 },
-            { *vhdl_wait_q, "0", 4, 0 },
+            { *vhdl_wait_q, "1", 1, 1 },
+            { *vhdl_wait_q, "0", 2, 1 },
+            { *vhdl_wait_q, "1", 3, 1 },
+            { *vhdl_wait_q, "0", 4, 1 },
         };
     assert(
         vhdl_wait_reference.changes
@@ -3621,7 +3754,7 @@ void ApplicationTestFixture::test_simulation_semantics()
     assert((
         conditional_hybrid.final_values
         == std::vector<std::string> {
-            "Z", "101Z", "100Z", "10XZ" }));
+            "Z", "101Z", "100Z", "10XX" }));
 
     auto comparison_config = config;
     comparison_config.project.name = "comparison-expression-test";

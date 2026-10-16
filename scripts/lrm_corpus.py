@@ -737,6 +737,10 @@ def ivtest_cases(root: Path) -> list[Case]:
         fields = entries[name]
         type_field = fields[1].split(",")
         test_type, args = type_field[0], [a for a in type_field[1:] if a]
+        # Icarus marks this legal Verilog-2005 case CE because it does not
+        # support event arrays. Run its original wake-count checks instead.
+        if name == "event_array" and test_type == "CE":
+            test_type = "normal"
         directory = fields[2] if len(fields) > 2 else ""
         gold = None
         module = None
@@ -1507,7 +1511,7 @@ def check_outcome(case: Case, steps: list[StepResult], workdir: Path) -> tuple[s
             return "pass", ""
         if gold:
             expected = [l.rstrip() for l in read_text(Path(gold)).splitlines()
-                        if not re.match(r"^(VCD info:|.*\$finish called|.*: warning)", l)]
+                        if not re.match(r"^(VCD info:|.*\$finish called|.*: warning|.*:\d+\s+warning)", l)]
             actual = [l.rstrip() for l in lines if not l.startswith("objects/")]
             actual = ivtest_source_location_lines(case.id, actual)
             if expected != actual:

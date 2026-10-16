@@ -187,6 +187,9 @@ end architecture;
   const auto sensitivity_source = fsim::frontend::parse_text(
       "dynamic_target_sensitivity.vhd",
       R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity Dynamic_Target_Sensitivity is
   port (
     Source : in std_logic_vector(3 downto 0);
@@ -226,6 +229,9 @@ end architecture;
   const auto invalid = fsim::frontend::parse_text(
       "invalid_dynamic_slices.vhd",
       R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity Bad_Direction is end entity;
 architecture Rtl of Bad_Direction is
   signal Value : std_logic_vector(0 to 7);
@@ -235,6 +241,9 @@ architecture Rtl of Bad_Direction is
 begin
   Result <= Value(Left_Bound downto Right_Bound);
 end architecture;
+
+library ieee;
+use ieee.std_logic_1164.all;
 
 entity Bad_Bound is end entity;
 architecture Rtl of Bad_Bound is
@@ -259,6 +268,9 @@ end architecture;
   const auto malformed = fsim::frontend::parse_text(
       "malformed_dynamic_slice.vhd",
       R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity Malformed_Dynamic_Slice is end entity;
 architecture Rtl of Malformed_Dynamic_Slice is
 begin
@@ -282,6 +294,9 @@ end architecture;
   const auto failing = fsim::frontend::parse_text(
       "failing_dynamic_slice.vhd",
       R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity Failing_Dynamic_Slice is end entity;
 architecture Rtl of Failing_Dynamic_Slice is
 begin

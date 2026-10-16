@@ -5,6 +5,7 @@
 #include "fsim/semantic/systemverilog_hir.hpp"
 #include "fsim/semantic/vhdl_hir.hpp"
 
+#include <compare>
 #include <optional>
 #include <memory>
 #include <span>
@@ -27,6 +28,53 @@ enum class CompiledReferenceKind : std::uint8_t {
     context,
 };
 
+/// Source identity for a package callable whose declaration ID is removed
+/// when its caller object is projected. Logical package identity is included
+/// because different libraries can provide the same package/member spelling.
+struct CompiledSystemVerilogPackageDeclarationIdentity {
+    std::string library;
+    std::string package;
+    sv::DeclarationForm form { sv::DeclarationForm::function };
+    std::string name;
+    std::string source_digest;
+    std::uint64_t source_begin { };
+    std::uint64_t source_end { };
+
+    friend auto operator<=>(
+        const CompiledSystemVerilogPackageDeclarationIdentity&,
+        const CompiledSystemVerilogPackageDeclarationIdentity&) = default;
+};
+
+struct CompiledSystemVerilogPackageOverloadIdentity {
+    std::uint32_t position { };
+    std::optional<DeclarationId> retained_declaration;
+    std::optional<CompiledSystemVerilogPackageDeclarationIdentity>
+        package_declaration;
+
+    friend auto operator<=>(
+        const CompiledSystemVerilogPackageOverloadIdentity&,
+        const CompiledSystemVerilogPackageOverloadIdentity&) = default;
+};
+
+/// Exact external callable targets associated with one retained HIR callsite.
+/// The callsite ID relocates with the consumer object; declaration identities
+/// are source-backed and are resolved only after the provider package is linked.
+struct CompiledSystemVerilogPackageMemberUse {
+    std::optional<ExpressionId> expression;
+    std::optional<StatementId> statement;
+    bool selected_present { };
+    bool selected_complete { true };
+    std::optional<DeclarationId> retained_selected;
+    std::optional<CompiledSystemVerilogPackageDeclarationIdentity>
+        package_selected;
+    std::uint32_t overload_count { };
+    bool overloads_complete { true };
+    std::vector<CompiledSystemVerilogPackageOverloadIdentity> overloads;
+
+    friend auto operator<=>(const CompiledSystemVerilogPackageMemberUse&,
+        const CompiledSystemVerilogPackageMemberUse&) = default;
+};
+
 /// One deterministic link edge retained by a compiled HIR bundle. Names are
 /// canonical logical-library identities; physical checkout paths never
 /// participate in linking or artifact identity.
@@ -38,6 +86,8 @@ struct CompiledReference {
     std::string secondary_name;
     SourceSpanId source;
     std::optional<UnitId> target;
+    std::optional<CompiledSystemVerilogPackageMemberUse>
+        systemverilog_package_member { };
 
     friend bool operator==(const CompiledReference&,
         const CompiledReference&) = default;

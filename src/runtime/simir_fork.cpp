@@ -715,7 +715,9 @@ void Interpreter::Impl::spawn_fork(
             child.program().reactive(),
             child.program().postponed());
         child.pc = branch;
-        child.frame = shared_frame;
+        child.frame = operation.isolate_register_frame && shared_frame
+            ? std::make_shared<ProcessFrame>(*shared_frame)
+            : shared_frame;
         child.cold().escaping_callable_contexts = inherited_contexts;
         child.cold().callable_registers_suspended
             = !inherited_contexts.empty();
@@ -730,7 +732,9 @@ void Interpreter::Impl::spawn_fork(
             }
             advance_process_executor_generation(parent);
             advance_process_executor_generation(child);
-            child.executor = executor->fork_clone(branch);
+            child.executor = operation.isolate_register_frame
+                ? executor->fork_clone_isolated_register_frame(branch)
+                : executor->fork_clone(branch);
             if (!child.executor) {
                 throw InterpreterError {
                     parent_id, instruction, "fork executor clone is null"

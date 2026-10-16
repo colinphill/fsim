@@ -133,14 +133,27 @@ std::optional<RegionConeProgram> RegionGraph::build_compute_program(
         && certificate.status
             == RegionComponentCertificateStatus::no_internal_state
         && certificate.structural_internal_signal_candidates.empty();
-    if ((!systemverilog_active && !vhdl_projected && !generic_update)
-        || (!structural_internal_candidate
-            && !generic_boundary_only_candidate)
-        || std::ranges::any_of(ordered_members, [&](const ProcessId process) {
-               const auto& node = processes_[process];
-               return node.scheduling_domain != scheduling_domain
-                   || node.update_kind != update_kind;
-           })) {
+    const char* eligibility_rejection = nullptr;
+    if (!systemverilog_active && !vhdl_projected && !generic_update) {
+        eligibility_rejection = "unsupported-scheduling-domain";
+    } else if (!structural_internal_candidate
+        && !generic_boundary_only_candidate) {
+        eligibility_rejection = "component-has-no-structural-internal-state";
+    } else if (std::ranges::any_of(ordered_members,
+                   [&](const ProcessId process) {
+                       const auto& node = processes_[process];
+                       return node.scheduling_domain != scheduling_domain
+                           || node.update_kind != update_kind;
+                   })) {
+        eligibility_rejection = "mixed-scheduling-domain-or-update-kind";
+    }
+    if (eligibility_rejection != nullptr) {
+        note_rejection(eligibility_rejection,
+            std::numeric_limits<SignalId>::max(),
+            std::numeric_limits<SignalId>::max(),
+            std::numeric_limits<ProcessId>::max(), ordered_members.front(),
+            std::numeric_limits<std::size_t>::max(),
+            "component-eligibility");
         return std::nullopt;
     }
 
@@ -1300,6 +1313,29 @@ std::optional<RegionConeProgram> RegionGraph::build_compute_program(
                         return false;
                     }
                     rewritten.emplace(CopyRegister {
+                        *destination, *source_register });
+                    return true;
+                } else if constexpr (std::is_same_v<Type, ConvertToTwoState>) {
+                    const auto width = register_width(value.source);
+                    const auto existing_destination_width
+                        = register_width(value.destination);
+                    const auto source_kinds
+                        = process_layout_detail::ProcessLayoutAccess::view(
+                            source.register_value_kinds);
+                    auto destination = global_register(value.destination);
+                    auto source_register = global_register(value.source);
+                    if (!width || *width == 0U
+                        || (existing_destination_width
+                            && *existing_destination_width != *width)
+                        || source_kinds.size() != source.register_count
+                        || !destination || !source_register
+                        || source_kinds[value.source] != ValueKind::logic4
+                        || source_kinds[value.destination]
+                            != ValueKind::logic4
+                        || !assign_width(value.destination, *width)) {
+                        return false;
+                    }
+                    rewritten.emplace(ConvertToTwoState {
                         *destination, *source_register });
                     return true;
                 } else if constexpr (std::is_same_v<Type, UnaryNot>) {

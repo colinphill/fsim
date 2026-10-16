@@ -96,28 +96,57 @@ void test_simir_mutable_strings()
             "oversize string object diagnostic");
     }
 
-    Interpreter invalid_index;
-    Process bad;
-    bad.id = 0;
-    bad.name = "invalid_string_index";
-    bad.register_count = 2;
-    bad.string_register_count = 1;
-    bad.operations = {
+    Interpreter out_of_range_index;
+    Process out_of_range;
+    out_of_range.id = 0;
+    out_of_range.name = "out_of_range_string_index";
+    out_of_range.register_count = 2;
+    out_of_range.string_register_count = 1;
+    out_of_range.debug_locals = {
+        DebugLocal {
+            "selected_byte", "int", 1, 32, { }, { }, { },
+            ValueKind::logic4, { } },
+    };
+    out_of_range.operations = {
         LoadStringConstant { 0, "x" },
         LoadConstant {
             0, PackedLogic4::from_aval_bval(32, 1, 0) },
+        LoadConstant {
+            1, PackedLogic4::from_aval_bval(32, 0x5a, 0) },
         StringIndex { 1, 0, 0, true },
         Halt { },
     };
-    (void)invalid_index.add_process(std::move(bad));
+    (void)out_of_range_index.add_process(std::move(out_of_range));
+    const auto out_of_range_result = out_of_range_index.run();
+    require(
+        out_of_range_result.status == RunStatus::completed
+            && out_of_range_index.read_debug_local(0, 0)
+                == PackedLogic4::from_aval_bval(32, 0, 0),
+        "out-of-range string index completes and returns zero");
+
+    Interpreter malformed_index;
+    Process malformed;
+    malformed.id = 0;
+    malformed.name = "malformed_string_index_destination";
+    malformed.register_count = 2;
+    malformed.string_register_count = 1;
+    malformed.operations = {
+        LoadStringConstant { 0, "x" },
+        LoadConstant {
+            0, PackedLogic4::from_aval_bval(32, 1, 0) },
+        StringIndex { 2, 0, 0, true },
+        Halt { },
+    };
+    (void)malformed_index.add_process(std::move(malformed));
     try {
-        (void)invalid_index.run();
-        throw std::runtime_error { "out-of-range string index was accepted" };
+        (void)malformed_index.run();
+        throw std::runtime_error {
+            "string index with invalid destination register was accepted" };
     } catch (const InterpreterError& error) {
         require(
-            std::string_view { error.what() }.find("outside the byte range")
+            std::string_view { error.what() }.find("invalid register ID")
                 != std::string_view::npos,
-            "out-of-range string index diagnostic");
+            "malformed string-index destination diagnostic");
     }
 }
 

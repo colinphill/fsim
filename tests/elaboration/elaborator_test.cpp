@@ -125,7 +125,9 @@ int main()
     FSIM_RUN_TEST(test_vhdl_attribute_closure);
     FSIM_RUN_TEST(test_vhdl_composite_operation_closure);
     FSIM_RUN_TEST(test_assertion_types_and_random_lowering);
+    FSIM_RUN_TEST(test_systemverilog_builtin_net_type_legality);
     FSIM_RUN_TEST(test_vhdl_interface_type_generics);
+    FSIM_RUN_TEST(test_vhdl_numeric_bit_subtype_identity);
     FSIM_RUN_TEST(test_vhdl_interface_function_generics);
     FSIM_RUN_TEST(test_vhdl_callable_overloads);
     FSIM_RUN_TEST(test_vhdl_interface_procedure_generics);

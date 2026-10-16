@@ -726,9 +726,16 @@ void Interpreter::Impl::execute_container(
         throw;
     }
     try {
-        load_memory_text(
-            target, text, operation.hexadecimal,
-            start, finish);
+        const auto load = load_memory_text_with_status(
+            target, text, operation.hexadecimal, start, finish);
+        if (load.word_count_mismatch && report_hook) {
+            report_hook(
+                process.id,
+                "read-memory file word count differs from the selected range",
+                AssertionSeverity::warning,
+                SourceLocation { },
+                scheduler.now(), scheduler.delta());
+        }
     } catch (const std::exception& error) {
         container_error(
             process.id, process.pc, error.what());

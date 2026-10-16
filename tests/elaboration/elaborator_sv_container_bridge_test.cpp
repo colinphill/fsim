@@ -34,8 +34,14 @@ endmodule
     const bool mismatched_shape) {
   const auto source = mismatched_shape
       ? R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity container_bridge_top is
 end entity;
+
+library ieee;
+use ieee.std_logic_1164.all;
 
 architecture rtl of container_bridge_top is
   type words_t is array (1 downto 0)
@@ -53,8 +59,14 @@ begin
 end architecture;
 )"
       : R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity container_bridge_top is
 end entity;
+
+library ieee;
+use ieee.std_logic_1164.all;
 
 architecture rtl of container_bridge_top is
   type bytes_t is array (3 downto 0)
@@ -147,9 +159,15 @@ endmodule
   auto child = fsim::frontend::parse_text(
       "projected-array-writer-child.vhd",
       R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity projected_array_writer is
   port (data : out std_logic_vector(15 downto 0));
 end entity;
+
+library ieee;
+use ieee.std_logic_1164.all;
 
 architecture rtl of projected_array_writer is
 begin

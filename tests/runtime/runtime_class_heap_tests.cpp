@@ -358,9 +358,26 @@ void test_systemverilog_class_heap() {
   } catch (const std::invalid_argument&) {
     element_type_failed = true;
   }
+  bool associative_element_type_failed = false;
+  try {
+    associative.set(container_heap, "unrelated", unrelated);
+  } catch (const std::invalid_argument&) {
+    associative_element_type_failed = true;
+  }
+  associative.set(container_heap, "null", 0);
+  const bool null_handle_is_valid = associative.at("null") == 0;
+  (void)container_heap.release(unrelated);
+  bool associative_stale_handle_failed = false;
+  try {
+    associative.set(container_heap, "stale", unrelated);
+  } catch (const std::out_of_range&) {
+    associative_stale_handle_failed = true;
+  }
   require(
-      queue_budget_failed && packed_handle_failed && element_type_failed,
-      "container budgets, packed legality, and handle element types must be checked");
+      queue_budget_failed && packed_handle_failed && element_type_failed
+          && associative_element_type_failed && null_handle_is_valid
+          && associative_stale_handle_failed,
+      "container budgets, packed legality, associative handle validity, and null handles must be checked");
 }
 
 void test_systemverilog_class_methods() {

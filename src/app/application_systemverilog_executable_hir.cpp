@@ -1430,10 +1430,13 @@ namespace {
                     ? expression(*container.queue_maximum, scope, parent)
                     : std::nullopt;
                 if (container.associative_index_type) {
-                    output.associative_index = type_reference(
+                    auto index_type = type_reference(
                         *container.associative_index_type, container.span,
-                        scope, parent)
-                                                   .target;
+                        scope, parent);
+                    systemverilog_hir_detail::inherit_named_systemverilog_type_shape(index_type, hir_);
+                    output.associative_index = index_type.target;
+                    output.associative_index_metadata
+                        = sv::make_associative_index_metadata(index_type);
                 }
                 for (const auto& range : container.static_range_expressions) {
                     output.unpacked_dimensions.push_back({ std::nullopt,
@@ -1735,6 +1738,8 @@ namespace {
             output.loop_runtime = input.loop_runtime;
             output.loop_post_test = input.loop_post_test;
             output.fork_join = fork_join_kind(input.fork_join_kind);
+            output.fork_isolate_register_frame
+                = input.fork_isolate_register_frame;
             output.assignment_control = assignment_control(
                 input.procedural_assignment_control);
             output.assignment_control_repeated = input.procedural_assignment_repeat;

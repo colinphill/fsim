@@ -67,6 +67,11 @@ struct ProcessInstanceProgram {
     std::optional<std::uint32_t> program_owner;
     bool postponed { };
     bool final { };
+    ProcessStartupPhase startup_phase { ProcessStartupPhase::ordinary };
+    std::uint64_t startup_order { };
+    std::uint32_t startup_package_owner_id { };
+    std::vector<StringObjectId> startup_writable_string_object_ids;
+    std::vector<ContainerObjectId> startup_writable_container_object_ids;
 
     ProcessInstanceProgram() = default;
     explicit ProcessInstanceProgram(Process process);
@@ -212,6 +217,15 @@ public:
         expression_profiles() const noexcept;
     [[nodiscard]] const ProcessSchedulingDomain&
         scheduling_domain() const noexcept;
+    [[nodiscard]] const ProcessStartupPhase&
+        startup_phase() const noexcept;
+    [[nodiscard]] const std::uint64_t& startup_order() const noexcept;
+    [[nodiscard]] const std::uint32_t&
+    startup_package_owner_id() const noexcept;
+    [[nodiscard]] const std::vector<StringObjectId>&
+        startup_writable_string_object_ids() const noexcept;
+    [[nodiscard]] const std::vector<ContainerObjectId>&
+        startup_writable_container_object_ids() const noexcept;
 
     [[nodiscard]] Process materialize() const;
     [[nodiscard]] Process materialize_transient() const;

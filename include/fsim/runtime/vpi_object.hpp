@@ -428,6 +428,10 @@ public:
         SystemVerilogVpiPropertyKind property) const;
     [[nodiscard]] SystemVerilogVpiValueError bind_value(
         fsim_vpi_handle_v1 handle, SystemVerilogVpiStoredValue value);
+    /// Seed a newly established startup baseline without dispatching value
+    /// observers. Both the current and reset values become the supplied value.
+    [[nodiscard]] SystemVerilogVpiValueError initialize_bound_value(
+        fsim_vpi_handle_v1 handle, SystemVerilogVpiStoredValue value);
     /// Publish a value supplied by the simulation kernel. This updates even a
     /// read-only object and preserves any VPI force as the effective value.
     [[nodiscard]] SystemVerilogVpiValueError update_bound_value(

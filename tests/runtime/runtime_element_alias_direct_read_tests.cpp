@@ -222,7 +222,8 @@ public:
                 = prior_first.aval == 0U && prior_first.bval == 0U
                 && prior_sibling.aval == 0U && prior_sibling.bval == 0U
                 && context.signal_last_event(family_.second)
-                    == std::numeric_limits<SimulationTick>::max();
+                    == static_cast<SimulationTick>(
+                        std::numeric_limits<std::int64_t>::max());
 
             probe_.expected = { "0011", "0110" };
             context.write_blocking(
@@ -535,7 +536,8 @@ public:
         probe_.history_keeps_sibling
             = previous.aval == 0U && previous.bval == 0U
             && context.signal_last_event(family_.second)
-                == std::numeric_limits<SimulationTick>::max();
+                == static_cast<SimulationTick>(
+                    std::numeric_limits<std::int64_t>::max());
         ProcessResumeResult result { 0U, 1U };
         result.external.kind = ExternalSuspendKind::halt;
         return result;

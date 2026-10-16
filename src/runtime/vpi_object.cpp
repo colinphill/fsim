@@ -1163,6 +1163,36 @@ SystemVerilogVpiValueError SystemVerilogVpiObjectRegistry::bind_value(
     record.value = std::move(value);
     return SystemVerilogVpiValueError::None;
 }
+
+SystemVerilogVpiValueError
+SystemVerilogVpiObjectRegistry::initialize_bound_value(
+    const fsim_vpi_handle_v1 handle,
+    SystemVerilogVpiStoredValue value)
+{
+    std::scoped_lock lock { mutex_ };
+    if (!valid()) {
+        return SystemVerilogVpiValueError::InvalidSimulation;
+    }
+    std::uint32_t slot { };
+    const auto error = resolve_object(handle, slot);
+    if (error != SystemVerilogVpiObjectError::None) {
+        return value_error(error);
+    }
+    auto& record = records_[slot];
+    if (!record.type) {
+        return SystemVerilogVpiValueError::NotReadable;
+    }
+    if (!record.value) {
+        return SystemVerilogVpiValueError::NotBound;
+    }
+    if (!validate_systemverilog_vpi_stored_value(*record.type, value)) {
+        return SystemVerilogVpiValueError::TypeMismatch;
+    }
+    record.initial_value = value;
+    record.value = std::move(value);
+    return SystemVerilogVpiValueError::None;
+}
+
 SystemVerilogVpiValueError
 SystemVerilogVpiObjectRegistry::validate_value_write(
     const fsim_vpi_handle_v1 handle,

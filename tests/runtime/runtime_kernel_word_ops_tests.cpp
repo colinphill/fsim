@@ -5,6 +5,7 @@
 #include "../../src/runtime/simir_internal.hpp"
 #include "../../src/runtime/simir_kernel_word_ops.hpp"
 
+#include <array>
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
@@ -278,6 +279,91 @@ void shift_ops()
     }
 }
 
+void conditional_ops_deterministic()
+{
+    constexpr std::array states {
+        Logic4::zero,
+        Logic4::one,
+        Logic4::x,
+        Logic4::z,
+    };
+    const auto set_bit = [](kw::Word& destination, const std::uint32_t index,
+                             const Logic4 value) {
+        const auto encoded = kw::from_logic4(value);
+        destination.a |= encoded.a << index;
+        destination.b |= encoded.b << index;
+    };
+    const auto merged_bit = [](const Logic4 left, const Logic4 right) {
+        if (left == right && (left == Logic4::zero || left == Logic4::one)) {
+            return left;
+        }
+        return Logic4::x;
+    };
+
+    for (const auto condition : states) {
+        const auto select = kw::from_logic4(condition);
+        for (const auto when_true : states) {
+            for (const auto when_false : states) {
+                Logic4 expected = Logic4::x;
+                if (condition == Logic4::one) {
+                    expected = when_true;
+                } else if (condition == Logic4::zero) {
+                    expected = when_false;
+                } else {
+                    // For one-bit operands this is the full-expression
+                    // equivalence exception: logical equality is true only
+                    // when both values are the same known bit.
+                    expected = merged_bit(when_true, when_false);
+                }
+                expect(kw::conditional(select, kw::from_logic4(when_true),
+                           kw::from_logic4(when_false), 1U),
+                    PackedLogic4(1U, expected),
+                    "conditional one-bit table condition "
+                        + std::to_string(static_cast<unsigned>(condition))
+                        + " arms "
+                        + std::to_string(static_cast<unsigned>(when_true))
+                        + ","
+                        + std::to_string(static_cast<unsigned>(when_false)));
+            }
+        }
+    }
+
+    // Exercise every arm pair in every bit position, including bit 63.
+    kw::Word when_true;
+    kw::Word when_false;
+    kw::Word expected;
+    for (std::uint32_t index = 0U; index < 64U; ++index) {
+        const auto left = states[(index / 4U) % states.size()];
+        const auto right = states[index % states.size()];
+        set_bit(when_true, index, left);
+        set_bit(when_false, index, right);
+        set_bit(expected, index, merged_bit(left, right));
+    }
+    for (const auto condition : { Logic4::x, Logic4::z }) {
+        expect(kw::conditional(kw::from_logic4(condition), when_true,
+                   when_false, 64U),
+            packed(expected, 64U),
+            "conditional 64-bit table condition "
+                + std::to_string(static_cast<unsigned>(condition)));
+
+        // The differing full expressions 101Z and 100Z merge to 10XX.
+        constexpr kw::Word arm_101z { 0xaU, 0x1U };
+        constexpr kw::Word arm_100z { 0x8U, 0x1U };
+        constexpr kw::Word expected_10xx { 0xbU, 0x3U };
+        expect(kw::conditional(kw::from_logic4(condition), arm_101z,
+                   arm_100z, 4U),
+            packed(expected_10xx, 4U), "conditional 101Z versus 100Z");
+
+        // A full-expression logical-equivalence match on known operands
+        // returns the common value; the bitwise merge agrees at all bits.
+        constexpr kw::Word known_equal { 0xa55aa55aa55aa55aULL, 0U };
+        expect(kw::conditional(kw::from_logic4(condition), known_equal,
+                   known_equal, 64U),
+            packed(known_equal, 64U),
+            "conditional 64-bit known-equivalent arms");
+    }
+}
+
 void select_ops()
 {
     for (int trial = 0; trial < 20000; ++trial) {
@@ -382,6 +468,7 @@ int main()
     logic9_conversions();
     unary_ops();
     shift_ops();
+    conditional_ops_deterministic();
     select_ops();
     dynamic_ops();
     std::cout << "kernel word op tests passed (" << checks << " checks)\n";

@@ -5,12 +5,18 @@
 
 #include <functional>
 #include <map>
+#include <string_view>
 #include <tuple>
+#include <vector>
 
 namespace fsim::app::application_detail {
 namespace vh = semantic::vhdl;
 
 [[nodiscard]] std::string canonical_vhdl_name(std::string value);
+[[nodiscard]] std::vector<std::string_view> vhdl_name_parts(
+    std::string_view value);
+[[nodiscard]] bool same_vhdl_unit_name(
+    const vh::Unit& unit, std::string_view spelling);
 [[nodiscard]] vh::UnitKind vhdl_unit_kind(frontend::UnitKind kind) noexcept;
 [[nodiscard]] vh::Direction vhdl_direction(
     frontend::PortDirection direction) noexcept;
@@ -87,7 +93,8 @@ private:
     [[nodiscard]] semantic::TypeId find_type(
         const semantic::ScopeId scope,
         const std::string_view name_value,
-        const std::optional<semantic::SourceSpanId> exact_source = std::nullopt)
+        const std::optional<semantic::SourceSpanId> exact_source = std::nullopt,
+        bool* ambiguous = nullptr)
         const noexcept;
 
     [[nodiscard]] semantic::ValueId find_value(
@@ -420,6 +427,21 @@ private:
         const frontend::GenerateBody& input,
         const semantic::ScopeId scope,
         const semantic::OriginId parent,
+        std::vector<semantic::DeclarationId>& declarations);
+
+    void queue_vhdl_local_declarations(
+        std::span<const frontend::ParameterDeclaration> constants,
+        std::span<const frontend::TypeAliasDeclaration> type_aliases,
+        std::span<const frontend::SignalAliasDeclaration> signal_aliases,
+        std::span<const frontend::PackageInstantiation> package_instances,
+        std::span<const frontend::FunctionDeclaration> functions,
+        std::span<const frontend::ProcedureDeclaration> procedures,
+        std::span<const frontend::VariableDeclaration> variables,
+        std::span<const frontend::VhdlAttributeDeclaration> attributes,
+        std::span<const frontend::VhdlGroupDeclaration> groups,
+        std::optional<std::string_view> omitted_type_alias,
+        semantic::ScopeId scope,
+        semantic::OriginId parent,
         std::vector<semantic::DeclarationId>& declarations);
 
     void add_generate_body(

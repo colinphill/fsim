@@ -1,20 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "application_internal.hpp"
+#include "application_vhdl_hir_internal.hpp"
 
 namespace fsim::app::application_detail {
 namespace {
 
 namespace vh = semantic::vhdl;
-
-[[nodiscard]] std::string canonical_vhdl_name(std::string value) {
-  if (!value.empty() && value.front() != '\\' && value.front() != '\'') {
-    std::transform(value.begin(), value.end(), value.begin(), [](const char c) {
-      return static_cast<char>(
-          std::tolower(static_cast<unsigned char>(c)));
-    });
-  }
-  return value;
-}
 
 class VhdlExecutableBuilder final {
  public:
@@ -184,10 +175,18 @@ class VhdlExecutableBuilder final {
           || input.kind == frontend::ExpressionKind::Binary) {
           constexpr auto qualified_prefix
               = std::string_view { "@vhdl-qualified:" };
-          const auto spelling = input.text.starts_with(qualified_prefix)
-              ? std::string_view { input.text }.substr(qualified_prefix.size())
-              : std::string_view { input.text };
+          auto spelling = input.text.starts_with(qualified_prefix)
+              ? std::string { std::string_view { input.text }.substr(
+                    qualified_prefix.size()) }
+              : input.text;
+          if (input.selected_operator_prefix) {
+              spelling = *input.selected_operator_prefix + "." + input.text;
+          }
           output.referenced_name = name(spelling, input.span, scope);
+          if (input.vhdl_selected_name_spelling) {
+              output.referenced_name->spelling
+                  = *input.vhdl_selected_name_spelling;
+          }
       }
       output.argument_names = input.call_argument_names;
       for (const auto& operand : input.operands) {
@@ -1120,20 +1119,20 @@ class VhdlExecutableBuilder final {
     };
     const auto context_unit = [&](const std::string_view selected)
         -> const vh::Unit* {
-      auto library = std::string_view { "work" };
-      auto context = selected;
-      if (const auto separator = selected.rfind('.');
-          separator != std::string_view::npos) {
-        library = selected.substr(0U, separator);
-        context = selected.substr(separator + 1U);
+      const auto parts = vhdl_name_parts(selected);
+      if (parts.empty()) {
+        return nullptr;
       }
+      const auto library = parts.size() >= 2U
+          ? parts[parts.size() - 2U]
+          : std::string_view { "work" };
+      const auto context = parts.back();
       const auto found = std::ranges::find_if(
           hir_.units(), [&](const vh::Unit& unit) {
             return unit.kind == vh::UnitKind::context
                 && canonical_vhdl_name(unit.library)
                     == canonical_vhdl_name(std::string { library })
-                && canonical_vhdl_name(unit.name)
-                    == canonical_vhdl_name(std::string { context });
+                && same_vhdl_unit_name(unit, context);
           });
       return found == hir_.units().end() ? nullptr : &*found;
     };

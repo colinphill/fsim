@@ -234,12 +234,15 @@ namespace {
             ? expression(*container.queue_maximum, scope, parent)
             : std::nullopt;
         if (container.associative_index_type) {
-            output.associative_index = type_reference(
+            auto index_type = type_reference(
                 *container.associative_index_type,
                 container.span,
                 scope,
-                parent)
-                                           .target;
+                parent);
+            inherit_named_systemverilog_type_shape(index_type, hir_);
+            output.associative_index = index_type.target;
+            output.associative_index_metadata
+                = sv::make_associative_index_metadata(index_type);
         }
         if (!container.static_range_expressions.empty()) {
             for (const auto& range : container.static_range_expressions) {
@@ -535,11 +538,13 @@ void SystemVerilogHirBuilder::add_type_payload(
             ? expression(*container.queue_maximum, scope, parent)
             : std::nullopt;
         if (container.associative_index_type) {
-            converted.associative_index = type_reference(
+            auto index_type = type_reference(
                 *container.associative_index_type,
                 container.span,
                 scope,
                 parent);
+            inherit_named_systemverilog_type_shape(index_type, hir_);
+            converted.associative_index = std::move(index_type);
         }
         if (!container.static_range_expressions.empty()) {
             for (const auto& range : container.static_range_expressions) {

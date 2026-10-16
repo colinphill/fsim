@@ -711,7 +711,7 @@ void replace_memory_packed_element(
 
 }  // namespace
 
-void load_memory_text(
+MemoryLoadResult load_memory_text_with_status(
     ContainerValue& target,
     const std::string_view text,
     const bool hexadecimal,
@@ -843,6 +843,9 @@ void load_memory_text(
             : index <= first && index >= last;
       };
   auto current = static_cast<std::int64_t>(first);
+  bool has_address_entries{};
+  bool sequential_data_outside_window{};
+  std::size_t data_word_count{};
 
   const auto parse_address =
       [](const std::string_view digits) -> std::int32_t {
@@ -937,6 +940,7 @@ void load_memory_text(
 
   for (const auto& item : tokens) {
     if (item.starts_with('@')) {
+      has_address_entries = true;
       current = parse_address(
           std::string_view{item}.substr(1));
       if (!in_declared_range(current)
@@ -946,8 +950,23 @@ void load_memory_text(
       }
       continue;
     }
-    if (!in_declared_range(current)
-        || !in_window(current)) {
+    ++data_word_count;
+    if (!in_window(current)) {
+      sequential_data_outside_window = true;
+      // Keep scanning so a later @address is still checked. Without file
+      // addresses, a count mismatch is a warning and excess words are ignored.
+      // Still validate the syntax of each ignored data token.
+      if (replacement.type.element_kind
+          == ContainerElementKind::String) {
+        (void)parse_memory_string(item);
+      } else {
+        const auto width = memory_packed_element(
+            replacement, 0).width();
+        (void)parse_data(item, width);
+      }
+      continue;
+    }
+    if (!in_declared_range(current)) {
       throw std::out_of_range{
           "read-memory data exceeds the selected range"};
     }
@@ -971,8 +990,27 @@ void load_memory_text(
     }
     current += step;
   }
+  if (has_address_entries && sequential_data_outside_window) {
+    throw std::out_of_range{
+        "read-memory data exceeds the selected range"};
+  }
+  const auto selected_word_count = static_cast<std::size_t>(
+      (first <= last ? last - first : first - last) + 1);
+  const MemoryLoadResult result {
+      !has_address_entries && data_word_count != selected_word_count };
   validate_container_value(replacement);
   target = std::move(replacement);
+  return result;
+}
+
+void load_memory_text(
+    ContainerValue& target,
+    const std::string_view text,
+    const bool hexadecimal,
+    const std::optional<std::int32_t> start,
+    const std::optional<std::int32_t> finish) {
+  (void)load_memory_text_with_status(
+      target, text, hexadecimal, start, finish);
 }
 
 std::string write_memory_text(

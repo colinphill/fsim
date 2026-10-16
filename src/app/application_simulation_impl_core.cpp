@@ -557,7 +557,8 @@ Simulation::Impl::static_property_parts(const std::string_view identity)
     const std::string_view allocation_scope,
     const runtime::SystemVerilogUvmRootHandle requested_root,
     const std::optional<runtime::simir::ProcessId> owner_design_process,
-    const runtime::SystemVerilogClassHandle owner_context_handle)
+    const runtime::SystemVerilogClassHandle owner_context_handle,
+    const std::optional<runtime::simir::ProcessId> report_process)
 {
     // `@no-constructor:` allocates the object for a constructor the
     // elaborated process runs itself.
@@ -847,7 +848,8 @@ Simulation::Impl::static_property_parts(const std::string_view identity)
         // simulation's UVM services stand in for the library constructors.
         if (run_constructor) {
             invoke_source_constructor(
-                specialization, handle, actuals, string_actuals, actual_names);
+                specialization, handle, actuals, string_actuals, actual_names,
+                report_process);
         }
     } catch (...) {
         class_owner_parameter_values.erase(handle);
@@ -878,9 +880,19 @@ Simulation::Impl::static_property_parts(const std::string_view identity)
         if (component_specialization && class_heap.contains(handle)) {
             (void)class_heap.release(handle);
         }
+        // HIR writes are not rolled back on this path. At the outermost
+        // construction boundary, publish the current live-state diff; an
+        // enclosing source call owns the snapshot when construction was nested.
+        if (source_function_dispatch_depth == 0U) {
+            try {
+                notify_class_changes(before);
+            } catch (...) {
+            }
+        }
         throw;
     }
-    notify_class_changes(before);
+    if (source_function_dispatch_depth == 0U)
+        notify_class_changes(before);
     return handle;
 }
 
@@ -904,7 +916,8 @@ Simulation::Impl::packed_class_snapshot() const
 
 void Simulation::Impl::notify_class_changes(const PackedSnapshot& before)
 {
-    if (!class_property_change_hook)
+    if (!class_property_change_hook
+        || interpreter->package_static_initialization_active())
         return;
     const auto after = packed_class_snapshot();
     for (const auto& [identity, value] : after) {
@@ -937,7 +950,8 @@ Simulation::Impl::packed_static_snapshot() const
 
 void Simulation::Impl::notify_static_changes(const StaticPackedSnapshot& before)
 {
-    if (!class_static_property_change_hook)
+    if (!class_static_property_change_hook
+        || interpreter->package_static_initialization_active())
         return;
     for (const auto& [identity, value] : packed_static_snapshot()) {
         const auto prior = before.find(identity);
@@ -1191,6 +1205,37 @@ void Simulation::Impl::publish_vpi_stored_signal(const SignalId signal)
                 "driver publication");
         }
     }
+}
+
+void Simulation::Impl::publish_vpi_package_startup_values()
+{
+    if (package_static_startup_values_published) {
+        return;
+    }
+    if (!vpi_runtime_updates_enabled || !vpi_registry) {
+        return;
+    }
+    for (const auto signal : package_static_startup_signal_ids) {
+        const auto handles = vpi_signal_handles.find(signal);
+        if (handles == vpi_signal_handles.end()) {
+            continue;
+        }
+        const auto value = vpi_value(
+            signal, interpreter->stored_signal_value_snapshot(signal));
+        for (const auto handle : handles->second) {
+            require_vpi_value(
+                vpi_registry->initialize_bound_value(handle, value),
+                "package startup baseline publication");
+        }
+    }
+    package_static_startup_values_published = true;
+}
+
+void Simulation::Impl::start_interpreter()
+{
+    interpreter->start();
+    publish_vpi_package_startup_values();
+    refresh_observation_hooks();
 }
 
 void Simulation::Impl::publish_vpi_driver(

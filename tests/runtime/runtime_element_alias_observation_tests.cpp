@@ -545,7 +545,8 @@ void check_transaction_waiters_for_whole_write(const std::size_t width)
 void check_transaction_trace_observes_family_stamps()
 {
     constexpr auto width = std::size_t { 4U };
-    constexpr auto never = std::numeric_limits<SimulationTick>::max();
+    constexpr auto never = static_cast<SimulationTick>(
+        std::numeric_limits<std::int64_t>::max());
     AliasFamily family(width, ResolutionKind::sv_wire, true);
     auto trace = FamilyTransactionSnapshotTrace {
         { family.first, family.second, family.aggregate } };
@@ -1550,7 +1551,8 @@ ForceFollowupResult run_force_followup(
 void check_force_release_transaction_edges()
 {
     constexpr auto width = std::size_t { 4U };
-    constexpr auto never = std::numeric_limits<SimulationTick>::max();
+    constexpr auto never = static_cast<SimulationTick>(
+        std::numeric_limits<std::int64_t>::max());
     const auto zeros = PackedLogic4::from_msb_string("00000000");
     const auto low_ones = PackedLogic4::from_msb_string("00000011");
     const auto low_leaf_ones = PackedLogic4::from_msb_string("0011");

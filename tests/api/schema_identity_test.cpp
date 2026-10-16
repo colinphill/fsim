@@ -19,19 +19,19 @@ static_assert(FSIM_TF_INTERFACE_ABI_VERSION == 3U);
 static_assert(FSIM_TF_REGISTRATION_TABLE_ABI_VERSION == 3U);
 static_assert(FSIM_SVDPI_CONTEXT_ABI_VERSION == 3U);
 static_assert(FSIM_ACC_STANDARD_QUERY_ABI_VERSION == 3U);
-static_assert(fsim::artifact::kObjectFormatVersion == 8);
-static_assert(fsim::library::kFormatVersion == 6);
-static_assert(fsim::library::kPortableSchemaVersion == 15);
-static_assert(fsim::library::kCompiledHirSchemaVersion == 1);
+static_assert(fsim::artifact::kObjectFormatVersion == 9);
+static_assert(fsim::library::kFormatVersion == 7);
+static_assert(fsim::library::kPortableSchemaVersion == 16);
+static_assert(fsim::library::kCompiledHirSchemaVersion == 3);
 static_assert(fsim::artifact::kDesignFormatVersion == 14);
-static_assert(fsim::app::kRuntimeStateSchema == 81);
+static_assert(fsim::app::kRuntimeStateSchema == 85);
 static_assert(fsim::app::kSemanticStateSchema == 4);
 static_assert(fsim::app::kDesignIrStateSchema == 5);
-static_assert(fsim::app::kCompiledHirBundleSchema == 1);
-static_assert(fsim::app::kSystemVerilogConstraintHirStateSchema == 11);
+static_assert(fsim::app::kCompiledHirBundleSchema == 3);
+static_assert(fsim::app::kSystemVerilogConstraintHirStateSchema == 14);
 static_assert(fsim::app::kSystemVerilogCoverageStateSchema == 7);
 static_assert(fsim::app::kSystemVerilogUvmStateSchema == 3);
-static_assert(fsim::app::kVhdlHirStateSchema == 7);
+static_assert(fsim::app::kVhdlHirStateSchema == 8);
 static_assert(fsim::compiler::llvm_detail::kNativeObjectCacheSchema ==
     std::string_view { "fsim-llvm-native-object-v274" });
 

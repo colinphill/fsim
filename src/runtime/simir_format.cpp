@@ -533,6 +533,17 @@ namespace fsim::runtime::simir {
     return (old_value == Logic4::one && (new_value == Logic4::zero || new_value == Logic4::x || new_value == Logic4::z)) || ((old_value == Logic4::x || old_value == Logic4::z) && new_value == Logic4::zero);
 }
 
+// Edge controls on packed expressions are detected from the LSB only.
+Logic4 edge_value(const PackedLogic4& value) noexcept
+{
+    if (value.width() == 0U) {
+        return Logic4::x;
+    }
+    return value.is_logic9()
+        ? to_logic4(value.get_logic9(0U))
+        : value.get(0U);
+}
+
 namespace {
 
 [[nodiscard]] std::string pattern_packed_element(

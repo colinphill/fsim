@@ -85,6 +85,10 @@ std::string unit_identity(const library::UnitIndexEntry& unit)
     for (const auto* field : { &unit.language, &unit.kind, &unit.name,
              &unit.primary_name, &unit.architecture })
         append_identity(result, *field);
+    append_identity(result,
+        std::to_string(static_cast<std::uint8_t>(unit.name_form)));
+    append_identity(result,
+        std::to_string(static_cast<std::uint8_t>(unit.primary_name_form)));
     return result;
 }
 

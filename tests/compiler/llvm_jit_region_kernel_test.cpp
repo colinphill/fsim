@@ -1122,22 +1122,24 @@ void compare_defined_member_registers(
     const PackedLogic4& condition, const PackedLogic4& when_true,
     const PackedLogic4& when_false)
 {
-  require(condition.width() == 1U
-          && when_true.width() == when_false.width(),
-      "the independent conditional-select oracle receives a valid shape");
-  if (condition.get(0U) == Logic4::one) {
-    return when_true;
-  }
-  if (condition.get(0U) == Logic4::zero) {
-    return when_false;
-  }
-  PackedLogic4 result(when_true.width(), Logic4::x);
-  for (std::uint32_t bit = 0U; bit < when_true.width(); ++bit) {
-    if (when_true.get(bit) == when_false.get(bit)) {
-      result.set(bit, when_true.get(bit));
+    require(condition.width() == 1U
+            && when_true.width() == when_false.width(),
+        "the independent conditional-select oracle receives a valid shape");
+    if (condition.get(0U) == Logic4::one) {
+        return when_true;
     }
-  }
-  return result;
+    if (condition.get(0U) == Logic4::zero) {
+        return when_false;
+    }
+    PackedLogic4 result(when_true.width(), Logic4::x);
+    for (std::uint32_t bit = 0U; bit < when_true.width(); ++bit) {
+        const auto left = when_true.get(bit);
+        if (left == when_false.get(bit)
+            && (left == Logic4::zero || left == Logic4::one)) {
+            result.set(bit, left);
+        }
+    }
+    return result;
 }
 
 [[nodiscard]] std::pair<PackedLogic4, PackedLogic4>

@@ -78,7 +78,8 @@ private:
 
   void parse_package_constant(DesignUnit &unit, const Token &start, bool body);
 
-  std::string parse_vhdl_selected_name(std::string_view description);
+  std::string parse_vhdl_selected_name(
+      std::string_view description, std::string* source_spelling = nullptr);
 
   void
   parse_vhdl_package_generic_map(std::vector<ParameterOverride> &associations,

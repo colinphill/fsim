@@ -20,7 +20,7 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "8a9bde5c7bf49b71cf4d5aaf60caa32b12a73d33fb4cecc97b11f749ed857fab")
+  "eaa1a6dcef59f87ee68d644e3c8f3184b4015bf95f3c32814d6fa9307a5052e8")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "nested portable contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
@@ -120,15 +120,15 @@ set(FSIM_COMPILED_HIR_CODEC
 set(FSIM_DESIGN_TEST
   "${FSIM_SOURCE_DIR}/tests/app/application_test_artifact_phases.cpp")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_HEADER}"
-  "kRuntimeStateSchema = 64"
+  "kRuntimeStateSchema = 85"
   "kSemanticStateSchema = 4"
   "kDesignIrStateSchema = 5"
-  "kCompiledHirBundleSchema = 1"
+  "kCompiledHirBundleSchema = 3"
   "kCompiledHirDecodeBudgetBytes"
-  "kSystemVerilogConstraintHirStateSchema = 8"
+  "kSystemVerilogConstraintHirStateSchema = 14"
   "kSystemVerilogCoverageStateSchema = 7"
   "kSystemVerilogUvmStateSchema = 3"
-  "kVhdlHirStateSchema = 6")
+  "kVhdlHirStateSchema = 8")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_CODEC_INTERNAL}"
   "kMaximumNesting = 1024"
   "design state string exceeds the payload"
@@ -143,13 +143,13 @@ fsim_require_nested_portable_tokens("${FSIM_DESIGN_CODEC}"
   "deserialize<runtime::SystemVerilogCoverageState>"
   "coverage state is inconsistent with compiled HIR")
 fsim_require_nested_portable_tokens("${FSIM_DESIGN_TEST}"
-  "kRuntimeStateSchema == 64"
+  "kRuntimeStateSchema == 85"
   "kDesignIrStateSchema == 5"
-  "kCompiledHirBundleSchema == 1"
-  "kSystemVerilogConstraintHirStateSchema == 8"
+  "kCompiledHirBundleSchema == 3"
+  "kSystemVerilogConstraintHirStateSchema == 14"
   "kSystemVerilogCoverageStateSchema == 7"
   "kSystemVerilogUvmStateSchema == 3"
-  "kVhdlHirStateSchema == 6"
+  "kVhdlHirStateSchema == 8"
   "future-coverage-state.bin"
   "truncated-coverage-state.bin"
   "future_uvm")

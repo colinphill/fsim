@@ -113,6 +113,74 @@ systemverilog_unit_candidates(
     return result;
 }
 
+bool extended_vhdl_identifier(const std::string_view spelling)
+{
+    return spelling.size() >= 2U && spelling.front() == '\\'
+        && spelling.back() == '\\';
+}
+
+std::string decode_vhdl_identifier(std::string_view spelling)
+{
+    if (!extended_vhdl_identifier(spelling)) {
+        std::string result { spelling };
+        std::ranges::transform(result, result.begin(), [](const char value) {
+            return value >= 'A' && value <= 'Z'
+                ? static_cast<char>(value - 'A' + 'a') : value;
+        });
+        return result;
+    }
+    spelling.remove_prefix(1U);
+    spelling.remove_suffix(1U);
+    std::string result;
+    result.reserve(spelling.size());
+    for (std::size_t index = 0; index < spelling.size(); ++index) {
+        result.push_back(spelling[index]);
+        if (spelling[index] == '\\' && index + 1U < spelling.size()
+            && spelling[index + 1U] == '\\') {
+            ++index;
+        }
+    }
+    return result;
+}
+
+bool same_vhdl_identifier(
+    const std::string_view left, const bool left_extended,
+    const std::string_view right, const bool right_extended)
+{
+    return left_extended == right_extended
+        && (left_extended ? left == right
+                          : equal_ignoring_ascii_case(left, right));
+}
+
+std::vector<std::string_view> vhdl_selected_name_parts(
+    const std::string_view spelling)
+{
+    std::vector<std::string_view> result;
+    std::size_t begin = 0U;
+    bool extended = false;
+    for (std::size_t index = 0; index < spelling.size(); ++index) {
+        if (spelling[index] == '\\') {
+            if (extended && index + 1U < spelling.size()
+                && spelling[index + 1U] == '\\') {
+                ++index;
+            } else {
+                extended = !extended;
+            }
+        } else if (spelling[index] == '.' && !extended) {
+            if (index == begin) {
+                return { };
+            }
+            result.push_back(spelling.substr(begin, index - begin));
+            begin = index + 1U;
+        }
+    }
+    if (extended || begin == spelling.size()) {
+        return { };
+    }
+    result.push_back(spelling.substr(begin));
+    return result;
+}
+
 } // namespace
 
 CompiledPortView::operator bool() const noexcept {
@@ -339,12 +407,13 @@ std::optional<semantic::CompiledUnitView> choose_unit(
     const semantic::CompiledDesign& compiled,
     const std::string& requested)
 {
+    const auto systemverilog_name = simple_top_name(requested);
     static constexpr std::array primary_kinds {
         semantic::sv::UnitKind::module,
         semantic::sv::UnitKind::program,
     };
     auto candidates = systemverilog_unit_candidates(
-        compiled, requested, primary_kinds, false,
+        compiled, systemverilog_name, primary_kinds, false,
         SystemVerilogLibraryMatch::any);
     if (!candidates.empty()) {
         return candidates.front();
@@ -353,24 +422,24 @@ std::optional<semantic::CompiledUnitView> choose_unit(
         semantic::sv::UnitKind::configuration,
     };
     candidates = systemverilog_unit_candidates(
-        compiled, requested, configuration_kinds, true,
+        compiled, systemverilog_name, configuration_kinds, true,
         SystemVerilogLibraryMatch::any);
     if (!candidates.empty()) {
         return candidates.front();
     }
+    const auto target = parse_target("vhdl:" + requested);
+    if (!target)
+        return std::nullopt;
     for (const auto& unit : compiled.vhdl_units()) {
         if (unit.kind == semantic::vhdl::UnitKind::configuration
-            && equal_ignoring_ascii_case(unit.name, requested)) {
+            && same_vhdl_identifier(unit.name, unit.extended_name,
+                target->unit, target->unit_extended)
+            && (target->library.empty()
+                || vhdl_library_equal(unit.library, target->library))) {
             return unit_view(compiled, unit);
         }
     }
-    for (const auto& unit : compiled.vhdl_units()) {
-        if (unit.kind == semantic::vhdl::UnitKind::architecture
-            && equal_ignoring_ascii_case(unit.primary_name, requested)) {
-            return unit_view(compiled, unit);
-        }
-    }
-    return std::nullopt;
+    return choose_bound_unit(compiled, *target);
 }
 
 
@@ -384,6 +453,47 @@ std::optional<TargetSpec> parse_target(const std::string_view spelling) {
     TargetSpec result;
     result.language = std::string{spelling.substr(0, colon)};
     auto remainder = spelling.substr(colon + 1);
+    if (result.language == "vhdl") {
+        bool extended = false;
+        auto architecture_open = std::string_view::npos;
+        for (std::size_t index = 0; index < remainder.size(); ++index) {
+            if (remainder[index] == '\\') {
+                if (extended && index + 1U < remainder.size()
+                    && remainder[index + 1U] == '\\') {
+                    ++index;
+                } else {
+                    extended = !extended;
+                }
+            } else if (remainder[index] == '(' && !extended) {
+                architecture_open = index;
+            }
+        }
+        if (architecture_open != std::string_view::npos) {
+            if (remainder.back() != ')') {
+                return std::nullopt;
+            }
+            const auto architecture = remainder.substr(architecture_open + 1U,
+                remainder.size() - architecture_open - 2U);
+            if (architecture.empty()) {
+                return std::nullopt;
+            }
+            result.architecture_extended
+                = extended_vhdl_identifier(architecture);
+            result.architecture = decode_vhdl_identifier(architecture);
+            remainder = remainder.substr(0U, architecture_open);
+        }
+        const auto parts = vhdl_selected_name_parts(remainder);
+        if (parts.empty() || parts.size() > 2U) {
+            return std::nullopt;
+        }
+        if (parts.size() == 2U) {
+            result.library = decode_vhdl_identifier(parts.front());
+        }
+        result.unit_extended = extended_vhdl_identifier(parts.back());
+        result.unit = decode_vhdl_identifier(parts.back());
+        return result.unit.empty() ? std::nullopt
+                                  : std::optional { result };
+    }
     if (const auto dot = remainder.rfind('.'); dot != std::string_view::npos) {
         result.library = std::string{remainder.substr(0, dot)};
         remainder.remove_prefix(dot + 1);
@@ -520,12 +630,15 @@ std::optional<semantic::CompiledUnitView> choose_bound_unit(
     if (target.language == "vhdl") {
         for (const auto& unit : compiled.vhdl_units()) {
             if (unit.kind == semantic::vhdl::UnitKind::architecture
-                && equal_ignoring_ascii_case(unit.primary_name, target.unit)
+                && same_vhdl_identifier(unit.primary_name,
+                    unit.extended_primary_name, target.unit,
+                    target.unit_extended)
                 && (target.library.empty() || unit.library.empty()
                     || equal_ignoring_ascii_case(unit.library, target.library))
                 && (!target.architecture
-                    || equal_ignoring_ascii_case(
-                        unit.name, *target.architecture))) {
+                    || same_vhdl_identifier(unit.name, unit.extended_name,
+                        *target.architecture,
+                        target.architecture_extended))) {
                 return unit_view(compiled, unit);
             }
         }
@@ -546,7 +659,8 @@ std::optional<semantic::CompiledUnitView> choose_top_unit(
         if (target->language == "vhdl" && !target->architecture) {
             for (const auto& unit : compiled.vhdl_units()) {
                 if (unit.kind == semantic::vhdl::UnitKind::configuration
-                    && equal_ignoring_ascii_case(unit.name, target->unit)
+                    && same_vhdl_identifier(unit.name, unit.extended_name,
+                        target->unit, target->unit_extended)
                     && (target->library.empty()
                         || vhdl_library_equal(
                             unit.library, target->library))) {
@@ -556,7 +670,7 @@ std::optional<semantic::CompiledUnitView> choose_top_unit(
         }
         return choose_bound_unit(compiled, *target);
     }
-    return choose_unit(compiled, simple_top_name(spelling));
+    return choose_unit(compiled, std::string { spelling });
 }
 
 

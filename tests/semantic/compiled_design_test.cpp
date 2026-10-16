@@ -2622,6 +2622,507 @@ void test_compiled_design_linker()
         != std::string::npos);
 }
 
+void test_vhdl_call_package_link_references()
+{
+    LinkBundleBuilder builder { "vhdl-call-package-references" };
+    const auto external_package = builder.add_vhdl_unit(
+        UnitKind::vhdl_package, vhdl::UnitKind::package,
+        "Call_Package", {}, "MiXeD_Lib");
+    const auto local_package = builder.add_vhdl_unit(
+        UnitKind::vhdl_package, vhdl::UnitKind::package,
+        "Local_Package", {}, "User_Lib");
+    const auto entity = builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity,
+        "Call_Owner", {}, "User_Lib");
+    const auto architecture = builder.add_vhdl_unit(
+        UnitKind::vhdl_architecture, vhdl::UnitKind::architecture,
+        "RTL", "Call_Owner", "User_Lib");
+
+    const auto add_member = [&](const UnitId package,
+                                const std::string_view name,
+                                const vhdl::DeclarationForm form) {
+        const auto scope = builder.model.units()[package.value()].scope;
+        const auto kind = form == vhdl::DeclarationForm::function
+            ? DeclarationKind::function : DeclarationKind::constant;
+        const auto id = builder.model.add_declaration(
+            scope, kind, std::string { name }, builder.source, builder.origin);
+        vhdl::Declaration declaration;
+        declaration.id = id;
+        declaration.scope = scope;
+        declaration.form = form;
+        declaration.name = name;
+        declaration.source = builder.source;
+        declaration.origin = builder.origin;
+        if (form == vhdl::DeclarationForm::function) {
+            declaration.callable.emplace();
+            declaration.callable->function = true;
+            declaration.callable->pure = true;
+            declaration.callable->defined = true;
+            declaration.callable->return_type.emplace();
+            declaration.callable->return_type->type_mark.spelling = "integer";
+            declaration.callable->return_type->domain
+                = vhdl::ValueDomain::integer;
+        }
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(declaration));
+        builder.vhdl_unit(package).declarations.push_back(id);
+        return id;
+    };
+    const auto external_function = add_member(external_package,
+        "Echo", vhdl::DeclarationForm::function);
+    const auto external_constant = add_member(external_package,
+        "Default_Value", vhdl::DeclarationForm::constant);
+    const auto local_function = add_member(local_package,
+        "Run", vhdl::DeclarationForm::function);
+
+    const auto architecture_scope
+        = builder.model.units()[architecture.value()].scope;
+    const auto add_expression = [&](const vhdl::ExpressionKind kind,
+                                    const std::string_view spelling,
+                                    const std::optional<DeclarationId> selected,
+                                    const bool has_referenced_name) {
+        const auto id = builder.model.add_expression_identity(
+            architecture_scope, builder.source, builder.origin);
+        vhdl::Expression expression;
+        expression.id = id;
+        expression.scope = architecture_scope;
+        expression.kind = kind;
+        expression.text = spelling;
+        expression.source = builder.source;
+        expression.origin = builder.origin;
+        if (has_referenced_name) {
+            expression.referenced_name = vhdl_name(
+                std::string { spelling }, builder.source);
+            expression.referenced_name->selected = selected;
+        }
+        builder.vhdl_hir.mutable_expressions().push_back(
+            std::move(expression));
+    };
+    add_expression(vhdl::ExpressionKind::call,
+        "mIxEd_lIb.Call_Package.Echo", external_function, true);
+    add_expression(vhdl::ExpressionKind::call,
+        "work.Local_Package.Run", local_function, true);
+    add_expression(vhdl::ExpressionKind::name,
+        "MiXeD_Lib.Call_Package.Default_Value", external_constant, true);
+    add_expression(vhdl::ExpressionKind::call,
+        "other_lib.Call_Package.Echo", std::nullopt, true);
+    add_expression(vhdl::ExpressionKind::call,
+        "work.Local_Package.Missing", std::nullopt, true);
+    add_expression(vhdl::ExpressionKind::call,
+        "MiXeD_Lib.Call_Package.Echo", std::nullopt, false);
+    add_expression(vhdl::ExpressionKind::string_literal,
+        "MiXeD_Lib.Call_Package.Echo", std::nullopt, false);
+    add_expression(vhdl::ExpressionKind::binary,
+        "MiXeD_Lib.Call_Package.Echo", std::nullopt, false);
+
+    std::vector<CompiledDesign> inputs;
+    inputs.push_back(builder.finish());
+    auto linked = link_compiled_designs(std::move(inputs));
+    assert(linked.ok() && linked.design);
+    const auto references = linked.design->references();
+    const auto package_references = std::ranges::count_if(
+        references, [&](const CompiledReference& reference) {
+            return reference.kind == CompiledReferenceKind::package
+                && reference.owner == architecture;
+        });
+    assert(package_references == 2U);
+    const auto external_reference = std::ranges::find_if(
+        references, [&](const CompiledReference& reference) {
+            return reference.kind == CompiledReferenceKind::package
+                && reference.owner == architecture
+                && reference.library == "mixed_lib"
+                && reference.name == "call_package";
+        });
+    assert(external_reference != references.end());
+    assert(external_reference->target
+        && *external_reference->target == external_package);
+    const auto local_reference = std::ranges::find_if(
+        references, [&](const CompiledReference& reference) {
+            return reference.kind == CompiledReferenceKind::package
+                && reference.owner == architecture
+                && reference.library == "user_lib"
+                && reference.name == "local_package";
+        });
+    assert(local_reference != references.end());
+    assert(local_reference->target
+        && *local_reference->target == local_package);
+    assert(linked.design->find_unit(entity));
+}
+
+void test_systemverilog_package_member_projection_identity()
+{
+    const auto add_member = [](auto& builder, const UnitId package,
+                                const std::string_view name,
+                                const std::string_view physical_file,
+                                const std::string_view logical_file,
+                                const std::string_view digest,
+                                const std::uint64_t begin,
+                                const std::uint64_t end) {
+        const auto file = builder.model.intern_source_file(
+            std::string { physical_file }, std::string { digest });
+        const auto source = builder.model.intern_source_span(file,
+            std::string { logical_file }, { begin, 1U, 1U },
+            { end, 1U, static_cast<std::uint32_t>(end - begin + 1U) });
+        const auto origin
+            = builder.model.add_origin(OriginKind::parsed, source);
+        const auto scope = builder.model.units()[package.value()].scope;
+        const auto id = builder.model.add_declaration(scope,
+            DeclarationKind::function, std::string { name }, source, origin);
+        sv::Declaration declaration;
+        declaration.id = id;
+        declaration.scope = scope;
+        declaration.form = sv::DeclarationForm::function;
+        declaration.name = name;
+        declaration.source = source;
+        declaration.origin = origin;
+        builder.systemverilog.mutable_declarations().push_back(
+            std::move(declaration));
+        builder.systemverilog_unit(package).declarations.push_back(id);
+        return id;
+    };
+    const auto make_package = [&](const std::string_view library,
+                                  const std::string_view physical_file,
+                                  const std::string_view digest,
+                                  const std::uint64_t first_begin,
+                                  const std::uint64_t first_end,
+                                  const std::uint64_t second_begin,
+                                  const std::uint64_t second_end) {
+        LinkBundleBuilder builder { "package-member-provider" };
+        const auto package = builder.add_systemverilog_unit(
+            UnitKind::systemverilog_package, sv::UnitKind::package,
+            "SharedPkg", std::string { library });
+        static_cast<void>(add_member(builder, package, "compute",
+            physical_file, "shared_pkg.sv", digest,
+            first_begin, first_end));
+        static_cast<void>(add_member(builder, package, "compute",
+            physical_file, "shared_pkg.sv", digest,
+            second_begin, second_end));
+        return builder.finish();
+    };
+
+    LinkBundleBuilder builder { "package-member-consumer" };
+    const auto package_a = builder.add_systemverilog_unit(
+        UnitKind::systemverilog_package, sv::UnitKind::package,
+        "SharedPkg", "libA");
+    const auto package_b = builder.add_systemverilog_unit(
+        UnitKind::systemverilog_package, sv::UnitKind::package,
+        "SharedPkg", "libB");
+    const auto package_c = builder.add_systemverilog_unit(
+        UnitKind::systemverilog_package, sv::UnitKind::package,
+        "MissingDigestPkg", "libC");
+    const auto package_d = builder.add_systemverilog_unit(
+        UnitKind::systemverilog_package, sv::UnitKind::package,
+        "EmptySpanPkg", "libD");
+    const auto package_e = builder.add_systemverilog_unit(
+        UnitKind::systemverilog_package, sv::UnitKind::package,
+        "AmbiguousPkg", "libE");
+    const auto consumer = builder.add_systemverilog_unit(
+        UnitKind::verilog_module, sv::UnitKind::module,
+        "Consumer", "work");
+    const auto a_first = add_member(builder, package_a, "compute",
+        "/checkout/old/libA/shared_pkg.sv", "shared_pkg.sv",
+        "same-source-a", 10U, 20U);
+    const auto a_second = add_member(builder, package_a, "compute",
+        "/checkout/old/libA/shared_pkg.sv", "shared_pkg.sv",
+        "same-source-a", 30U, 40U);
+    const auto b_member = add_member(builder, package_b, "compute",
+        "/checkout/old/libB/shared_pkg.sv", "shared_pkg.sv",
+        "same-source-b", 50U, 60U);
+    const auto c_member = add_member(builder, package_c, "compute",
+        "/checkout/old/libC/missing_digest_pkg.sv",
+        "missing_digest_pkg.sv", {}, 70U, 80U);
+    const auto d_member = add_member(builder, package_d, "compute",
+        "/checkout/old/libD/empty_span_pkg.sv",
+        "empty_span_pkg.sv", "same-source-d", 90U, 90U);
+    const auto e_first = add_member(builder, package_e, "compute",
+        "/checkout/old/libE/ambiguous_pkg.sv", "ambiguous_pkg.sv",
+        "same-source-e", 110U, 120U);
+    static_cast<void>(add_member(builder, package_e, "compute",
+        "/checkout/old/libE/ambiguous_pkg.sv", "ambiguous_pkg.sv",
+        "same-source-e", 110U, 120U));
+
+    const auto add_call = [&](const std::string_view spelling,
+                              const DeclarationId selected,
+                              std::vector<DeclarationId> overloads) {
+        const auto scope = builder.model.units()[consumer.value()].scope;
+        const auto id = builder.model.add_expression_identity(
+            scope, builder.source, builder.origin);
+        sv::Expression expression;
+        expression.id = id;
+        expression.scope = scope;
+        expression.kind = sv::ExpressionKind::call;
+        expression.text = spelling;
+        expression.source = builder.source;
+        expression.origin = builder.origin;
+        auto name = sv_name(std::string { spelling }, builder.source);
+        name.selected = selected;
+        name.overloads = std::move(overloads);
+        expression.referenced_name = std::move(name);
+        builder.systemverilog.mutable_expressions().push_back(
+            std::move(expression));
+        return id;
+    };
+    const auto call_a = add_call(
+        "libA::SharedPkg::compute", a_second, { a_second, a_first });
+    const auto call_b = add_call(
+        "libB::SharedPkg::compute", b_member, { b_member });
+    const auto call_c = add_call(
+        "libC::MissingDigestPkg::compute", c_member, { c_member });
+    const auto call_d = add_call(
+        "libD::EmptySpanPkg::compute", d_member, { d_member });
+    const auto call_e = add_call(
+        "libE::AmbiguousPkg::compute", e_first, { e_first });
+    assert(call_c.valid() && call_d.valid() && call_e.valid());
+    auto source = builder.finish();
+
+    const std::array consumer_selection { consumer };
+    const std::vector<std::string> no_supporting_libraries;
+    auto consumer_object = extract_compiled_units(
+        source, consumer_selection, no_supporting_libraries);
+    assert(consumer_object.ok() && consumer_object.design);
+    assert(std::ranges::none_of(consumer_object.design->systemverilog_units(),
+        [](const sv::Unit& unit) { return unit.kind == sv::UnitKind::package; }));
+    for (const auto expression_id : { call_a, call_b }) {
+        const auto original = std::ranges::find(
+            source.systemverilog_hir.expressions(), expression_id,
+            &sv::Expression::id);
+        const auto projected = std::ranges::find_if(
+            consumer_object.design->systemverilog_hir.expressions(),
+            [&](const sv::Expression& expression) {
+                return expression.text
+                    == (expression_id == call_a
+                            ? "libA::SharedPkg::compute"
+                            : "libB::SharedPkg::compute");
+            });
+        assert(original != source.systemverilog_hir.expressions().end());
+        assert(projected
+            != consumer_object.design->systemverilog_hir.expressions().end());
+        assert(projected->referenced_name);
+        assert(!projected->referenced_name->selected);
+        assert(projected->referenced_name->overloads.empty());
+        assert(std::ranges::any_of(consumer_object.design->references(),
+            [&](const CompiledReference& reference) {
+                return reference.systemverilog_package_member
+                    && reference.systemverilog_package_member->expression
+                    == std::optional { projected->id };
+            }));
+    }
+
+    const std::array package_b_selection { package_b };
+    auto package_b_object = extract_compiled_units(
+        source, package_b_selection, no_supporting_libraries);
+    assert(package_b_object.ok() && package_b_object.design);
+    auto relocated_package_a = make_package(
+        "libA", "/checkout/new/libA/shared_pkg.sv", "same-source-a",
+        10U, 20U, 30U, 40U);
+    std::vector<CompiledDesign> link_inputs;
+    link_inputs.push_back(std::move(*consumer_object.design));
+    link_inputs.push_back(std::move(*package_b_object.design));
+    link_inputs.push_back(std::move(relocated_package_a));
+    auto linked = link_compiled_designs(std::move(link_inputs));
+    assert(linked.ok() && linked.design);
+
+    const auto identity_for_call = [&](const std::string_view spelling) {
+        const auto expression = std::ranges::find_if(
+            linked.design->systemverilog_hir.expressions(),
+            [&](const sv::Expression& candidate) {
+                return candidate.text == spelling;
+            });
+        assert(expression
+            != linked.design->systemverilog_hir.expressions().end());
+        assert(expression->referenced_name
+            && expression->referenced_name->selected);
+        const auto selected = *expression->referenced_name->selected;
+        const auto declaration = std::ranges::find(
+            linked.design->systemverilog_hir.declarations(), selected,
+            &sv::Declaration::id);
+        assert(declaration
+            != linked.design->systemverilog_hir.declarations().end());
+        const auto& semantic_declaration
+            = linked.design->semantics.declarations()[selected.value()];
+        const auto provider
+            = linked.design->semantics.scopes()[semantic_declaration.scope.value()].unit;
+        const auto& unit = linked.design->semantics.units()[provider.value()];
+        const auto& span
+            = linked.design->semantics.source_spans()[declaration->source.value()];
+        const auto& file
+            = linked.design->semantics.source_files()[span.file.value()];
+        return std::tuple {
+            unit.library, unit.name, file.content_digest,
+            span.begin.offset };
+    };
+    assert((identity_for_call("libA::SharedPkg::compute")
+        == std::tuple { std::string { "libA" }, std::string { "SharedPkg" },
+            std::string { "same-source-a" }, std::uint64_t { 30U } }));
+    assert((identity_for_call("libB::SharedPkg::compute")
+        == std::tuple { std::string { "libB" }, std::string { "SharedPkg" },
+            std::string { "same-source-b" }, std::uint64_t { 50U } }));
+    const auto linked_a = std::ranges::find_if(
+        linked.design->systemverilog_hir.expressions(),
+        [](const sv::Expression& expression) {
+            return expression.text == "libA::SharedPkg::compute";
+        });
+    assert(linked_a->referenced_name->overloads.size() == 2U);
+    assert(linked_a->referenced_name->overloads[0]
+        == *linked_a->referenced_name->selected);
+    const auto second_overload = std::ranges::find(
+        linked.design->systemverilog_hir.declarations(),
+        linked_a->referenced_name->overloads[1], &sv::Declaration::id);
+    assert(second_overload
+        != linked.design->systemverilog_hir.declarations().end());
+    const auto& second_span = linked.design->semantics.source_spans()
+        [second_overload->source.value()];
+    assert(second_span.begin.offset == 10U);
+    assert(std::ranges::count_if(linked.design->systemverilog_units(),
+        [](const sv::Unit& unit) { return unit.kind == sv::UnitKind::package; })
+        == 2U);
+
+    auto changed_package_a = make_package(
+        "libA", "/checkout/changed/libA/shared_pkg.sv", "changed-source-a",
+        10U, 20U, 30U, 40U);
+    auto changed_package_b = extract_compiled_units(
+        source, package_b_selection, no_supporting_libraries);
+    assert(changed_package_b.ok() && changed_package_b.design);
+    auto changed_consumer = extract_compiled_units(
+        source, consumer_selection, no_supporting_libraries);
+    assert(changed_consumer.ok() && changed_consumer.design);
+    std::vector<CompiledDesign> changed_inputs;
+    changed_inputs.push_back(std::move(*changed_consumer.design));
+    changed_inputs.push_back(std::move(*changed_package_b.design));
+    changed_inputs.push_back(std::move(changed_package_a));
+    auto changed = link_compiled_designs(std::move(changed_inputs));
+    assert(changed.ok() && changed.design);
+    const auto changed_a = std::ranges::find_if(
+        changed.design->systemverilog_hir.expressions(),
+        [](const sv::Expression& expression) {
+            return expression.text == "libA::SharedPkg::compute";
+        });
+    const auto changed_b = std::ranges::find_if(
+        changed.design->systemverilog_hir.expressions(),
+        [](const sv::Expression& expression) {
+            return expression.text == "libB::SharedPkg::compute";
+        });
+    assert(changed_a != changed.design->systemverilog_hir.expressions().end());
+    assert(changed_b != changed.design->systemverilog_hir.expressions().end());
+    assert(changed_a->referenced_name
+        && !changed_a->referenced_name->selected
+        && changed_a->referenced_name->overloads.empty());
+    assert(changed_b->referenced_name
+        && changed_b->referenced_name->selected);
+
+    const std::array retained_selection { consumer, package_c, package_d };
+    auto retained_providers = extract_compiled_units(
+        source, retained_selection, no_supporting_libraries);
+    assert(retained_providers.ok() && retained_providers.design);
+    const auto assert_retained_without_source_identity = [&](
+        const CompiledDesign& design, const std::string_view spelling,
+        const std::string_view expected_library,
+        const std::string_view expected_package) {
+        const auto call = std::ranges::find_if(
+            design.systemverilog_hir.expressions(),
+            [&](const sv::Expression& expression) {
+                return expression.text == spelling;
+            });
+        assert(call != design.systemverilog_hir.expressions().end());
+        assert(call->referenced_name && call->referenced_name->selected);
+        const auto selected = *call->referenced_name->selected;
+        const auto declaration = std::ranges::find(
+            design.systemverilog_hir.declarations(), selected,
+            &sv::Declaration::id);
+        assert(declaration != design.systemverilog_hir.declarations().end());
+        assert(declaration->scope.valid()
+            && declaration->scope.value() < design.semantics.scopes().size());
+        const auto provider
+            = design.semantics.scopes()[declaration->scope.value()].unit;
+        assert(provider.valid()
+            && provider.value() < design.semantics.units().size());
+        const auto& provider_unit = design.semantics.units()[provider.value()];
+        assert(provider_unit.kind == UnitKind::systemverilog_package);
+        assert(provider_unit.library == expected_library);
+        assert(provider_unit.name == expected_package);
+        const auto use = std::ranges::find_if(
+            design.references(), [&](const CompiledReference& reference) {
+                return reference.systemverilog_package_member
+                    && reference.systemverilog_package_member->expression
+                        == std::optional { call->id };
+            });
+        assert(use != design.references().end());
+        const auto& member_use = *use->systemverilog_package_member;
+        assert(member_use.selected_present && member_use.selected_complete);
+        assert(member_use.retained_selected == std::optional { selected });
+        assert(!member_use.package_selected);
+    };
+    assert_retained_without_source_identity(
+        *retained_providers.design, "libC::MissingDigestPkg::compute",
+        "libC", "MissingDigestPkg");
+    assert_retained_without_source_identity(
+        *retained_providers.design, "libD::EmptySpanPkg::compute",
+        "libD", "EmptySpanPkg");
+
+    std::vector<CompiledDesign> retained_inputs;
+    retained_inputs.push_back(std::move(*retained_providers.design));
+    auto retained_linked
+        = link_compiled_designs(std::move(retained_inputs));
+    assert(retained_linked.ok() && retained_linked.design);
+    assert_retained_without_source_identity(
+        *retained_linked.design, "libC::MissingDigestPkg::compute",
+        "libC", "MissingDigestPkg");
+    assert_retained_without_source_identity(
+        *retained_linked.design, "libD::EmptySpanPkg::compute",
+        "libD", "EmptySpanPkg");
+
+    const std::array ambiguous_provider_selection { package_e };
+    auto ambiguous_provider = extract_compiled_units(
+        source, ambiguous_provider_selection, no_supporting_libraries);
+    auto ambiguous_consumer = extract_compiled_units(
+        source, consumer_selection, no_supporting_libraries);
+    assert(ambiguous_provider.ok() && ambiguous_provider.design);
+    assert(ambiguous_consumer.ok() && ambiguous_consumer.design);
+    std::vector<CompiledDesign> ambiguous_inputs;
+    ambiguous_inputs.push_back(std::move(*ambiguous_consumer.design));
+    ambiguous_inputs.push_back(std::move(*ambiguous_provider.design));
+    auto ambiguous_linked
+        = link_compiled_designs(std::move(ambiguous_inputs));
+    assert(ambiguous_linked.ok() && ambiguous_linked.design);
+    const auto ambiguous_call = std::ranges::find_if(
+        ambiguous_linked.design->systemverilog_hir.expressions(),
+        [](const sv::Expression& expression) {
+            return expression.text == "libE::AmbiguousPkg::compute";
+        });
+    assert(ambiguous_call
+        != ambiguous_linked.design->systemverilog_hir.expressions().end());
+    assert(ambiguous_call->referenced_name
+        && !ambiguous_call->referenced_name->selected
+        && ambiguous_call->referenced_name->overloads.empty());
+
+    const std::array source_less_provider_selection { package_c, package_d };
+    auto source_less_providers = extract_compiled_units(
+        source, source_less_provider_selection, no_supporting_libraries);
+    auto source_less_consumer = extract_compiled_units(
+        source, consumer_selection, no_supporting_libraries);
+    assert(source_less_providers.ok() && source_less_providers.design);
+    assert(source_less_consumer.ok() && source_less_consumer.design);
+    std::vector<CompiledDesign> source_less_inputs;
+    source_less_inputs.push_back(std::move(*source_less_consumer.design));
+    source_less_inputs.push_back(std::move(*source_less_providers.design));
+    auto source_less_linked
+        = link_compiled_designs(std::move(source_less_inputs));
+    assert(source_less_linked.ok() && source_less_linked.design);
+    for (const auto spelling : {
+             "libC::MissingDigestPkg::compute",
+             "libD::EmptySpanPkg::compute" }) {
+        const auto call = std::ranges::find_if(
+            source_less_linked.design->systemverilog_hir.expressions(),
+            [&](const sv::Expression& expression) {
+                return expression.text == spelling;
+            });
+        assert(call
+            != source_less_linked.design->systemverilog_hir.expressions().end());
+        assert(call->referenced_name && !call->referenced_name->selected
+            && call->referenced_name->overloads.empty());
+    }
+}
+
 void test_compiled_design_relocation_regressions()
 {
     auto specialization = make_specialization_fixture();
@@ -3513,6 +4014,178 @@ void test_compiled_design_specialization()
         fixture.vhdl_architecture, foreign_vhdl));
     assert(!make_specialized_hir_overlay(fixture.design,
         UnitId::from_index(1000), sv_actuals));
+}
+
+void test_compiled_vhdl_resolver_nominal_profile_identity()
+{
+    using Builtin = vhdl::BuiltinTypeIdentity;
+    LinkBundleBuilder builder { "resolver-nominal-profile-identity.vhd" };
+    const auto unit = builder.add_vhdl_unit(UnitKind::vhdl_package,
+        vhdl::UnitKind::package, "nominal_profiles");
+    const auto scope = builder.model.units()[unit.value()].scope;
+    auto& package = builder.vhdl_unit(unit);
+
+    const auto add_array_type = [&](const std::string& name) {
+        const auto declaration = builder.model.add_declaration(scope,
+            DeclarationKind::type, name, builder.source, builder.origin);
+        TypeReference semantic_base;
+        semantic_base.source = builder.source;
+        semantic_base.spelling = name;
+        const auto type = builder.model.add_type(scope,
+            TypeKind::declaration, name, semantic_base,
+            builder.source, builder.origin);
+        vhdl::TypeDefinition definition;
+        definition.id = type;
+        definition.declaration = declaration;
+        definition.form = vhdl::TypeForm::array;
+        definition.name = name;
+        definition.element_subtype.emplace();
+        definition.element_subtype->type_mark.spelling = "bit";
+        definition.element_subtype->domain = vhdl::ValueDomain::bit2;
+        definition.element_subtype->executable_width = 1U;
+        vhdl::ArrayDimension dimension;
+        dimension.unconstrained = true;
+        dimension.source = builder.source;
+        definition.array_dimensions.push_back(dimension);
+        definition.source = builder.source;
+        definition.origin = builder.origin;
+        builder.vhdl_hir.mutable_types().push_back(
+            std::move(definition));
+        vhdl::Declaration declaration_record;
+        declaration_record.id = declaration;
+        declaration_record.scope = scope;
+        declaration_record.form = vhdl::DeclarationForm::type;
+        declaration_record.name = name;
+        declaration_record.declared_type = type;
+        declaration_record.source = builder.source;
+        declaration_record.origin = builder.origin;
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(declaration_record));
+        package.declarations.push_back(declaration);
+        return type;
+    };
+    const auto matrix_type = add_array_type("matrix_t");
+    const auto distinct_type = add_array_type("other_matrix_t");
+
+    const auto alias_declaration = builder.model.add_declaration(scope,
+        DeclarationKind::subtype, "matrix_alias_t",
+        builder.source, builder.origin);
+    TypeReference alias_model_base;
+    alias_model_base.source = builder.source;
+    alias_model_base.spelling = "matrix_t";
+    alias_model_base.target = matrix_type;
+    const auto alias_type = builder.model.add_type(scope,
+        TypeKind::subtype, "matrix_alias_t", alias_model_base,
+        builder.source, builder.origin);
+    vhdl::TypeDefinition alias_definition;
+    alias_definition.id = alias_type;
+    alias_definition.declaration = alias_declaration;
+    alias_definition.form = vhdl::TypeForm::subtype;
+    alias_definition.name = "matrix_alias_t";
+    alias_definition.base.type_mark.spelling = "matrix_t";
+    alias_definition.base.type_mark.target = matrix_type;
+    alias_definition.source = builder.source;
+    alias_definition.origin = builder.origin;
+    builder.vhdl_hir.mutable_types().push_back(
+        std::move(alias_definition));
+    vhdl::Declaration alias_record;
+    alias_record.id = alias_declaration;
+    alias_record.scope = scope;
+    alias_record.form = vhdl::DeclarationForm::subtype;
+    alias_record.name = "matrix_alias_t";
+    alias_record.declared_type = alias_type;
+    alias_record.source = builder.source;
+    alias_record.origin = builder.origin;
+    builder.vhdl_hir.mutable_declarations().push_back(
+        std::move(alias_record));
+    package.declarations.push_back(alias_declaration);
+
+    const auto design = builder.finish();
+    const CompiledDesignResolver resolver { design, unit };
+    const auto selected = [](const TypeId target, std::string spelling) {
+        vhdl::SubtypeIndication subtype;
+        subtype.type_mark.target = target;
+        subtype.type_mark.spelling = std::move(spelling);
+        subtype.domain = vhdl::ValueDomain::bit2;
+        subtype.unconstrained = true;
+        return subtype;
+    };
+    const auto local_same_name = selected(matrix_type, "integer_vector");
+    const auto unrelated_same_name
+        = selected(distinct_type, "integer_vector");
+    const auto alias_same_type = selected(alias_type, "renamed_vector");
+    assert(!resolver.vhdl_subtype_profiles_match(
+        local_same_name, scope, unrelated_same_name, scope));
+    assert(resolver.vhdl_subtype_profiles_match(
+        local_same_name, scope, alias_same_type, scope));
+
+    const auto standard_identity = [&]() {
+        vhdl::SubtypeIndication subtype;
+        subtype.type_mark.spelling = "integer_vector";
+        subtype.builtin_type = Builtin::std_standard_integer_vector;
+        subtype.unconstrained = true;
+        return subtype;
+    }();
+    assert(!resolver.vhdl_subtype_profiles_match(
+        local_same_name, scope, standard_identity, scope));
+    assert(resolver.vhdl_subtype_profiles_match(
+        standard_identity, scope, standard_identity, scope));
+    auto other_standard_identity = standard_identity;
+    other_standard_identity.builtin_type
+        = Builtin::std_standard_time_vector;
+    assert(!resolver.vhdl_subtype_profiles_match(
+        standard_identity, scope, other_standard_identity, scope));
+
+    const std::array standard_array_profiles {
+        std::tuple { Builtin::std_standard_string,
+            std::string { "string" }, vhdl::ValueDomain::string,
+            std::uint64_t { 8U } },
+        std::tuple { Builtin::std_standard_bit_vector,
+            std::string { "bit_vector" }, vhdl::ValueDomain::bit2,
+            std::uint64_t { 1U } },
+    };
+    for (const auto& [identity, spelling, domain, element_width] :
+        standard_array_profiles) {
+        vhdl::SubtypeIndication serialized_profile;
+        serialized_profile.type_mark.spelling = spelling;
+        serialized_profile.builtin_type = identity;
+        serialized_profile.domain = domain;
+        serialized_profile.executable_width = element_width;
+        serialized_profile.unconstrained = false;
+        auto source_profile = serialized_profile;
+        source_profile.executable_width.reset();
+        source_profile.unconstrained = true;
+        assert(resolver.vhdl_subtype_profiles_match(
+            serialized_profile, scope, source_profile, scope));
+    }
+
+    auto bounded_bit_vector = standard_identity;
+    bounded_bit_vector.type_mark.spelling = "bit_vector";
+    bounded_bit_vector.builtin_type = Builtin::std_standard_bit_vector;
+    bounded_bit_vector.domain = vhdl::ValueDomain::bit2;
+    bounded_bit_vector.unconstrained = false;
+    bounded_bit_vector.executable_width = 8U;
+    vhdl::RangeConstraint bounded_range;
+    bounded_range.kind = vhdl::RangeKind::array_index;
+    bounded_range.left = 7;
+    bounded_range.right = 0;
+    bounded_range.descending = true;
+    bounded_bit_vector.constraints.push_back(bounded_range);
+    assert(resolver.vhdl_subtype_profiles_match(
+        bounded_bit_vector, scope, bounded_bit_vector, scope));
+    auto shifted_bit_vector = bounded_bit_vector;
+    shifted_bit_vector.constraints.front().left = 8;
+    shifted_bit_vector.constraints.front().right = 1;
+    assert(!resolver.vhdl_subtype_profiles_match(
+        bounded_bit_vector, scope, shifted_bit_vector, scope));
+
+    vhdl::SubtypeIndication unresolved_left;
+    unresolved_left.type_mark.spelling = "unresolved_vector";
+    unresolved_left.domain = vhdl::ValueDomain::bit2;
+    unresolved_left.unconstrained = true;
+    const auto unresolved_right = unresolved_left;
+    assert(resolver.vhdl_subtype_profiles_match(
+        unresolved_left, scope, unresolved_right, scope));
 }
 
 void test_compiled_design_resolver_generic_callable_profile()
@@ -4950,7 +5623,28 @@ void test_compiled_association_resolution()
 
 void test_specialized_hir_unit()
 {
-    const auto fixture = make_specialization_fixture();
+    auto fixture = make_specialization_fixture();
+    auto& architecture_units
+        = fixture.design.mutable_vhdl().mutable_units();
+    const auto architecture_unit = std::ranges::find(
+        architecture_units, fixture.vhdl_architecture, &vhdl::Unit::id);
+    assert(architecture_unit != architecture_units.end());
+    architecture_unit->standard = "2008";
+    architecture_unit->predefined_environment.identity
+        = "ieee-1076-standard:2008:fsim-v3";
+    architecture_unit->predefined_environment.working_library = "work";
+    architecture_unit->predefined_environment.implicit_libraries
+        = { "std", "work" };
+    architecture_unit->predefined_environment.implicit_packages
+        = { "std.standard.all" };
+    architecture_unit->predefined_environment.declarations = {
+        "boolean", "bit", "character", "severity_level", "integer",
+        "real", "time", "natural", "positive", "string", "bit_vector",
+        "universal_integer", "universal_real", "file_open_kind",
+        "file_open_status", "delay_length", "boolean_vector",
+        "integer_vector", "real_vector", "time_vector"
+    };
+    fixture.design.refresh_lookup_indexes();
     const auto& design = fixture.design;
     const auto any_record = [](const auto&) { return true; };
 
@@ -5249,6 +5943,12 @@ void test_specialized_hir_unit()
     const CompiledDesignResolver bound_resolver {
         *specialized_vhdl, bound_frames
     };
+    const auto bound_type_identity = bound_resolver.resolve_vhdl_type_identity(
+        "bit_vector", specialized_vhdl->scope());
+    assert(bound_type_identity.status == CompiledResolutionStatus::unique
+        && !bound_type_identity.type
+        && bound_type_identity.builtin_type
+            == vhdl::BuiltinTypeIdentity::std_standard_bit_vector);
     const auto bound_effective = bound_resolver.effective_vhdl_subtype(
         bound_vector, specialized_vhdl->scope());
     assert(bound_effective
@@ -12289,6 +12989,509 @@ void test_compiled_vhdl_named_type_lexical_visibility()
         "ambiguous_named_type", root_scope));
 }
 
+void test_compiled_vhdl_type_identity_resolution()
+{
+    LinkBundleBuilder builder {
+        "resolver-vhdl-type-identity-resolution.vhd"
+    };
+    const auto add_standard_owner = [&](const std::string_view name,
+                                        const std::string_view revision) {
+        const auto unit = builder.add_vhdl_unit(
+            UnitKind::vhdl_entity, vhdl::UnitKind::entity,
+            std::string { name });
+        auto& record = builder.vhdl_unit(unit);
+        record.standard = revision;
+        record.predefined_environment.identity
+            = "ieee-1076-standard:" + std::string { revision }
+            + ":fsim-v3";
+        record.predefined_environment.implicit_packages
+            = { "std.standard.all" };
+        record.predefined_environment.declarations = {
+            "boolean", "bit", "character", "severity_level", "integer",
+            "real", "time", "natural", "positive", "string", "bit_vector",
+            "universal_integer", "universal_real"
+        };
+        if (revision != "1987") {
+            record.predefined_environment.declarations.push_back(
+                "file_open_kind");
+            record.predefined_environment.declarations.push_back(
+                "file_open_status");
+            record.predefined_environment.declarations.push_back(
+                "delay_length");
+        }
+        if (revision == "2008" || revision == "2019") {
+            record.predefined_environment.declarations.push_back(
+                "integer_vector");
+        }
+        return unit;
+    };
+    const auto standard_1987 = add_standard_owner(
+        "Standard_1987", "1987");
+    const auto standard_1993 = add_standard_owner(
+        "Standard_1993", "1993");
+    const auto standard_2008 = add_standard_owner(
+        "Standard_2008", "2008");
+    const auto standard_2019 = add_standard_owner(
+        "Standard_2019", "2019");
+    const auto no_implicit_standard = builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity,
+        "No_Implicit_Standard");
+    auto& no_implicit_unit = builder.vhdl_unit(no_implicit_standard);
+    no_implicit_unit.predefined_environment.identity
+        = "ieee-1076-standard:2008:fsim-v3";
+    no_implicit_unit.predefined_environment.declarations = { "integer" };
+    const auto context_without_implicit_standard = builder.add_vhdl_unit(
+        UnitKind::vhdl_context, vhdl::UnitKind::context,
+        "Context_Without_Implicit_Standard");
+    auto& context_unit
+        = builder.vhdl_unit(context_without_implicit_standard);
+    context_unit.predefined_environment.identity
+        = "ieee-1076-standard:2008:fsim-v3";
+    context_unit.predefined_environment.implicit_packages
+        = { "std.standard.all" };
+    context_unit.predefined_environment.declarations = { "integer" };
+    const auto standard_package_owner = builder.add_vhdl_unit(
+        UnitKind::vhdl_package, vhdl::UnitKind::package,
+        "standard", {}, "std");
+    auto& standard_package_unit = builder.vhdl_unit(standard_package_owner);
+    standard_package_unit.predefined_environment.identity
+        = "ieee-1076-standard:2008:fsim-v3";
+    standard_package_unit.predefined_environment.implicit_packages
+        = { "std.standard.all" };
+    standard_package_unit.predefined_environment.declarations
+        = { "integer" };
+
+    const auto first_package = builder.add_vhdl_unit(
+        UnitKind::vhdl_package, vhdl::UnitKind::package,
+        "First_Vector_Types");
+    const auto second_package = builder.add_vhdl_unit(
+        UnitKind::vhdl_package, vhdl::UnitKind::package,
+        "Second_Vector_Types");
+    const auto add_package_type = [&](const UnitId package) {
+        const auto scope = builder.model.units()[package.value()].scope;
+        const auto declaration_id = builder.model.add_declaration(
+            scope, DeclarationKind::type, "bit_vector",
+            builder.source, builder.origin);
+        TypeReference base;
+        base.source = builder.source;
+        base.spelling = "bit";
+        const auto type_id = builder.model.add_type(
+            scope, TypeKind::declaration, "bit_vector",
+            std::move(base), builder.source, builder.origin);
+        vhdl::Declaration declaration;
+        declaration.id = declaration_id;
+        declaration.scope = scope;
+        declaration.form = vhdl::DeclarationForm::type;
+        declaration.name = "bit_vector";
+        declaration.declared_type = type_id;
+        declaration.source = builder.source;
+        declaration.origin = builder.origin;
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(declaration));
+        builder.vhdl_unit(package).declarations.push_back(declaration_id);
+        return type_id;
+    };
+    const auto first_type = add_package_type(first_package);
+    const auto second_type = add_package_type(second_package);
+    assert(first_type != second_type);
+    const auto add_package_integer_type = [&](const UnitId package) {
+        const auto scope = builder.model.units()[package.value()].scope;
+        const auto declaration_id = builder.model.add_declaration(
+            scope, DeclarationKind::type, "integer",
+            builder.source, builder.origin);
+        TypeReference base;
+        base.source = builder.source;
+        base.spelling = "integer";
+        const auto type_id = builder.model.add_type(
+            scope, TypeKind::declaration, "integer",
+            std::move(base), builder.source, builder.origin);
+        vhdl::Declaration declaration;
+        declaration.id = declaration_id;
+        declaration.scope = scope;
+        declaration.form = vhdl::DeclarationForm::type;
+        declaration.name = "integer";
+        declaration.declared_type = type_id;
+        declaration.source = builder.source;
+        declaration.origin = builder.origin;
+        builder.vhdl_hir.mutable_declarations().push_back(
+            std::move(declaration));
+        vhdl::TypeDefinition definition;
+        definition.id = type_id;
+        definition.declaration = declaration_id;
+        definition.form = vhdl::TypeForm::scalar;
+        definition.name = "integer";
+        definition.base.type_mark.source = builder.source;
+        definition.base.type_mark.spelling = "integer";
+        definition.source = builder.source;
+        definition.origin = builder.origin;
+        builder.vhdl_hir.mutable_types().push_back(
+            std::move(definition));
+        builder.vhdl_unit(package).declarations.push_back(declaration_id);
+        return type_id;
+    };
+    const auto first_integer_type
+        = add_package_integer_type(first_package);
+    const auto second_integer_type
+        = add_package_integer_type(second_package);
+    assert(first_integer_type != second_integer_type);
+
+    const auto import_owner = builder.add_vhdl_unit(
+        UnitKind::vhdl_entity, vhdl::UnitKind::entity,
+        "Ambiguous_Import_Owner");
+    auto& import_unit = builder.vhdl_unit(import_owner);
+    import_unit.predefined_environment.identity
+        = "ieee-1076-standard:2008:fsim-v3";
+    import_unit.predefined_environment.implicit_packages
+        = { "std.standard.all" };
+    import_unit.predefined_environment.declarations = {
+        "boolean", "bit", "character", "severity_level", "integer",
+        "real", "time", "natural", "positive", "string", "bit_vector",
+        "integer_vector"
+    };
+    const auto import_scope = builder.model.units()[import_owner.value()].scope;
+    const auto add_import = [&](const std::string_view package_name) {
+        vhdl::ContextItem clause;
+        clause.kind = vhdl::ContextKind::use_clause;
+        clause.source = builder.source;
+        clause.selected_names.push_back(vhdl_name(
+            "work." + std::string { package_name } + ".all",
+            builder.source));
+        import_unit.context.push_back(std::move(clause));
+    };
+    add_import("First_Vector_Types");
+    add_import("Second_Vector_Types");
+    const auto local_scope = builder.model.add_scope(
+        import_owner, import_scope, "local", builder.source,
+        builder.origin);
+    const auto local_declaration_id = builder.model.add_declaration(
+        local_scope, DeclarationKind::type, "bit_vector",
+        builder.source, builder.origin);
+    TypeReference local_base;
+    local_base.source = builder.source;
+    local_base.spelling = "bit";
+    const auto local_type = builder.model.add_type(
+        local_scope, TypeKind::declaration, "bit_vector",
+        std::move(local_base), builder.source, builder.origin);
+    vhdl::Declaration local_declaration;
+    local_declaration.id = local_declaration_id;
+    local_declaration.scope = local_scope;
+    local_declaration.form = vhdl::DeclarationForm::type;
+    local_declaration.name = "bit_vector";
+    local_declaration.declared_type = local_type;
+    local_declaration.source = builder.source;
+    local_declaration.origin = builder.origin;
+    builder.vhdl_hir.mutable_declarations().push_back(
+        std::move(local_declaration));
+    const auto local_integer_declaration_id = builder.model.add_declaration(
+        local_scope, DeclarationKind::type, "integer",
+        builder.source, builder.origin);
+    TypeReference local_integer_base;
+    local_integer_base.source = builder.source;
+    local_integer_base.spelling = "integer";
+    const auto local_integer_type = builder.model.add_type(
+        local_scope, TypeKind::declaration, "integer",
+        std::move(local_integer_base), builder.source, builder.origin);
+    vhdl::Declaration local_integer_declaration;
+    local_integer_declaration.id = local_integer_declaration_id;
+    local_integer_declaration.scope = local_scope;
+    local_integer_declaration.form = vhdl::DeclarationForm::type;
+    local_integer_declaration.name = "integer";
+    local_integer_declaration.declared_type = local_integer_type;
+    local_integer_declaration.source = builder.source;
+    local_integer_declaration.origin = builder.origin;
+    builder.vhdl_hir.mutable_declarations().push_back(
+        std::move(local_integer_declaration));
+
+    const auto integer_object_scope = builder.model.add_scope(
+        standard_2008,
+        builder.model.units()[standard_2008.value()].scope,
+        "integer_object", builder.source, builder.origin);
+    const auto integer_object_id = builder.model.add_declaration(
+        integer_object_scope, DeclarationKind::constant, "integer",
+        builder.source, builder.origin);
+    vhdl::Declaration integer_object;
+    integer_object.id = integer_object_id;
+    integer_object.scope = integer_object_scope;
+    integer_object.form = vhdl::DeclarationForm::constant;
+    integer_object.name = "integer";
+    integer_object.source = builder.source;
+    integer_object.origin = builder.origin;
+    builder.vhdl_hir.mutable_declarations().push_back(
+        std::move(integer_object));
+
+    std::vector<CompiledReference> references;
+    references.push_back(CompiledReference {
+        CompiledReferenceKind::package, import_owner, "work",
+        "First_Vector_Types", {}, builder.source, first_package });
+    references.push_back(CompiledReference {
+        CompiledReferenceKind::package, import_owner, "work",
+        "Second_Vector_Types", {}, builder.source, second_package });
+    const CompiledDesign design {
+        std::move(builder.model),
+        std::move(builder.systemverilog),
+        std::move(builder.vhdl_hir),
+        {},
+        std::move(references)
+    };
+
+    const auto owner_scope = [&](const UnitId unit) {
+        return design.units()[unit.value()].scope;
+    };
+    const CompiledDesignResolver resolver_1987 {
+        design, standard_1987
+    };
+    const CompiledDesignResolver resolver_1993 {
+        design, standard_1993
+    };
+    const auto file_open_kind_1987
+        = resolver_1987.resolve_vhdl_type_identity(
+            "file_open_kind", owner_scope(standard_1987));
+    const auto delay_length_1987
+        = resolver_1987.resolve_vhdl_type_identity(
+            "delay_length", owner_scope(standard_1987));
+    assert(file_open_kind_1987.status
+        == CompiledResolutionStatus::not_found);
+    assert(delay_length_1987.status
+        == CompiledResolutionStatus::not_found);
+    const auto bit_vector_1993
+        = resolver_1993.resolve_vhdl_type_identity(
+            "BIT_VECTOR", owner_scope(standard_1993));
+    assert(bit_vector_1993.status == CompiledResolutionStatus::unique);
+    assert(bit_vector_1993.builtin_type
+        == vhdl::BuiltinTypeIdentity::std_standard_bit_vector);
+    const auto integer_vector_1993
+        = resolver_1993.resolve_vhdl_type_identity(
+            "integer_vector", owner_scope(standard_1993));
+    assert(integer_vector_1993.status
+        == CompiledResolutionStatus::not_found);
+    assert(integer_vector_1993.builtin_type
+        == vhdl::BuiltinTypeIdentity::none);
+    const auto integer_1993
+        = resolver_1993.resolve_vhdl_type_identity(
+            "INTEGER", owner_scope(standard_1993));
+    assert(integer_1993.status == CompiledResolutionStatus::unique);
+    assert(!integer_1993.type);
+    assert(integer_1993.builtin_type == vhdl::BuiltinTypeIdentity::none);
+    assert(integer_1993.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::integer);
+    const auto file_open_kind_1993
+        = resolver_1993.resolve_vhdl_type_identity(
+            "file_open_kind", owner_scope(standard_1993));
+    assert(file_open_kind_1993.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::file_open_kind);
+    const auto file_open_status_1993
+        = resolver_1993.resolve_vhdl_type_identity(
+            "file_open_status", owner_scope(standard_1993));
+    assert(file_open_status_1993.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::file_open_status);
+    assert(file_open_status_1993.standard_scalar_type
+        != file_open_kind_1993.standard_scalar_type);
+
+    const CompiledDesignResolver resolver_2008 {
+        design, standard_2008
+    };
+    const auto qualified_bit_vector_2008
+        = resolver_2008.resolve_vhdl_type_identity(
+            "std.standard.bit_vector", owner_scope(standard_2008));
+    assert(qualified_bit_vector_2008.status
+        == CompiledResolutionStatus::unique);
+    assert(qualified_bit_vector_2008.builtin_type
+        == vhdl::BuiltinTypeIdentity::std_standard_bit_vector);
+    const auto marked_bit_vector_2008
+        = resolver_2008.resolve_vhdl_type_identity(
+            "@builtin:std.standard.bit_vector",
+            owner_scope(standard_2008));
+    assert(marked_bit_vector_2008.status
+        == CompiledResolutionStatus::unique);
+    assert(marked_bit_vector_2008.builtin_type
+        == vhdl::BuiltinTypeIdentity::std_standard_bit_vector);
+    const auto unrelated_qualified_bit_vector
+        = resolver_2008.resolve_vhdl_type_identity(
+            "work.user_package.bit_vector", owner_scope(standard_2008));
+    assert(unrelated_qualified_bit_vector.status
+        == CompiledResolutionStatus::not_found);
+    assert(unrelated_qualified_bit_vector.builtin_type
+        == vhdl::BuiltinTypeIdentity::none);
+    const auto integer_vector_2008
+        = resolver_2008.resolve_vhdl_type_identity(
+            "integer_vector", owner_scope(standard_2008));
+    assert(integer_vector_2008.status == CompiledResolutionStatus::unique);
+    assert(integer_vector_2008.builtin_type
+        == vhdl::BuiltinTypeIdentity::std_standard_integer_vector);
+    const auto integer_2008
+        = resolver_2008.resolve_vhdl_type_identity(
+            "integer", owner_scope(standard_2008));
+    assert(integer_2008.status == CompiledResolutionStatus::unique);
+    assert(!integer_2008.type);
+    assert(integer_2008.builtin_type == vhdl::BuiltinTypeIdentity::none);
+    assert(integer_2008.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::integer);
+    const auto natural_2008
+        = resolver_2008.resolve_vhdl_type_identity(
+            "natural", owner_scope(standard_2008));
+    const auto positive_2008
+        = resolver_2008.resolve_vhdl_type_identity(
+            "positive", owner_scope(standard_2008));
+    assert(natural_2008.standard_scalar_type
+        == integer_2008.standard_scalar_type);
+    assert(positive_2008.standard_scalar_type
+        == integer_2008.standard_scalar_type);
+    const auto qualified_integer_2008
+        = resolver_2008.resolve_vhdl_type_identity(
+            "STD.STANDARD.INTEGER", owner_scope(standard_2008));
+    assert(qualified_integer_2008.status
+        == CompiledResolutionStatus::unique);
+    assert(qualified_integer_2008.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::integer);
+    const auto integer_time_separation
+        = resolver_2008.resolve_vhdl_type_identity(
+            "time", owner_scope(standard_2008));
+    assert(integer_time_separation.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::time);
+    assert(integer_time_separation.standard_scalar_type
+        != integer_2008.standard_scalar_type);
+    const auto integer_real_separation
+        = resolver_2008.resolve_vhdl_type_identity(
+            "real", owner_scope(standard_2008));
+    assert(integer_real_separation.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::real);
+    const auto bit_2008 = resolver_2008.resolve_vhdl_type_identity(
+        "bit", owner_scope(standard_2008));
+    const auto boolean_2008 = resolver_2008.resolve_vhdl_type_identity(
+        "boolean", owner_scope(standard_2008));
+    const auto character_2008 = resolver_2008.resolve_vhdl_type_identity(
+        "character", owner_scope(standard_2008));
+    const auto severity_2008 = resolver_2008.resolve_vhdl_type_identity(
+        "severity_level", owner_scope(standard_2008));
+    assert(bit_2008.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::bit);
+    assert(boolean_2008.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::boolean);
+    assert(character_2008.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::character);
+    assert(severity_2008.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::severity_level);
+    assert(bit_2008.standard_scalar_type
+        != boolean_2008.standard_scalar_type);
+    assert(character_2008.standard_scalar_type
+        != integer_2008.standard_scalar_type);
+    const auto delay_length_2008
+        = resolver_2008.resolve_vhdl_type_identity(
+            "delay_length", owner_scope(standard_2008));
+    assert(delay_length_2008.standard_scalar_type
+        == integer_time_separation.standard_scalar_type);
+    const auto universal_integer_2008
+        = resolver_2008.resolve_vhdl_type_identity(
+            "universal_integer", owner_scope(standard_2008));
+    assert(universal_integer_2008.status
+        == CompiledResolutionStatus::not_found);
+    assert(universal_integer_2008.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::none);
+    const auto universal_real_2008
+        = resolver_2008.resolve_vhdl_type_identity(
+            "universal_real", owner_scope(standard_2008));
+    assert(universal_real_2008.status
+        == CompiledResolutionStatus::not_found);
+    assert(universal_real_2008.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::none);
+    const auto unrelated_qualified_integer
+        = resolver_2008.resolve_vhdl_type_identity(
+            "work.user_package.integer", owner_scope(standard_2008));
+    assert(unrelated_qualified_integer.status
+        == CompiledResolutionStatus::not_found);
+    assert(unrelated_qualified_integer.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::none);
+
+    const CompiledDesignResolver resolver_2019 {
+        design, standard_2019
+    };
+    const auto integer_vector_2019
+        = resolver_2019.resolve_vhdl_type_identity(
+            "integer_vector", owner_scope(standard_2019));
+    assert(integer_vector_2019.status == CompiledResolutionStatus::unique);
+    assert(integer_vector_2019.builtin_type
+        == vhdl::BuiltinTypeIdentity::std_standard_integer_vector);
+
+    const CompiledDesignResolver import_resolver {
+        design, import_owner
+    };
+    const auto imported_integer_ambiguous
+        = import_resolver.resolve_vhdl_type_identity(
+            "integer", import_scope);
+    assert(imported_integer_ambiguous.status
+        == CompiledResolutionStatus::ambiguous);
+    assert(imported_integer_ambiguous.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::none);
+    const auto local_integer_shadow
+        = import_resolver.resolve_vhdl_type_identity(
+            "integer", local_scope);
+    assert(local_integer_shadow.status == CompiledResolutionStatus::unique);
+    assert(local_integer_shadow.type == local_integer_type);
+    assert(local_integer_shadow.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::none);
+    const auto integer_object_shadow
+        = resolver_2008.resolve_vhdl_type_identity(
+            "integer", integer_object_scope);
+    assert(integer_object_shadow.status
+        == CompiledResolutionStatus::not_found);
+    assert(integer_object_shadow.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::none);
+    const CompiledDesignResolver no_implicit_resolver {
+        design, no_implicit_standard
+    };
+    const auto unimported_integer
+        = no_implicit_resolver.resolve_vhdl_type_identity(
+            "integer", owner_scope(no_implicit_standard));
+    assert(unimported_integer.status
+        == CompiledResolutionStatus::not_found);
+    assert(unimported_integer.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::none);
+    const auto explicitly_qualified_integer
+        = no_implicit_resolver.resolve_vhdl_type_identity(
+            "std.standard.integer", owner_scope(no_implicit_standard));
+    assert(explicitly_qualified_integer.status
+        == CompiledResolutionStatus::unique);
+    assert(explicitly_qualified_integer.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::integer);
+    const auto unsupported_unqualified_package_alias
+        = no_implicit_resolver.resolve_vhdl_type_identity(
+            "standard.integer", owner_scope(no_implicit_standard));
+    assert(unsupported_unqualified_package_alias.status
+        == CompiledResolutionStatus::not_found);
+    const auto unsupported_colon_package_alias
+        = no_implicit_resolver.resolve_vhdl_type_identity(
+            "std:standard.integer", owner_scope(no_implicit_standard));
+    assert(unsupported_colon_package_alias.status
+        == CompiledResolutionStatus::not_found);
+    const CompiledDesignResolver context_resolver {
+        design, context_without_implicit_standard
+    };
+    const auto context_integer = context_resolver.resolve_vhdl_type_identity(
+        "integer", owner_scope(context_without_implicit_standard));
+    assert(context_integer.status == CompiledResolutionStatus::not_found);
+    assert(context_integer.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::none);
+    const CompiledDesignResolver standard_package_resolver {
+        design, standard_package_owner
+    };
+    const auto standard_package_integer
+        = standard_package_resolver.resolve_vhdl_type_identity(
+            "integer", owner_scope(standard_package_owner));
+    assert(standard_package_integer.status
+        == CompiledResolutionStatus::not_found);
+    assert(standard_package_integer.standard_scalar_type
+        == CompiledVhdlStandardScalarIdentity::none);
+    const auto ambiguous = import_resolver.resolve_vhdl_type_identity(
+        "bit_vector", import_scope);
+    assert(ambiguous.status == CompiledResolutionStatus::ambiguous);
+    assert(ambiguous.builtin_type == vhdl::BuiltinTypeIdentity::none);
+    const auto shadowed = import_resolver.resolve_vhdl_type_identity(
+        "bit_vector", local_scope);
+    assert(shadowed.status == CompiledResolutionStatus::unique);
+    assert(shadowed.type == local_type);
+    assert(shadowed.builtin_type == vhdl::BuiltinTypeIdentity::none);
+}
+
 void test_vhdl_architecture_compatibility_profile_pairing()
 {
     constexpr std::string_view strict_profile {
@@ -12430,6 +13633,8 @@ void run_compiled_design_tests()
 
     test_compiled_udp_validation();
     test_compiled_design_linker();
+    test_vhdl_call_package_link_references();
+    test_systemverilog_package_member_projection_identity();
     test_compiled_design_relocation_regressions();
     test_systemverilog_auxiliary_record_relocation();
     test_systemverilog_auxiliary_record_projection();
@@ -12442,6 +13647,7 @@ void run_compiled_design_tests()
     test_compiled_design_resolver_generic_callable_profile();
     test_compiled_vhdl_resolver_retained_time_layout();
     test_compiled_vhdl_resolver_array_shapes();
+    test_compiled_vhdl_resolver_nominal_profile_identity();
     test_compiled_vhdl_resolver_active_formal_range_direction();
     test_compiled_vhdl_resolver_scalar_range_direction();
     test_compiled_vhdl_resolver_enumeration_array_bounds();
@@ -12467,4 +13673,5 @@ void run_compiled_design_tests()
     test_vhdl_package_member_index_contract();
     test_compiled_vhdl_scope_name_index_resolution();
     test_compiled_vhdl_named_type_lexical_visibility();
+    test_compiled_vhdl_type_identity_resolution();
 }

@@ -46,6 +46,35 @@ struct CompiledDeclarationResolution {
     [[nodiscard]] std::optional<DeclarationId> unique() const noexcept;
 };
 
+/// Compiler-owned STD.STANDARD scalar base types whose declarations may be
+/// absent from compiled HIR. This transient resolver identity is separate
+/// from the persisted HIR builtin-array identity enum.
+enum class CompiledVhdlStandardScalarIdentity : std::uint8_t {
+    none,
+    bit,
+    boolean,
+    character,
+    file_open_kind,
+    file_open_status,
+    integer,
+    real,
+    severity_level,
+    time,
+};
+
+struct CompiledVhdlTypeIdentityResolution {
+    CompiledResolutionStatus status {
+        CompiledResolutionStatus::not_found
+    };
+    std::optional<TypeId> type;
+    vhdl::BuiltinTypeIdentity builtin_type {
+        vhdl::BuiltinTypeIdentity::none
+    };
+    CompiledVhdlStandardScalarIdentity standard_scalar_type {
+        CompiledVhdlStandardScalarIdentity::none
+    };
+};
+
 struct CompiledSystemVerilogLetResolution {
     CompiledResolutionStatus status {
         CompiledResolutionStatus::not_found
@@ -218,6 +247,18 @@ public:
     /// associated-entity visibility, package use clauses, and generic-package
     /// instances. Ambiguous names deliberately have no selected result.
     [[nodiscard]] std::optional<TypeId> resolve_vhdl_named_type(
+        std::string_view spelling,
+        std::optional<ScopeId> owner_scope = std::nullopt) const;
+
+    /// Resolve a source-declared VHDL type first, preserving ambiguity, then
+    /// an exact compiler-owned STD.STANDARD type identity from the owning
+    /// unit's predefined environment. A leading internal `@builtin:` marker
+    /// is stripped before source-name lookup. Unqualified scalar fallback
+    /// respects the context-declaration and package-STANDARD exceptions to
+    /// implicit visibility. Scalar identities are transient and do not alter
+    /// the persisted HIR builtin-array schema.
+    [[nodiscard]] CompiledVhdlTypeIdentityResolution
+    resolve_vhdl_type_identity(
         std::string_view spelling,
         std::optional<ScopeId> owner_scope = std::nullopt) const;
 

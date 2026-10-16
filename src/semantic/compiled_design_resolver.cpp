@@ -103,6 +103,28 @@ bool same_vhdl_identifier(
             });
 }
 
+bool same_vhdl_unit_name(
+    const vhdl::Unit& unit, const std::string_view spelling)
+{
+    const auto extended = extended_vhdl_identifier(spelling);
+    if (unit.extended_name != extended) {
+        return false;
+    }
+    if (!extended) {
+        return same_vhdl_identifier(unit.name, spelling);
+    }
+    std::string decoded;
+    decoded.reserve(spelling.size() - 2U);
+    for (std::size_t index = 1U; index + 1U < spelling.size(); ++index) {
+        decoded.push_back(spelling[index]);
+        if (spelling[index] == '\\' && index + 2U < spelling.size()
+            && spelling[index + 1U] == '\\') {
+            ++index;
+        }
+    }
+    return unit.name == decoded;
+}
+
 bool simple_systemverilog_identifier(const std::string_view value)
 {
     return !value.empty()
@@ -171,21 +193,30 @@ VhdlNameParts vhdl_name_parts(const std::string_view name)
 {
     VhdlNameParts result;
     std::size_t begin { };
-    while (begin < name.size()) {
-        const auto end = name.find('.', begin);
-        const auto part = name.substr(begin,
-            end == std::string_view::npos
-                ? std::string_view::npos
-                : end - begin);
-        if (part.empty()) {
+    bool in_extended_identifier { };
+    for (std::size_t index { }; index < name.size(); ++index) {
+        if (name[index] == '\\') {
+            if (in_extended_identifier && index + 1U < name.size()
+                && name[index + 1U] == '\\') {
+                ++index;
+                continue;
+            }
+            in_extended_identifier = !in_extended_identifier;
+            continue;
+        }
+        if (name[index] != '.' || in_extended_identifier) {
+            continue;
+        }
+        if (index == begin) {
             return { };
         }
-        result.push_back(part);
-        if (end == std::string_view::npos) {
-            break;
-        }
-        begin = end + 1U;
+        result.push_back(name.substr(begin, index - begin));
+        begin = index + 1U;
     }
+    if (begin == name.size()) {
+        return { };
+    }
+    result.push_back(name.substr(begin));
     return result;
 }
 
@@ -661,13 +692,79 @@ bool vhdl_callable_form(const vhdl::DeclarationForm form)
         || form == Form::generic_procedure_instance;
 }
 
-bool same_vhdl_subtype(const vhdl::SubtypeIndication& left,
+struct VhdlProfileNominalIdentity {
+    std::optional<TypeId> type;
+    vhdl::BuiltinTypeIdentity builtin { vhdl::BuiltinTypeIdentity::none };
+
+    [[nodiscard]] bool known() const
+    {
+        return type.has_value()
+            || builtin != vhdl::BuiltinTypeIdentity::none;
+    }
+};
+
+VhdlProfileNominalIdentity vhdl_profile_nominal_identity(
+    const CompiledDesign& design, const SpecializedHirUnit* effective,
+    const vhdl::SubtypeIndication& subtype)
+{
+    auto type_id = subtype.type_mark.target;
+    if (!type_id.valid()
+        && subtype.builtin_type != vhdl::BuiltinTypeIdentity::none) {
+        return { std::nullopt, subtype.builtin_type };
+    }
+    const auto unresolved_type = type_id;
+    std::set<TypeId> visited;
+    while (type_id.valid() && visited.insert(type_id).second) {
+        const auto resolved = effective != nullptr
+            ? effective->find_type(type_id)
+            : std::nullopt;
+        const auto type = resolved ? resolved : design.find_type(type_id);
+        if (!type || type->vhdl == nullptr) {
+            return { type_id, vhdl::BuiltinTypeIdentity::none };
+        }
+        const auto& definition = *type->vhdl;
+        if (definition.form != vhdl::TypeForm::subtype
+            && definition.form != vhdl::TypeForm::alias) {
+            return { type_id, vhdl::BuiltinTypeIdentity::none };
+        }
+        if (definition.base.type_mark.target.valid()) {
+            type_id = definition.base.type_mark.target;
+            continue;
+        }
+        if (definition.base.builtin_type
+            != vhdl::BuiltinTypeIdentity::none) {
+            return { std::nullopt, definition.base.builtin_type };
+        }
+        return { type_id, vhdl::BuiltinTypeIdentity::none };
+    }
+    // A malformed/cyclic alias chain remains a known identity and must not
+    // fall through to spelling-based equivalence.
+    return unresolved_type.valid()
+        ? VhdlProfileNominalIdentity {
+              unresolved_type, vhdl::BuiltinTypeIdentity::none
+          }
+        : VhdlProfileNominalIdentity { };
+}
+
+bool same_vhdl_subtype(const CompiledDesign& design,
+    const SpecializedHirUnit* effective,
+    const vhdl::SubtypeIndication& left,
     const vhdl::SubtypeIndication& right)
 {
-    if (left.type_mark.target.valid()
-        && right.type_mark.target.valid()
-        && left.type_mark.target == right.type_mark.target) {
-        return true;
+    const auto left_identity = vhdl_profile_nominal_identity(
+        design, effective, left);
+    const auto right_identity = vhdl_profile_nominal_identity(
+        design, effective, right);
+    if (left_identity.type && right_identity.type) {
+        return *left_identity.type == *right_identity.type;
+    }
+    if (left_identity.builtin != vhdl::BuiltinTypeIdentity::none
+        || right_identity.builtin != vhdl::BuiltinTypeIdentity::none) {
+        return left_identity.builtin != vhdl::BuiltinTypeIdentity::none
+            && left_identity.builtin == right_identity.builtin;
+    }
+    if (left_identity.known() || right_identity.known()) {
+        return false;
     }
     if (!left.type_mark.spelling.empty()
         && !right.type_mark.spelling.empty()) {
@@ -1035,6 +1132,76 @@ bool builtin_standard_discrete_type(const std::string_view name)
         [&](const std::string_view candidate) {
             return same_vhdl_identifier(candidate, name);
         });
+}
+
+CompiledVhdlStandardScalarIdentity builtin_standard_scalar_type_identity(
+    const std::string_view spelling,
+    const vhdl::PredefinedEnvironment& environment,
+    const bool allow_unqualified)
+{
+    constexpr auto standard_profile
+        = std::string_view { "ieee-1076-standard:" };
+    if (spelling.empty() || spelling.find('@') != std::string_view::npos
+        || !environment.identity.starts_with(standard_profile)) {
+        return CompiledVhdlStandardScalarIdentity::none;
+    }
+    const auto listed = [&](const std::span<const std::string> names,
+                            const std::string_view name) {
+        return std::ranges::any_of(names,
+            [&](const std::string& candidate) {
+                return same_vhdl_identifier(candidate, name);
+            });
+    };
+    auto simple = spelling;
+    constexpr auto qualified_prefix
+        = std::string_view { "std.standard." };
+    if (spelling.size() >= qualified_prefix.size()
+        && same_vhdl_identifier(
+            spelling.substr(0U, qualified_prefix.size()), qualified_prefix)) {
+        simple = spelling.substr(qualified_prefix.size());
+        if (simple.empty() || simple.find_first_of(":.")
+                != std::string_view::npos) {
+            return CompiledVhdlStandardScalarIdentity::none;
+        }
+    } else if (spelling.find_first_of(":.") != std::string_view::npos
+        || !allow_unqualified
+        || !listed(environment.implicit_packages, "std.standard.all")) {
+        return CompiledVhdlStandardScalarIdentity::none;
+    }
+    if (!listed(environment.declarations, simple)) {
+        return CompiledVhdlStandardScalarIdentity::none;
+    }
+    if (same_vhdl_identifier(simple, "bit")) {
+        return CompiledVhdlStandardScalarIdentity::bit;
+    }
+    if (same_vhdl_identifier(simple, "boolean")) {
+        return CompiledVhdlStandardScalarIdentity::boolean;
+    }
+    if (same_vhdl_identifier(simple, "character")) {
+        return CompiledVhdlStandardScalarIdentity::character;
+    }
+    if (same_vhdl_identifier(simple, "file_open_kind")) {
+        return CompiledVhdlStandardScalarIdentity::file_open_kind;
+    }
+    if (same_vhdl_identifier(simple, "file_open_status")) {
+        return CompiledVhdlStandardScalarIdentity::file_open_status;
+    }
+    if (same_vhdl_identifier(simple, "integer")
+        || same_vhdl_identifier(simple, "natural")
+        || same_vhdl_identifier(simple, "positive")) {
+        return CompiledVhdlStandardScalarIdentity::integer;
+    }
+    if (same_vhdl_identifier(simple, "real")) {
+        return CompiledVhdlStandardScalarIdentity::real;
+    }
+    if (same_vhdl_identifier(simple, "severity_level")) {
+        return CompiledVhdlStandardScalarIdentity::severity_level;
+    }
+    if (same_vhdl_identifier(simple, "time")
+        || same_vhdl_identifier(simple, "delay_length")) {
+        return CompiledVhdlStandardScalarIdentity::time;
+    }
+    return CompiledVhdlStandardScalarIdentity::none;
 }
 
 bool builtin_standard_package_exports(const std::string_view library,
@@ -2667,6 +2834,136 @@ std::optional<TypeId> CompiledDesignResolver::resolve_vhdl_named_type(
     return ambiguous ? std::nullopt : selected;
 }
 
+CompiledVhdlTypeIdentityResolution
+CompiledDesignResolver::resolve_vhdl_type_identity(
+    std::string_view spelling,
+    const std::optional<ScopeId> owner_scope) const
+{
+    if (design_ == nullptr) {
+        return { CompiledResolutionStatus::invalid, std::nullopt,
+            vhdl::BuiltinTypeIdentity::none,
+            CompiledVhdlStandardScalarIdentity::none };
+    }
+    constexpr auto builtin_prefix = std::string_view { "@builtin:" };
+    if (spelling.starts_with(builtin_prefix)) {
+        spelling.remove_prefix(builtin_prefix.size());
+    }
+    if (const auto type = resolve_vhdl_named_type(spelling, owner_scope)) {
+        return { CompiledResolutionStatus::unique, type,
+            vhdl::BuiltinTypeIdentity::none,
+            CompiledVhdlStandardScalarIdentity::none };
+    }
+
+    auto lookup_scope = owner_scope;
+    if (!lookup_scope) {
+        const auto selected = design_->find_unit(selected_unit_);
+        if (selected && selected->identity != nullptr) {
+            lookup_scope = selected->identity->scope;
+        }
+    }
+    if (!lookup_scope) {
+        return { };
+    }
+
+    vhdl::Name source_name;
+    source_name.spelling = spelling;
+    source_name.canonical = spelling;
+    const CompiledDeclarationPredicate named_type = [](const auto& view) {
+        if (view.vhdl == nullptr) {
+            return false;
+        }
+        using Form = vhdl::DeclarationForm;
+        return view.vhdl->form == Form::type
+            || view.vhdl->form == Form::subtype
+            || view.vhdl->form == Form::generic_type
+            || view.vhdl->form == Form::alias;
+    };
+    const auto visible_source = resolve_vhdl(
+        source_name, *lookup_scope, named_type);
+    if (visible_source.status != CompiledResolutionStatus::not_found) {
+        CompiledVhdlTypeIdentityResolution result;
+        result.status = visible_source.status;
+        if (const auto declaration_id = visible_source.unique()) {
+            const auto declaration = find_declaration(
+                *design_, effective_, *declaration_id);
+            if (declaration && declaration->vhdl != nullptr) {
+                result.type = declaration->vhdl->declared_type;
+                if (!result.type && declaration->vhdl->subtype
+                    && declaration->vhdl->subtype->type_mark.target.valid()) {
+                    result.type
+                        = declaration->vhdl->subtype->type_mark.target;
+                }
+            }
+            if (!result.type) {
+                for (const auto& stored : design_->vhdl_hir.types()) {
+                    const auto type = effective_ != nullptr
+                        ? effective_->find_type(stored.id)
+                        : design_->find_type(stored.id);
+                    if (!type || type->vhdl == nullptr
+                        || type->vhdl->declaration != *declaration_id) {
+                        continue;
+                    }
+                    if (result.type
+                        && *result.type != type->vhdl->id) {
+                        result.status
+                            = CompiledResolutionStatus::ambiguous;
+                        result.type.reset();
+                        return result;
+                    }
+                    result.type = type->vhdl->id;
+                }
+            }
+        }
+        return result;
+    }
+
+    const auto* owner_scope_record
+        = find_scope(*design_, *lookup_scope);
+    const auto owner_unit = owner_scope_record != nullptr
+        ? design_->find_unit(owner_scope_record->unit)
+        : std::nullopt;
+    const auto* owner_vhdl
+        = owner_unit && owner_unit->vhdl != nullptr
+        ? owner_unit->vhdl
+        : nullptr;
+    if (owner_vhdl == nullptr) {
+        return { };
+    }
+    // Do not turn a same-spelled source declaration of another class into a
+    // compiler-owned type. This check intentionally uses the unfiltered
+    // scoped resolver: the filtered lookup above has already preserved source
+    // type identities and ambiguity.
+    if (resolve_vhdl(source_name, *lookup_scope).status
+        == CompiledResolutionStatus::not_found) {
+        // IEEE 1076-2019 13.2 omits the implicit context clause for context
+        // declarations and package STANDARD. The compiler currently stamps
+        // the same predefined-environment record on every unit, so apply
+        // those owner-kind exceptions before accepting an unqualified name.
+        const bool standard_package_owner
+            = owner_vhdl->kind == vhdl::UnitKind::package
+            && same_vhdl_identifier(
+                normalized_library(owner_vhdl->library), "std")
+            && same_vhdl_identifier(owner_vhdl->name, "standard");
+        const bool allow_unqualified_standard
+            = owner_vhdl->kind != vhdl::UnitKind::context
+            && !standard_package_owner;
+        const auto scalar = builtin_standard_scalar_type_identity(
+            spelling, owner_vhdl->predefined_environment,
+            allow_unqualified_standard);
+        if (scalar != CompiledVhdlStandardScalarIdentity::none) {
+            return { CompiledResolutionStatus::unique, std::nullopt,
+                vhdl::BuiltinTypeIdentity::none, scalar };
+        }
+    }
+    const auto builtin = vhdl::standard_array_builtin_type_identity(
+        spelling, owner_vhdl->predefined_environment);
+    if (builtin == vhdl::BuiltinTypeIdentity::none) {
+        return { };
+    }
+    return { CompiledResolutionStatus::unique, std::nullopt, builtin,
+        CompiledVhdlStandardScalarIdentity::none };
+}
+
 std::optional<sv::TypeReference>
 CompiledDesignResolver::effective_systemverilog_type(
     const sv::TypeReference& input, ScopeId use_scope) const
@@ -3087,6 +3384,25 @@ CompiledDesignResolver::effective_vhdl_subtype(
         const ScopeId subtype_scope) {
         materialize_boundaries(result, active);
         const auto name = simple_vhdl_name(result.type_mark.spelling);
+        if (result.builtin_type == vhdl::BuiltinTypeIdentity::none
+            && !result.type_mark.target.valid()) {
+            auto spelling = std::string_view {
+                result.type_mark.spelling
+            };
+            constexpr auto builtin_prefix
+                = std::string_view { "@builtin:" };
+            if (spelling.starts_with(builtin_prefix)) {
+                spelling.remove_prefix(builtin_prefix.size());
+            }
+            const auto resolved = CompiledDesignResolver {
+                *design_, selected_unit_, effective_, active
+            }.resolve_vhdl_type_identity(spelling, subtype_scope);
+            if (resolved.status == CompiledResolutionStatus::unique
+                && resolved.builtin_type
+                    != vhdl::BuiltinTypeIdentity::none) {
+                result.builtin_type = resolved.builtin_type;
+            }
+        }
         const auto stamp_builtin_vector_identity = [&]() {
             if (result.builtin_type != vhdl::BuiltinTypeIdentity::none
                 || result.type_mark.target.valid()
@@ -3194,26 +3510,37 @@ CompiledDesignResolver::effective_vhdl_subtype(
         } else {
             std::uint64_t element_width { };
             auto element_domain = vhdl::ValueDomain::unknown;
-            if (same_vhdl_identifier(name, "bit_vector")) {
+            switch (result.builtin_type) {
+            case vhdl::BuiltinTypeIdentity::std_standard_bit_vector:
                 element_width = 1U;
                 element_domain = vhdl::ValueDomain::bit2;
-            } else if (same_vhdl_identifier(name, "boolean_vector")) {
+                break;
+            case vhdl::BuiltinTypeIdentity::std_standard_boolean_vector:
                 element_width = 1U;
                 element_domain = vhdl::ValueDomain::boolean;
-            } else if (same_vhdl_identifier(name, "string")) {
+                break;
+            case vhdl::BuiltinTypeIdentity::std_standard_string:
                 element_width = 8U;
                 element_domain = vhdl::ValueDomain::string;
-            } else if (same_vhdl_identifier(name, "integer_vector")) {
+                break;
+            case vhdl::BuiltinTypeIdentity::std_standard_integer_vector:
                 element_width = standard_width();
                 element_domain = vhdl::ValueDomain::integer;
-            } else if (same_vhdl_identifier(name, "time_vector")) {
+                break;
+            case vhdl::BuiltinTypeIdentity::std_standard_time_vector:
                 element_width = 64U;
                 element_domain = vhdl::ValueDomain::integer;
-            } else if (same_vhdl_identifier(name, "real_vector")) {
+                break;
+            case vhdl::BuiltinTypeIdentity::std_standard_real_vector:
                 // REAL elements are IEEE doubles (IEEE 1076-2008 16.3).
                 element_width = 64U;
                 element_domain = vhdl::ValueDomain::bit2;
-            } else if (same_vhdl_identifier(name, "std_logic_vector")
+                break;
+            default:
+                break;
+            }
+            if (element_width == 0U
+                && (same_vhdl_identifier(name, "std_logic_vector")
                 || same_vhdl_identifier(name, "std_ulogic_vector")
                 || same_vhdl_identifier(name, "signed")
                 || same_vhdl_identifier(name, "unsigned")
@@ -3223,9 +3550,26 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 || same_vhdl_identifier(name, "unresolved_sfixed")
                 || same_vhdl_identifier(name, "float")
                 || same_vhdl_identifier(name, "unresolved_float")
-                || same_vhdl_identifier(name, "u_float")) {
+                || same_vhdl_identifier(name, "u_float"))) {
                 element_width = 1U;
                 element_domain = vhdl::ValueDomain::logic9;
+            }
+            if (element_width == 0U
+                && result.builtin_type == vhdl::BuiltinTypeIdentity::none
+                && same_vhdl_identifier(name, "string")
+                && result.type_mark.target.valid()) {
+                const auto shadow = effective_ != nullptr
+                    ? effective_->find_type(result.type_mark.target)
+                    : design_->find_type(result.type_mark.target);
+                if (shadow && shadow->vhdl != nullptr
+                    && shadow->vhdl->form == vhdl::TypeForm::array
+                    && same_vhdl_identifier(shadow->vhdl->name, "string")) {
+                    // Preserve the legacy representation fallback for a
+                    // resolved source array named STRING without assigning
+                    // the predefined STD.STANDARD.STRING identity.
+                    element_width = 8U;
+                    element_domain = vhdl::ValueDomain::string;
+                }
             }
             if (element_width == 0U) {
                 return false;
@@ -3234,6 +3578,23 @@ CompiledDesignResolver::effective_vhdl_subtype(
                 result.domain = element_domain;
             }
             stamp_builtin_vector_identity();
+            const bool compiler_owned_unconstrained_logic_vector
+                = !result.type_mark.target.valid()
+                && (result.builtin_type
+                        == vhdl::BuiltinTypeIdentity::ieee_std_logic_1164_std_logic_vector
+                    || result.builtin_type
+                        == vhdl::BuiltinTypeIdentity::ieee_std_logic_1164_std_ulogic_vector)
+                && result.constraints.empty();
+            if (compiler_owned_unconstrained_logic_vector
+                && result.executable_width
+                && *result.executable_width == element_width) {
+                // The parser represents a bare Logic9 type mark with scalar
+                // width one. For these imported IEEE array types that value
+                // is only the element-width placeholder, not a constrained
+                // one-bit array subtype.
+                result.unconstrained = true;
+                result.executable_width.reset();
+            }
             if (result.constraints.empty()) {
                 if (!result.executable_width
                     || *result.executable_width == 0U) {
@@ -4072,9 +4433,10 @@ CompiledDesignResolver::effective_vhdl_subtype(
             result.executable_width = width;
             result.integer_storage_width = width;
             result.signed_value = true;
-        } else if (definition.form == vhdl::TypeForm::access
-            && (!result.executable_width || *result.executable_width == 0U)) {
-            // An access value is a 32-bit handle, as in signal layouts.
+        } else if (definition.form == vhdl::TypeForm::access) {
+            // Access subtypes retain designated-object constraints, but their
+            // runtime representation is always one 32-bit handle. Never treat
+            // an array index constraint's element count as handle width.
             result.domain = vhdl::ValueDomain::bit2;
             result.executable_width = 32U;
         } else if (definition.form == vhdl::TypeForm::record) {
@@ -5296,10 +5658,35 @@ bool CompiledDesignResolver::vhdl_subtype_profiles_match(
     if (design_ == nullptr) {
         return false;
     }
-    const auto effective_left = effective_vhdl_subtype(
+    auto effective_left = effective_vhdl_subtype(
         left, left_scope).value_or(left);
-    const auto effective_right = effective_vhdl_subtype(
+    auto effective_right = effective_vhdl_subtype(
         right, right_scope).value_or(right);
+    const auto normalize_standard_array_placeholder = [](
+        vhdl::SubtypeIndication& subtype) {
+        if (subtype.type_mark.target.valid()
+            || !subtype.constraints.empty()) {
+            return;
+        }
+        std::uint64_t element_width { };
+        switch (subtype.builtin_type) {
+        case vhdl::BuiltinTypeIdentity::std_standard_string:
+            element_width = 8U;
+            break;
+        case vhdl::BuiltinTypeIdentity::std_standard_bit_vector:
+            element_width = 1U;
+            break;
+        default:
+            return;
+        }
+        if (subtype.executable_width
+            && *subtype.executable_width == element_width) {
+            subtype.unconstrained = true;
+            subtype.executable_width.reset();
+        }
+    };
+    normalize_standard_array_placeholder(effective_left);
+    normalize_standard_array_placeholder(effective_right);
     if (effective_left.unspecified_class
         != vhdl::UnspecifiedTypeClass::none) {
         return vhdl_unspecified_profile_accepts(
@@ -5314,7 +5701,8 @@ bool CompiledDesignResolver::vhdl_subtype_profiles_match(
             vhdl_profile_type_class(
                 *design_, effective_, effective_left));
     }
-    if (!same_vhdl_subtype(effective_left, effective_right)) {
+    if (!same_vhdl_subtype(
+            *design_, effective_, effective_left, effective_right)) {
         return false;
     }
     const auto shapes = vhdl_array_shapes_match(
@@ -5888,8 +6276,8 @@ CompiledDesignResolver::resolve_vhdl_package_members(
                     if (context.kind == vhdl::UnitKind::context
                         && same_vhdl_identifier(
                             normalized_library(context.library), library)
-                        && same_vhdl_identifier(
-                            context.name, selected_parts.back())) {
+                        && same_vhdl_unit_name(
+                            context, selected_parts.back())) {
                         self(self, context, &active);
                     }
                 }
@@ -5938,6 +6326,14 @@ bool CompiledDesignResolver::vhdl_package_member_visible(
         || package.kind != vhdl::UnitKind::package
         || !package.primary_name.empty()) {
         return false;
+    }
+    // IEEE 1076-2019 13.2 gives every design unit an implicit context
+    // clause naming STD.STANDARD. Keep this package visibility independent
+    // of explicit use clauses; lexical declarations still rank ahead of it.
+    if (same_vhdl_identifier(
+            normalized_library(package.library), "std")
+        && same_vhdl_identifier(package.name, "standard")) {
+        return true;
     }
     if (lookup_unit.kind == vhdl::UnitKind::package
         && !lookup_unit.primary_name.empty()
@@ -5989,8 +6385,7 @@ bool CompiledDesignResolver::vhdl_package_member_visible(
                     if (context.kind == vhdl::UnitKind::context
                         && same_vhdl_identifier(
                             normalized_library(context.library), library)
-                        && same_vhdl_identifier(
-                            context.name, parts.back())
+                        && same_vhdl_unit_name(context, parts.back())
                         && self(self, context)) {
                         active_contexts.erase(owner.id.value());
                         return true;
@@ -6064,8 +6459,7 @@ bool CompiledDesignResolver::vhdl_library_name_visible(
                     if (context.kind == vhdl::UnitKind::context
                         && same_vhdl_identifier(
                             normalized_library(context.library), library)
-                        && same_vhdl_identifier(
-                            context.name, parts.back())
+                        && same_vhdl_unit_name(context, parts.back())
                         && self(self, context)) {
                         active_contexts.erase(context_owner.id.value());
                         return true;
@@ -6185,8 +6579,8 @@ bool CompiledDesignResolver::vhdl_standard_package_member_visible(
                         if (context.kind == vhdl::UnitKind::context
                             && same_vhdl_identifier(
                                 context.library, library)
-                            && same_vhdl_identifier(
-                                context.name, selected_parts.back())
+                            && same_vhdl_unit_name(
+                                context, selected_parts.back())
                             && self(self, context)) {
                             return true;
                         }
@@ -6239,12 +6633,65 @@ bool CompiledDesignResolver::vhdl_builtin_package_member_imported(
     }
     const auto lookup_units = vhdl_lookup_units(
         *design_, selected_unit_, use_scope);
-    return visit_vhdl_linked_imports(*design_, lookup_units,
-        [&](const CompiledVhdlImport& imported) {
-            return same_vhdl_identifier(imported.library, library)
-                && same_vhdl_identifier(imported.package, package)
-                && (same_vhdl_identifier(imported.member, "all")
-                    || same_vhdl_identifier(imported.member, member));
+    const auto matching_import = [&](const CompiledVhdlImport& imported) {
+        return same_vhdl_identifier(imported.library, library)
+            && same_vhdl_identifier(imported.package, package)
+            && (same_vhdl_identifier(imported.member, "all")
+                || same_vhdl_identifier(imported.member, member));
+    };
+    std::unordered_set<std::uint32_t> visited_contexts;
+    const auto imports_from = [&](const auto& self,
+                                  const vhdl::Unit& owner) -> bool {
+        if (!visited_contexts.insert(owner.id.value()).second) {
+            return false;
+        }
+        const std::vector<const vhdl::Unit*> direct_owner { &owner };
+        if (visit_vhdl_linked_imports(
+                *design_, direct_owner, matching_import)) {
+            return true;
+        }
+        for (const auto& item : owner.context) {
+            if (item.kind != vhdl::ContextKind::context_reference) {
+                continue;
+            }
+            for (const auto& selected : item.selected_names) {
+                const auto parts = vhdl_name_parts(vhdl_spelling(selected));
+                if (parts.empty()) {
+                    continue;
+                }
+                const auto context_library = parts.size() >= 2U
+                    ? effective_vhdl_library(
+                          parts[parts.size() - 2U], owner.library)
+                    : normalized_library(owner.library);
+                const vhdl::Unit* referenced_context { };
+                bool duplicate_context { };
+                for (const auto& candidate : design_->vhdl_units()) {
+                    if (candidate.kind != vhdl::UnitKind::context
+                        || !same_vhdl_identifier(
+                            normalized_library(candidate.library),
+                            context_library)
+                        || !same_vhdl_unit_name(
+                            candidate, parts.back())) {
+                        continue;
+                    }
+                    if (referenced_context != nullptr
+                        && referenced_context->id != candidate.id) {
+                        duplicate_context = true;
+                        break;
+                    }
+                    referenced_context = &candidate;
+                }
+                if (!duplicate_context && referenced_context != nullptr
+                    && self(self, *referenced_context)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+    return std::ranges::any_of(lookup_units,
+        [&](const vhdl::Unit* owner) {
+            return owner != nullptr && imports_from(imports_from, *owner);
         });
 }
 
@@ -7253,8 +7700,7 @@ bool CompiledDesignResolver::vhdl_package_generic_maps_match(
         if (expected_type || actual_type) {
             if (!expected_type || !actual_type
                 || !same_vhdl_subtype(
-                    effective_package_subtype(
-                        *expected_type, left->vhdl->scope),
+                    *design_, effective_, effective_package_subtype(*expected_type, left->vhdl->scope),
                     effective_package_subtype(
                         *actual_type, right->vhdl->scope))) {
                 return false;

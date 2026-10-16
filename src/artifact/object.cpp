@@ -32,7 +32,27 @@ constexpr std::array<char, 8> kMagic{'F', 'S', 'I', 'M', 'O', 'B', 'J', '\0'};
 constexpr std::string_view kSchemaCode = "FSIM-ART-0001";
 constexpr std::string_view kValueCode = "FSIM-ART-0002";
 constexpr std::string_view kIoCode = "FSIM-ART-0003";
+constexpr std::uint32_t kPreviousObjectFormatVersion = 8;
+constexpr std::uint32_t kPreviousPortableSchemaVersion = 15;
 std::atomic_uint64_t staging_sequence{};
+
+bool valid_identifier_form(const library::VhdlIdentifierForm form) {
+  return form == library::VhdlIdentifierForm::unknown
+      || form == library::VhdlIdentifierForm::basic
+      || form == library::VhdlIdentifierForm::extended;
+}
+
+bool valid_unit_identifier_forms(const library::UnitIndexEntry& unit) {
+  return valid_identifier_form(unit.name_form)
+      && valid_identifier_form(unit.primary_name_form)
+      && (unit.language == "vhdl"
+          || (unit.name_form == library::VhdlIdentifierForm::unknown
+              && unit.primary_name_form
+                  == library::VhdlIdentifierForm::unknown))
+      && (!unit.primary_name.empty()
+          || unit.primary_name_form
+              == library::VhdlIdentifierForm::unknown);
+}
 
 void error(
     diagnostic::Engine& diagnostics,
@@ -205,7 +225,12 @@ class Reader {
 
 std::string compilation_digest(const ObjectMetadata& metadata) {
   Writer writer;
-  writer.string("fsim-object-compilation-v8-compiled-hir");
+  const bool legacy_identity
+      = metadata.format == kPreviousObjectFormatVersion
+          && metadata.portable_schema == kPreviousPortableSchemaVersion;
+  writer.string(legacy_identity
+      ? "fsim-object-compilation-v8-compiled-hir"
+      : "fsim-object-compilation-v9-compiled-hir");
   writer.u32(metadata.compiled_hir_schema);
   writer.path(metadata.compiled_hir_artifact);
   writer.string(metadata.compiled_hir_checksum);
@@ -246,6 +271,10 @@ std::string compilation_digest(const ObjectMetadata& metadata) {
     writer.string(item.checksum);
     writer.string(item.standard);
     writer.string(item.compatibility_profile);
+    if (!legacy_identity) {
+      writer.u32(static_cast<std::uint32_t>(item.name_form));
+      writer.u32(static_cast<std::uint32_t>(item.primary_name_form));
+    }
   });
   return support::Sha256::hex(
       support::Sha256::digest(std::move(writer).take()));
@@ -255,8 +284,13 @@ bool validate_metadata(
     const ObjectMetadata& metadata,
     diagnostic::Engine& diagnostics,
     const std::string& source) {
-  if (metadata.format != kObjectFormatVersion
-      || metadata.portable_schema != library::kPortableSchemaVersion
+  const bool current_identity
+      = metadata.format == kObjectFormatVersion
+          && metadata.portable_schema == library::kPortableSchemaVersion;
+  const bool legacy_identity
+      = metadata.format == kPreviousObjectFormatVersion
+          && metadata.portable_schema == kPreviousPortableSchemaVersion;
+  if ((!current_identity && !legacy_identity)
       || metadata.compiled_hir_schema
           != library::kCompiledHirSchemaVersion) {
       error(
@@ -359,6 +393,17 @@ bool validate_metadata(
           "object sources require unique relative logical/payload paths, "
           "matching language, standard, compatibility profile, and lowercase "
           "SHA-256 checksums", source);
+    }
+  }
+  for (const auto& unit : metadata.units) {
+    if (!valid_unit_identifier_forms(unit)
+        || (legacy_identity
+            && (unit.name_form != library::VhdlIdentifierForm::unknown
+                || unit.primary_name_form
+                    != library::VhdlIdentifierForm::unknown))) {
+      error(
+          diagnostics, kValueCode,
+          "object unit identifier-form metadata is invalid", source);
     }
   }
   for (const auto& item : metadata.units) {
@@ -467,7 +512,37 @@ std::string compute_object_compilation_digest(
   return compilation_digest(metadata);
 }
 
-std::string serialize_object_metadata(const ObjectMetadata& metadata) {
+std::string serialize_object_metadata(const ObjectMetadata& input_metadata) {
+  auto metadata = input_metadata;
+  const bool current_identity
+      = metadata.format == kObjectFormatVersion
+          && metadata.portable_schema == library::kPortableSchemaVersion
+          && metadata.compiled_hir_schema
+              == library::kCompiledHirSchemaVersion;
+  const bool legacy_identity
+      = metadata.format == kPreviousObjectFormatVersion
+          && metadata.portable_schema == kPreviousPortableSchemaVersion
+          && metadata.compiled_hir_schema
+              == library::kCompiledHirSchemaVersion;
+  if (!current_identity && !legacy_identity) {
+    throw std::invalid_argument(
+        "cannot serialize .fsimobj metadata with unsupported identity");
+  }
+  if (legacy_identity) {
+    diagnostic::Engine validation;
+    if (!validate_metadata(
+            metadata, validation, std::string { kObjectMetadataFilename })) {
+      throw std::invalid_argument(
+          "cannot upgrade invalid legacy .fsimobj metadata for serialization");
+    }
+    metadata.format = kObjectFormatVersion;
+    metadata.portable_schema = library::kPortableSchemaVersion;
+    for (auto& unit : metadata.units) {
+      unit.name_form = library::VhdlIdentifierForm::unknown;
+      unit.primary_name_form = library::VhdlIdentifierForm::unknown;
+    }
+    metadata.compilation_digest = compilation_digest(metadata);
+  }
   Writer writer;
   writer.bytes(kMagic);
   writer.u32(kObjectFormatVersion);
@@ -519,6 +594,8 @@ std::string serialize_object_metadata(const ObjectMetadata& metadata) {
     writer.string(item.checksum);
     writer.string(item.standard);
     writer.string(item.compatibility_profile);
+    writer.u32(static_cast<std::uint32_t>(item.name_form));
+    writer.u32(static_cast<std::uint32_t>(item.primary_name_form));
   });
   return std::move(writer).take();
 }
@@ -544,8 +621,13 @@ std::optional<ObjectMetadata> deserialize_object_metadata(
   metadata.format = *read_format;
   metadata.portable_schema = *read_schema;
   metadata.compiled_hir_schema = *read_compiled_hir_schema;
-  if (metadata.format != kObjectFormatVersion
-      || metadata.portable_schema != library::kPortableSchemaVersion
+  const bool current_identity
+      = metadata.format == kObjectFormatVersion
+          && metadata.portable_schema == library::kPortableSchemaVersion;
+  const bool legacy_identity
+      = metadata.format == kPreviousObjectFormatVersion
+          && metadata.portable_schema == kPreviousPortableSchemaVersion;
+  if ((!current_identity && !legacy_identity)
       || metadata.compiled_hir_schema
           != library::kCompiledHirSchemaVersion) {
       error(
@@ -690,6 +772,22 @@ std::optional<ObjectMetadata> deserialize_object_metadata(
         || !read_string(item.compatibility_profile)) {
       error(diagnostics, kSchemaCode, "truncated object unit index", source_name);
       return std::nullopt;
+    }
+    if (current_identity) {
+      const auto name_form = canonical.u32();
+      const auto primary_name_form = canonical.u32();
+      if (!name_form || !primary_name_form
+          || *name_form > static_cast<std::uint32_t>(
+              library::VhdlIdentifierForm::extended)
+          || *primary_name_form > static_cast<std::uint32_t>(
+              library::VhdlIdentifierForm::extended)) {
+        error(diagnostics, kSchemaCode,
+            "invalid object VHDL identifier-form value", source_name);
+        return std::nullopt;
+      }
+      item.name_form = static_cast<library::VhdlIdentifierForm>(*name_form);
+      item.primary_name_form
+          = static_cast<library::VhdlIdentifierForm>(*primary_name_form);
     }
     item.artifact = std::move(*artifact);
     metadata.units.push_back(std::move(item));

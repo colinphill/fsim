@@ -333,16 +333,19 @@ void assert_compiled_hir_codec_rejections(
             }));
     };
 
-    for (const std::uint32_t schema : { 0U, 2U }) {
+    const auto current_schema = fsim::app::kCompiledHirBundleSchema;
+    for (const std::uint32_t schema : {
+             0U, current_schema - 1U, current_schema + 1U }) {
         auto incompatible = std::string { valid_bundle };
         store_u32(incompatible, 8U, schema);
         assert_rejected(
             incompatible,
-            schema == 0U ? "stale compiled-HIR bundle"
-                         : "future compiled-HIR bundle",
+            schema < current_schema ? "stale compiled-HIR bundle"
+                                    : "future compiled-HIR bundle",
             "unsupported design state FSIMCHIR identity: found schema "
                 + std::to_string(schema)
-                + "; required schema 1; regenerate compiled-HIR bundle "
+                + "; required schema " + std::to_string(current_schema)
+                + "; regenerate compiled-HIR bundle "
                   "with this fsim build");
     }
 

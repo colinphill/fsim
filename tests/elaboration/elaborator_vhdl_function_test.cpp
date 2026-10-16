@@ -2504,6 +2504,152 @@ end architecture;
     assert(interpreter->signal_value(*empty_count).low_word().aval == 0U);
 }
 
+void test_vhdl_subtype_mark_loop_directions()
+{
+    const auto parsed = fsim::frontend::parse_text(
+        "vhdl-subtype-mark-loop-directions.vhd",
+        R"(
+entity subtype_mark_loop_directions is end entity;
+architecture rtl of subtype_mark_loop_directions is
+  subtype descending_vector_t is bit_vector(3 downto 0);
+  subtype descending_null_vector_t is bit_vector(2 downto 3);
+  subtype ascending_null_vector_t is bit_vector(2 to 1);
+  subtype descending_singleton_vector_t is bit_vector(5 downto 5);
+  subtype descending_scalar_t is integer range descending_vector_t'range;
+  subtype descending_null_scalar_t is integer
+    range descending_null_vector_t'range;
+  subtype ascending_null_scalar_t is integer
+    range ascending_null_vector_t'range;
+  subtype descending_singleton_scalar_t is integer
+    range descending_singleton_vector_t'range;
+  signal descending_trace : integer;
+  signal descending_visits : integer;
+  signal descending_null_visits : integer;
+  signal ascending_null_visits : integer;
+  signal singleton_total : integer;
+  signal singleton_visits : integer;
+  signal explicit_to_trace : integer;
+  signal explicit_downto_trace : integer;
+  signal explicit_to_null_visits : integer;
+  signal explicit_downto_null_visits : integer;
+begin
+  worker : process
+    variable trace_value : integer := 0;
+    variable visit_count : integer := 0;
+    variable descending_null_count : integer := 0;
+    variable ascending_null_count : integer := 0;
+    variable singleton_sum : integer := 0;
+    variable singleton_count : integer := 0;
+    variable to_trace : integer := 0;
+    variable downto_trace : integer := 0;
+    variable to_null_count : integer := 0;
+    variable downto_null_count : integer := 0;
+  begin
+    for value in descending_scalar_t loop
+      trace_value := trace_value * 10 + value;
+      visit_count := visit_count + 1;
+    end loop;
+    for value in descending_null_scalar_t loop
+      descending_null_count := descending_null_count + 1;
+    end loop;
+    for value in ascending_null_scalar_t loop
+      ascending_null_count := ascending_null_count + 1;
+    end loop;
+    for value in descending_singleton_scalar_t loop
+      singleton_sum := singleton_sum + value;
+      singleton_count := singleton_count + 1;
+    end loop;
+
+    for value in 0 to 2 loop
+      to_trace := to_trace * 10 + value;
+    end loop;
+    for value in 2 downto 0 loop
+      downto_trace := downto_trace * 10 + value;
+    end loop;
+    for value in 2 to 1 loop
+      to_null_count := to_null_count + 1;
+    end loop;
+    for value in 2 downto 3 loop
+      downto_null_count := downto_null_count + 1;
+    end loop;
+
+    descending_trace <= trace_value;
+    descending_visits <= visit_count;
+    descending_null_visits <= descending_null_count;
+    ascending_null_visits <= ascending_null_count;
+    singleton_total <= singleton_sum;
+    singleton_visits <= singleton_count;
+    explicit_to_trace <= to_trace;
+    explicit_downto_trace <= downto_trace;
+    explicit_to_null_visits <= to_null_count;
+    explicit_downto_null_visits <= downto_null_count;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(parsed.ok());
+    const auto elaborated = compile_and_elaborate(
+        parsed.design,
+        "vhdl:work.subtype_mark_loop_directions(rtl)");
+    if (!elaborated.ok()) {
+        for (const auto& diagnostic : elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated.ok());
+
+    const auto descending_trace
+        = elaborated.design->find_signal("descending_trace");
+    const auto descending_visits
+        = elaborated.design->find_signal("descending_visits");
+    const auto descending_null_visits
+        = elaborated.design->find_signal("descending_null_visits");
+    const auto ascending_null_visits
+        = elaborated.design->find_signal("ascending_null_visits");
+    const auto singleton_total
+        = elaborated.design->find_signal("singleton_total");
+    const auto singleton_visits
+        = elaborated.design->find_signal("singleton_visits");
+    const auto explicit_to_trace
+        = elaborated.design->find_signal("explicit_to_trace");
+    const auto explicit_downto_trace
+        = elaborated.design->find_signal("explicit_downto_trace");
+    const auto explicit_to_null_visits
+        = elaborated.design->find_signal("explicit_to_null_visits");
+    const auto explicit_downto_null_visits
+        = elaborated.design->find_signal("explicit_downto_null_visits");
+    assert(descending_trace && descending_visits && descending_null_visits
+        && ascending_null_visits && singleton_total && singleton_visits
+        && explicit_to_trace && explicit_downto_trace
+        && explicit_to_null_visits && explicit_downto_null_visits);
+
+    auto interpreter = elaborated.design->create_interpreter();
+    assert(interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(interpreter->signal_value(*descending_trace).low_word().aval
+        == 3210U);
+    assert(interpreter->signal_value(*descending_visits).low_word().aval
+        == 4U);
+    assert(interpreter->signal_value(*descending_null_visits).low_word().aval
+        == 0U);
+    assert(interpreter->signal_value(*ascending_null_visits).low_word().aval
+        == 0U);
+    assert(interpreter->signal_value(*singleton_total).low_word().aval
+        == 5U);
+    assert(interpreter->signal_value(*singleton_visits).low_word().aval
+        == 1U);
+    assert(interpreter->signal_value(*explicit_to_trace).low_word().aval
+        == 12U);
+    assert(interpreter->signal_value(*explicit_downto_trace).low_word().aval
+        == 210U);
+    assert(interpreter->signal_value(*explicit_to_null_visits).low_word().aval
+        == 0U);
+    assert(interpreter->signal_value(*explicit_downto_null_visits).low_word().aval
+        == 0U);
+}
+
 void test_vhdl_runtime_for_loop_iteration_cap()
 {
     const auto make_design = [](const std::string_view source_name,
@@ -3280,6 +3426,203 @@ void test_vhdl_object_alias_is_not_array_index_type()
         "subtype_alias_index_mark_control", "index_t", false, false);
 }
 
+void test_vhdl_nested_callable_capture_tracks_parent_specialization()
+{
+    const auto parsed = fsim::frontend::parse_text(
+        "vhdl-nested-callable-distinct-parent-capture.vhd",
+        R"(
+entity nested_callable_parent_specialization is end entity;
+architecture test of nested_callable_parent_specialization is
+begin
+  process
+    impure function outer(limit_value : integer) return integer is
+      variable bound_value : integer := limit_value;
+      subtype captured_t is integer range 0 to bound_value;
+      impure function echo(n : captured_t) return integer is
+      begin
+        return n;
+      end function;
+      impure function middle(value : integer) return integer is
+        impure function deep(nested_value : integer) return integer is
+        begin
+          -- echo is a sibling of middle under outer.  Reaching its lexical
+          -- owner requires walking deep -> middle -> outer.
+          return echo(nested_value);
+        end function;
+      begin
+        return deep(value);
+      end function;
+    begin
+      bound_value := 0;
+      return middle(limit_value);
+    end function;
+  begin
+    assert outer(2) = 2 severity failure;
+    assert outer(5) = 5 severity failure;
+    report "FSIM-NESTED-CALLABLE-PARENT-CAPTURE-PASS";
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(parsed.ok());
+
+    const auto elaborated = compile_and_elaborate(
+        parsed.design,
+        "vhdl:work.nested_callable_parent_specialization(test)");
+    if (!elaborated.ok()) {
+        for (const auto& diagnostic : elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated.ok());
+    auto interpreter = elaborated.design->create_interpreter();
+    assert(interpreter->run().status
+           == fsim::runtime::RunStatus::completed);
+}
+
+void test_vhdl_standard_array_callable_returns()
+{
+    const auto parsed = fsim::frontend::parse_text(
+        "vhdl-standard-array-callable-returns.vhd",
+        R"(
+entity standard_array_callable_returns is end entity;
+architecture rtl of standard_array_callable_returns is
+  function echo_bit(value : bit_vector) return bit_vector is
+  begin
+    return value;
+  end function;
+  function echo_boolean(value : boolean_vector) return boolean_vector is
+  begin
+    return value;
+  end function;
+  function echo_integer_vector(value : integer_vector)
+    return integer_vector is
+  begin
+    return value;
+  end function;
+  function echo_real_vector(value : real_vector) return real_vector is
+  begin
+    return value;
+  end function;
+  function echo_time_vector(value : time_vector) return time_vector is
+  begin
+    return value;
+  end function;
+  function echo_string(value : string) return string is
+  begin
+    return value;
+  end function;
+
+  function echo_integer(value : integer) return integer is
+  begin
+    return value;
+  end function;
+  function echo_real(value : real) return real is
+  begin
+    return value;
+  end function;
+  function echo_time(value : time) return time is
+  begin
+    return value;
+  end function;
+
+  signal bit_input : bit_vector(0 to 2);
+  signal bit_output : bit_vector(0 to 2);
+  signal boolean_input : boolean_vector(0 to 2);
+  signal boolean_output : boolean_vector(0 to 2);
+  signal integer_vector_input : integer_vector(0 to 2);
+  signal integer_vector_output : integer_vector(0 to 2);
+  signal real_vector_input : real_vector(0 to 2);
+  signal real_vector_output : real_vector(0 to 2);
+  signal time_vector_input : time_vector(0 to 2);
+  signal time_vector_output : time_vector(0 to 2);
+  signal string_input : string(1 to 3) := "ABC";
+  signal string_output : string(1 to 3);
+  signal integer_input : integer := 0;
+  signal integer_output : integer;
+  signal real_input : real := 0.0;
+  signal real_output : real;
+  signal time_input : time := 0 ns;
+  signal time_output : time;
+begin
+  bit_output <= echo_bit(bit_input);
+  boolean_output <= echo_boolean(boolean_input);
+  integer_vector_output <= echo_integer_vector(integer_vector_input);
+  real_vector_output <= echo_real_vector(real_vector_input);
+  time_vector_output <= echo_time_vector(time_vector_input);
+  string_output <= echo_string(string_input);
+  integer_output <= echo_integer(integer_input);
+  real_output <= echo_real(real_input);
+  time_output <= echo_time(time_input);
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(parsed.ok());
+    const auto elaborated = compile_and_elaborate(
+        parsed.design,
+        "vhdl:work.standard_array_callable_returns(rtl)");
+    if (!elaborated.ok()) {
+        for (const auto& diagnostic : elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated.ok());
+    const auto string_output
+        = elaborated.design->find_signal("string_output");
+    assert(string_output);
+    auto interpreter = elaborated.design->create_interpreter();
+    assert(interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(interpreter->signal_value(*string_output).to_msb_string()
+        == "010000010100001001000011");
+}
+
+void test_vhdl_callable_overloads_preserve_standard_and_nominal_arrays()
+{
+    const auto parsed = fsim::frontend::parse_text(
+        "vhdl-callable-standard-and-nominal-array-overloads.vhd",
+        R"(
+library std;
+entity callable_standard_and_nominal_array_overloads is end entity;
+library std;
+architecture rtl of callable_standard_and_nominal_array_overloads is
+  type integer_vector is array (natural range <>) of integer;
+  function echo(value : integer_vector) return integer_vector is
+  begin
+    return value;
+  end function;
+  function echo(value : std.standard.integer_vector)
+    return std.standard.integer_vector is
+  begin
+    return value;
+  end function;
+  signal local_input : integer_vector(1 to 2);
+  signal local_output : integer_vector(1 to 2);
+  signal standard_input : std.standard.integer_vector(1 to 2);
+  signal standard_output : std.standard.integer_vector(1 to 2);
+begin
+  local_output <= echo(local_input);
+  standard_output <= echo(standard_input);
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008,
+        fsim::frontend::VhdlStandard::Vhdl2019);
+    assert(parsed.ok());
+    const auto elaborated = compile_and_elaborate(
+        parsed.design,
+        "vhdl:work.callable_standard_and_nominal_array_overloads(rtl)");
+    if (!elaborated.ok()) {
+        for (const auto& diagnostic : elaborated.diagnostics) {
+            std::cerr << diagnostic.code << ": "
+                      << diagnostic.message << '\n';
+        }
+    }
+    assert(elaborated.ok());
+}
+
 void test_vhdl_interface_function_generics()
 {
     test_vhdl_object_alias_is_not_array_index_type();
@@ -3289,6 +3632,9 @@ void test_vhdl_interface_function_generics()
     test_vhdl_constant_initializer_preserves_mismatched_packed_bounds();
     test_vhdl_packed_array_signal_initializer();
     test_vhdl_packed_generic_value_reaches_nested_callable();
+    test_vhdl_nested_callable_capture_tracks_parent_specialization();
+    test_vhdl_standard_array_callable_returns();
+    test_vhdl_callable_overloads_preserve_standard_and_nominal_arrays();
     test_vhdl_packed_bitwise_evaluator_preserves_operator_range();
     test_vhdl_pure_call_updates_local_packed_array_in_place();
     test_vhdl_pure_call_respects_package_generic_binding();
@@ -3303,6 +3649,7 @@ void test_vhdl_interface_function_generics()
     test_vhdl_dynamic_exponent_formal_remains_unresolved();
     test_vhdl_dynamic_integer_for_loop_bounds();
     test_vhdl_array_range_for_loops();
+    test_vhdl_subtype_mark_loop_directions();
     test_vhdl_runtime_for_loop_iteration_cap();
     test_vhdl_large_static_for_loops_use_counted_lowering();
     test_vhdl_static_for_threshold_preserves_array_values_and_visits();

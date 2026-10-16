@@ -208,7 +208,7 @@ and do not become scalar predicates accidentally. A PSL monitor may observe a
 signal driven by the existing VITAL path-delay runtime on a later clock sample,
 preserving the same delta ordering as every other signal consumer. The compiled
 HIR bundle retains the PSL declaration/directive token and source-span
-ownership through VHDL HIR schema 5. Standalone designs carry the same
+ownership through VHDL HIR schema 8. Standalone designs carry the same
 checksummed `FSIMVHIR` payload containing the complete owning VHDL HIR,
 including analyzed PSL clocks, declarations, temporal operators, directives,
 and source IDs. Loading validates every retained semantic ID and enum before
@@ -1275,7 +1275,7 @@ The same scalar/string/chandle profiles recurse through the supported static,
 dynamic, queue, associative, packed-aggregate, and unpacked-aggregate value
 shapes and through bounded scalar file I/O.
 
-Compiled-HIR bundle schema 1 and portable schema 15 preserve scalar type
+Compiled-HIR bundle schema 3 and portable schema 15 preserve scalar type
 identity, canonical literal payloads, and negative contextual operands. The
 design-state codec preserves the corresponding executable signal,
 callable, container, aggregate, string, and chandle state. Both codecs reject

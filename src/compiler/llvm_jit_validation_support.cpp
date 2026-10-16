@@ -254,9 +254,22 @@ void validate_fork_operation(
     const runtime::simir::Operation& operation) noexcept
 {
     using namespace runtime::simir;
+    const auto has_selected_signal_query = [&] {
+        const auto selected = [](const auto* query) {
+            return query != nullptr && query->selection.has_value();
+        };
+        return selected(operation_get_if<SignalEvent>(&operation))
+            || selected(operation_get_if<SignalLastValue>(&operation))
+            || selected(operation_get_if<SignalLastEvent>(&operation))
+            || selected(operation_get_if<SignalActive>(&operation))
+            || selected(operation_get_if<SignalLastActive>(&operation))
+            || selected(operation_get_if<SignalDriving>(&operation))
+            || selected(operation_get_if<SignalDrivingValue>(&operation));
+    }();
     const auto* report
         = fsim::runtime::simir::operation_get_if<Report>(&operation);
-    return fsim::runtime::simir::operation_holds<WaitFor>(operation)
+    return has_selected_signal_query
+        || fsim::runtime::simir::operation_holds<WaitFor>(operation)
         || (report != nullptr
             && report->severity == AssertionSeverity::failure)
         || fsim::runtime::simir::operation_holds<CoverageQuery>(operation)

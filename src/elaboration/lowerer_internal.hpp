@@ -45,6 +45,12 @@ vhdl_logic_string_function_name(std::string_view spelling) noexcept;
     const semantic::vhdl::SubtypeIndication&,
     semantic::ScopeId use_scope,
     std::span<const semantic::CompiledBindingFrame> binding_frames = {});
+[[nodiscard]] semantic::vhdl::BuiltinTypeIdentity
+hir_vhdl_standard_array_builtin_type(
+    const semantic::SpecializedHirUnit&,
+    const semantic::vhdl::SubtypeIndication&,
+    semantic::ScopeId use_scope,
+    std::span<const semantic::CompiledBindingFrame> binding_frames = {});
 
 [[nodiscard]] constexpr bool use_systemverilog_timeformat_width(
     const std::uint32_t minimum_width,
@@ -183,6 +189,16 @@ public:
             vhdl_context = std::nullopt,
         std::optional<std::pair<std::uint32_t, std::uint32_t>>
             actual_slice = std::nullopt);
+    /// Lower one exact package variable declaration initializer as a
+    /// synchronous, one-shot SystemVerilog initial process. The declaration
+    /// supplies both the retained initializer expression and its lexical
+    /// scope; destination must be the runtime binding for that declaration.
+    [[nodiscard]] std::optional<Process>
+    lower_hir_package_initializer(
+        semantic::DeclarationId declaration,
+        SignalId destination,
+        frontend::Language language,
+        std::string_view hierarchy);
     // The nets and constant bit ranges that an inout port actual selects
     // (`bus[0]`, `bus[3:2]`, `{a, b[1]}`), each with its offset in the
     // formal, for bidirectional switch connections.
@@ -243,6 +259,12 @@ public:
     void set_package_container_object(PackageContainerObject materialize)
     {
         package_container_object_ = std::move(materialize);
+    }
+    using PackageStringObject = std::function<
+        std::optional<StringObjectId>(semantic::DeclarationId)>;
+    void set_package_string_object(PackageStringObject materialize)
+    {
+        package_string_object_ = std::move(materialize);
     }
 
 private:
@@ -354,6 +376,9 @@ private:
         bool event_expression_scalar_edge { };
         std::optional<semantic::ExpressionId> input_actual;
         std::optional<SignalId> input_actual_destination;
+        bool input_actual_assignment_context { };
+        std::optional<semantic::sv::TypeReference>
+            input_actual_assignment_type;
         std::optional<semantic::vhdl::SubtypeIndication>
             input_actual_vhdl_context;
         std::optional<SignalId> output_actual_source;
@@ -1116,6 +1141,15 @@ private:
         runtime::SimulationTick duration { };
         std::size_t width { };
         frontend::ValueDomain domain { frontend::ValueDomain::Unknown };
+        std::size_t storage_width { };
+        frontend::ValueDomain storage_domain {
+            frontend::ValueDomain::Unknown
+        };
+        std::optional<HirConstantSelection> selection;
+        // The declaration is the resolved actual behind any signal-formal
+        // alias; the process scope is inherited by deferred callable bodies.
+        std::optional<semantic::DeclarationId> signal_declaration;
+        std::optional<semantic::ScopeId> driving_process_scope;
         // 'EVENT of an indexed element of the signal: the element read.
         std::optional<semantic::ExpressionId> element;
     };
@@ -1123,6 +1157,9 @@ private:
     hir_vhdl_signal_attribute_profile(
         semantic::ExpressionId expression,
         semantic::ScopeId process_scope) const;
+    [[nodiscard]] std::optional<semantic::vhdl::Direction>
+    hir_vhdl_signal_formal_direction(
+        semantic::ExpressionId attribute_expression) const;
     [[nodiscard]] bool is_hir_vhdl_vital_mux2(
         semantic::ExpressionId expression) const;
     [[nodiscard]] std::optional<HirVhdlIntrinsicProfile>
@@ -1403,7 +1440,11 @@ private:
     struct HirVhdlAccessHeap;
     [[nodiscard]] HirVhdlAccessHeap* hir_vhdl_access_heap(
         const semantic::vhdl::TypeDefinition& type,
-        const frontend::SourceSpan& span);
+        const frontend::SourceSpan& span,
+        const semantic::vhdl::SubtypeIndication* access_subtype = nullptr,
+        std::optional<semantic::ExpressionId> initializer = std::nullopt,
+        std::span<const semantic::vhdl::RangeConstraint>
+            allocator_constraints = {});
     [[nodiscard]] const semantic::vhdl::TypeDefinition*
     hir_vhdl_access_type_definition(
         const semantic::vhdl::SubtypeIndication& subtype) const;
@@ -1419,6 +1460,9 @@ private:
         RegisterId handle,
         const semantic::vhdl::SubtypeIndication& access_subtype,
         const frontend::SourceSpan& span);
+    [[nodiscard]] std::optional<StringRegisterId>
+    lower_hir_vhdl_access_string_object(
+        semantic::ExpressionId dereference);
     [[nodiscard]] bool is_hir_vhdl_access_deallocation(
         semantic::StatementId statement) const;
     [[nodiscard]] bool lower_hir_vhdl_access_deallocation(
@@ -1569,6 +1613,12 @@ private:
         std::optional<frontend::IntegerRange> integer_range;
         std::optional<RegisterId> local;
         std::optional<SignalId> signal;
+        // A selected signal formal reads one subrange of the root signal.
+        // Keep the formal view separate from the root signal storage.
+        std::optional<HirConstantSelection> signal_selection;
+        std::optional<semantic::ExpressionId> signal_selection_expression;
+        std::optional<std::size_t> signal_storage_width;
+        std::optional<frontend::ValueDomain> signal_storage_domain;
         bool vhdl_port { };
         semantic::vhdl::Direction vhdl_direction {
             semantic::vhdl::Direction::unknown
@@ -1587,6 +1637,8 @@ private:
         semantic::DeclarationId declaration,
         semantic::ScopeId process_scope,
         bool require_storage) const;
+    [[nodiscard]] std::optional<semantic::ScopeId>
+    hir_vhdl_current_process_scope() const;
     struct HirPackedUpdateTarget {
         HirRuntimeBinding binding;
         std::optional<HirConstantSelection> constant_selection;
@@ -1705,6 +1757,10 @@ private:
         const runtime::simir::ContainerType& type) const;
     struct HirArrayQueryShape {
         std::vector<HirPackedRange> dimensions;
+        // Keep variable-sized unpacked dimensions in the same slowest-first
+        // vector as fixed and packed dimensions. A parallel marker preserves
+        // the distinction needed by IEEE 1800-2017 20.7.1.
+        std::vector<bool> variable_dimensions;
         std::size_t unpacked_dimensions { };
     };
     [[nodiscard]] std::optional<HirArrayQueryShape>
@@ -1796,7 +1852,8 @@ private:
     lower_hir_class_handle_array_index(
         std::string_view identity,
         const std::vector<semantic::ExpressionId>& indices,
-        runtime::simir::RegisterId& validity);
+        runtime::simir::RegisterId& validity,
+        bool& applies);
     [[nodiscard]] std::optional<HirStaticContainerValue>
     lower_hir_static_container_value(semantic::ExpressionId expression);
     enum class HirContainerExpressionPurpose : std::uint8_t {
@@ -1842,6 +1899,16 @@ private:
         semantic::ScopeId callable_scope,
         semantic::ExpressionId actual,
         semantic::ScopeId actual_scope) const;
+    // Emit the scalar subtype check that belongs to an input/inout VHDL
+    // callable formal. Dynamic bounds are lowered in the callable body after
+    // all formal registers have been bound.
+    [[nodiscard]] std::optional<std::uint32_t>
+    hir_vhdl_lexical_enclosing_callable(
+        semantic::ScopeId declaration_scope) const;
+    [[nodiscard]] bool emit_hir_callable_scalar_range_check(
+        semantic::DeclarationId formal,
+        semantic::ScopeId callable_scope,
+        RegisterId value);
     enum class HirStringBindingKind : std::uint8_t {
         local,
         object,
@@ -2394,6 +2461,7 @@ private:
     const ReadOnlySignalBindings& read_only_signals_;
     PackageConstantSignal package_constant_signal_;
     PackageContainerObject package_container_object_;
+    PackageStringObject package_string_object_;
     const StringObjectBindings& string_objects_;
     const ReadOnlyStringBindings& read_only_string_objects_;
     const ContainerObjectBindings& container_objects_;
@@ -2430,9 +2498,19 @@ private:
         hir_enclosing_local_registers_;
     std::unordered_map<std::uint32_t, StringRegisterId>
         hir_enclosing_local_string_registers_;
+    struct HirVhdlCapturedScalarRange {
+        semantic::SourceSpanId source;
+        RegisterId left;
+        RegisterId right;
+        bool descending { };
+    };
     struct HirCallableFrame {
         semantic::DeclarationId declaration;
         semantic::ScopeId scope;
+        // A function or procedure called from a process evaluates
+        // 'DRIVING_VALUE in that caller process, even while its deferred body
+        // is lowered in the callable's nested scope.
+        std::optional<semantic::ScopeId> vhdl_driver_process_scope;
         HirCallableType type;
         RegisterId result { };
         StringRegisterId string_result { };
@@ -2470,6 +2548,13 @@ private:
         // The registers of the body's formals and locals once lowered,
         // visible to subprograms declared inside it.
         std::unordered_map<std::uint32_t, RegisterId> body_registers;
+        // Scalar subtype bounds evaluated while this callable activation's
+        // declarative part is elaborated, keyed by the source range.
+        std::vector<HirVhdlCapturedScalarRange> body_vhdl_scalar_ranges;
+        // The lexical callable frame whose locals and captured subtype ranges
+        // this frame closes over. This identity is also part of the frame key.
+        std::optional<std::uint32_t>
+            enclosing_callable_invocation_identity;
         std::unordered_map<std::uint32_t, StringRegisterId>
             static_string_variables;
         std::unordered_map<std::uint32_t, ContainerRegisterId>
@@ -2497,6 +2582,8 @@ private:
         std::size_t driver_count, std::size_t element_width);
     std::optional<std::pair<RegisterId, RegisterId>> hir_vhdl_resolver_registers_;
     std::vector<HirCallableFrame> hir_callable_frames_;
+    std::vector<HirVhdlCapturedScalarRange>
+        hir_vhdl_captured_scalar_ranges_;
     struct HirStaticStorage {
         std::optional<SignalId> signal;
         std::optional<StringObjectId> string;

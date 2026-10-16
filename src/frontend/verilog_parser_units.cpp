@@ -1541,7 +1541,9 @@ Type VerilogParser::parse_parameter_type() {
     }
     return type;
   } else if (is_named_type_reference_start()) {
-    return parse_named_type();
+    auto named_type = parse_named_type();
+    parse_optional_range(named_type);
+    return named_type;
   }
   parse_optional_signedness(type);
   if (type.spelling == "implicit"

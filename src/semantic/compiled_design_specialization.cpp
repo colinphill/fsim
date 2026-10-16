@@ -6259,8 +6259,15 @@ private:
                 call_frames_.pop_back();
                 return std::nullopt;
             }
+            const auto effective_subtype
+                = CompiledDesignResolver { unit_ }.effective_vhdl_subtype(
+                    *formal->vhdl->subtype, formal->vhdl->scope);
+            if (!effective_subtype) {
+                call_frames_.pop_back();
+                return std::nullopt;
+            }
             const auto coerced = vhdl_coerce_packed(
-                value->second, *formal->vhdl->subtype);
+                value->second, *effective_subtype);
             if (!coerced) {
                 call_frames_.pop_back();
                 return std::nullopt;

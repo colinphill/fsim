@@ -2307,9 +2307,16 @@ std::uint32_t LlvmProcessExecutor::container_operation(
                 }
                 throw;
             }
-            runtime::simir::load_memory_text(
-                mutable_container(load->target), text, load->hexadecimal,
-                start, finish);
+            const auto load_result =
+                runtime::simir::load_memory_text_with_status(
+                    mutable_container(load->target), text,
+                    load->hexadecimal, start, finish);
+            if (load_result.word_count_mismatch) {
+                state.context->report(
+                    "read-memory file word count differs from the selected range",
+                    runtime::simir::AssertionSeverity::warning,
+                    runtime::simir::SourceLocation { });
+            }
         } else if (const auto* exists = fsim::runtime::simir::operation_get_if<runtime::simir::ContainerExists>(
                        &operation)) {
             const auto& source = read_container(exists->source);

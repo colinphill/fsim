@@ -1464,6 +1464,8 @@ tests/app/acc_scheduler_application_test.cpp
 tests/app/allocation_profile_test.cpp
 tests/app/application_artifact_case.cpp
 tests/app/application_case_dispatch.cpp
+tests/app/application_class_hir_failure_routes_case.cpp
+tests/app/application_class_hir_reports_case.cpp
 tests/app/application_classes_case.cpp
 tests/app/application_runtime_path_codec_test.cpp
 tests/app/application_simulation_unsupported_pack_test.cpp
@@ -1615,6 +1617,7 @@ tests/app/sdf_vital_reannotation_test.cpp
 tests/app/sdf_vital_scheduling_test.cpp
 tests/app/sdf_vital_target_plan_test.cpp
 tests/app/sdf_vital_timing_checks_test.cpp
+tests/app/selected_signal_frontier_history_test.cpp
 tests/app/simplification_benchmark_driver.cpp
 tests/app/specify_application_test.cpp
 tests/app/static_kernel_behavioral_test.cpp
@@ -2044,6 +2047,8 @@ tests/fixtures/compliance/sv_celldefine_idempotent_batch57.sv
 tests/fixtures/compliance/sv_class_construction_in_methods.sv
 tests/fixtures/compliance/sv_class_global_void_function_in_class_batch58.sv
 tests/fixtures/compliance/sv_class_global_void_shadow_precedence_batch58.sv
+tests/fixtures/compliance/sv_class_handle_fixed_array_range_index_20261015.sv
+tests/fixtures/compliance/sv_class_handle_fixed_array_wide_index_invalid_20261015.sv
 tests/fixtures/compliance/sv_class_handle_multidim_index_batch57.sv
 tests/fixtures/compliance/sv_class_method_default_arguments_batch58_20261014.sv
 tests/fixtures/compliance/sv_class_module_owner_context_batch58_20261013.sv
@@ -2193,6 +2198,7 @@ tests/fixtures/compliance/vhdl_formal_subelements.vhd
 tests/fixtures/compliance/vhdl_function_integer_indexed_result_shape_batch59.vhd
 tests/fixtures/compliance/vhdl_function_result_array_of_arrays_indexing_20261013.vhd
 tests/fixtures/compliance/vhdl_function_signal_attributes_batch59.vhd
+tests/fixtures/compliance/vhdl_function_signal_indexed_actual_batch59.vhd
 tests/fixtures/compliance/vhdl_generate_configuration.vhd
 tests/fixtures/compliance/vhdl_guarded_and_real_ranges.vhd
 tests/fixtures/compliance/vhdl_guarded_bus_port.vhd
@@ -2366,6 +2372,8 @@ tests/fixtures/systemverilog/scheduling/expected/nba_batch_before_active.out
 tests/fixtures/systemverilog/scheduling/expected/nba_batch_before_active.out.license
 tests/fixtures/systemverilog/scheduling/expected/ordered_wave_native.out
 tests/fixtures/systemverilog/scheduling/expected/ordered_wave_native.out.license
+tests/fixtures/systemverilog/scheduling/expected/packed_vector_edge_sensitivity.out
+tests/fixtures/systemverilog/scheduling/expected/packed_vector_edge_sensitivity.out.license
 tests/fixtures/systemverilog/scheduling/expected/reactive_reinactive_re_nba.out
 tests/fixtures/systemverilog/scheduling/expected/reactive_reinactive_re_nba.out.license
 tests/fixtures/systemverilog/scheduling/expected/sensitivity_ranges.json
@@ -2391,6 +2399,7 @@ tests/fixtures/systemverilog/scheduling/multidimensional_fixed_read.sv
 tests/fixtures/systemverilog/scheduling/named_event_triggered_nba.sv
 tests/fixtures/systemverilog/scheduling/nba_batch_before_active.sv
 tests/fixtures/systemverilog/scheduling/ordered_wave_native.sv
+tests/fixtures/systemverilog/scheduling/packed_vector_edge_sensitivity.sv
 tests/fixtures/systemverilog/scheduling/pending/README.md
 tests/fixtures/systemverilog/scheduling/pending/sampled_app_clocked_history.sv
 tests/fixtures/systemverilog/scheduling/pending/sampled_explicit_clock.sv
@@ -2427,7 +2436,6 @@ tests/fixtures/vhdl/scheduling/probe.tcl
 tests/fixtures/vhdl_block_configuration/matching_bound_architecture_batch59.vhd
 tests/fixtures/vhdl_block_configuration/run_compile_only.cmake
 tests/fixtures/vhdl_compile_only/run_compile_only.cmake
-tests/fixtures/vhdl_compile_only/vhdl_function_signal_indexed_actual_compile_batch59.vhd
 tests/fixtures/vhdl_compile_only/vhdl_function_signal_sliced_actual_compile_batch59.vhd
 tests/fixtures/vhdl_type_mark_visibility/explicit_library_mask_consumer.vhd
 tests/fixtures/vhdl_type_mark_visibility/imported_type.vhd
@@ -2500,6 +2508,7 @@ tests/native_frontier_a2_single_root_fanout.cmake
 tests/native_frontier_generic_partial_prefix.cmake
 tests/native_frontier_generic_update.cmake
 tests/native_frontier_retained_stop_resume.cmake
+tests/native_frontier_selected_signal_history.cmake
 tests/native_frontier_v2_first_generic.cmake
 tests/project/project_config_test.cpp
 tests/runtime/CMakeLists.txt
@@ -2591,6 +2600,7 @@ tests/runtime/runtime_native_frontier_logic9_sync_tests.cpp
 tests/runtime/runtime_native_frontier_wide_sync_tests.cpp
 tests/runtime/runtime_owned_driver_demote_failure_tests.cpp
 tests/runtime/runtime_owned_driver_demotion_test_access.hpp
+tests/runtime/runtime_package_static_startup_tests.cpp
 tests/runtime/runtime_packed_inline_tests.cpp
 tests/runtime/runtime_prepared_output_failure_main.cpp
 tests/runtime/runtime_private_region_scheduler_tests.cpp

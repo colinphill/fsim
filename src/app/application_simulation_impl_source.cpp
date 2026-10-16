@@ -11,7 +11,10 @@ namespace fsim::app {
     std::vector<std::string>& string_actuals,
     const std::span<const std::string> actual_names,
     const std::span<const std::uint8_t> actual_directions,
-    const bool virtual_dispatch)
+    const bool virtual_dispatch,
+    const application_detail::SystemVerilogClassHirExecution::ActualReferences
+        actual_references,
+    const std::optional<runtime::simir::ProcessId> report_process)
 {
     const auto method_separator = canonical_identity.rfind("::");
     const auto method_name = method_separator == std::string_view::npos
@@ -159,7 +162,7 @@ namespace fsim::app {
         }
         return class_hir_execution.invoke_function(
             *method, handle, actuals, string_actuals, actual_names,
-            actual_directions);
+            actual_directions, actual_references, report_process);
     }
     throw std::invalid_argument {
         "compiled HIR class method '" + std::string { canonical_identity }
@@ -173,7 +176,10 @@ Simulation::Impl::invoke_source_static_function(
     std::vector<runtime::PackedLogic4>& actuals,
     std::vector<std::string>& string_actuals,
     const std::span<const std::string> actual_names,
-    const std::span<const std::uint8_t> actual_directions)
+    const std::span<const std::uint8_t> actual_directions,
+    const application_detail::SystemVerilogClassHirExecution::ActualReferences
+        actual_references,
+    const std::optional<runtime::simir::ProcessId> report_process)
 {
     constexpr std::string_view registry_create_prefix {
         "@uvm-registry-create:"
@@ -288,7 +294,7 @@ Simulation::Impl::invoke_source_static_function(
         = class_hir_execution.static_method(canonical_identity)) {
         return class_hir_execution.invoke_function(
             *method, 0, actuals, string_actuals, actual_names,
-            actual_directions);
+            actual_directions, actual_references, report_process);
     }
     throw std::invalid_argument {
         "compiled HIR class static method '"
@@ -301,7 +307,8 @@ void Simulation::Impl::invoke_source_constructor(
     const runtime::SystemVerilogClassHandle handle,
     const std::span<const runtime::PackedLogic4> actuals,
     const std::span<const std::string> string_actuals,
-    const std::span<const std::string> actual_names)
+    const std::span<const std::string> actual_names,
+    const std::optional<runtime::simir::ProcessId> report_process)
 {
     // The unmodified UVM library constructors bootstrap their own singleton
     // scheduler, report server, resource pool, and component hierarchy. Those
@@ -314,14 +321,35 @@ void Simulation::Impl::invoke_source_constructor(
         != std::string::npos) {
         return;
     }
-    if (class_hir_execution.invoke_constructor(
+    const bool outermost = source_function_dispatch_depth == 0U;
+    const auto static_before = outermost
+        ? packed_static_snapshot() : StaticPackedSnapshot { };
+    ++source_function_dispatch_depth;
+    bool invoked { };
+    try {
+        invoked = class_hir_execution.invoke_constructor(
             specialization.specialization_identity, handle, actuals,
-            string_actuals, actual_names)) {
-        return;
+            string_actuals, actual_names, report_process);
+    } catch (...) {
+        --source_function_dispatch_depth;
+        if (outermost) {
+            // Constructor writes to static class storage survive a failed
+            // construction, just as writes made by a function do.
+            try {
+                notify_static_changes(static_before);
+            } catch (...) {
+            }
+        }
+        throw;
     }
-    throw std::invalid_argument {
-        "compiled HIR constructor '" + specialization.declaration_identity
-        + "' is not executable"
-    };
+    --source_function_dispatch_depth;
+    if (!invoked) {
+        throw std::invalid_argument {
+            "compiled HIR constructor '" + specialization.declaration_identity
+            + "' is not executable"
+        };
+    }
+    if (outermost)
+        notify_static_changes(static_before);
 }
 } // namespace fsim::app

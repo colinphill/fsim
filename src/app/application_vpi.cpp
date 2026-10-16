@@ -941,6 +941,30 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
         }
     }
 
+    // Package startup processes have a parentless, package-named synthetic
+    // specialization. Publish its runtime paths beneath the package object
+    // created by the package inventory pass, not as a configured Root.
+    std::map<std::uint32_t, std::string> package_initializer_instances;
+    for (const auto& specialization : project.design_ir.specializations()) {
+        if (!relevant_specializations.contains(specialization.id.value())) {
+            continue;
+        }
+        const auto& instance = project.design_ir.instances().at(
+            specialization.instance.value());
+        const auto& unit = project.semantics.units().at(
+            specialization.unit.value());
+        const auto configured_root = std::ranges::find(
+                                         project.design_ir.roots(), instance.path)
+            != project.design_ir.roots().end();
+        if (!configured_root && !instance.parent
+            && unit.kind == semantic::UnitKind::systemverilog_package
+            && project.design_ir.path(instance.path) == unit.name) {
+            package_initializer_instances.emplace(
+                specialization.instance.value(),
+                unit.library + "::" + unit.name);
+        }
+    }
+
     std::map<std::uint32_t, fsim_vpi_handle_v1> instances;
     std::map<std::string, fsim_vpi_handle_v1, std::less<>> instance_paths;
     std::map<std::string, fsim_vpi_handle_v1, std::less<>> published_scopes;
@@ -948,6 +972,9 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
     const auto publish_instance = [&](const auto& self,
                                       const auto& instance)
         -> fsim_vpi_handle_v1 {
+        if (package_initializer_instances.contains(instance.id.value())) {
+            return { };
+        }
         const auto existing = instances.find(instance.id.value());
         if (existing != instances.end()) {
             return existing->second;
@@ -1100,6 +1127,24 @@ SystemVerilogVpiPublishedDesign make_systemverilog_vpi_design(
             *result.registry, std::move(descriptor), unit.name);
         packages.emplace(unit.name, package);
         packages.emplace(unit.library + "::" + unit.name, package);
+    }
+
+    for (const auto& [instance_id, package_identity]
+        : package_initializer_instances) {
+        const auto package = packages.find(package_identity);
+        if (package == packages.end()) {
+            throw std::logic_error {
+                "package initializer specialization has no published VPI package"
+            };
+        }
+        const auto& instance = project.design_ir.instances().at(instance_id);
+        const auto package_path = project.design_ir.path(instance.path);
+        if (!instances.emplace(instance_id, package->second).second
+            || !instance_paths.emplace(package_path, package->second).second) {
+            throw std::logic_error {
+                "package initializer specialization aliases an existing VPI instance"
+            };
+        }
     }
 
     std::map<

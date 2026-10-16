@@ -33,14 +33,81 @@ void test_string_method_archive_enum_range()
         != std::string::npos);
 }
 
+void test_process_startup_phase_archive_enum_range()
+{
+    using Phase = fsim::runtime::simir::ProcessStartupPhase;
+
+    fsim::app::codec_detail::Writer valid_writer;
+    valid_writer.write(static_cast<std::uint8_t>(
+        Phase::package_static_initializer));
+    const auto valid_bytes = std::move(valid_writer).finish();
+    fsim::app::codec_detail::Reader valid_reader { valid_bytes };
+    Phase decoded { };
+    assert(valid_reader.read(decoded));
+    assert(decoded == Phase::package_static_initializer);
+
+    fsim::app::codec_detail::Writer invalid_writer;
+    invalid_writer.write(std::uint8_t { 0xffU });
+    const auto invalid_bytes = std::move(invalid_writer).finish();
+    fsim::app::codec_detail::Reader invalid_reader { invalid_bytes };
+    assert(!invalid_reader.read(decoded));
+    assert(invalid_reader.failure().find("invalid scalar enumeration")
+        != std::string::npos);
+}
+
+void test_tagged_fork_runtime_roundtrip()
+{
+    using namespace fsim::runtime::simir;
+
+    auto state = make_startup_metadata_state();
+    Process process;
+    process.id = 3U;
+    process.name = "top.tagged_fork";
+    process.language_standard = "1800-2017";
+    process.compatibility_profile = "none";
+    process.operations.emplace_back(
+        Fork { { 2U }, ForkJoinKind::none, true });
+    process.operations.emplace_back(Halt { });
+    process.operations.emplace_back(ForkEnd { });
+    state.processes.push_back(std::move(process));
+
+    auto design = ElaboratedDesign::from_state(std::move(state));
+    assert(design);
+    fsim::diagnostic::Engine encode_diagnostics;
+    const auto bytes = fsim::app::serialize_runtime_state(
+        *design, encode_diagnostics);
+    assert(bytes && !encode_diagnostics.has_error());
+
+    fsim::diagnostic::Engine decode_diagnostics;
+    auto restored = fsim::app::deserialize_runtime_state(
+        *bytes, "tagged-fork-runtime-roundtrip", decode_diagnostics);
+    assert(restored && !decode_diagnostics.has_error());
+    using ProcessAccess
+        = fsim::elaboration::detail::ElaboratedDesignProcessAccess;
+    const auto view = ProcessAccess::process_view(*restored, 3U);
+    const auto operation = view.operations().expanded(0U);
+    const auto* fork = operation_get_if<Fork>(&operation);
+    assert(fork && fork->isolate_register_frame
+        && fork->join == ForkJoinKind::none
+        && fork->branches == std::vector<InstructionIndex> { 2U });
+}
+
 void test_schema_and_direct_row_roundtrip()
 {
-    assert(fsim::app::kRuntimeStateSchema == 81U);
-    const auto source_bytes = encode_source_design();
+    assert(fsim::app::kRuntimeStateSchema == 85U);
+    const auto source_bytes = encode_startup_metadata_design();
     assert(source_bytes.has_value());
+    const auto wire_payload = read_runtime_wire_payload(*source_bytes);
+    assert(wire_payload.has_value());
+    assert(wire_payload->process_rows->rows[0U]
+        .instance.startup_package_owner_id == 8U);
+    assert(wire_payload->state.string_objects[0U].package_owner_id == 8U);
+    assert(wire_payload->state.container_objects[0U].package_owner_id == 8U);
 
     auto restored = decode_design(*source_bytes);
     assert_view_rows(*restored);
+    assert_startup_metadata_view_rows(*restored);
+    assert_package_startup_sidecar_rows(*restored);
     using ProcessAccess
         = fsim::elaboration::detail::ElaboratedDesignProcessAccess;
     const auto independent_view = ProcessAccess::process_view(*restored, 2U);
@@ -70,12 +137,18 @@ void test_schema_and_direct_row_roundtrip()
 
     auto repeated = decode_design(*repeated_bytes);
     assert_view_rows(*repeated);
+    assert_startup_metadata_view_rows(*repeated);
+    assert_package_startup_sidecar_rows(*repeated);
     fsim::diagnostic::Engine repeated_diagnostics;
     const auto third_bytes = fsim::app::serialize_runtime_state(*repeated, repeated_diagnostics);
     assert(third_bytes && *third_bytes == *source_bytes);
 
+    auto facade_copy = *repeated;
+    assert_startup_metadata_facade_rows(facade_copy.processes());
+
     for (const std::uint32_t unsupported_schema : {
-             70U, 71U, 72U, 73U, 75U, 76U, 78U }) {
+             70U, 71U, 72U, 73U, 75U, 76U, 78U, 81U, 82U, 83U,
+             fsim::app::kRuntimeStateSchema - 1U }) {
         auto invalid_bytes = *source_bytes;
         assert(invalid_bytes.size() > 8U);
         invalid_bytes[8U] = static_cast<char>(unsupported_schema);
@@ -85,6 +158,131 @@ void test_schema_and_direct_row_roundtrip()
         assert(!invalid.has_value());
         assert(invalid_diagnostics.has_error());
     }
+
+    const auto reject_startup_metadata = [&](const std::string_view name,
+                                             const std::string_view expected,
+                                             const auto& mutate) {
+        auto payload = read_runtime_wire_payload(*source_bytes);
+        assert(payload.has_value());
+        mutate(*payload);
+        const auto malformed = write_runtime_wire_payload(*payload);
+        assert(malformed.has_value());
+        fsim::diagnostic::Engine malformed_diagnostics;
+        const auto rejected = fsim::app::deserialize_runtime_state(
+            *malformed, std::string { name }, malformed_diagnostics);
+        assert(!rejected.has_value());
+        assert(malformed_diagnostics.has_error());
+        assert(std::ranges::any_of(
+            malformed_diagnostics.diagnostics(), [&](const auto& item) {
+                return item.message.find(expected) != std::string::npos;
+            }));
+    };
+    reject_startup_metadata("duplicate-tagged-process-order",
+        "runtime package startup order is duplicated", [](auto& payload) {
+            auto& second = payload.process_rows->rows[1U].instance;
+            second.startup_phase = ProcessStartupPhase::package_static_initializer;
+            second.startup_order
+                = payload.process_rows->rows.front().instance.startup_order;
+        });
+    reject_startup_metadata("duplicate-process-callback-order",
+        "runtime package class-handle initializer metadata is invalid",
+        [](auto& payload) {
+            payload.state.systemverilog_package_class_initializers.front()
+                .startup_order
+                = payload.process_rows->rows.front().instance.startup_order;
+        });
+    reject_startup_metadata("duplicate-package-callback-order",
+        "runtime package static-property initializer metadata is invalid",
+        [](auto& payload) {
+            payload.state.systemverilog_package_class_static_initializers
+                .front().startup_order = payload.state
+                    .systemverilog_package_class_initializers.front()
+                    .startup_order;
+        });
+    reject_startup_metadata("package-callback-omits-target-store",
+        "runtime package class-handle initializer metadata is invalid",
+        [](auto& payload) {
+            payload.state.systemverilog_package_class_initializers.front()
+                .writable_signal_ids = { 0U, 4U };
+        });
+    reject_startup_metadata("package-callback-unsorted-store-set",
+        "runtime package class-handle initializer metadata is invalid",
+        [](auto& payload) {
+            payload.state.systemverilog_package_class_initializers.front()
+                .writable_signal_ids = { 1U, 0U, 4U };
+        });
+    reject_startup_metadata("package-process-duplicate-string-permission",
+        "runtime package process object permissions are invalid",
+        [](auto& payload) {
+            payload.process_rows->rows[0U].instance
+                .startup_writable_string_object_ids = { 0U, 0U };
+        });
+    reject_startup_metadata("package-process-out-of-range-container-permission",
+        "runtime package process object permissions are invalid",
+        [](auto& payload) {
+            payload.process_rows->rows[0U].instance
+                .startup_writable_container_object_ids = { 1U };
+        });
+    reject_startup_metadata("ordinary-process-carries-package-object-permission",
+        "ordinary runtime process carries package object permissions",
+        [](auto& payload) {
+            payload.process_rows->rows[1U].instance
+                .startup_writable_string_object_ids = { 0U };
+        });
+    reject_startup_metadata("ordinary-process-carries-package-owner",
+        "ordinary runtime process carries package object permissions",
+        [](auto& payload) {
+            payload.process_rows->rows[1U].instance
+                .startup_package_owner_id = 8U;
+        });
+    reject_startup_metadata("package-process-missing-owner",
+        "runtime package process object permissions are invalid",
+        [](auto& payload) {
+            payload.process_rows->rows[0U].instance
+                .startup_package_owner_id = 0U;
+        });
+    reject_startup_metadata("package-process-string-write-mismatch",
+        "runtime package process object permissions do not match its writes",
+        [](auto& payload) {
+            payload.process_rows->rows[0U].instance
+                .startup_writable_string_object_ids.clear();
+        });
+    reject_startup_metadata("package-process-foreign-string-owner",
+        "runtime package process string permission has a foreign owner",
+        [](auto& payload) {
+            payload.state.string_objects[0U].package_owner_id = 9U;
+        });
+    reject_startup_metadata("package-process-foreign-container-owner",
+        "runtime package process container permission is not direct owned storage",
+        [](auto& payload) {
+            payload.state.container_objects[0U].package_owner_id = 9U;
+        });
+    reject_startup_metadata("package-process-aliased-container-object",
+        "runtime package process container permission is not direct owned storage",
+        [](auto& payload) {
+            const fsim::runtime::simir::ContainerSliceAlias alias {
+                0U, 0, 0 };
+            payload.state.container_object_info[0U].slice_alias = alias;
+            payload.state.container_objects[0U].slice_alias = alias;
+        });
+}
+
+void test_from_state_rejects_sensitive_package_startup_process()
+{
+    auto state = make_startup_metadata_state();
+    state.processes[0U].static_sensitivity.push_back(
+        { 0U, EdgeKind::any, 0U, 1U });
+    const auto design = ElaboratedDesign::from_state(std::move(state));
+    assert(!design.has_value());
+}
+
+void test_from_state_rejects_generic_domain_package_startup_process()
+{
+    auto state = make_startup_metadata_state();
+    state.processes[0U].scheduling_domain
+        = ProcessSchedulingDomain::generic;
+    const auto design = ElaboratedDesign::from_state(std::move(state));
+    assert(!design.has_value());
 }
 
 void assert_invalid_runtime_row_wire(
@@ -238,7 +436,11 @@ void test_restored_interpreter_keeps_public_facades_lazy()
 int main()
 {
     test_string_method_archive_enum_range();
+    test_process_startup_phase_archive_enum_range();
+    test_tagged_fork_runtime_roundtrip();
     test_schema_and_direct_row_roundtrip();
+    test_from_state_rejects_sensitive_package_startup_process();
+    test_from_state_rejects_generic_domain_package_startup_process();
     test_decoder_rejects_noncanonical_process_rows();
     test_lazy_materialization_copy_move_and_state();
     test_restored_interpreter_keeps_public_facades_lazy();

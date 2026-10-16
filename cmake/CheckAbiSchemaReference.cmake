@@ -18,7 +18,7 @@ set(FSIM_CONTRACT
   "${FSIM_SOURCE_DIR}/tests/feature_matrix/abi_schema_reference_contract.tsv")
 set(FSIM_REFERENCE "${FSIM_SOURCE_DIR}/docs/abi-schema-reference.md")
 set(FSIM_EXPECTED_DIGEST
-  "2db02fc2f0951c59f727c2ed24d2f547bb97e49329e2da98fa6960b8fca92abe")
+  "7bb81e16f78af8f985a97664a4d2cb389eaa19964f70dcdc7ffaf26e740a7314")
 fsim_normalized_text_sha256("${FSIM_CONTRACT}" FSIM_ACTUAL_DIGEST)
 if(NOT FSIM_ACTUAL_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
@@ -28,8 +28,8 @@ endif()
 
 file(STRINGS "${FSIM_CONTRACT}" FSIM_ROWS)
 list(LENGTH FSIM_ROWS FSIM_ROW_COUNT)
-if(NOT FSIM_ROW_COUNT EQUAL 33)
-  message(FATAL_ERROR "ABI/schema reference requires SPDX, header and 31 rows")
+if(NOT FSIM_ROW_COUNT EQUAL 34)
+  message(FATAL_ERROR "ABI/schema reference requires SPDX, header and 32 rows")
 endif()
 list(GET FSIM_ROWS 0 FSIM_SPDX)
 list(GET FSIM_ROWS 1 FSIM_HEADER)
@@ -40,7 +40,7 @@ if(NOT FSIM_SPDX STREQUAL "# SPDX-License-Identifier: Apache-2.0" OR
 endif()
 
 set(FSIM_IDS)
-foreach(FSIM_INDEX RANGE 2 32)
+foreach(FSIM_INDEX RANGE 2 33)
   list(GET FSIM_ROWS ${FSIM_INDEX} FSIM_ROW)
   string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_ROW}")
   list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
@@ -88,12 +88,15 @@ foreach(FSIM_TOKEN IN ITEMS
     "`SCV::scv`"
     "| SystemC | ABI 4 |"
     "project schema 3"
-    "format 8, portable schema 15, compiled-HIR bundle 1"
+    "format 9, portable schema 16, compiled-HIR bundle 3"
+    "format 8/schema 15"
     "format 14, runtime ABI 1"
     "fsim-code-coverage-foundation-v3"
-    "format 6, portable schema 15, compiled-HIR bundle 1"
+    "format 7, portable schema 16, compiled-HIR bundle 3"
     "format 2, runtime ABI 1, SystemC ABI 4"
-    "runtime 64"
+    "runtime 85"
+    "C++ SDK consumers must"
+    "VhdlBindingIndication"
     "DesignIR 5"
     "FSIMHPT1"
     "state/hierarchy-paths.bin"

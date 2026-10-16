@@ -1173,7 +1173,14 @@ private:
             if (actual.type)
                 bind_type(*actual.type, scope);
         }
-        if (type.associative_index) {
+        if (type.associative_index_metadata) {
+            auto index = sv::type_reference_from_associative_index_metadata(
+                *type.associative_index_metadata);
+            bind_type(index, scope);
+            type.associative_index = index.target;
+            type.associative_index_metadata
+                = sv::make_associative_index_metadata(index);
+        } else if (type.associative_index) {
             sv::TypeReference index;
             index.target = *type.associative_index;
             bind_type(index, scope);

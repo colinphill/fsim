@@ -84,6 +84,30 @@ std::vector<PackedLogic4> evaluate_region_activation_kernel(
                 };
             }
             write_register(copy->destination, registers[copy->source]);
+        } else if (const auto* convert
+            = operation_get_if<ConvertToTwoState>(&operation)) {
+            if (convert->source >= registers.size()
+                || convert->destination >= registers.size()) {
+                throw std::out_of_range {
+                    "region activation conversion uses an invalid register"
+                };
+            }
+            if (register_value_kinds[convert->source] != ValueKind::logic4
+                || register_value_kinds[convert->destination]
+                    != ValueKind::logic4
+                || registers[convert->source].is_logic9()) {
+                throw std::logic_error {
+                    "region activation conversion is not Logic4"
+                };
+            }
+            const auto& source = registers[convert->source];
+            PackedLogic4 converted(source.width(), Logic4::zero);
+            for (std::size_t bit = 0U; bit < source.width(); ++bit) {
+                if (to_logic4(source.get_logic9(bit)) == Logic4::one) {
+                    converted.set(bit, Logic4::one);
+                }
+            }
+            write_register(convert->destination, std::move(converted));
         } else if (const auto* unary = operation_get_if<UnaryNot>(&operation)) {
             if (unary->source >= registers.size()) {
                 throw std::out_of_range {

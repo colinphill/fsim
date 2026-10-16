@@ -39,7 +39,9 @@ std::filesystem::path checkout_root(const std::string_view leaf)
 #endif
 }
 
-constexpr std::string_view kSource = R"(entity leaf is
+constexpr std::string_view kSource = R"(library ieee;
+use ieee.std_logic_1164.all;
+entity leaf is
   port (
     clock : in bit;
     data : in std_logic_vector(7 downto 0);

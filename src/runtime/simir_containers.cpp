@@ -2058,12 +2058,121 @@ void Interpreter::Impl::write_container_alias_driver_family(
     finalize_container_alias_driver_family(prepared);
 }
 
+void Interpreter::Impl::initialize_package_static_container_object(
+    const ContainerObjectId object_id,
+    const ContainerValue& value,
+    const std::optional<ProcessId> process)
+{
+    if (!package_static_initialization_active
+        || started || region_graph || scheduler.has_pending()
+        || object_id >= container_objects.size()
+        || object_id >= container_value_reference_exposed.size()) {
+        throw std::logic_error {
+            "package static container write is outside startup actions"
+        };
+    }
+    if (process) {
+        if (package_static_initialization_callback_active
+            || *process != package_static_initialization_process) {
+            throw std::logic_error {
+                "package static container process identity is not active"
+            };
+        }
+        const auto program = processes.program_view(*process);
+        if (program.startup_phase()
+                != ProcessStartupPhase::package_static_initializer
+            || program.startup_package_owner_id() == 0U
+            || program.startup_package_owner_id()
+                != container_objects[object_id].package_owner_id
+            || !std::ranges::binary_search(
+                program.startup_writable_container_object_ids(), object_id)) {
+            throw std::logic_error {
+                "package static process wrote outside its direct container closure"
+            };
+        }
+    } else {
+        if (!package_static_initialization_callback_active
+            || package_static_initialization_callback_index
+                >= package_static_startup_callbacks.size()) {
+            throw std::logic_error {
+                "package static container write is outside its startup callback"
+            };
+        }
+        const auto& callback = package_static_startup_callbacks[
+            package_static_initialization_callback_index];
+        if (!std::ranges::binary_search(
+                callback.writable_container_object_ids, object_id)) {
+            throw std::logic_error {
+                "package static callback wrote outside its container closure"
+            };
+        }
+    }
+    validate_container_value(value);
+    const auto& object = container_objects[object_id];
+    const bool has_signal_alias
+        = (object_id < container_signal_aliases.size()
+            && container_signal_aliases[object_id])
+        || (object_id < container_aggregate_signal_aliases.size()
+            && container_aggregate_signal_aliases[object_id])
+        || (object_id < container_element_signal_aliases.size()
+            && std::ranges::any_of(
+                container_element_signal_aliases[object_id],
+                [](const auto& alias) { return alias.has_value(); }));
+    if (object.slice_alias || has_signal_alias
+        || container_value_reference_exposed[object_id] != 0U
+        || object.initial_value.type != value.type) {
+        throw std::logic_error {
+            "package static container write requires direct unaliased storage"
+        };
+    }
+    const auto view_reaches = [&](ContainerObjectId selected) {
+        for (std::size_t depth = 0U;
+             depth < container_objects.size();
+             ++depth) {
+            if (selected == object_id) {
+                return true;
+            }
+            if (selected >= container_objects.size()
+                || !container_objects[selected].slice_alias) {
+                return false;
+            }
+            selected = container_objects[selected].slice_alias->object;
+        }
+        return false;
+    };
+    bool references_target = std::ranges::any_of(
+        exposed_container_value_references,
+        [&](const auto exposed) { return view_reaches(exposed); });
+    for (std::size_t index = 0U;
+         !references_target && index < container_objects.size();
+         ++index) {
+        if (container_objects[index].slice_alias) {
+            references_target = view_reaches(
+                static_cast<ContainerObjectId>(index));
+        }
+    }
+    if (references_target) {
+        throw std::logic_error {
+            "package static container write cannot update aliased storage"
+        };
+    }
+    invalidate_container_aggregate_extract(object_id);
+    container_objects[object_id].initial_value = value;
+    if (object_id < container_materialized_revisions.size()) {
+        container_materialized_revisions[object_id].reset();
+    }
+}
+
 void Interpreter::Impl::write_container_object_value(
     const ContainerObjectId id,
     const ContainerValue& value,
     const std::optional<ProcessId> driver,
     const SignalChangeOrigin origin)
 {
+    if (package_static_initialization_active) {
+        initialize_package_static_container_object(id, value, driver);
+        return;
+    }
     require_container_signal_role_materialized(*this, id);
     validate_container_value(value);
     auto& object = get_container_object(id);
@@ -2267,6 +2376,12 @@ void Interpreter::Impl::write_container_object_element_value(
     const InstructionIndex instruction,
     const SignalChangeOrigin origin)
 {
+    if (package_static_initialization_active
+        && !package_static_initialization_callback_active) {
+        throw std::logic_error {
+            "package startup processes cannot write container elements"
+        };
+    }
     require_container_signal_role_materialized(*this, id);
     auto& object = get_container_object(id);
     invalidate_container_aggregate_extract(id);

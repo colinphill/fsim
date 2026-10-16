@@ -1904,9 +1904,18 @@ void test_rejections()
     vector_edge.static_sensitivity = { { 0, EdgeKind::posedge } };
     vector_edge.operations = { WaitSensitivity { }, Halt { } };
     const std::array<std::uint32_t, 1> vector_signal { 8 };
+    jit.add_process("vector_edge", vector_edge, vector_signal);
+
+    const std::array<std::uint32_t, 1> zero_width_signal { 0 };
+    auto zero_width_edge = vector_edge;
+    zero_width_edge.id = 0;
+    zero_width_edge.name = "zero_width_edge";
     expect_fatal_error(
-        [&] { jit.add_process("vector_edge", vector_edge, vector_signal); },
-        "edge sensitivity requires a scalar signal");
+        [&] {
+            jit.add_process(
+                "zero_width_edge", zero_width_edge, zero_width_signal);
+        },
+        "signal width must be greater than zero");
 
     Process invalid_edge;
     invalid_edge.id = 0;
@@ -1925,13 +1934,19 @@ void test_rejections()
     vector_dynamic_edge.operations = {
         WaitOn { { 0 }, { EdgeKind::posedge } }, Halt { }
     };
+    jit.add_process(
+        "vector_dynamic_edge", vector_dynamic_edge, vector_signal);
+
+    auto zero_width_dynamic_edge = vector_dynamic_edge;
+    zero_width_dynamic_edge.id = 0;
+    zero_width_dynamic_edge.name = "zero_width_dynamic_edge";
     expect_fatal_error(
         [&] {
             jit.add_process(
-                "vector_dynamic_edge", vector_dynamic_edge,
-                vector_signal);
+                "zero_width_dynamic_edge", zero_width_dynamic_edge,
+                zero_width_signal);
         },
-        "WaitOn edge requires a scalar signal");
+        "signal width must be greater than zero");
 
     Process invalid_dynamic_edge;
     invalid_dynamic_edge.id = 0;
@@ -1951,7 +1966,6 @@ void test_rejections()
     zero_width_wait.id = 0;
     zero_width_wait.name = "zero_width_wait";
     zero_width_wait.operations = { WaitOn { { 0 } }, Halt { } };
-    const std::array<std::uint32_t, 1> zero_width_signal { 0 };
     expect_fatal_error(
         [&] {
             jit.add_process(

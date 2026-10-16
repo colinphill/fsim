@@ -246,9 +246,169 @@ Interpreter::Impl::prepare_region_runtime_snapshot(
         auto compute_program = snapshot.graph.build_compute_program(
             component, programs,
             capture_program_rejection ? &program_rejection : nullptr);
+        if (capture_program_rejection) {
+            ++frontier_preparation_diagnostic_rows;
+            const char* result = compute_program ? "accepted" : "declined";
+            const char* reason = program_rejection.reason != nullptr
+                ? program_rejection.reason : "unclassified";
+            std::fprintf(stderr,
+                "[fsim region-program-context] component=%zu result=%s "
+                "reason=%s certificate_status=%u members=%zu "
+                "internal_candidates=%zu boundary_signals=%zu\n",
+                component, result, reason,
+                static_cast<unsigned>(certificate.status),
+                certificate.members.size(),
+                certificate.structural_internal_signal_candidates.size(),
+                certificate.boundary_signals.size());
+            const auto print_signal_list = [&](const char* const label,
+                                               const auto& ids) {
+                std::fprintf(stderr,
+                    "[fsim region-program-context-signals] component=%zu "
+                    "kind=%s count=%zu ids=",
+                    component, label, ids.size());
+                const auto limit = std::min<std::size_t>(ids.size(), 16U);
+                for (std::size_t index = 0U; index < limit; ++index) {
+                    const auto signal = ids[index];
+                    const char* name = signal < signal_cold.size()
+                        ? signal_cold[signal].name.c_str() : "invalid";
+                    std::fprintf(stderr, "%s%u:%s", index == 0U ? "" : ",",
+                        static_cast<unsigned>(signal), name);
+                }
+                if (ids.size() > limit) {
+                    std::fprintf(stderr, ",...");
+                }
+                std::fputc('\n', stderr);
+            };
+            print_signal_list("internal",
+                certificate.structural_internal_signal_candidates);
+            print_signal_list("boundary", certificate.boundary_signals);
+
+            const auto graph_processes = snapshot.graph.processes();
+            const auto graph_signals = snapshot.graph.signals();
+            if (compute_program) {
+                print_signal_list("accepted-internal",
+                    compute_program->activation_kernel.internal_signals);
+                const auto output_limit = std::min<std::size_t>(
+                    compute_program->activation_kernel.outputs.size(), 16U);
+                for (std::size_t output_index = 0U;
+                     output_index < output_limit; ++output_index) {
+                    const auto& output
+                        = compute_program->activation_kernel.outputs[output_index];
+                    const char* name = output.signal < signal_cold.size()
+                        ? signal_cold[output.signal].name.c_str() : "invalid";
+                    const auto* readers = output.signal < graph_signals.size()
+                        ? &graph_signals[output.signal].readers : nullptr;
+                    const auto reader_count = readers != nullptr
+                        ? readers->size() : 0U;
+                    std::fprintf(stderr,
+                        "[fsim region-program-context-output] component=%zu "
+                        "index=%zu owner=%u signal=%u name='%s' "
+                        "offset=%u width=%u update_kind=%u "
+                        "observations=%u readers=%zu",
+                        component, output_index,
+                        static_cast<unsigned>(output.owner),
+                        static_cast<unsigned>(output.signal), name,
+                        static_cast<unsigned>(output.offset),
+                        static_cast<unsigned>(output.width),
+                        static_cast<unsigned>(output.update_kind),
+                        output.signal < graph_signals.size()
+                            ? static_cast<unsigned>(graph_signals[output.signal]
+                                  .observations) : 0U,
+                        reader_count);
+                    if (readers != nullptr) {
+                        const auto reader_limit
+                            = std::min<std::size_t>(readers->size(), 8U);
+                        for (std::size_t reader_index = 0U;
+                             reader_index < reader_limit; ++reader_index) {
+                            const auto& reader = (*readers)[reader_index];
+                            const char* reader_name
+                                = reader.process < programs.size()
+                                    && programs[reader.process] != nullptr
+                                ? programs[reader.process]->name.c_str()
+                                : "invalid";
+                            std::fprintf(stderr, " r%u:%u+%u:%s",
+                                static_cast<unsigned>(reader.process),
+                                static_cast<unsigned>(reader.offset),
+                                static_cast<unsigned>(reader.width), reader_name);
+                        }
+                        if (readers->size() > 8U) {
+                            std::fprintf(stderr, " r...");
+                        }
+                    }
+                    std::fputc('\n', stderr);
+                }
+                if (compute_program->activation_kernel.outputs.size()
+                    > output_limit) {
+                    std::fprintf(stderr,
+                        "[fsim region-program-context-output] component=%zu "
+                        "truncated=%zu\n", component,
+                        compute_program->activation_kernel.outputs.size()
+                            - output_limit);
+                }
+            }
+            const auto member_limit
+                = std::min<std::size_t>(certificate.members.size(), 16U);
+            for (std::size_t member_index = 0U;
+                 member_index < member_limit; ++member_index) {
+                const auto process = certificate.members[member_index];
+                if (process >= programs.size() || programs[process] == nullptr
+                    || process >= graph_processes.size()) {
+                    std::fprintf(stderr,
+                        "[fsim region-program-context-member] component=%zu "
+                        "index=%zu process=%u invalid=1\n",
+                        component, member_index,
+                        static_cast<unsigned>(process));
+                    continue;
+                }
+                const auto& node = graph_processes[process];
+                std::fprintf(stderr,
+                    "[fsim region-program-context-member] component=%zu "
+                    "index=%zu process=%u name='%s' domain=%u update_kind=%u "
+                    "reads=%zu writes=%zu",
+                    component, member_index, static_cast<unsigned>(process),
+                    programs[process]->name.c_str(),
+                    static_cast<unsigned>(node.scheduling_domain),
+                    static_cast<unsigned>(node.update_kind), node.reads.size(),
+                    node.writes.size());
+                const auto read_limit
+                    = std::min<std::size_t>(node.reads.size(), 8U);
+                for (std::size_t index = 0U; index < read_limit; ++index) {
+                    const auto& read = node.reads[index];
+                    const char* name = read.signal < signal_cold.size()
+                        ? signal_cold[read.signal].name.c_str() : "invalid";
+                    std::fprintf(stderr, " r%u:%u+%u:%s",
+                        static_cast<unsigned>(read.signal),
+                        static_cast<unsigned>(read.offset),
+                        static_cast<unsigned>(read.width), name);
+                }
+                if (node.reads.size() > read_limit) {
+                    std::fprintf(stderr, " r...");
+                }
+                const auto write_limit
+                    = std::min<std::size_t>(node.writes.size(), 8U);
+                for (std::size_t index = 0U; index < write_limit; ++index) {
+                    const auto& write = node.writes[index];
+                    const char* name = write.signal < signal_cold.size()
+                        ? signal_cold[write.signal].name.c_str() : "invalid";
+                    std::fprintf(stderr, " w%u:%u+%u:%s",
+                        static_cast<unsigned>(write.signal),
+                        static_cast<unsigned>(write.offset),
+                        static_cast<unsigned>(write.width), name);
+                }
+                if (node.writes.size() > write_limit) {
+                    std::fprintf(stderr, " w...");
+                }
+                std::fputc('\n', stderr);
+            }
+            if (certificate.members.size() > member_limit) {
+                std::fprintf(stderr,
+                    "[fsim region-program-context-member] component=%zu "
+                    "truncated=%zu\n", component,
+                    certificate.members.size() - member_limit);
+            }
+        }
         if (!compute_program && program_rejection.reason != nullptr
             && capture_program_rejection) {
-            ++frontier_preparation_diagnostic_rows;
             std::fprintf(stderr,
                 "[fsim region-program-build-decline] reason=%s "
                 "component=%zu signal=%u family_proxy=%u writer=%u "
@@ -2272,6 +2432,15 @@ Interpreter::Impl::prepare_region_runtime_snapshot(
               };
         for (std::size_t component = 0U;
              component < components.size(); ++component) {
+            if (profile_frontier_preparation && component < 16U) {
+                std::fprintf(stderr,
+                    "[fsim frontier-entry-gate] component=%zu program=%u current_epoch=%u authoritative=%u local_wave=%u\n",
+                    component,
+                    snapshot.programs_by_component[component] ? 1U : 0U,
+                    snapshot.graph.component_epochs_current(component) ? 1U : 0U,
+                    snapshot.authoritative_state_by_component[component] ? 1U : 0U,
+                    snapshot.local_wave_state_by_component[component] ? 1U : 0U);
+            }
             if (!snapshot.programs_by_component[component]
                 || !snapshot.graph.component_epochs_current(component)) {
                 continue;
@@ -2400,6 +2569,25 @@ Interpreter::Impl::prepare_region_runtime_snapshot(
                     return matching_driver_region;
                 });
             if (!members_are_supported || !outputs_are_supported) {
+                if (profile_frontier_preparation && component < 16U) {
+                    std::fprintf(stderr,
+                        "[fsim frontier-shape-gate] component=%zu members_supported=%u outputs_supported=%u\n",
+                        component, members_are_supported ? 1U : 0U,
+                        outputs_are_supported ? 1U : 0U);
+                    for (const auto& output : kernel.outputs) {
+                        std::fprintf(stderr,
+                            "[fsim frontier-output-gate] component=%zu owner=%u signal=%u offset=%u width=%u signal_width=%u publication=%u domain=%u update=%u value_kind=%u mode=%u delay=%llu rejection=%llu\n",
+                            component, output.owner, output.signal,
+                            output.offset, output.width, output.signal_width,
+                            static_cast<unsigned>(output.publication_kind),
+                            static_cast<unsigned>(output.domain),
+                            static_cast<unsigned>(output.update_kind),
+                            static_cast<unsigned>(output.value_kind),
+                            static_cast<unsigned>(output.projected_mode),
+                            static_cast<unsigned long long>(output.projected_delay),
+                            static_cast<unsigned long long>(output.projected_rejection));
+                    }
+                }
                 continue;
             }
 
@@ -3168,8 +3356,10 @@ Interpreter::Impl::build_region_runtime_snapshot(
     program_snapshots.reserve(processes.size());
     std::vector<const Process*> programs;
     programs.reserve(processes.size());
-    // Dormant kernel members share one stub body.
-    std::optional<OperationList> dormant_stub_operations;
+    // Inactive startup-only processes and dormant kernel members share one
+    // stub body. Startup initializers have already completed and are not
+    // active runtime writers or readers.
+    std::optional<OperationList> inactive_stub_operations;
     std::vector<std::uint8_t> process_access_complete;
     process_access_complete.reserve(processes.size());
     bool access_inventory_complete = true;
@@ -3177,34 +3367,42 @@ Interpreter::Impl::build_region_runtime_snapshot(
     std::size_t incomplete_access_rows = 0U;
     for (ProcessId id = 0U; id < processes.size(); ++id) {
         const auto program = processes.program_view(id);
+        const bool package_static_initializer
+            = program.startup_phase()
+                == ProcessStartupPhase::package_static_initializer;
+        const bool dormant_kernel_member = static_kernel
+            && id < fusion_dormant_process.size()
+            && fusion_dormant_process[id] != 0U;
+        const bool inert_kernel_member = static_kernel
+            && id < fusion_dormant_process.size()
+            && fusion_dormant_process[id] == 1U;
         // RegionGraph is an immutable startup/quiet-point snapshot API that
         // still consumes the public Process shape. Keep these facades
         // temporary; runtime process state remains compact and materializes a
         // retained facade only when the public accessor is called.
-        if (static_kernel && id < fusion_dormant_process.size()
-            && fusion_dormant_process[id] != 0U) {
-            // A static kernel member never runs on the scheduler; its effects
-            // reach the host only through the kernel host process. A stub
-            // keeps process identities dense without materializing it.
-            if (!dormant_stub_operations) {
-                dormant_stub_operations.emplace(
+        if (dormant_kernel_member || package_static_initializer) {
+            // A static kernel member never runs on the scheduler; a package
+            // initializer ran synchronously before this active snapshot. A
+            // stub keeps process identities dense without making either an
+            // active reader or writer.
+            if (!inactive_stub_operations) {
+                inactive_stub_operations.emplace(
                     std::vector<Operation> { WaitForever { } });
             }
             auto& stub = program_snapshots.emplace_back();
             stub.id = id;
             stub.scheduling_domain = program.scheduling_domain();
             stub.language_standard = program.language_standard();
-            stub.operations = *dormant_stub_operations;
+            stub.operations = *inactive_stub_operations;
             stub.initialize = false;
         } else {
             program_snapshots.push_back(program.materialize_transient());
         }
         programs.push_back(&program_snapshots.back());
-        // An inert kernel member has no executor (its stub accesses nothing).
-        const auto access_complete = (static_kernel
-                                         && id < fusion_dormant_process.size()
-                                         && fusion_dormant_process[id] == 1U)
-            || process_signal_access_is_complete(id);
+        // Inert kernel members and completed package initializers have no
+        // active executor accesses in this snapshot.
+        const auto access_complete = package_static_initializer
+            || inert_kernel_member || process_signal_access_is_complete(id);
         access_inventory_complete &= access_complete;
         process_access_complete.push_back(
             static_cast<std::uint8_t>(access_complete));

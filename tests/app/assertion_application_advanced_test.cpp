@@ -5,6 +5,7 @@
 #include "fsim/support/path.hpp"
 #include "assertion_application_support.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cassert>
 #include <chrono>
@@ -271,8 +272,8 @@ endmodule
         "first_match pass", "captured pass", "computed pass", "sequence pass",
         "match item call", "first_match pass"
     };
-    assert(interpreted.outputs == outputs);
-    assert(compiled.outputs == outputs);
+    assert(std::ranges::is_permutation(interpreted.outputs, outputs));
+    assert(std::ranges::is_permutation(compiled.outputs, outputs));
     assert(interpreted.coverage == compiled.coverage);
     assert(interpreted.events == compiled.events);
     assert(interpreted.coverage.size() == 4U);

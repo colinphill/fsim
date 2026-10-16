@@ -298,6 +298,14 @@ void VhdlHirBuilder::add_design(const frontend::ParsedDesign& parsed)
     output.id = id;
     output.scope = scope;
     output.target = name(input.unit_name, input.span, scope);
+    if (!input.vhdl_unit_name_spelling.empty()) {
+        output.target.spelling = input.vhdl_unit_name_spelling;
+        if (!input.vhdl_architecture_name_spelling.empty()) {
+            output.target.spelling += '(';
+            output.target.spelling += input.vhdl_architecture_name_spelling;
+            output.target.spelling += ')';
+        }
+    }
     output.name = input.name;
     output.generic_map = associations(
         input.parameter_overrides, scope, instance_origin);
@@ -792,6 +800,78 @@ void VhdlHirBuilder::queue_body_declarations(
     }
 }
 
+void VhdlHirBuilder::queue_vhdl_local_declarations(
+    const std::span<const frontend::ParameterDeclaration> constants,
+    const std::span<const frontend::TypeAliasDeclaration> type_aliases,
+    const std::span<const frontend::SignalAliasDeclaration> signal_aliases,
+    const std::span<const frontend::PackageInstantiation> package_instances,
+    const std::span<const frontend::FunctionDeclaration> functions,
+    const std::span<const frontend::ProcedureDeclaration> procedures,
+    const std::span<const frontend::VariableDeclaration> variables,
+    const std::span<const frontend::VhdlAttributeDeclaration> attributes,
+    const std::span<const frontend::VhdlGroupDeclaration> groups,
+    const std::optional<std::string_view> omitted_type_alias,
+    const semantic::ScopeId scope,
+    const semantic::OriginId parent,
+    std::vector<semantic::DeclarationId>& declarations)
+{
+    // VHDL elaborates local declarations in source order. The parser retains
+    // them in category-specific vectors, so merge those vectors before the
+    // lowerer records declaration-time values and subtype constraints.
+    std::vector<Pending> pending;
+    const auto queue = [&]<typename Range, typename Builder>(
+                           const Range& range,
+                           const std::size_t category,
+                           Builder builder) {
+        for (std::size_t index = 0; index < range.size(); ++index) {
+            const auto& item = range[index];
+            pending.push_back({ frontend::physical_source(item.span),
+                item.span.begin.offset,
+                category,
+                index,
+                [&, item_ptr = &item, builder] {
+                    return (this->*builder)(*item_ptr, scope, parent);
+                } });
+        }
+    };
+    queue(constants, 0, &VhdlHirBuilder::add_parameter);
+    for (std::size_t index = 0; index < type_aliases.size(); ++index) {
+        const auto& item = type_aliases[index];
+        if (omitted_type_alias && item.name == *omitted_type_alias) {
+            continue;
+        }
+        pending.push_back({ frontend::physical_source(item.span),
+            item.span.begin.offset,
+            1U,
+            index,
+            [&, item_ptr = &item] {
+                return add_type_declaration(
+                    *item_ptr, scope, parent);
+            } });
+    }
+    queue(signal_aliases, 2, &VhdlHirBuilder::add_alias);
+    queue(package_instances, 3, &VhdlHirBuilder::add_package_instance);
+    queue(functions, 4, &VhdlHirBuilder::add_function);
+    queue(procedures, 5, &VhdlHirBuilder::add_procedure);
+    queue(variables, 6, &VhdlHirBuilder::add_variable);
+    queue(attributes, 7, &VhdlHirBuilder::add_attribute);
+    queue(groups, 8, &VhdlHirBuilder::add_group);
+    std::stable_sort(pending.begin(), pending.end(), [](const auto& left, const auto& right) {
+        return std::tuple {
+            left.physical_source, left.offset, left.category, left.index
+        }
+        < std::tuple {
+              right.physical_source,
+              right.offset,
+              right.category,
+              right.index
+          };
+    });
+    for (auto& item : pending) {
+        declarations.push_back(item.build());
+    }
+}
+
 void VhdlHirBuilder::add_generate_body(
     const frontend::GenerateBody& input,
     vh::GenerateRegion& output)
@@ -842,60 +922,23 @@ void VhdlHirBuilder::add_generate_body(
     output.postponed = input.vhdl_postponed;
     output.source = process_source;
     output.origin = process_origin;
-    add_children(
-        input.constants,
+    const auto span = [](const auto& values) {
+        return std::span { values.data(), values.size() };
+    };
+    queue_vhdl_local_declarations(
+        span(input.constants),
+        span(input.type_aliases),
+        span(input.signal_aliases),
+        span(input.package_instances),
+        span(input.functions),
+        span(input.procedures),
+        span(input.variables),
+        span(input.vhdl_attributes),
+        span(input.vhdl_groups),
+        std::nullopt,
         process_scope,
         process_origin,
-        output.declarations,
-        &VhdlHirBuilder::add_parameter);
-    add_children(
-        input.type_aliases,
-        process_scope,
-        process_origin,
-        output.declarations,
-        &VhdlHirBuilder::add_type_declaration);
-    add_children(
-        input.signal_aliases,
-        process_scope,
-        process_origin,
-        output.declarations,
-        &VhdlHirBuilder::add_alias);
-    add_children(
-        input.package_instances,
-        process_scope,
-        process_origin,
-        output.declarations,
-        &VhdlHirBuilder::add_package_instance);
-    add_children(
-        input.functions,
-        process_scope,
-        process_origin,
-        output.declarations,
-        &VhdlHirBuilder::add_function);
-    add_children(
-        input.procedures,
-        process_scope,
-        process_origin,
-        output.declarations,
-        &VhdlHirBuilder::add_procedure);
-    add_children(
-        input.variables,
-        process_scope,
-        process_origin,
-        output.declarations,
-        &VhdlHirBuilder::add_variable);
-    add_children(
-        input.vhdl_attributes,
-        process_scope,
-        process_origin,
-        output.declarations,
-        &VhdlHirBuilder::add_attribute);
-    add_children(
-        input.vhdl_groups,
-        process_scope,
-        process_origin,
-        output.declarations,
-        &VhdlHirBuilder::add_group);
+        output.declarations);
     add_statement_regions(
         input.statements, process_scope, process_origin);
     hir_.mutable_processes().push_back(std::move(output));

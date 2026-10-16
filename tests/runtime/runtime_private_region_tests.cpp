@@ -1054,8 +1054,13 @@ void check_executor_access_provenance_gates_hidden_plans()
         bool exact_graph_proof { };
         bool disjoint_a4_slots { };
         bool exact_static_cohort { };
+        bool owners_share_component { };
+        bool output_is_separate_boundary { };
+        bool reader_bridge_certified { };
     };
-    const auto candidate_counts = [](const ExecutorMode mode) {
+    const auto candidate_counts = [](const ExecutorMode mode,
+                                     const bool join_owner_components,
+                                     const bool observe_output) {
         ScopedPrivateRegionEnvironment region_kernel {
             "FSIM_ENABLE_SV_REGION_KERNEL", "1" };
         ScopedPrivateRegionEnvironment single_owner_disabled {
@@ -1076,6 +1081,25 @@ void check_executor_access_provenance_gates_hidden_plans()
             "output", PackedLogic4 { output_width, Logic4::z },
             ResolutionKind::sv_wire
         });
+        std::optional<SignalId> reader_trigger;
+        std::optional<SignalId> reader_sink;
+        if (join_owner_components) {
+            reader_trigger = interpreter.add_signal({
+                "reader_trigger", PackedLogic4 { 1U, Logic4::zero }
+            });
+            reader_sink = interpreter.add_signal({
+                "reader_sink", PackedLogic4 { 1U, Logic4::zero }
+            });
+        }
+        if (observe_output) {
+            interpreter.set_native_signal_observation_required_hook(
+                [output](const SignalId signal) {
+                    return signal == output;
+                });
+        }
+        // A generic process bridges the disjoint writer clusters by reading
+        // the full output. Its separate sink gives the process a generic
+        // update class without adding another writer to the shared output.
         for (ProcessId id = 0U; id < 2U; ++id) {
             const auto offset = id == 0U ? 0U : 64U;
             const auto width = id == 0U ? 64U : 1U;
@@ -1102,6 +1126,31 @@ void check_executor_access_provenance_gates_hidden_plans()
                 "access-provenance owners have dense process IDs");
         }
 
+        if (join_owner_components) {
+            Process reader;
+            reader.id = 2U;
+            reader.name = "component_reader";
+            reader.scheduling_domain = ProcessSchedulingDomain::generic;
+            reader.register_count = 2U;
+            reader.initialize = false;
+            reader.static_sensitivity = {
+                { *reader_trigger, EdgeKind::any }
+            };
+            reader.driver_regions = {
+                { *reader_sink, 0U, 1U, true },
+            };
+            reader.operations = {
+                ReadSignal { 0U, output },
+                LoadConstant { 1U, PackedLogic4 { 1U, Logic4::zero } },
+                WriteUpdate { *reader_sink, 1U,
+                    SignalUpdateDomain::generic },
+                WaitSensitivity { },
+                Jump { 0U },
+            };
+            require(interpreter.add_process(std::move(reader)) == 2U,
+                "the generic component bridge has a dense process ID");
+        }
+
         const std::array masked_inputs {
             interpreter.add_signal({
                 "masked_first_input", PackedLogic4 { 1U, Logic4::zero } }),
@@ -1113,7 +1162,8 @@ void check_executor_access_provenance_gates_hidden_plans()
             ResolutionKind::sv_wire
         });
         for (std::size_t index = 0U; index < masked_inputs.size(); ++index) {
-            const auto id = static_cast<ProcessId>(index + 2U);
+            const auto id = static_cast<ProcessId>(index
+                + (join_owner_components ? 3U : 2U));
             const auto bit = static_cast<std::uint32_t>(index);
             Process process;
             process.id = id;
@@ -1139,7 +1189,7 @@ void check_executor_access_provenance_gates_hidden_plans()
 
         if (mode != ExecutorMode::none) {
             Process process;
-            process.id = 4U;
+            process.id = join_owner_components ? 5U : 4U;
             process.name = "executor_without_signal_effects";
             process.initialize = false;
             process.operations = { Halt { } };
@@ -1162,7 +1212,9 @@ void check_executor_access_provenance_gates_hidden_plans()
             && graph->processes().size() > 1U
             && graph->signals().size() > output
             && graph->processes()[0U].pure
+            && !graph->processes()[0U].cyclic_or_dependent_on_cycle
             && graph->processes()[1U].pure
+            && !graph->processes()[1U].cyclic_or_dependent_on_cycle
             && graph->processes()[0U].operation_write_ranges_exact
             && graph->processes()[1U].operation_write_ranges_exact
             && graph->processes()[0U].update_kind
@@ -1178,6 +1230,74 @@ void check_executor_access_provenance_gates_hidden_plans()
                 [&](const RegionAccess& writer) {
                     return writer.process == 1U && writer.offset == 64U
                         && writer.width == 1U;
+                });
+        const bool owners_share_component = graph != nullptr
+            && std::ranges::any_of(
+                graph->certificate_inventory().components,
+                [](const auto& certificate) {
+                    return std::ranges::binary_search(
+                            certificate.members, ProcessId { 0U })
+                        && std::ranges::binary_search(
+                            certificate.members, ProcessId { 1U });
+                });
+        bool output_is_separate_boundary { };
+        if (graph != nullptr) {
+            const auto& components
+                = graph->certificate_inventory().components;
+            const auto first = std::ranges::find_if(components,
+                [](const auto& certificate) {
+                    return std::ranges::binary_search(
+                        certificate.members, ProcessId { 0U });
+                });
+            const auto second = std::ranges::find_if(components,
+                [](const auto& certificate) {
+                    return std::ranges::binary_search(
+                        certificate.members, ProcessId { 1U });
+                });
+            output_is_separate_boundary
+                = first != components.end() && second != components.end()
+                && first != second
+                && std::ranges::find(first->boundary_signals, output)
+                    != first->boundary_signals.end()
+                && std::ranges::find(second->boundary_signals, output)
+                    != second->boundary_signals.end();
+        }
+        const bool reader_bridge_certified
+            = join_owner_components && graph != nullptr
+            && graph->certificate_inventory().access_inventory_complete
+            && graph->processes().size() > 2U
+            && graph->signals().size() > output
+            && graph->processes()[2U].pure
+            && !graph->processes()[2U].cyclic_or_dependent_on_cycle
+            && graph->processes()[2U].scheduling_domain
+                == ProcessSchedulingDomain::generic
+            && graph->processes()[2U].update_kind
+                == RegionUpdateKind::generic
+            && reader_sink.has_value()
+            && graph->processes()[2U].writes.size() == 1U
+            && graph->processes()[2U].writes.front().signal == *reader_sink
+            && graph->processes()[2U].operation_write_ranges_exact
+            && std::ranges::any_of(graph->signals()[output].readers,
+                [](const RegionAccess& reader) {
+                    return reader.process == 2U && reader.offset == 0U
+                        && reader.width == 0U
+                        && reader.edge == EdgeKind::any;
+                })
+            && std::ranges::any_of(
+                graph->certificate_inventory().components,
+                [output, observe_output](const auto& certificate) {
+                    const auto expected_status = observe_output
+                        ? RegionComponentCertificateStatus::no_internal_state
+                        : RegionComponentCertificateStatus::structural_candidate;
+                    return certificate.status == expected_status
+                        && std::ranges::binary_search(
+                            certificate.members, ProcessId { 0U })
+                        && std::ranges::binary_search(
+                            certificate.members, ProcessId { 1U })
+                        && std::ranges::binary_search(
+                            certificate.members, ProcessId { 2U })
+                        && std::ranges::find(certificate.boundary_signals,
+                            output) != certificate.boundary_signals.end();
                 });
         auto* const authoritative
             = implementation.region_authoritative_state_for_signal(output);
@@ -1204,16 +1324,25 @@ void check_executor_access_provenance_gates_hidden_plans()
             interpreter.fused_masked_region_candidates().size(),
             exact_graph_proof,
             disjoint_a4_slots,
-            exact_static_cohort
+            exact_static_cohort,
+            owners_share_component,
+            output_is_separate_boundary,
+            reader_bridge_certified
         };
     };
 
-    const auto ordinary = candidate_counts(ExecutorMode::none);
-    const auto opaque = candidate_counts(ExecutorMode::opaque);
-    const auto bound = candidate_counts(ExecutorMode::bound);
+    const auto ordinary = candidate_counts(ExecutorMode::none, true, false);
+    const auto opaque = candidate_counts(ExecutorMode::opaque, true, false);
+    const auto bound = candidate_counts(ExecutorMode::bound, true, false);
+    const auto cross_component = candidate_counts(
+        ExecutorMode::bound, false, false);
+    const auto observed_output = candidate_counts(
+        ExecutorMode::bound, true, true);
     require(ordinary.static_candidates != 0U
             && ordinary.masked_candidates == 0U
             && ordinary.exact_graph_proof
+            && ordinary.owners_share_component
+            && ordinary.reader_bridge_certified
             && ordinary.disjoint_a4_slots
             && ordinary.exact_static_cohort
             && opaque.static_candidates == 0U
@@ -1222,9 +1351,26 @@ void check_executor_access_provenance_gates_hidden_plans()
             && bound.static_candidates == ordinary.static_candidates
             && bound.masked_candidates == ordinary.masked_candidates
             && bound.exact_graph_proof
+            && bound.owners_share_component
+            && bound.reader_bridge_certified
             && bound.disjoint_a4_slots
             && bound.exact_static_cohort,
-        "only an exact executor signal-access binding permits hidden-state static cohorts");
+        "same-component disjoint owners admit only registered or exactly bound executor access");
+    require(cross_component.static_candidates == 0U
+            && cross_component.masked_candidates == 0U
+            && cross_component.exact_graph_proof
+            && !cross_component.owners_share_component
+            && !cross_component.reader_bridge_certified
+            && cross_component.output_is_separate_boundary
+            && !cross_component.disjoint_a4_slots
+            && !cross_component.exact_static_cohort,
+        "exact disjoint ownership across component certificates remains a boundary, not shared A4 state");
+    require(observed_output.static_candidates == 0U
+            && observed_output.masked_candidates == 0U
+            && observed_output.reader_bridge_certified
+            && !observed_output.disjoint_a4_slots
+            && !observed_output.exact_static_cohort,
+        "a live output observer blocks A4 storage and hidden-state static cohorts");
 
     Process parent;
     parent.id = 7U;

@@ -425,6 +425,138 @@ endmodule
     }
 }
 
+void test_vhdl_generate_range_validation()
+{
+    const auto expect_rejection = [](
+        const std::string_view filename,
+        const std::string_view source,
+        const std::string_view top,
+        const std::string_view code,
+        const std::string_view message) {
+        const auto result = elaborate_vhdl_component_text(
+            filename, source, top);
+        const auto expected = std::ranges::find_if(
+            result.diagnostics,
+            [&](const auto& diagnostic) {
+                return diagnostic.code == code
+                    && diagnostic.message == message;
+            });
+        if (result.ok() || expected == result.diagnostics.end()) {
+            for (const auto& diagnostic : result.diagnostics) {
+                std::cerr << diagnostic.code << ": "
+                          << diagnostic.message << '\n';
+            }
+        }
+        assert(!result.ok());
+        assert(expected != result.diagnostics.end());
+    };
+    const auto expect_acceptance = [](
+        const std::string_view filename,
+        const std::string_view source,
+        const std::string_view top) {
+        const auto result = elaborate_vhdl_component_text(
+            filename, source, top);
+        if (!result.ok()) {
+            for (const auto& diagnostic : result.diagnostics) {
+                std::cerr << diagnostic.code << ": "
+                          << diagnostic.message << '\n';
+            }
+        }
+        assert(result.ok());
+    };
+
+    constexpr std::string_view nondiscrete_message
+        = "a VHDL loop parameter range must be discrete";
+    expect_rejection(
+        "vhdl_generate_physical_range.vhd",
+        R"(
+entity generate_physical_range is end entity;
+architecture rtl of generate_physical_range is
+begin
+  g : for i in 0 ns to 8 ns generate
+    p : process begin wait; end process p;
+  end generate g;
+end architecture;
+)",
+        "generate_physical_range(rtl)", "FSIM-ELAB-VHLOOP-001",
+        nondiscrete_message);
+    expect_rejection(
+        "vhdl_generate_real_range.vhd",
+        R"(
+entity generate_real_range is end entity;
+architecture rtl of generate_real_range is
+begin
+  g : for i in 0.0 to 8.0 generate
+    p : process begin wait; end process p;
+  end generate g;
+end architecture;
+)",
+        "generate_real_range(rtl)", "FSIM-ELAB-VHLOOP-001",
+        nondiscrete_message);
+
+    constexpr std::string_view mismatched_range_message
+        = "the bounds of a VHDL range must have the same type";
+    expect_rejection(
+        "vhdl_generate_distinct_integer_bounds.vhd",
+        R"(
+entity generate_distinct_integer_bounds is end entity;
+architecture rtl of generate_distinct_integer_bounds is
+  type count_a is range 0 to 3;
+  type count_b is range 0 to 3;
+begin
+  g : for i in count_a'low to count_b'high generate
+    p : process begin wait; end process p;
+  end generate g;
+end architecture;
+)",
+        "generate_distinct_integer_bounds(rtl)",
+        "FSIM-ELAB-VHRANGE-001", mismatched_range_message);
+
+    expect_acceptance(
+        "vhdl_generate_integer_range.vhd",
+        R"(
+entity generate_integer_range is end entity;
+architecture rtl of generate_integer_range is
+begin
+  g : for i in 0 to 3 generate
+    p : process begin wait; end process p;
+  end generate g;
+end architecture;
+)",
+        "generate_integer_range(rtl)");
+    expect_acceptance(
+        "vhdl_generate_enum_range.vhd",
+        R"(
+entity generate_enum_range is end entity;
+architecture rtl of generate_enum_range is
+  type color_t is (red, green);
+begin
+  g : for color in red to green generate
+    p : process begin wait; end process p;
+  end generate g;
+end architecture;
+)",
+        "generate_enum_range(rtl)");
+
+    // The inner range is still a generate parameter specification even
+    // though the enclosing static conditional has no active branch body.
+    expect_rejection(
+        "vhdl_generate_inactive_parent_range.vhd",
+        R"(
+entity generate_inactive_parent_range is end entity;
+architecture rtl of generate_inactive_parent_range is
+begin
+  inactive : if false generate
+    nested : for i in 0 ns to 8 ns generate
+      p : process begin wait; end process p;
+    end generate nested;
+  end generate inactive;
+end architecture;
+)",
+        "generate_inactive_parent_range(rtl)",
+        "FSIM-ELAB-VHLOOP-001", nondiscrete_message);
+}
+
 } // namespace
 
 void test_generate_slice_and_case_closure(
@@ -433,6 +565,7 @@ void test_generate_slice_and_case_closure(
 void test_generate_elaboration() {
     test_generated_verilog_constant_slice_startup();
     test_generated_constant_driver_merge();
+    test_vhdl_generate_range_validation();
 auto generated_sv = fsim::frontend::parse_text(
         "generated-mixed.sv",
         R"(
@@ -1433,6 +1566,9 @@ begin
   begin
   end block dynamic_scope;
 end architecture;
+
+library ieee;
+use ieee.numeric_std.all;
 
 entity generated_vhdl_bad_block_port is
   port (source_value : in unsigned(7 downto 0));

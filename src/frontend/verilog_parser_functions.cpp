@@ -547,7 +547,12 @@ void VerilogParser::validate_function_body(
                    && !root->operands.empty()) {
               root = &root->operands.front();
             }
-            if (root->kind != ExpressionKind::Identifier) {
+            const bool selected_member_root =
+                root->kind == ExpressionKind::Call
+                && root->text.starts_with("@sv-select:")
+                && root->operands.size() == 1U;
+            if (root->kind != ExpressionKind::Identifier
+                && !selected_member_root) {
               error(
                   start,
                   "FSIM-SV-SEM-061",

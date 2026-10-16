@@ -113,6 +113,12 @@ struct Expression {
     SystemVerilogScalarKind systemverilog_scalar_kind {
         SystemVerilogScalarKind::None
     };
+    // Preserve the selected package prefix for a VHDL operator-symbol call.
+    // `text` remains the operator token consumed by expression lowering.
+    std::optional<std::string> selected_operator_prefix;
+    // Exact token spelling for a VHDL selected name containing an extended
+    // identifier. `text` remains the decoded lowering spelling.
+    std::optional<std::string> vhdl_selected_name_spelling;
     GeneratedTextKind generated_text { GeneratedTextKind::none };
     Expression() = default;
 
@@ -1165,9 +1171,16 @@ struct VhdlBindingIndication {
     VhdlBindingAspectKind kind { VhdlBindingAspectKind::Entity };
     // Canonical selected entity name, normally `library.entity`.
     std::string entity_name;
+    // Original selected-name spelling retains extended-identifier delimiters.
+    std::string entity_reference_spelling;
+    bool entity_name_extended { };
     std::string architecture_name;
+    std::string architecture_name_spelling;
+    bool architecture_name_extended { };
     // Canonical selected configuration name, normally `library.configuration`.
     std::string configuration_name;
+    std::string configuration_reference_spelling;
+    bool configuration_name_extended { };
     std::vector<ParameterOverride> generic_map;
     std::vector<PortConnection> port_map;
     SourceSpan span;
@@ -1178,6 +1191,7 @@ struct VhdlComponentConfiguration;
 
 struct VhdlBlockConfiguration {
     std::string block_name;
+    bool block_name_extended { };
     // An explicitly selected one-dimensional generate occurrence.
     std::optional<Expression> generate_index;
     std::vector<VhdlComponentConfiguration> component_configurations;
@@ -1348,6 +1362,12 @@ struct Instance {
     // The source-language unit name is retained even when an explicit
     // cross-language manifest binding overrides it.
     std::string unit_name;
+    std::string vhdl_unit_name_spelling;
+    std::string vhdl_architecture_name_spelling;
+    // The final direct entity/configuration designator, if this is a direct
+    // VHDL instantiation. Component names do not use these metadata flags.
+    bool vhdl_extended_unit_name { };
+    bool vhdl_extended_architecture_name { };
     std::string name;
     // Verilog UDPs permit an omitted instance name. The parser assigns a
     // deterministic internal hierarchy name while retaining this distinction;
@@ -1639,6 +1659,8 @@ struct Statement {
     // A parallel procedural block stores one child statement per branch.
     // Declarations and label belong to the lexical fork scope.
     ForkJoinKind fork_join_kind { ForkJoinKind::All };
+    // Concurrent assertion attempts own independent local register frames.
+    bool fork_isolate_register_frame { };
     // True only for an If node synthesized from a VHDL conditional signal
     // assignment, preserving its distinct legality diagnostic.
     bool vhdl_conditional_assignment { };

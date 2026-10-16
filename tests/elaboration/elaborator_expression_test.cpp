@@ -597,9 +597,13 @@ endmodule
     const auto vhdl_power = fsim::frontend::parse_text(
         "vhdl_power.vhd",
         R"(
+library ieee;
+use ieee.numeric_std.all;
 entity vhdl_power is
 end entity;
 
+library ieee;
+use ieee.numeric_std.all;
 architecture rtl of vhdl_power is
   signal positive : unsigned(7 downto 0);
   signal negative_base : signed(7 downto 0);
@@ -646,9 +650,13 @@ end architecture;
     const auto invalid_vhdl_power = fsim::frontend::parse_text(
         "invalid_vhdl_power.vhd",
         R"(
+library ieee;
+use ieee.numeric_std.all;
 entity invalid_vhdl_power is
 end entity;
 
+library ieee;
+use ieee.numeric_std.all;
 architecture rtl of invalid_vhdl_power is
   signal result : unsigned(7 downto 0);
 begin
@@ -663,13 +671,19 @@ end architecture;
     assert(!rejected_vhdl_power.ok());
     assert(has_diagnostic(
         rejected_vhdl_power, "FSIM-ELAB-091"));
+    assert(!has_diagnostic(
+        rejected_vhdl_power, "FSIM-ELAB-VHSUBTYPE-003"));
 
     const auto invalid_vhdl_conditional = fsim::frontend::parse_text(
         "invalid_vhdl_conditional.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
 entity invalid_vhdl_conditional is
 end entity;
 
+library ieee;
+use ieee.std_logic_1164.all;
 architecture rtl of invalid_vhdl_conditional is
   signal choose : std_logic;
   signal result : std_logic;
@@ -689,9 +703,13 @@ end architecture;
     const auto vhdl_2019_conditional = fsim::frontend::parse_text(
         "vhdl_2019_conditional.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
 entity vhdl_2019_conditional is
 end entity;
 
+library ieee;
+use ieee.std_logic_1164.all;
 architecture rtl of vhdl_2019_conditional is
   function selected(value : integer) return integer is
   begin
@@ -2065,9 +2083,15 @@ endmodule
     const auto vhdl_attribute_negative = fsim::frontend::parse_text(
         "vhdl_attribute_negative.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 entity vhdl_attribute_negative is
 end entity;
 
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
 architecture rtl of vhdl_attribute_negative is
   signal source : std_logic;
   signal duration : signed(63 downto 0);
@@ -2099,6 +2123,313 @@ end architecture;
              "FSIM-ELAB-VHATTR-007" }) {
         assert(has_diagnostic(rejected_vhdl_attributes, code));
     }
+
+    const auto vhdl_alias_driver = fsim::frontend::parse_text(
+        "vhdl_driving_value_alias.vhd",
+        R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity vhdl_driving_value_alias is
+end entity;
+
+library ieee;
+use ieee.std_logic_1164.all;
+architecture rtl of vhdl_driving_value_alias is
+  signal source : std_logic := '0';
+  signal observed : std_logic := '0';
+  alias source_alias : std_logic is source;
+begin
+  p: process
+  begin
+    source_alias <= '1';
+    wait for 0 ns;
+    observed <= source'driving_value;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_alias_driver.ok());
+    const auto elaborated_vhdl_alias_driver = compile_and_elaborate(
+        vhdl_alias_driver.design,
+        "vhdl:work.vhdl_driving_value_alias(rtl)");
+    assert(elaborated_vhdl_alias_driver.ok());
+    const auto alias_observed
+        = elaborated_vhdl_alias_driver.design->find_signal("observed");
+    assert(alias_observed);
+    auto alias_driver_interpreter
+        = elaborated_vhdl_alias_driver.design->create_interpreter();
+    (void)alias_driver_interpreter->run();
+    assert(alias_driver_interpreter->signal_value(*alias_observed)
+               .to_msb_string()
+           == "1");
+
+    const auto vhdl_nested_procedure_driver
+        = fsim::frontend::parse_text(
+            "vhdl_driving_value_nested_procedure.vhd",
+            R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity vhdl_driving_value_nested_procedure is
+end entity;
+
+library ieee;
+use ieee.std_logic_1164.all;
+architecture rtl of vhdl_driving_value_nested_procedure is
+  signal source : std_logic := '0';
+  signal observed : std_logic := '0';
+begin
+  p: process
+    procedure write_then_query(
+        signal target : inout std_logic;
+        signal sample : out std_logic) is
+      procedure query_nested(
+          signal value : inout std_logic;
+          signal result : out std_logic) is
+      begin
+        result <= value'driving_value;
+      end procedure;
+    begin
+      target <= '1';
+      wait for 0 ns;
+      query_nested(target, sample);
+    end procedure;
+  begin
+    write_then_query(source, observed);
+    wait;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_nested_procedure_driver.ok());
+    const auto elaborated_vhdl_nested_procedure_driver
+        = compile_and_elaborate(
+            vhdl_nested_procedure_driver.design,
+            "vhdl:work.vhdl_driving_value_nested_procedure(rtl)");
+    assert(elaborated_vhdl_nested_procedure_driver.ok());
+    const auto nested_observed
+        = elaborated_vhdl_nested_procedure_driver.design->find_signal(
+            "observed");
+    assert(nested_observed);
+    auto nested_driver_interpreter
+        = elaborated_vhdl_nested_procedure_driver.design
+              ->create_interpreter();
+    (void)nested_driver_interpreter->run();
+    assert(nested_driver_interpreter->signal_value(*nested_observed)
+               .to_msb_string()
+           == "1");
+
+    const auto vhdl_unrelated_nested_procedure_driver
+        = fsim::frontend::parse_text(
+            "vhdl_driving_value_unrelated_nested_procedure.vhd",
+            R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity vhdl_driving_value_unrelated_nested_procedure is
+end entity;
+
+library ieee;
+use ieee.std_logic_1164.all;
+architecture rtl of vhdl_driving_value_unrelated_nested_procedure is
+  signal source : std_logic := '0';
+  signal unrelated : std_logic := '0';
+  signal observed : std_logic := '0';
+begin
+  p: process
+    procedure drive_unrelated(
+        signal target : inout std_logic;
+        signal value : inout std_logic;
+        signal sample : out std_logic) is
+      procedure query_nested(
+          signal nested_value : inout std_logic;
+          signal result : out std_logic) is
+      begin
+        result <= nested_value'driving_value;
+      end procedure;
+    begin
+      target <= '1';
+      wait for 0 ns;
+      query_nested(value, sample);
+    end procedure;
+  begin
+    drive_unrelated(unrelated, source, observed);
+    wait;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_unrelated_nested_procedure_driver.ok());
+    const auto rejected_vhdl_unrelated_nested_procedure_driver
+        = compile_and_elaborate(
+            vhdl_unrelated_nested_procedure_driver.design,
+            "vhdl:work.vhdl_driving_value_unrelated_nested_procedure(rtl)");
+    assert(!rejected_vhdl_unrelated_nested_procedure_driver.ok());
+    assert(has_diagnostic(
+        rejected_vhdl_unrelated_nested_procedure_driver,
+        "FSIM-ELAB-VHATTR-003"));
+
+    const auto vhdl_selected_element_driver = fsim::frontend::parse_text(
+        "vhdl_driving_value_selected_element.vhd",
+        R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity vhdl_driving_value_selected_element is
+end entity;
+
+library ieee;
+use ieee.std_logic_1164.all;
+architecture rtl of vhdl_driving_value_selected_element is
+  signal source : std_logic_vector(1 downto 0) := "00";
+  signal observed : std_logic := '0';
+begin
+  p: process
+  begin
+    source(1) <= '1';
+    wait for 0 ns;
+    observed <= source(1)'driving_value;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_selected_element_driver.ok());
+    const auto elaborated_vhdl_selected_element_driver = compile_and_elaborate(
+        vhdl_selected_element_driver.design,
+        "vhdl:work.vhdl_driving_value_selected_element(rtl)");
+    assert(elaborated_vhdl_selected_element_driver.ok());
+    const auto selected_element_observed
+        = elaborated_vhdl_selected_element_driver.design->find_signal(
+            "observed");
+    assert(selected_element_observed);
+    auto selected_element_driver_interpreter
+        = elaborated_vhdl_selected_element_driver.design->create_interpreter();
+    (void)selected_element_driver_interpreter->run();
+    assert(selected_element_driver_interpreter
+               ->signal_value(*selected_element_observed)
+               .to_msb_string()
+           == "1");
+
+    const auto vhdl_whole_signal_covers_selection
+        = fsim::frontend::parse_text(
+            "vhdl_driving_value_whole_signal_covers_selection.vhd",
+            R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity vhdl_driving_value_whole_signal_covers_selection is
+end entity;
+
+library ieee;
+use ieee.std_logic_1164.all;
+architecture rtl of vhdl_driving_value_whole_signal_covers_selection is
+  signal source : std_logic_vector(1 downto 0) := "00";
+  signal observed : std_logic := '0';
+begin
+  p: process
+  begin
+    source <= "10";
+    wait for 0 ns;
+    observed <= source(1)'driving_value;
+    wait;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_whole_signal_covers_selection.ok());
+    const auto elaborated_vhdl_whole_signal_covers_selection
+        = compile_and_elaborate(
+            vhdl_whole_signal_covers_selection.design,
+            "vhdl:work.vhdl_driving_value_whole_signal_covers_selection(rtl)");
+    assert(elaborated_vhdl_whole_signal_covers_selection.ok());
+    const auto whole_signal_observed
+        = elaborated_vhdl_whole_signal_covers_selection.design->find_signal(
+            "observed");
+    assert(whole_signal_observed);
+    auto whole_signal_driver_interpreter
+        = elaborated_vhdl_whole_signal_covers_selection.design
+              ->create_interpreter();
+    (void)whole_signal_driver_interpreter->run();
+    assert(whole_signal_driver_interpreter
+               ->signal_value(*whole_signal_observed)
+               .to_msb_string()
+           == "1");
+
+    const auto vhdl_partial_writes_cover_slice = fsim::frontend::parse_text(
+        "vhdl_driving_value_partial_writes_cover_slice.vhd",
+        R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity vhdl_driving_value_partial_writes_cover_slice is
+end entity;
+
+library ieee;
+use ieee.std_logic_1164.all;
+architecture rtl of vhdl_driving_value_partial_writes_cover_slice is
+  signal source : std_logic_vector(1 downto 0) := "00";
+  signal observed : std_logic_vector(1 downto 0) := "00";
+begin
+  p: process
+  begin
+    source(1) <= '1';
+    source(0) <= '0';
+    wait for 0 ns;
+    observed <= source(1 downto 0)'driving_value;
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_partial_writes_cover_slice.ok());
+    const auto elaborated_vhdl_partial_writes_cover_slice
+        = compile_and_elaborate(
+            vhdl_partial_writes_cover_slice.design,
+            "vhdl:work.vhdl_driving_value_partial_writes_cover_slice(rtl)");
+    assert(elaborated_vhdl_partial_writes_cover_slice.ok());
+    const auto partial_writes_observed
+        = elaborated_vhdl_partial_writes_cover_slice.design->find_signal(
+            "observed");
+    assert(partial_writes_observed);
+    auto partial_writes_driver_interpreter
+        = elaborated_vhdl_partial_writes_cover_slice.design
+              ->create_interpreter();
+    (void)partial_writes_driver_interpreter->run();
+    assert(partial_writes_driver_interpreter
+               ->signal_value(*partial_writes_observed)
+               .to_msb_string()
+           == "10");
+
+    const auto vhdl_selected_neighbor_driver
+        = fsim::frontend::parse_text(
+            "vhdl_driving_value_selected_neighbor.vhd",
+            R"(
+library ieee;
+use ieee.std_logic_1164.all;
+entity vhdl_driving_value_selected_neighbor is
+end entity;
+
+library ieee;
+use ieee.std_logic_1164.all;
+architecture rtl of vhdl_driving_value_selected_neighbor is
+  signal source : std_logic_vector(1 downto 0) := "00";
+  signal observed : std_logic := '0';
+begin
+  p: process
+  begin
+    source(0) <= '1';
+    wait for 0 ns;
+    observed <= source(1)'driving_value;
+    wait;
+  end process;
+end architecture;
+)",
+            fsim::frontend::Language::Vhdl2008);
+    assert(vhdl_selected_neighbor_driver.ok());
+    const auto rejected_vhdl_selected_neighbor_driver = compile_and_elaborate(
+        vhdl_selected_neighbor_driver.design,
+        "vhdl:work.vhdl_driving_value_selected_neighbor(rtl)");
+    assert(!rejected_vhdl_selected_neighbor_driver.ok());
+    assert(has_diagnostic(
+        rejected_vhdl_selected_neighbor_driver,
+        "FSIM-ELAB-VHATTR-003"));
 }
 
 } // namespace fsim::tests::elaboration

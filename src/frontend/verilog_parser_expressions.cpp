@@ -250,6 +250,84 @@ Expression VerilogParser::parse_lvalue()
             cover(start.span, previous().span)
         };
     }
+    const auto has_receiver_call = [&] {
+        std::size_t parenthesis_depth { };
+        std::size_t square_depth { };
+        for (auto token_index = position();
+            token_index < tokens_.size();
+            ++token_index) {
+            const auto kind = tokens_[token_index].kind;
+            if (kind == TokenKind::EndOfFile
+                || (kind == TokenKind::Semicolon
+                    && parenthesis_depth == 0U && square_depth == 0U)) {
+                return false;
+            }
+            if (parenthesis_depth == 0U && square_depth == 0U) {
+                if (kind == TokenKind::LeftParen) {
+                    return true;
+                }
+                if (kind == TokenKind::Assign
+                    || kind == TokenKind::LessEqual
+                    || kind == TokenKind::PlusAssign
+                    || kind == TokenKind::MinusAssign
+                    || kind == TokenKind::StarAssign
+                    || kind == TokenKind::SlashAssign
+                    || kind == TokenKind::PercentAssign
+                    || kind == TokenKind::AmpersandAssign
+                    || kind == TokenKind::PipeAssign
+                    || kind == TokenKind::CaretAssign
+                    || kind == TokenKind::ShiftLeftAssign
+                    || kind == TokenKind::ShiftRightAssign
+                    || kind == TokenKind::ArithmeticShiftLeftAssign
+                    || kind == TokenKind::ArithmeticShiftRightAssign) {
+                    return false;
+                }
+            }
+            switch (kind) {
+            case TokenKind::LeftParen:
+                ++parenthesis_depth;
+                break;
+            case TokenKind::RightParen:
+                if (parenthesis_depth != 0U) {
+                    --parenthesis_depth;
+                }
+                break;
+            case TokenKind::LeftBracket:
+                ++square_depth;
+                break;
+            case TokenKind::RightBracket:
+                if (square_depth != 0U) {
+                    --square_depth;
+                }
+                break;
+            default:
+                break;
+            }
+        }
+        return false;
+    };
+    if (at(TokenKind::Identifier) && has_receiver_call()) {
+        const auto before = position();
+        const auto source_order = systemverilog_source_order();
+        const auto implicit_reference_count = implicit_net_references_.size();
+        auto selected = parse_primary();
+        const Expression* lvalue_base = &selected;
+        while ((lvalue_base->kind == ExpressionKind::Index
+                   || lvalue_base->kind == ExpressionKind::Slice)
+            && !lvalue_base->operands.empty()) {
+            lvalue_base = &lvalue_base->operands.front();
+        }
+        if (lvalue_base->kind == ExpressionKind::Call
+            && lvalue_base->text.starts_with("@sv-select:")) {
+            // A function or method returning a class handle can be the
+            // receiver of a writable member selection. Keep its member and
+            // index expressions in the same tree used by ordinary lvalues.
+            selected.systemverilog_source_order = source_order;
+            return selected;
+        }
+        rewind(before);
+        implicit_net_references_.resize(implicit_reference_count);
+    }
     const auto source_order = systemverilog_source_order();
     const auto name = keyword("this") || keyword("super")
         ? advance()

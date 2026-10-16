@@ -145,6 +145,9 @@ void test_multi_library_resolution() {
         "vhdl-search-parent.vhd",
         R"(
 entity vhdl_search_parent is end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of vhdl_search_parent is
   component vhdl_searched is
     port (value : in std_logic);

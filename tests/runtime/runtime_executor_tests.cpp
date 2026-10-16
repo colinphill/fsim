@@ -974,7 +974,7 @@ void test_simir_display_output()
             && events[3].text == "tail"
             && !events[3].newline
             && events[3].time == 2
-            && events[3].delta == 0
+            && events[3].delta == 1
             && events[3].phase == SchedulerPhase::active,
         "immediate/postponed display hook ordering and metadata");
 
@@ -1141,7 +1141,7 @@ void test_simir_display_output()
             && reports[1].severity == AssertionSeverity::error
             && formatted_output
                 == std::vector<std::string> {
-                    "v=10xz!", "d=-1", "u=x", "h=a5", "c=\xA5",
+                    "v=10xz!", "d=-1", "u=X", "h=a5", "c=\xA5",
                     "s=test", "z=a5", "width=    a5",
                     "left=a5    !", "zero=-00001", "time=0007" },
         "nonfatal report hook severity, source, and ordering");

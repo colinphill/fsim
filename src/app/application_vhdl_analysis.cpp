@@ -399,25 +399,98 @@ std::vector<std::string_view> selected_name_parts(
     const std::string_view name) {
   std::vector<std::string_view> result;
   std::size_t begin = 0;
-  while (begin <= name.size()) {
-    const auto separator = name.find('.', begin);
-    result.push_back(name.substr(
-        begin,
-        separator == std::string_view::npos
-            ? name.size() - begin
-            : separator - begin));
-    if (separator == std::string_view::npos) {
-      break;
+  bool in_extended_identifier { };
+  for (std::size_t index = 0; index < name.size(); ++index) {
+    if (name[index] == '\\') {
+      if (in_extended_identifier && index + 1U < name.size()
+          && name[index + 1U] == '\\') {
+        ++index;
+        continue;
+      }
+      in_extended_identifier = !in_extended_identifier;
+      continue;
     }
-    begin = separator + 1;
+    if (name[index] != '.' || in_extended_identifier) {
+      continue;
+    }
+    if (index == begin) {
+      return { };
+    }
+    result.push_back(name.substr(begin, index - begin));
+    begin = index + 1U;
   }
+  if (begin == name.size()) {
+    return { };
+  }
+  result.push_back(name.substr(begin));
   return result;
+}
+
+std::string vhdl_unit_name_spelling(
+    const std::string_view name, const bool extended)
+{
+  if (!extended) {
+    return std::string { name };
+  }
+  std::string result { "\\" };
+  result.reserve(name.size() + 2U);
+  for (const auto character : name) {
+    result.push_back(character);
+    if (character == '\\') {
+      result.push_back('\\');
+    }
+  }
+  result.push_back('\\');
+  return result;
+}
+
+std::string vhdl_identifier_key(
+    const std::string_view name, const bool extended)
+{
+  return extended
+      ? vhdl_unit_name_spelling(name, true)
+      : canonical_vhdl_name(std::string { name });
+}
+
+std::optional<std::string> vhdl_metadata_identifier_key(
+    const std::string_view name,
+    const library::VhdlIdentifierForm form)
+{
+  switch (form) {
+  case library::VhdlIdentifierForm::basic:
+    return vhdl_identifier_key(name, false);
+  case library::VhdlIdentifierForm::extended:
+    return vhdl_identifier_key(name, true);
+  case library::VhdlIdentifierForm::unknown:
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+std::string context_lookup_name(const std::string_view spelling)
+{
+  const bool extended = spelling.size() >= 2U
+      && spelling.front() == '\\' && spelling.back() == '\\';
+  if (!extended) {
+    return canonical_vhdl_name(std::string { spelling });
+  }
+  std::string decoded;
+  decoded.reserve(spelling.size() - 2U);
+  for (std::size_t index = 1U; index + 1U < spelling.size(); ++index) {
+    decoded.push_back(spelling[index]);
+    if (spelling[index] == '\\' && index + 2U < spelling.size()
+        && spelling[index + 1U] == '\\') {
+      ++index;
+    }
+  }
+  return vhdl_identifier_key(decoded, true);
 }
 
 std::string selected_library(
     const std::string_view requested,
     const std::string_view owner) {
-  return requested == "work" ? std::string{owner} : std::string{requested};
+  const auto canonical = canonical_vhdl_name(std::string { requested });
+  return canonical == "work" ? std::string { owner } : canonical;
 }
 
 std::string primary_key(
@@ -458,7 +531,9 @@ class AnalysisOrderValidator {
       for (const auto& unit : units) {
         if (unit.language == frontend::Language::Vhdl2008
             && unit.kind == frontend::UnitKind::VhdlEntity) {
-          local_entities_.insert(primary_key(library_of(unit), unit.name));
+          local_entities_.insert(primary_key(
+              library_of(unit),
+              vhdl_identifier_key(unit.name, unit.vhdl_extended_name)));
         }
       }
     }
@@ -466,7 +541,11 @@ class AnalysisOrderValidator {
       if (unit.language == frontend::Language::Vhdl2008
           && unit.kind == frontend::UnitKind::VhdlArchitecture) {
         local_architectures_.insert_or_assign(
-            architecture_key(library_of(unit), unit.primary_name, unit.name),
+            architecture_key(
+                library_of(unit),
+                vhdl_identifier_key(
+                    unit.primary_name, unit.vhdl_extended_primary_name),
+                vhdl_identifier_key(unit.name, unit.vhdl_extended_name)),
             &unit);
       }
     }
@@ -489,16 +568,27 @@ class AnalysisOrderValidator {
          if (unit.language != "vhdl") {
              return;
          }
+         const auto name = vhdl_metadata_identifier_key(
+             unit.name, unit.name_form);
+         if (!name) {
+             // Old metadata omitted the form. It remains loadable, but cannot
+             // satisfy an exact VHDL name lookup without risking a false match.
+             return;
+         }
          const auto library = available.library.empty()
              ? std::string_view { "work" }
              : std::string_view { available.library };
-         const auto key = primary_key(library, unit.name);
+         const auto key = primary_key(library, *name);
          if (unit.kind == "entity") {
              entities_.insert_or_assign(key, unit.standard);
          } else if (unit.kind == "architecture") {
+             const auto primary = vhdl_metadata_identifier_key(
+                 unit.primary_name, unit.primary_name_form);
+             if (!primary) {
+                 return;
+             }
              architectures_.insert_or_assign(
-                 architecture_key(library, unit.primary_name,
-                     unit.architecture.empty() ? unit.name : unit.architecture),
+                 architecture_key(library, *primary, *name),
                  unit.standard);
          } else if (unit.kind == "package" && unit.primary_name.empty()) {
              packages_.insert_or_assign(key, unit.standard);
@@ -514,14 +604,19 @@ class AnalysisOrderValidator {
          const auto library = unit.library.empty()
              ? std::string_view { "work" }
              : std::string_view { unit.library };
-         const auto key = primary_key(library, unit.name);
+         const auto key = primary_key(
+             library, vhdl_identifier_key(unit.name, unit.extended_name));
          switch (unit.kind) {
          case semantic::vhdl::UnitKind::entity:
              entities_.insert_or_assign(key, unit.standard);
              break;
          case semantic::vhdl::UnitKind::architecture:
              architectures_.insert_or_assign(
-                 architecture_key(library, unit.primary_name, unit.name),
+                 architecture_key(
+                     library,
+                     vhdl_identifier_key(
+                         unit.primary_name, unit.extended_primary_name),
+                     vhdl_identifier_key(unit.name, unit.extended_name)),
                  unit.standard);
              break;
          case semantic::vhdl::UnitKind::package:
@@ -530,7 +625,10 @@ class AnalysisOrderValidator {
              }
              break;
          case semantic::vhdl::UnitKind::context:
-             contexts_.insert_or_assign(key, unit.standard);
+             contexts_.insert_or_assign(
+                 primary_key(library, vhdl_unit_name_spelling(
+                     unit.name, unit.extended_name)),
+                 unit.standard);
              break;
          case semantic::vhdl::UnitKind::configuration:
              configurations_.insert_or_assign(key, unit.standard);
@@ -584,7 +682,8 @@ class AnalysisOrderValidator {
           }
           const auto library = selected_library(parts[0], owner_library);
           if (!validate_dependency(
-                  packages_, primary_key(library, parts[1]), "package",
+                  packages_, primary_key(
+                      library, context_lookup_name(parts[1])), "package",
                   unit, item.span)) {
               report(
                   "FSIM-FE-VHORDER-004",
@@ -599,9 +698,12 @@ class AnalysisOrderValidator {
           // `use library.unit;` names a primary unit (IEEE 1076-2008
           // 12.4); an architecture or package body is a secondary unit.
           const auto library = selected_library(parts[0], owner_library);
-          const auto key = primary_key(library, parts[1]);
+          const auto key = primary_key(
+              library, context_lookup_name(parts[1]));
           if (!packages_.contains(key) && !entities_.contains(key)
-              && !configurations_.contains(key) && !contexts_.contains(key)) {
+              && !configurations_.contains(key)
+              && !contexts_.contains(primary_key(
+                  library, context_lookup_name(parts[1])))) {
               report(
                   "FSIM-FE-VHORDER-004",
                   "VHDL primary unit '" + library + "."
@@ -618,7 +720,8 @@ class AnalysisOrderValidator {
           }
           const auto library = selected_library(parts[0], owner_library);
           if (!validate_dependency(
-                  contexts_, primary_key(library, parts[1]), "context",
+                  contexts_, primary_key(
+                      library, context_lookup_name(parts[1])), "context",
                   unit, item.span)) {
               report(
                   "FSIM-FE-VHORDER-003",
@@ -641,15 +744,23 @@ class AnalysisOrderValidator {
           return;
       }
       if (binding.kind == frontend::VhdlBindingAspectKind::Configuration) {
-          const auto parts = selected_name_parts(binding.configuration_name);
+          const auto& configuration_spelling
+              = binding.configuration_reference_spelling.empty()
+              ? binding.configuration_name
+              : binding.configuration_reference_spelling;
+          const auto parts = selected_name_parts(configuration_spelling);
           if (parts.empty() || parts.size() > 2) {
               return;
           }
           const auto library = parts.size() == 2
               ? selected_library(parts[0], owner_library)
               : std::string { owner_library };
+          const auto configuration = binding.configuration_reference_spelling.empty()
+              ? vhdl_identifier_key(
+                    parts.back(), binding.configuration_name_extended)
+              : context_lookup_name(parts.back());
           if (!validate_dependency(
-                  configurations_, primary_key(library, parts.back()),
+                  configurations_, primary_key(library, configuration),
                   "configuration", owner, binding.span)) {
               report(
                   "FSIM-FE-VHORDER-008",
@@ -661,7 +772,9 @@ class AnalysisOrderValidator {
           return;
       }
 
-      const auto parts = selected_name_parts(binding.entity_name);
+      const auto& entity_spelling = binding.entity_reference_spelling.empty()
+          ? binding.entity_name : binding.entity_reference_spelling;
+      const auto parts = selected_name_parts(entity_spelling);
       if (parts.empty() || parts.size() > 2
           || binding.architecture_name.empty()) {
           return;
@@ -669,7 +782,15 @@ class AnalysisOrderValidator {
       const auto library = parts.size() == 2
           ? selected_library(parts[0], owner_library)
           : std::string { owner_library };
-      const auto entity = parts.back();
+      const auto entity = binding.entity_reference_spelling.empty()
+          ? vhdl_identifier_key(
+                parts.back(), binding.entity_name_extended)
+          : context_lookup_name(parts.back());
+      const auto architecture = binding.architecture_name_spelling.empty()
+          ? vhdl_identifier_key(
+                binding.architecture_name,
+                binding.architecture_name_extended)
+          : context_lookup_name(binding.architecture_name_spelling);
       if (!validate_dependency(
               entities_, primary_key(library, entity), "entity", owner,
               binding.span)) {
@@ -680,7 +801,7 @@ class AnalysisOrderValidator {
               binding.span);
       }
       if (!validate_dependency(
-              architectures_, architecture_key(library, entity, binding.architecture_name),
+              architectures_, architecture_key(library, entity, architecture),
               "architecture", owner, binding.span)) {
           report(
               "FSIM-FE-VHORDER-006",
@@ -729,8 +850,10 @@ class AnalysisOrderValidator {
               if (component.binding.kind
                       == frontend::VhdlBindingAspectKind::Entity
                   && !component.binding.architecture_name.empty()
-                  && nested.block_name
-                      != component.binding.architecture_name) {
+                  && (nested.block_name
+                          != component.binding.architecture_name
+                      || nested.block_name_extended
+                          != component.binding.architecture_name_extended)) {
                   report(
                       "FSIM-FE-VHCONFIG-002",
                       "nested block configuration '" + nested.block_name
@@ -757,7 +880,9 @@ class AnalysisOrderValidator {
           if (!instance.vhdl_configuration_instance) {
               continue;
           }
-          const auto parts = selected_name_parts(instance.unit_name);
+          const auto& instance_spelling = instance.vhdl_unit_name_spelling.empty()
+              ? instance.unit_name : instance.vhdl_unit_name_spelling;
+          const auto parts = selected_name_parts(instance_spelling);
           if (parts.empty() || parts.size() > 2) {
               continue;
           }
@@ -765,7 +890,11 @@ class AnalysisOrderValidator {
               ? selected_library(parts[0], owner_library)
               : std::string { owner_library };
           if (!validate_dependency(
-                  configurations_, primary_key(library, parts.back()),
+                  configurations_, primary_key(
+                      library, instance.vhdl_unit_name_spelling.empty()
+                          ? vhdl_identifier_key(
+                                parts.back(), instance.vhdl_extended_unit_name)
+                          : context_lookup_name(parts.back())),
                   "configuration", owner, instance.span)) {
               report(
                   "FSIM-FE-VHORDER-008",
@@ -803,7 +932,9 @@ class AnalysisOrderValidator {
     switch (unit.kind) {
       case frontend::UnitKind::VhdlArchitecture:
         {
-          const auto key = primary_key(library, unit.primary_name);
+          const auto key = primary_key(
+              library, vhdl_identifier_key(
+                  unit.primary_name, unit.vhdl_extended_primary_name));
           if (!validate_dependency(entities_, key, "entity", unit, unit.span)
               && (!allow_external_architecture_primary_
                   || local_entities_.contains(key))) {
@@ -819,7 +950,9 @@ class AnalysisOrderValidator {
       case frontend::UnitKind::VhdlPackage:
           if (!unit.primary_name.empty()
               && !validate_dependency(
-                  packages_, primary_key(library, unit.name), "package",
+                  packages_, primary_key(
+                      library, vhdl_identifier_key(
+                          unit.name, unit.vhdl_extended_name)), "package",
                   unit, unit.span)) {
               report(
                   "FSIM-FE-VHORDER-002",
@@ -830,7 +963,10 @@ class AnalysisOrderValidator {
         break;
       case frontend::UnitKind::VhdlConfiguration:
           if (!validate_dependency(
-                  entities_, primary_key(library, unit.primary_name),
+                entities_, primary_key(
+                    library, vhdl_identifier_key(
+                        unit.primary_name,
+                        unit.vhdl_extended_primary_name)),
                   "entity", unit, unit.span)) {
               report(
                   "FSIM-FE-VHORDER-005",
@@ -842,7 +978,13 @@ class AnalysisOrderValidator {
         if (unit.vhdl_configuration) {
           const auto& block = unit.vhdl_configuration->block;
           if (!validate_dependency(
-                  architectures_, architecture_key(library, unit.primary_name, block.block_name),
+                  architectures_, architecture_key(
+                      library,
+                      vhdl_identifier_key(
+                          unit.primary_name,
+                          unit.vhdl_extended_primary_name),
+                      vhdl_identifier_key(
+                          block.block_name, block.block_name_extended)),
                   "architecture", unit, block.span)) {
               report(
                   "FSIM-FE-VHORDER-006",
@@ -854,7 +996,13 @@ class AnalysisOrderValidator {
           }
           validate_block(block, unit);
           if (const auto architecture = local_architectures_.find(
-                  architecture_key(library, unit.primary_name, block.block_name));
+                  architecture_key(
+                      library,
+                      vhdl_identifier_key(
+                          unit.primary_name,
+                          unit.vhdl_extended_primary_name),
+                      vhdl_identifier_key(
+                          block.block_name, block.block_name_extended)));
               architecture != local_architectures_.end()) {
             validate_block_labels(block, architecture->second->generate_regions);
           }
@@ -879,7 +1027,9 @@ class AnalysisOrderValidator {
         frontend::to_string(unit.vhdl_standard) };
     const auto record_primary =
         [&] {
-          const auto key = primary_key(library, unit.name);
+          const auto key = primary_key(
+              library, vhdl_identifier_key(
+                  unit.name, unit.vhdl_extended_name));
           if (!primary_units_.insert(key).second) {
             report_vhdl_duplicate_design_unit(unit, diagnostics_);
           }
@@ -893,31 +1043,56 @@ class AnalysisOrderValidator {
     switch (unit.kind) {
       case frontend::UnitKind::VhdlEntity:
         record_primary();
-        entities_.insert_or_assign(primary_key(library, unit.name), standard);
+        entities_.insert_or_assign(primary_key(
+            library, vhdl_identifier_key(
+                unit.name, unit.vhdl_extended_name)), standard);
         break;
       case frontend::UnitKind::VhdlArchitecture:
         record_secondary(
-            architecture_key(library, unit.primary_name, unit.name));
+            architecture_key(
+                library,
+                vhdl_identifier_key(
+                    unit.primary_name, unit.vhdl_extended_primary_name),
+                vhdl_identifier_key(unit.name, unit.vhdl_extended_name)));
         architectures_.insert_or_assign(architecture_key(
-                                            library, unit.primary_name, unit.name),
+                                            library,
+                                            vhdl_identifier_key(
+                                                unit.primary_name,
+                                                unit.vhdl_extended_primary_name),
+                                            vhdl_identifier_key(
+                                                unit.name,
+                                                unit.vhdl_extended_name)),
             standard);
         break;
       case frontend::UnitKind::VhdlConfiguration:
         record_primary();
-        configurations_.insert_or_assign(primary_key(library, unit.name), standard);
+        configurations_.insert_or_assign(primary_key(
+            library, vhdl_identifier_key(
+                unit.name, unit.vhdl_extended_name)), standard);
         break;
       case frontend::UnitKind::VhdlPackage:
         if (unit.primary_name.empty()) {
           record_primary();
-          packages_.insert_or_assign(primary_key(library, unit.name), standard);
+          packages_.insert_or_assign(primary_key(
+              library, vhdl_identifier_key(
+                  unit.name, unit.vhdl_extended_name)), standard);
         } else {
           record_secondary(
-              primary_key(library, unit.name) + "\npackage-body");
+              primary_key(library, vhdl_identifier_key(
+                  unit.name, unit.vhdl_extended_name)) + "\npackage-body");
         }
         break;
       case frontend::UnitKind::VhdlContext:
-        record_primary();
-        contexts_.insert_or_assign(primary_key(library, unit.name), standard);
+        if (!primary_units_.insert(primary_key(
+                library,
+                vhdl_identifier_key(unit.name,
+                    unit.vhdl_extended_name))).second) {
+          report_vhdl_duplicate_design_unit(unit, diagnostics_);
+        }
+        contexts_.insert_or_assign(
+            primary_key(library, vhdl_identifier_key(
+                unit.name, unit.vhdl_extended_name)),
+            standard);
         break;
       case frontend::UnitKind::VhdlPslVerificationUnit:
         record_primary();
@@ -1536,12 +1711,13 @@ void validate_vhdl_port_association_modes(
     return result;
   };
   const auto find_entity = [&](const std::string& library,
-                               const std::string& name)
+                               const std::string& identifier_key)
       -> const DesignUnit* {
     for (const auto& unit : units) {
       if (unit.kind == frontend::UnitKind::VhdlEntity
           && lower(library_of(unit)) == lower(library)
-          && lower(unit.name) == lower(name)) {
+          && vhdl_identifier_key(
+                 unit.name, unit.vhdl_extended_name) == identifier_key) {
         return &unit;
       }
     }
@@ -1580,7 +1756,9 @@ void validate_vhdl_port_association_modes(
       continue;
     }
     const auto* entity = find_entity(
-        library_of(architecture), architecture.primary_name);
+        library_of(architecture), vhdl_identifier_key(
+            architecture.primary_name,
+            architecture.vhdl_extended_primary_name));
     if (entity == nullptr) {
       continue;
     }
@@ -1623,10 +1801,14 @@ void validate_vhdl_port_association_modes(
               port.vhdl_linkage ? PortDirection::Unknown : port.direction);
         }
       } else if (!instance.vhdl_configuration_instance) {
-        auto name = std::string_view { instance.unit_name };
-        name.remove_prefix(name.find_last_of('.') + 1U);
+        const auto& spelling = instance.vhdl_unit_name_spelling.empty()
+            ? instance.unit_name : instance.vhdl_unit_name_spelling;
+        const auto parts = selected_name_parts(spelling);
+        if (parts.empty()) {
+          continue;
+        }
         const auto* target = find_entity(
-            library_of(architecture), std::string { name });
+            library_of(architecture), context_lookup_name(parts.back()));
         if (target == nullptr) {
           continue;
         }

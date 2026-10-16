@@ -2,6 +2,7 @@
 #include "../../src/app/application_compiled_environment_vhdl.hpp"
 #include "../../src/app/application_internal.hpp"
 #include "../../src/app/application_workspace_internal.hpp"
+#include "../../src/elaboration/elaboration_targets.hpp"
 
 #include "fsim/app/design_artifact.hpp"
 #include "fsim/cli/driver.hpp"
@@ -16,11 +17,13 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <map>
 #include <optional>
 #include <sstream>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -176,7 +179,8 @@ end package body;
 )";
 
 void test_context_dependency_fingerprints(const semantic::CompiledDesign& design,
-    const semantic::UnitId context_id, const semantic::UnitId architecture_id)
+    const semantic::UnitId context_id, const semantic::UnitId architecture_id,
+    const workspace::Store& store)
 {
     detail::WorkspaceCatalogs catalogs;
     for (const std::string_view library : { "support", "work" }) {
@@ -229,8 +233,14 @@ void test_context_dependency_fingerprints(const semantic::CompiledDesign& design
     auto& architecture = artifact_for("work", "architecture");
     const std::array context_owner { context_id };
     const std::array architecture_owner { architecture_id };
-    context.dependencies = detail::workspace_dependencies(design, context_owner, catalogs);
-    architecture.dependencies = detail::workspace_dependencies(design, architecture_owner, catalogs);
+    fsim::diagnostic::Engine dependency_diagnostics;
+    auto context_dependencies = detail::workspace_dependencies(
+        store, design, context_owner, catalogs, dependency_diagnostics);
+    auto architecture_dependencies = detail::workspace_dependencies(
+        store, design, architecture_owner, catalogs, dependency_diagnostics);
+    assert(context_dependencies && architecture_dependencies);
+    context.dependencies = std::move(*context_dependencies);
+    architecture.dependencies = std::move(*architecture_dependencies);
     assert(has_dependency(architecture.dependencies, context, context.fingerprint));
     assert(has_dependency(architecture.dependencies, specification, specification.fingerprint));
     assert(has_dependency(architecture.dependencies, body, body.fingerprint));
@@ -241,7 +251,11 @@ void test_context_dependency_fingerprints(const semantic::CompiledDesign& design
     const auto old_body_fingerprint = body.fingerprint;
     const auto context_fingerprint = context.fingerprint;
     body.fingerprint = body.id + "-v2";
-    context.dependencies = detail::workspace_dependencies(design, context_owner, catalogs);
+    dependency_diagnostics.clear();
+    context_dependencies = detail::workspace_dependencies(
+        store, design, context_owner, catalogs, dependency_diagnostics);
+    assert(context_dependencies);
+    context.dependencies = std::move(*context_dependencies);
     assert(context.fingerprint == context_fingerprint);
     assert(has_dependency(context.dependencies, body, body.fingerprint));
     assert(has_dependency(architecture.dependencies, body, old_body_fingerprint));
@@ -342,8 +356,9 @@ end architecture;
     assert(packed && packed->bits == "1010");
     const auto& label = named_declaration(design, *compiled_package->vhdl, "label_text");
     assert(specialized->evaluate_string_declaration(label.id) == "OK");
+    const workspace::Store store { directory / "workspace" };
     test_context_dependency_fingerprints(design, compiled_context->identity->id,
-        architecture->identity->id);
+        architecture->identity->id, store);
 
     fsim::diagnostic::Engine mismatch;
     const auto incompatible = compile(directory, "standard_mismatch", R"(
@@ -354,6 +369,212 @@ entity newer_consumer is end entity;
         mismatch, &context, "work", "2019");
     assert(!incompatible);
     assert(has_code(mismatch, "FSIM-FE-VHORDER-011"));
+}
+
+
+void test_configuration_binding_dependencies(const std::filesystem::path& directory)
+{
+    auto design = accepted(directory, "configuration_binding_dependencies", R"(
+entity bound_target is end entity;
+architecture chosen of bound_target is begin end architecture;
+entity bound_owner is end entity;
+architecture owner_arch of bound_owner is
+  component leaf is end component;
+  for leaf_instance : leaf use entity WORK.bound_target(Chosen);
+begin
+  leaf_instance : leaf;
+end architecture;
+configuration target_configuration of bound_target is
+  for chosen
+  end for;
+end configuration;
+configuration owner_configuration of bound_owner is
+  for owner_arch
+    for leaf_instance : leaf use configuration WORK.target_configuration;
+    end for;
+  end for;
+end configuration;
+)", nullptr, "work");
+
+    const auto bound_target = design.find_unit(
+        semantic::UnitKind::vhdl_entity, "work", "bound_target");
+    const auto chosen_architecture = design.find_unit(
+        semantic::UnitKind::vhdl_architecture,
+        "work", "bound_target", "chosen");
+    const auto target_configuration = design.find_unit(
+        semantic::UnitKind::vhdl_configuration,
+        "work", "target_configuration", "bound_target");
+    const auto owner_architecture = design.find_unit(
+        semantic::UnitKind::vhdl_architecture,
+        "work", "bound_owner", "owner_arch");
+    const auto owner_configuration = design.find_unit(
+        semantic::UnitKind::vhdl_configuration,
+        "work", "owner_configuration", "bound_owner");
+    assert(bound_target && chosen_architecture && target_configuration
+        && owner_architecture && owner_configuration);
+    assert(bound_target->identity && chosen_architecture->identity
+        && target_configuration->identity && owner_architecture->identity
+        && owner_configuration->identity);
+    assert(has_reference(design, owner_architecture->identity->id,
+        semantic::CompiledReferenceKind::entity, bound_target->identity->id));
+    assert(has_reference(design, owner_architecture->identity->id,
+        semantic::CompiledReferenceKind::architecture,
+        chosen_architecture->identity->id));
+    assert(has_reference(design, owner_configuration->identity->id,
+        semantic::CompiledReferenceKind::configuration,
+        target_configuration->identity->id));
+
+    detail::WorkspaceCatalogs catalogs;
+    workspace::LibraryCatalog work_catalog;
+    work_catalog.location.name = "work";
+    std::map<std::string, std::string> fingerprints;
+    std::size_t artifact_index { };
+    for (auto& [id, unit] : detail::compiled_object_unit_entries(
+             design, "work")) {
+        (void)id;
+        workspace::ArtifactRecord artifact;
+        artifact.id = "binding-unit-" + std::to_string(artifact_index++);
+        artifact.fingerprint = artifact.id + "-fingerprint";
+        fingerprints.emplace(workspace::unit_identity(unit), artifact.fingerprint);
+        artifact.units.push_back({ std::move(unit), { } });
+        work_catalog.artifacts.push_back(std::move(artifact));
+    }
+    catalogs.push_back(std::move(work_catalog));
+    const workspace::Store store { directory / "configuration-bindings" };
+    const auto has_dependency = [&](const auto& dependencies,
+                                    const std::string_view kind,
+                                    const std::string_view name,
+                                    const std::string_view primary_name) {
+        return std::ranges::any_of(dependencies, [&](const auto& dependency) {
+            const auto fingerprint = fingerprints.find(
+                workspace::unit_identity(dependency.unit));
+            return dependency.library == "work"
+                && dependency.unit.language == "vhdl"
+                && dependency.unit.kind == kind
+                && dependency.unit.name == name
+                && dependency.unit.primary_name == primary_name
+                && fingerprint != fingerprints.end()
+                && dependency.fingerprint == fingerprint->second;
+        });
+    };
+    const std::array architecture_owner { owner_architecture->identity->id };
+    const std::array configuration_owner { owner_configuration->identity->id };
+    fsim::diagnostic::Engine diagnostics;
+    const auto architecture_dependencies = detail::workspace_dependencies(
+        store, design, architecture_owner, catalogs, diagnostics);
+    const auto configuration_dependencies = detail::workspace_dependencies(
+        store, design, configuration_owner, catalogs, diagnostics);
+    assert(architecture_dependencies && configuration_dependencies);
+    assert(has_dependency(*architecture_dependencies,
+        "entity", "bound_target", ""));
+    assert(has_dependency(*architecture_dependencies,
+        "architecture", "chosen", "bound_target"));
+    assert(has_dependency(*configuration_dependencies,
+        "configuration", "target_configuration", "bound_target"));
+
+    fsim::diagnostic::Engine missing_architecture;
+    assert(!compile(directory, "missing_bound_architecture", R"(
+entity unresolved_owner is end entity;
+architecture top of unresolved_owner is
+  component leaf is end component;
+  for leaf_instance : leaf use entity WORK.bound_target(absent_architecture);
+begin
+  leaf_instance : leaf;
+end architecture;
+)", missing_architecture, &design, "work"));
+    assert(has_code(missing_architecture, "FSIM-FE-VHORDER-006"));
+
+    fsim::diagnostic::Engine missing_configuration;
+    assert(!compile(directory, "missing_bound_configuration", R"(
+configuration unresolved_configuration of bound_owner is
+  for owner_arch
+    for leaf_instance : leaf use configuration WORK.absent_configuration;
+    end for;
+  end for;
+end configuration;
+)", missing_configuration, &design, "work"));
+    assert(has_code(missing_configuration, "FSIM-FE-VHORDER-008"));
+}
+
+void test_configuration_default_architecture_dependencies(
+    const std::filesystem::path& directory)
+{
+    const auto design = accepted(directory, "configuration_default_architecture", R"(
+entity default_target is end entity;
+architecture arch_a of default_target is begin end architecture;
+architecture arch_b of default_target is begin end architecture;
+entity explicit_target is end entity;
+architecture arch_a of explicit_target is begin end architecture;
+architecture arch_b of explicit_target is begin end architecture;
+entity default_owner is end entity;
+architecture default_owner_arch of default_owner is
+  component leaf is end component;
+  for instance : leaf use entity work.default_target;
+begin instance : leaf; end architecture;
+entity explicit_owner is end entity;
+architecture explicit_owner_arch of explicit_owner is
+  component leaf is end component;
+  for instance : leaf use entity work.explicit_target(arch_a);
+begin instance : leaf; end architecture;
+)", nullptr, "work");
+    const auto unit_id = [&](const std::string_view name,
+                             const std::string_view primary) {
+        const auto found = std::ranges::find_if(
+            design.vhdl_hir.units(), [&](const vh::Unit& unit) {
+                return unit.kind == vh::UnitKind::architecture
+                    && unit.name == name && unit.primary_name == primary;
+            });
+        assert(found != design.vhdl_hir.units().end());
+        return found->id;
+    };
+    const auto default_owner = unit_id("default_owner_arch", "default_owner");
+    const auto explicit_owner = unit_id("explicit_owner_arch", "explicit_owner");
+    const auto default_a = unit_id("arch_a", "default_target");
+    const auto default_b = unit_id("arch_b", "default_target");
+    const auto explicit_a = unit_id("arch_a", "explicit_target");
+    const auto explicit_b = unit_id("arch_b", "explicit_target");
+    assert(has_reference(design, default_owner,
+        semantic::CompiledReferenceKind::architecture, default_a));
+    assert(has_reference(design, default_owner,
+        semantic::CompiledReferenceKind::architecture, default_b));
+    assert(has_reference(design, explicit_owner,
+        semantic::CompiledReferenceKind::architecture, explicit_a));
+    assert(!has_reference(design, explicit_owner,
+        semantic::CompiledReferenceKind::architecture, explicit_b));
+
+    detail::WorkspaceCatalogs catalogs;
+    workspace::LibraryCatalog work;
+    work.location.name = "work";
+    workspace::ArtifactRecord artifact;
+    artifact.id = "default-architecture-units";
+    artifact.fingerprint = "default-architecture-fingerprint";
+    for (auto& [id, unit] : detail::compiled_object_unit_entries(design, "work")) {
+        (void)id;
+        artifact.units.push_back({ std::move(unit), { } });
+    }
+    work.artifacts.push_back(std::move(artifact));
+    catalogs.push_back(std::move(work));
+    const workspace::Store store { directory / "default-architecture" };
+    const auto has_architecture_dependency = [&](const semantic::UnitId owner,
+                                                 const std::string_view name,
+                                                 const std::string_view primary) {
+        const std::array owners { owner };
+        fsim::diagnostic::Engine diagnostics;
+        const auto dependencies = detail::workspace_dependencies(
+            store, design, owners, catalogs, diagnostics);
+        assert(dependencies);
+        return std::ranges::any_of(*dependencies, [&](const auto& dependency) {
+            return dependency.fingerprint == "default-architecture-fingerprint"
+                && dependency.unit.language == "vhdl"
+                && dependency.unit.kind == "architecture"
+                && dependency.unit.name == name
+                && dependency.unit.primary_name == primary;
+        });
+    };
+    assert(has_architecture_dependency(default_owner, "arch_a", "default_target"));
+    assert(has_architecture_dependency(default_owner, "arch_b", "default_target"));
+    assert(has_architecture_dependency(explicit_owner, "arch_a", "explicit_target"));
+    assert(!has_architecture_dependency(explicit_owner, "arch_b", "explicit_target"));
 }
 
 void test_compiled_body_conformance(const std::filesystem::path& directory)
@@ -451,14 +672,16 @@ void test_workspace_compile_environment_isolation(const std::filesystem::path& d
     std::filesystem::current_path(root);
     const auto compile_source = [](const std::string& name, const std::string& language,
                                     const std::string& standard, const std::string_view source,
-                                    const bool success = true) {
+                                    const bool success = true,
+                                    const std::string& library = "work") {
         {
             std::ofstream output(name);
             output << source;
             assert(output.good());
         }
         const std::vector<std::string> arguments { "fsim", "compile", "--quiet",
-            "--lang", language, "--standard", standard, "--jobs", "8", name };
+            "--lang", language, "--standard", standard, "--library", library,
+            "--jobs", "8", name };
         std::vector<const char*> raw;
         for (const auto& argument : arguments) {
             raw.push_back(argument.c_str());
@@ -551,6 +774,107 @@ entity replacement is end entity;
             });
         }));
     }
+
+    const auto check_context_identity = [&](const std::string_view case_name,
+                                            const bool producer_extended,
+                                            const bool consumer_extended) {
+        const auto scenario = root / std::string { case_name };
+        std::filesystem::create_directory(scenario);
+        std::filesystem::current_path(scenario);
+        const std::string producer = producer_extended ? R"(
+context \ctx\ is
+  library ieee;
+  use ieee.std_logic_1164.all;
+end context \ctx\;
+)" : R"(
+context ctx is
+  library ieee;
+  use ieee.std_logic_1164.all;
+end context ctx;
+)";
+        compile_source("context.vhd", "vhdl", "2008", producer, true,
+            "support");
+        const std::string consumer = consumer_extended ? R"(
+library support;
+context support.\ctx\;
+entity context_consumer is end entity;
+)" : R"(
+library support;
+context support.ctx;
+entity context_consumer is end entity;
+)";
+        const auto diagnostic = compile_source("consumer.vhd", "vhdl", "2019",
+            consumer, false);
+        assert(diagnostic.find("FSIM-FE-VHORDER-003")
+                != std::string::npos
+                || diagnostic.find("FSIM-FE-VHORDER-011")
+                    != std::string::npos);
+        const auto expected = producer_extended == consumer_extended
+            ? "FSIM-FE-VHORDER-011" : "FSIM-FE-VHORDER-003";
+        const auto forbidden = producer_extended == consumer_extended
+            ? "FSIM-FE-VHORDER-003" : "FSIM-FE-VHORDER-011";
+        assert(diagnostic.find(expected) != std::string::npos);
+        assert(diagnostic.find(forbidden) == std::string::npos);
+    };
+    for (const auto& [case_name, producer_extended, consumer_extended] : {
+             std::tuple { "basic-exact", false, false },
+             std::tuple { "basic-to-extended", false, true },
+             std::tuple { "extended-exact", true, true },
+             std::tuple { "extended-to-basic", true, false } }) {
+        const auto previous = std::filesystem::current_path();
+        check_context_identity(case_name, producer_extended, consumer_extended);
+        std::filesystem::current_path(previous);
+    }
+}
+
+void test_vhdl_identifier_forms_survive_compiled_metadata_round_trip(
+    const std::filesystem::path& directory)
+{
+    // Keep the top entity pair distinct from the same-named context pair:
+    // primary design-unit names share the library identity namespace.
+    const auto design = accepted(directory, "identifier-form-pair", R"(
+context ctx is
+  library ieee;
+  use ieee.std_logic_1164.all;
+end context ctx;
+
+context \ctx\ is
+  library ieee;
+  use ieee.std_logic_1164.all;
+end context \ctx\;
+
+entity ctx_target is end entity;
+architecture rtl of ctx_target is begin end architecture;
+entity \ctx_target\ is end entity;
+architecture rtl of \ctx_target\ is begin end architecture;
+)", nullptr, "work");
+    const auto entries = detail::compiled_unit_metadata_entries(design, "work");
+    std::vector<fsim::library::UnitIndexEntry> contexts;
+    for (const auto& entry : entries) {
+        if (entry.language == "vhdl" && entry.kind == "context")
+            contexts.push_back(entry);
+    }
+    assert(contexts.size() == 2U);
+    assert(contexts[0].name == contexts[1].name);
+    assert(contexts[0].name_form != contexts[1].name_form);
+    assert(std::ranges::any_of(contexts, [](const auto& entry) {
+        return entry.name_form == fsim::library::VhdlIdentifierForm::basic;
+    }));
+    assert(std::ranges::any_of(contexts, [](const auto& entry) {
+        return entry.name_form == fsim::library::VhdlIdentifierForm::extended;
+    }));
+    assert(detail::compiled_unit_metadata_key(contexts[0], "work")
+        != detail::compiled_unit_metadata_key(contexts[1], "work"));
+
+    const auto basic_top = fsim::elaboration::elaboration_detail::choose_top_unit(
+        design, "ctx_target");
+    const auto extended_top
+        = fsim::elaboration::elaboration_detail::choose_top_unit(
+            design, "\\ctx_target\\");
+    assert(basic_top && basic_top->vhdl != nullptr
+        && !basic_top->vhdl->extended_primary_name);
+    assert(extended_top && extended_top->vhdl != nullptr
+        && extended_top->vhdl->extended_primary_name);
 }
 
 } // namespace
@@ -562,7 +886,11 @@ int main()
         / ("fsim-workspace-vhdl-packages-" + std::to_string(nonce)) };
     std::filesystem::create_directories(directory.path);
     test_separate_package_compilation(directory.path);
+    test_configuration_binding_dependencies(directory.path);
+    test_configuration_default_architecture_dependencies(directory.path);
     test_compiled_body_conformance(directory.path);
     test_missing_workspace_entity(directory.path);
     test_workspace_compile_environment_isolation(directory.path);
+    test_vhdl_identifier_forms_survive_compiled_metadata_round_trip(
+        directory.path);
 }

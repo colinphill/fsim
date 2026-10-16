@@ -45,7 +45,7 @@ bool read_identity(Database& database, const LibraryLocation& location,
     }
     const auto version = query.integer(0, error);
     const auto name = query.text(1, error);
-    if (version != 1 || name != location.name) {
+    if (version != database.schema_version || name != location.name) {
         error = "workspace library catalog version or logical library name does not match";
         return false;
     }
@@ -54,6 +54,16 @@ bool read_identity(Database& database, const LibraryLocation& location,
         return false;
     }
     return true;
+}
+
+std::string legacy_unit_identity(const library::UnitIndexEntry& unit)
+{
+    std::string result;
+    for (const auto* field : { &unit.language, &unit.kind, &unit.name,
+             &unit.primary_name, &unit.architecture }) {
+        result += std::to_string(field->size()) + ":" + *field;
+    }
+    return result;
 }
 
 using RecordMap = std::map<std::string, std::size_t>;
@@ -128,20 +138,27 @@ bool read_sources(Database& database, LibraryCatalog& catalog,
 bool read_units(Database& database, LibraryCatalog& catalog,
     const RecordMap& records, std::size_t& count, std::string& error)
 {
-    Statement query { database,
-        "SELECT owner, identity, language, kind, name, primary_name, architecture, "
-        "artifact, checksum, standard, profile, source FROM units ORDER BY owner, identity", error };
+    const bool has_identifier_forms = database.schema_version >= 2;
+    const char* sql = has_identifier_forms
+        ? "SELECT owner, identity, language, kind, name, primary_name, architecture, "
+          "artifact, checksum, standard, profile, name_form, primary_name_form, source "
+          "FROM units ORDER BY owner, identity"
+        : "SELECT owner, identity, language, kind, name, primary_name, architecture, "
+          "artifact, checksum, standard, profile, source FROM units ORDER BY owner, identity";
+    Statement query { database, sql, error };
     if (!query)
         return false;
     int status;
     while ((status = query.step(error)) == SQLITE_ROW) {
         auto* record = owner_record(query, catalog, records, count, error);
         const auto identity = query.text(1, error);
-        auto unit = read_unit(query, 2, error);
-        auto source = query.text(11, error);
+        auto unit = read_unit(query, 2, error, has_identifier_forms);
+        auto source = query.text(has_identifier_forms ? 13 : 11, error);
         if (!record || !unit || !identity || !source)
             return false;
-        if (*identity != unit_identity(*unit)) {
+        const auto expected_identity = has_identifier_forms
+            ? unit_identity(*unit) : legacy_unit_identity(*unit);
+        if (*identity != expected_identity) {
             error = "workspace unit identity does not match its metadata";
             return false;
         }
@@ -153,9 +170,15 @@ bool read_units(Database& database, LibraryCatalog& catalog,
 bool read_dependencies(Database& database, LibraryCatalog& catalog,
     const RecordMap& records, std::size_t& count, std::string& error)
 {
-    Statement query { database,
-        "SELECT owner, ordinal, library, language, kind, name, primary_name, architecture, "
-        "artifact, checksum, standard, profile, fingerprint FROM dependencies ORDER BY owner, ordinal", error };
+    const bool has_identifier_forms = database.schema_version >= 2;
+    const char* sql = has_identifier_forms
+        ? "SELECT owner, ordinal, library, language, kind, name, primary_name, architecture, "
+          "artifact, checksum, standard, profile, name_form, primary_name_form, fingerprint "
+          "FROM dependencies ORDER BY owner, ordinal"
+        : "SELECT owner, ordinal, library, language, kind, name, primary_name, architecture, "
+          "artifact, checksum, standard, profile, fingerprint "
+          "FROM dependencies ORDER BY owner, ordinal";
+    Statement query { database, sql, error };
     if (!query)
         return false;
     int status;
@@ -163,8 +186,8 @@ bool read_dependencies(Database& database, LibraryCatalog& catalog,
         auto* record = owner_record(query, catalog, records, count, error);
         const auto ordinal = query.integer(1, error);
         auto library = query.text(2, error);
-        auto unit = read_unit(query, 3, error);
-        auto fingerprint = query.text(12, error);
+        auto unit = read_unit(query, 3, error, has_identifier_forms);
+        auto fingerprint = query.text(has_identifier_forms ? 14 : 12, error);
         if (!record || !ordinal || !library || !unit || !fingerprint)
             return false;
         if (*ordinal < 0 || static_cast<std::size_t>(*ordinal) != record->dependencies.size()) {
@@ -193,20 +216,26 @@ bool insert_record(Database& database, const ArtifactRecord& record, std::string
     }
     for (const auto& owned : record.units) {
         Statement query { database,
-            "INSERT INTO units VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", error };
+            "INSERT INTO units(identity, owner, language, kind, name, primary_name, "
+            "architecture, artifact, checksum, standard, profile, name_form, "
+            "primary_name_form, source) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            error };
         if (!query || !query.bind(1, unit_identity(owned.unit), error)
             || !query.bind(2, record.id, error) || !bind_unit(query, 3, owned.unit, error)
-            || !query.bind(12, owned.source_key, error) || !query.finish(error))
+            || !query.bind(14, owned.source_key, error) || !query.finish(error))
             return false;
     }
     int ordinal = 0;
     for (const auto& dependency : record.dependencies) {
         Statement query { database,
-            "INSERT INTO dependencies VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", error };
+            "INSERT INTO dependencies(owner, ordinal, library, language, kind, name, "
+            "primary_name, architecture, artifact, checksum, standard, profile, "
+            "name_form, primary_name_form, fingerprint) "
+            "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", error };
         if (!query || !query.bind(1, record.id, error)
             || !query.bind(2, ordinal++, error) || !query.bind(3, dependency.library, error)
             || !bind_unit(query, 4, dependency.unit, error)
-            || !query.bind(13, dependency.fingerprint, error) || !query.finish(error))
+            || !query.bind(15, dependency.fingerprint, error) || !query.finish(error))
             return false;
     }
     return true;
@@ -278,12 +307,36 @@ bool save_catalog(const LibraryCatalog& catalog, std::string& error)
     if (exists) {
         if (!database.validate_schema(error) || !read_identity(database, catalog.location, error))
             return false;
+        if (database.schema_version == 1) {
+            if (!database.execute(
+                    // The catalog is rewritten from the already validated
+                    // in-memory snapshot below. Recreate the tables instead
+                    // of relying on SQLite's ALTER TABLE SQL-text rewrite;
+                    // validate_schema intentionally recognizes exact schemas.
+                    "DROP TABLE dependencies;"
+                    "DROP TABLE units;"
+                    "DROP TABLE sources;"
+                    "DROP TABLE artifacts;"
+                    "DROP TABLE metadata;",
+                    error)) {
+                return false;
+            }
+            if (!database.initialize_schema(error))
+                return false;
+            Statement identity { database,
+                "INSERT INTO metadata VALUES(2, ?)", error };
+            if (!identity || !identity.bind(1, catalog.location.name, error)
+                || !identity.finish(error))
+                return false;
+            database.schema_version = 2;
+        }
     } else {
         if (!database.initialize_schema(error))
             return false;
-        Statement identity { database, "INSERT INTO metadata VALUES(1, ?)", error };
+        Statement identity { database, "INSERT INTO metadata VALUES(2, ?)", error };
         if (!identity || !identity.bind(1, catalog.location.name, error) || !identity.finish(error))
             return false;
+        database.schema_version = 2;
     }
     if (!database.execute("DELETE FROM artifacts", error))
         return false;

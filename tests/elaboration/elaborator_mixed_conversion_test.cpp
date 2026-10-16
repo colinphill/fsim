@@ -1184,6 +1184,9 @@ end architecture;
       R"(
 entity strict_domain_vhdl_parent is
 end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of strict_domain_vhdl_parent is
   signal clk : std_logic;
 begin

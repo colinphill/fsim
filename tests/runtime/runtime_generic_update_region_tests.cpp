@@ -2114,6 +2114,7 @@ void check_generic_update_allocation_failure_retries_exactly()
 
 void test_generic_update_region_runtime()
 {
+    ScopedEnvironment region_kernel("FSIM_ENABLE_SV_REGION_KERNEL", "1");
     for (const auto width : { 3U, 9U, 65U, 129U }) {
         check_native_case(width);
     }

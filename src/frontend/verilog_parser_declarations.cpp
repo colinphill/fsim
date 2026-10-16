@@ -807,6 +807,62 @@ void VerilogParser::require_default_port_net_type(
           current(offset).text)) {
     return false;
   }
+  const auto has_packed_declarator = [&](std::size_t cursor) {
+    bool saw_dimension = false;
+    while (at(TokenKind::LeftBracket, cursor)) {
+      ++cursor;
+      std::size_t nested_brackets{};
+      std::size_t parentheses{};
+      std::size_t braces{};
+      std::size_t conditional_depth{};
+      bool has_range_separator = false;
+      bool closed = false;
+      for (; !at(TokenKind::EndOfFile, cursor); ++cursor) {
+        const auto kind = current(cursor).kind;
+        if (kind == TokenKind::LeftBracket) {
+          ++nested_brackets;
+        } else if (kind == TokenKind::RightBracket) {
+          if (parentheses == 0U && braces == 0U
+              && nested_brackets == 0U) {
+            closed = true;
+            break;
+          }
+          if (nested_brackets != 0U) {
+            --nested_brackets;
+          }
+        } else if (kind == TokenKind::LeftParen) {
+          ++parentheses;
+        } else if (kind == TokenKind::RightParen && parentheses != 0U) {
+          --parentheses;
+        } else if (kind == TokenKind::LeftBrace) {
+          ++braces;
+        } else if (kind == TokenKind::RightBrace && braces != 0U) {
+          --braces;
+        } else if (parentheses == 0U && braces == 0U
+                   && nested_brackets == 0U) {
+          if (kind == TokenKind::Question) {
+            ++conditional_depth;
+          } else if (kind == TokenKind::Colon) {
+            if (conditional_depth != 0U) {
+              --conditional_depth;
+            } else {
+              has_range_separator = true;
+            }
+          }
+        }
+      }
+      if (!closed || !has_range_separator) {
+        return false;
+      }
+      ++cursor;
+      saw_dimension = true;
+    }
+    return saw_dimension && at(TokenKind::Identifier, cursor);
+  };
+  const auto has_type_declarator = [&](std::size_t cursor) {
+    return at(TokenKind::Identifier, cursor)
+        || has_packed_declarator(cursor);
+  };
   if (at(TokenKind::Hash, offset + 1)) {
     std::size_t cursor = offset + 2U;
     if (!at(TokenKind::LeftParen, cursor)) {
@@ -830,7 +886,7 @@ void VerilogParser::require_default_port_net_type(
       selected = true;
       cursor += 2U;
     }
-    return !selected || at(TokenKind::Identifier, cursor);
+    return !selected || has_type_declarator(cursor);
   }
   if (at(TokenKind::Scope, offset + 1)) {
     if (!at(TokenKind::Identifier, offset + 2)) {
@@ -855,13 +911,14 @@ void VerilogParser::require_default_port_net_type(
         }
         ++cursor;
       } while (!at(TokenKind::EndOfFile, cursor));
-      return at(TokenKind::Identifier, cursor);
+      return has_type_declarator(cursor);
     }
-    return at(TokenKind::Identifier, cursor + 1U);
+    return has_type_declarator(cursor + 1U);
   }
-  return at(TokenKind::Identifier, offset + 1)
-      && !at(TokenKind::LeftParen, offset + 2)
-      && !at(TokenKind::Hash, offset + 2);
+  return (at(TokenKind::Identifier, offset + 1)
+          && !at(TokenKind::LeftParen, offset + 2)
+          && !at(TokenKind::Hash, offset + 2))
+      || has_packed_declarator(offset + 1U);
 }
 
 Type VerilogParser::parse_named_type() {

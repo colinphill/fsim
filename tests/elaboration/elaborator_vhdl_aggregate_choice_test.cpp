@@ -2063,6 +2063,130 @@ end architecture;
           .to_msb_string()
       == "1000");
 
+  const auto enumeration_type_mark_endpoint_choices =
+      fsim::frontend::parse_text(
+          "vhdl_enumeration_type_mark_endpoint_choices.vhd",
+          R"(
+entity Enumeration_Type_Mark_Endpoint_Choices is
+end entity;
+architecture rtl of enumeration_type_mark_endpoint_choices is
+  type Index_T is (First_Index, Middle_Index, Last_Index);
+  type Table_T is array (Index_T range <>) of bit;
+  signal Low_Values : Table_T(First_Index to Last_Index);
+  signal Left_Values : Table_T(First_Index to Last_Index);
+  signal High_Values : Table_T(First_Index to Last_Index);
+  signal Right_Values : Table_T(First_Index to Last_Index);
+begin
+  drive : process
+  begin
+    Low_Values <= (Index_T'low => '1', others => '0');
+    Left_Values <= (Index_T'left => '1', others => '0');
+    High_Values <= (Index_T'high => '1', others => '0');
+    Right_Values <= (Index_T'right => '1', others => '0');
+    wait;
+  end process;
+end architecture;
+)",
+          fsim::frontend::Language::Vhdl2008);
+  assert(enumeration_type_mark_endpoint_choices.ok());
+  const auto endpoint_design = compile_and_elaborate(
+      enumeration_type_mark_endpoint_choices.design,
+      "vhdl:work.enumeration_type_mark_endpoint_choices(rtl)");
+  assert(endpoint_design.ok());
+  const auto low_values = endpoint_design.design->find_signal("low_values");
+  const auto left_values = endpoint_design.design->find_signal("left_values");
+  const auto high_values = endpoint_design.design->find_signal("high_values");
+  const auto right_values = endpoint_design.design->find_signal("right_values");
+  assert(low_values && left_values && high_values && right_values);
+  auto endpoint_interpreter = endpoint_design.design->create_interpreter();
+  const auto endpoint_run = endpoint_interpreter->run();
+  assert(endpoint_run.status == fsim::runtime::RunStatus::completed);
+  assert(
+      endpoint_interpreter->signal_value(*low_values).to_msb_string()
+      == "100");
+  assert(
+      endpoint_interpreter->signal_value(*left_values).to_msb_string()
+      == "100");
+  assert(
+      endpoint_interpreter->signal_value(*high_values).to_msb_string()
+      == "001");
+  assert(
+      endpoint_interpreter->signal_value(*right_values).to_msb_string()
+      == "001");
+
+  const auto local_line_integer_index_choices = fsim::frontend::parse_text(
+      "vhdl_local_line_integer_index_choices.vhd",
+      R"(
+entity Local_Line_Integer_Index_Choices is
+end entity;
+architecture rtl of local_line_integer_index_choices is
+  subtype line is integer range 0 to 15;
+  type Data_Lines is array (line range <>) of bit;
+  signal Values : Data_Lines(0 to 3);
+  signal Source_Values : Data_Lines(0 to 15)
+      := (0 to 3 => '1', others => '0');
+  signal Slice_Values : Data_Lines(0 to 3);
+begin
+  drive : process
+  begin
+    Values <= (0 to 3 => '1');
+    Slice_Values <= Source_Values(0 to 3);
+    wait;
+  end process;
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(local_line_integer_index_choices.ok());
+  const auto local_line_design = compile_and_elaborate(
+      local_line_integer_index_choices.design,
+      "vhdl:work.local_line_integer_index_choices(rtl)");
+  assert(local_line_design.ok());
+  const auto local_line_values = local_line_design.design->find_signal("values");
+  const auto local_line_slice_values
+      = local_line_design.design->find_signal("slice_values");
+  assert(local_line_values && local_line_slice_values);
+  auto local_line_interpreter = local_line_design.design->create_interpreter();
+  const auto local_line_run = local_line_interpreter->run();
+  assert(local_line_run.status == fsim::runtime::RunStatus::completed);
+  assert(
+      local_line_interpreter->signal_value(*local_line_values).to_msb_string()
+      == "1111");
+  assert(
+      local_line_interpreter
+          ->signal_value(*local_line_slice_values).to_msb_string()
+      == "1111");
+
+  const auto wrong_enumeration_low_type_choice =
+      fsim::frontend::parse_text(
+          "vhdl_wrong_nominal_enumeration_low_type_choice.vhd",
+          R"(
+entity Wrong_Nominal_Enumeration_Low_Type_Choice is
+end entity;
+architecture rtl of wrong_nominal_enumeration_low_type_choice is
+  type Index_T is ('U', 'X', '0', '1');
+  type Other_Index_T is ('U', 'X', '0', '1');
+  type Table_T is array (Index_T range <>) of bit;
+  signal Values : Table_T('U' to '1');
+begin
+  drive : process
+  begin
+    Values <= (Other_Index_T'low => '1', others => '0');
+    wait;
+  end process;
+end architecture;
+)",
+          fsim::frontend::Language::Vhdl2008);
+  assert(wrong_enumeration_low_type_choice.ok());
+  const auto rejected_wrong_enumeration_low_type_choice
+      = compile_and_elaborate(
+          wrong_enumeration_low_type_choice.design,
+          "vhdl:work.wrong_nominal_enumeration_low_type_choice(rtl)");
+  assert(
+      !rejected_wrong_enumeration_low_type_choice.ok()
+      && has_diagnostic(
+          rejected_wrong_enumeration_low_type_choice,
+          "FSIM-ELAB-DYNINDEX-002"));
+
   const auto wrong_enumeration_index_choice =
       fsim::frontend::parse_text(
           "vhdl_wrong_nominal_enumeration_index_choice.vhd",

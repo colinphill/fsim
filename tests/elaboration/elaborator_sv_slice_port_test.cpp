@@ -416,6 +416,92 @@ endmodule
       && has_diagnostic(
           scalar_array_read_only_rejected, "FSIM-ELAB-SVPORT-009"));
 
+  const auto scalar_array_nominal_controls = fsim::frontend::parse_text(
+      "instance-array-nominal-profile-controls.sv",
+      R"(
+package scalar_array_nominal_profile_pkg;
+  typedef struct packed {
+    bit high;
+    bit low;
+  } pair_a_t;
+  typedef struct packed {
+    bit upper;
+    bit lower;
+  } pair_b_t;
+  typedef union packed {
+    bit [1:0] bits;
+    pair_a_t pair;
+  } pair_union_t;
+  typedef enum bit [1:0] {
+    enum_zero = 2'b00,
+    enum_one = 2'b01
+  } pair_enum_t;
+endpackage
+
+module scalar_array_vector_output_leaf(output bit [1:0] result);
+endmodule
+
+module scalar_array_struct_output_leaf(
+    output scalar_array_nominal_profile_pkg::pair_a_t result);
+endmodule
+
+module scalar_array_logic_output_leaf(output logic [1:0] result);
+endmodule
+
+module scalar_array_signed_output_leaf(output bit signed [1:0] result);
+endmodule
+
+module scalar_array_struct_vector_compatible;
+  scalar_array_nominal_profile_pkg::pair_a_t result[2];
+  scalar_array_vector_output_leaf child[2](.result(result));
+endmodule
+
+module scalar_array_distinct_structs_compatible;
+  scalar_array_nominal_profile_pkg::pair_b_t result[2];
+  scalar_array_struct_output_leaf child[2](.result(result));
+endmodule
+
+module scalar_array_union_vector_compatible;
+  scalar_array_nominal_profile_pkg::pair_union_t result[2];
+  scalar_array_vector_output_leaf child[2](.result(result));
+endmodule
+
+module scalar_array_enum_vector_incompatible;
+  scalar_array_nominal_profile_pkg::pair_enum_t result[2];
+  scalar_array_vector_output_leaf child[2](.result(result));
+endmodule
+
+module scalar_array_domain_mismatch;
+  bit [1:0] result[2];
+  scalar_array_logic_output_leaf child[2](.result(result));
+endmodule
+
+module scalar_array_signedness_mismatch;
+  bit [1:0] result[2];
+  scalar_array_signed_output_leaf child[2](.result(result));
+endmodule
+)",
+      fsim::frontend::Language::SystemVerilog2017);
+  assert(scalar_array_nominal_controls.ok());
+  for (const auto* top : {
+           "scalar_array_struct_vector_compatible",
+           "scalar_array_distinct_structs_compatible",
+           "scalar_array_union_vector_compatible" }) {
+    const auto compatible = compile_and_elaborate(
+        scalar_array_nominal_controls.design, top);
+    assert(compatible.ok());
+  }
+  for (const auto* top : {
+           "scalar_array_enum_vector_incompatible",
+           "scalar_array_domain_mismatch",
+           "scalar_array_signedness_mismatch" }) {
+    const auto incompatible = compile_and_elaborate(
+        scalar_array_nominal_controls.design, top);
+    assert(
+        !incompatible.ok()
+        && has_diagnostic(incompatible, "FSIM-ELAB-SVPORT-007"));
+  }
+
   const auto read_only = fsim::frontend::parse_text(
       "static-slice-port-read-only.sv",
       R"(

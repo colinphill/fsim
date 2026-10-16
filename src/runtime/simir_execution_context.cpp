@@ -316,6 +316,11 @@ Interpreter::Impl::ExecutionContext::read_string_object(const StringObjectId obj
 void Interpreter::Impl::ExecutionContext::write_string_object(
     const StringObjectId object,
     const std::string_view value){
+    if (owner.package_static_initialization_active) {
+        owner.initialize_package_static_string_object(
+            object, value, process);
+        return;
+    }
     if (value.size() > maximum_string_bytes) {
         throw std::length_error {
             "SimIR string object exceeds byte limit"

@@ -75,6 +75,8 @@ class ApplicationTestFixture {
   void test_systemc_scheduling_matrix();
   void test_simulation_semantics();
   void test_hir_first_class_visibility();
+  void test_class_hir_failure_routes();
+  void test_class_hir_report_exceptions();
   void test_class_simulation_integration();
   void test_specialization_and_packages();
   void test_mixed_language_and_generate();

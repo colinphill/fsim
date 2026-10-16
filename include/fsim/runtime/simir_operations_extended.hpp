@@ -52,31 +52,44 @@ private:
     T value_ { absent };
 };
 
+enum class MailboxElementKind : std::uint8_t {
+    packed,
+    string,
+};
+
 /// Construct a typed mailbox. A zero capacity selects the bounded unbounded
-/// form; nonzero capacities are exact maximum entry counts.
+/// form; nonzero capacities are exact maximum entry counts. String mailboxes
+/// encode their element kind explicitly and use a zero packed width.
 struct MailboxCreate {
     RegisterId destination { };
     RegisterId capacity { };
     std::uint32_t element_width { };
+    MailboxElementKind element_kind { MailboxElementKind::packed };
 };
 
-/// Put one packed value. A result register selects nonblocking `try_put` and
+/// Put one typed value. Packed messages use `source`; string messages use
+/// `string_source`. A result register selects nonblocking `try_put` and
 /// receives one on success; no result register selects blocking `put`.
 struct MailboxPut {
     RegisterId receiver { };
     RegisterId source { };
     std::uint32_t element_width { };
     std::optional<RegisterId> result;
+    MailboxElementKind element_kind { MailboxElementKind::packed };
+    StringRegisterId string_source { };
 };
 
-/// Get or peek one packed value. A result register selects the corresponding
-/// nonblocking `try_*` form and receives one on success.
+/// Get or peek one typed value. Packed messages use `destination`; string
+/// messages use `string_destination`. A result register selects the
+/// corresponding nonblocking `try_*` form and receives one on success.
 struct MailboxGet {
     RegisterId receiver { };
     RegisterId destination { };
     std::uint32_t element_width { };
     std::optional<RegisterId> result;
     bool peek { };
+    MailboxElementKind element_kind { MailboxElementKind::packed };
+    StringRegisterId string_destination { };
 };
 
 struct MailboxNum {

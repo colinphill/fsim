@@ -2496,11 +2496,11 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     return true;
                 }
                 if (sensitivity.edge != semantic::sv::EdgeKind::any
-                    && design_.signal_info_[*found].width != 1U) {
+                    && design_.signal_info_[*found].width == 0U) {
                     report(
                         "FSIM-ELAB-060",
                         "dynamic edge-qualified wait signal '"
-                            + sensitivity.signal + "' must be scalar",
+                            + sensitivity.signal + "' must be non-empty",
                         hir_source_span(sensitivity.source));
                     return true;
                 }
@@ -6295,11 +6295,17 @@ bool Lowerer::lower_hir_statement_unsuspended(
                     hir_expression_signed(*value));
             }
             if (register_domain(*lowered) != element->domain) {
-                const auto converted = allocate_register(
-                    element->width, element->domain);
-                process_.operations.emplace_back(CopyRegister {
-                    converted, *lowered });
-                lowered = converted;
+                if (element->local
+                    && is_two_state_domain(element->domain)
+                    && !is_two_state_domain(register_domain(*lowered))) {
+                    lowered = convert_to_two_state(*lowered);
+                } else {
+                    const auto converted = allocate_register(
+                        element->width, element->domain);
+                    process_.operations.emplace_back(CopyRegister {
+                        converted, *lowered });
+                    lowered = converted;
+                }
             }
             std::optional<NonblockingHandoff> handoff;
             if (delayed_nonblocking_element) {
@@ -6444,19 +6450,20 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 access.operands[0], 64U);
             auto element_index = std::optional<RegisterId> { };
             auto index_validity = std::optional<RegisterId> { };
-            if (access.operands.size() == 2U) {
+            std::vector<semantic::ExpressionId> indices(
+                access.operands.begin() + 1, access.operands.end());
+            RegisterId validity { };
+            bool helper_applies { };
+            element_index = lower_hir_class_handle_array_index(
+                identity, indices, validity, helper_applies);
+            if (element_index) {
+                index_validity = validity;
+            } else if (!helper_applies && indices.size() == 1U) {
                 const auto index_width = hir_expression_width(
-                    access.operands[1], hir_process_scope_)
+                    indices.front(), hir_process_scope_)
                                              .value_or(32U);
                 element_index = lower_hir_expression(
-                    access.operands[1], index_width);
-            } else {
-                std::vector<semantic::ExpressionId> indices(
-                    access.operands.begin() + 1, access.operands.end());
-                RegisterId validity { };
-                element_index = lower_hir_class_handle_array_index(
-                    identity, indices, validity);
-                index_validity = validity;
+                    indices.front(), index_width);
             }
             const auto lowered = lower_hir_expression(*value, 64U);
             if (!receiver || register_width(*receiver) != 64U
@@ -9674,6 +9681,23 @@ bool Lowerer::lower_hir_statement_unsuspended(
                         return constraint.kind
                             == semantic::vhdl::RangeKind::array_index;
                     }));
+        const bool vhdl_string_signal_call
+            = statement->vhdl != nullptr && signal_assignment
+            && !target_is_selected && !member_width
+            && binding->kind == HirRuntimeBindingKind::signal
+            && binding->signal
+            && binding->domain == frontend::ValueDomain::Bit2
+            && binding->width != 0U && binding->width % 8U == 0U
+            && assignment_width
+            && binding->width == *assignment_width
+            && target_subtype
+            && target_subtype->domain
+                == semantic::vhdl::ValueDomain::string
+            && hir_vhdl_predefined_string_type(*target_subtype)
+            && value && value_expression && value_expression->vhdl != nullptr
+            && value_expression->vhdl->kind
+                == semantic::vhdl::ExpressionKind::call
+            && hir_expression_is_string(*value, hir_process_scope_);
         const auto vhdl_array_context = aggregate_context_subtype
                 && (vhdl_concatenation || conditional_array_context)
             ? &*aggregate_context_subtype
@@ -9685,6 +9709,9 @@ bool Lowerer::lower_hir_statement_unsuspended(
                   *packed_pattern,
                   *packed_pattern_type,
                   *assignment_width)
+            : vhdl_string_signal_call
+            ? lower_hir_string_to_packed(
+                  *value, *assignment_width, &*target_subtype)
             : vhdl_aggregate
             ? lower_hir_vhdl_aggregate(
                   *value, *assignment_width, &*aggregate_context_subtype)
@@ -9947,7 +9974,16 @@ bool Lowerer::lower_hir_statement_unsuspended(
                 *procedural_delay });
         }
         if (binding->kind == HirRuntimeBindingKind::local) {
-            if (nonblocking || continuous_assignment || !binding->local) {
+            if (nonblocking) {
+                if (std::getenv("FSIM_HIR_LOWER_TRACE_FAILURES")
+                    != nullptr) {
+                    std::cerr
+                        << "[fsim-hir-lower] "
+                           "local-nonblocking-assignment-rejected\n";
+                }
+                return assignment_rejected(__LINE__);
+            }
+            if (continuous_assignment || !binding->local) {
                 return assignment_rejected(__LINE__);
             }
             if (constant_selection) {
@@ -11333,7 +11369,10 @@ bool Lowerer::lower_hir_statement_unsuspended(
                                 ieee_std_logic_1164_std_logic_vector
                         || identity
                             == semantic::vhdl::BuiltinTypeIdentity::
-                                ieee_std_logic_1164_std_ulogic_vector;
+                                ieee_std_logic_1164_std_ulogic_vector
+                        || identity
+                            == semantic::vhdl::BuiltinTypeIdentity::
+                                std_standard_bit_vector;
                 };
                 const auto resolver
                     = semantic::CompiledDesignResolver {
@@ -16725,7 +16764,7 @@ bool Lowerer::lower_hir_statement_unsuspended(
             break;
         }
         process_.operations[fork_site] = Fork {
-            std::move(branches), join
+            std::move(branches), join, input.fork_isolate_register_frame
         };
         restore_scope();
         return true;

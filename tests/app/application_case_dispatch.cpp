@@ -19,6 +19,8 @@ int fsim_application_case_core_non_project_cli();
 int fsim_application_case_specialization();
 int fsim_application_case_artifact_phases();
 int fsim_application_case_classes();
+int fsim_application_case_class_hir_failure_routes();
+int fsim_application_case_class_hir_reports();
 int fsim_application_case_systemc_matrix();
 int fsim_application_case_expressions();
 int fsim_application_case_structural_signal_remap();
@@ -56,6 +58,9 @@ constexpr NamedApplicationCase application_cases[] = {
     { "specialization", fsim_application_case_specialization },
     { "artifact_phases", fsim_application_case_artifact_phases },
     { "classes", fsim_application_case_classes },
+    { "class_hir_failure_routes",
+        fsim_application_case_class_hir_failure_routes },
+    { "class_hir_reports", fsim_application_case_class_hir_reports },
     { "systemc_matrix", fsim_application_case_systemc_matrix },
     { "expressions", fsim_application_case_expressions },
     { "structural_signal_remap",

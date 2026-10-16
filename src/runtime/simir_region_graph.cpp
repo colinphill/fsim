@@ -54,6 +54,7 @@ bool plain_register_operation(const Operation& operation)
         if constexpr (std::is_same_v<T, DebugPoint>
             || std::is_same_v<T, LoadConstant>
             || std::is_same_v<T, CopyRegister>
+            || std::is_same_v<T, ConvertToTwoState>
             || std::is_same_v<T, Shift>
             || std::is_same_v<T, Extract>
             || std::is_same_v<T, Concatenate>
@@ -640,7 +641,8 @@ bool visit_known_region_accesses(
 bool fork_control_access_is_known(const Fork& fork,
     const std::size_t instruction, const std::size_t operation_count)
 {
-    if ((fork.join != ForkJoinKind::all
+    if (fork.isolate_register_frame
+        || (fork.join != ForkJoinKind::all
             && fork.join != ForkJoinKind::any
             && fork.join != ForkJoinKind::none)
         || instruction + 1U >= operation_count) {

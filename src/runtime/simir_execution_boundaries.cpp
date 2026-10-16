@@ -1041,9 +1041,9 @@ void Interpreter::Impl::handle_boundary(
                 break;
             case EdgeKind::posedge:
             case EdgeKind::negedge:
-                if (source.initial_value.width() != 1) {
+                if (source.initial_value.width() == 0U) {
                     process.pc = instruction;
-                    fail(process, "WaitOn edge requires a scalar signal");
+                    fail(process, "WaitOn edge requires a non-empty signal");
                 }
                 break;
             default:
@@ -1238,18 +1238,116 @@ void Interpreter::Impl::handle_boundary(
             format_display->scalar_kind);
         return;
     }
+    if (const auto* event
+        = operation_get_if<SignalEvent>(&operation);
+        event && event->selection) {
+        const auto* selected = find_signal_selection_history(
+            event->signal, *event->selection);
+        if (selected == nullptr) {
+            process.pc = instruction;
+            fail(process,
+                "selected SimIR event range was not registered");
+        }
+        const auto stamp = selected->last_event;
+        const auto active = stamp && stamp->first == scheduler.now()
+            && stamp->second == scheduler.delta();
+        write_process_register(
+            process, event->destination,
+            PackedLogic4(1U, active ? Logic4::one : Logic4::zero));
+        return;
+    }
+    if (const auto* last_event
+        = operation_get_if<SignalLastEvent>(&operation);
+        last_event && last_event->selection) {
+        const auto* selected = find_signal_selection_history(
+            last_event->signal, *last_event->selection);
+        if (selected == nullptr) {
+            process.pc = instruction;
+            fail(process,
+                "selected SimIR last-event range was not registered");
+        }
+        const auto elapsed = selected->last_event
+            ? scheduler.now() - selected->last_event->first
+            : static_cast<SimulationTick>(
+                  std::numeric_limits<std::int64_t>::max());
+        write_process_register(
+            process, last_event->destination,
+            PackedLogic4::from_aval_bval(64U, elapsed, 0U));
+        return;
+    }
+    if (const auto* active
+        = operation_get_if<SignalActive>(&operation);
+        active && active->selection) {
+        const auto* selected = find_signal_selection_history(
+            active->signal, *active->selection);
+        if (selected == nullptr) {
+            process.pc = instruction;
+            fail(process,
+                "selected SimIR active range was not registered");
+        }
+        const auto stamp = selected->last_transaction;
+        const auto in_current_delta = stamp
+            && stamp->first == scheduler.now()
+            && stamp->second == scheduler.delta();
+        write_process_register(
+            process, active->destination,
+            PackedLogic4(1U,
+                in_current_delta ? Logic4::one : Logic4::zero));
+        return;
+    }
+    if (const auto* last_active
+        = operation_get_if<SignalLastActive>(&operation);
+        last_active && last_active->selection) {
+        const auto* selected = find_signal_selection_history(
+            last_active->signal, *last_active->selection);
+        if (selected == nullptr) {
+            process.pc = instruction;
+            fail(process,
+                "selected SimIR last-active range was not registered");
+        }
+        const auto elapsed = selected->last_transaction
+            ? scheduler.now() - selected->last_transaction->first
+            : static_cast<SimulationTick>(
+                  std::numeric_limits<std::int64_t>::max());
+        write_process_register(
+            process, last_active->destination,
+            PackedLogic4::from_aval_bval(64U, elapsed, 0U));
+        return;
+    }
+    if (const auto* driving
+        = operation_get_if<SignalDriving>(&operation);
+        driving && driving->selection) {
+        const auto value = signal_attribute_detail::driving(
+            *this, process.id, driving->signal, driving->selection);
+        write_process_register(
+            process, driving->destination,
+            PackedLogic4(1U, value ? Logic4::one : Logic4::zero));
+        return;
+    }
     if (const auto* last_value
         = operation_get_if<SignalLastValue>(&operation)) {
         (void)get_signal(last_value->signal);
+        const auto* selected = last_value->selection
+            ? find_signal_selection_history(
+                  last_value->signal, *last_value->selection)
+            : nullptr;
+        if (last_value->selection && selected == nullptr) {
+            process.pc = instruction;
+            fail(process,
+                "selected SimIR last-value range was not registered");
+        }
         write_process_register(
             process, last_value->destination,
-            signal_last_values[last_value->signal]);
+            selected != nullptr
+                ? selected->last_value
+                : signal_last_values[last_value->signal]);
         return;
     }
     if (const auto* driving_value
         = operation_get_if<SignalDrivingValue>(&operation)) {
         if (!signal_attribute_detail::driving(
-                *this, process.id, driving_value->signal)) {
+                *this, process.id, driving_value->signal,
+                driving_value->selection)) {
             process.pc = instruction;
             fail(process,
                 "VHDL 'driving_value queried a signal without a driver");
@@ -1257,7 +1355,8 @@ void Interpreter::Impl::handle_boundary(
         write_process_register(
             process, driving_value->destination,
             signal_attribute_detail::driving_value(
-                *this, process.id, driving_value->signal));
+                *this, process.id, driving_value->signal,
+                driving_value->selection));
         return;
     }
     if (const auto* time
@@ -1919,7 +2018,7 @@ void Interpreter::Impl::handle_boundary(
         return;
     }
     if (const auto* class_allocate = fsim::runtime::simir::operation_get_if<ClassAllocate>(&operation)) {
-        if (!class_allocate_hook) {
+        if (!class_allocate_hook && !class_allocate_context_hook) {
             fail(process, "class allocation service is unavailable");
         }
         std::vector<PackedLogic4> actuals;
@@ -1938,14 +2037,24 @@ void Interpreter::Impl::handle_boundary(
                     ? process.executor->read_string_register(actual)
                     : std::string { });
         }
-        const auto handle = class_allocate_hook(
-            process.cold().design_process,
-            process.program().name(),
-            class_allocate->specialization_identity,
-            class_allocate->declared_type,
-            actuals,
-            string_actuals,
-            class_allocate->constructor_actual_names);
+        const auto handle = class_allocate_context_hook
+            ? class_allocate_context_hook(
+                  process.id,
+                  process.cold().design_process,
+                  process.program().name(),
+                  class_allocate->specialization_identity,
+                  class_allocate->declared_type,
+                  actuals,
+                  string_actuals,
+                  class_allocate->constructor_actual_names)
+            : class_allocate_hook(
+                  process.cold().design_process,
+                  process.program().name(),
+                  class_allocate->specialization_identity,
+                  class_allocate->declared_type,
+                  actuals,
+                  string_actuals,
+                  class_allocate->constructor_actual_names);
         write_process_register(
             process,
             class_allocate->destination,
@@ -2020,7 +2129,7 @@ void Interpreter::Impl::handle_boundary(
     }
     if (const auto* method = fsim::runtime::simir::operation_get_if<ClassMethodCall>(
             &operation)) {
-        if (!class_method_call_hook) {
+        if (!class_method_call_hook && !class_method_call_context_hook) {
             fail(process, "class method service is unavailable");
         }
         std::vector<PackedLogic4> actuals;
@@ -2046,15 +2155,26 @@ void Interpreter::Impl::handle_boundary(
             process,
             method->destination,
             resize_class_value(
-                class_method_call_hook(
-                    handle,
-                    method->method_identity,
-                    actuals,
-                    string_actuals,
-                    method->actual_names,
-                    method->actual_directions,
-                    method->inline_constraints,
-                    method->virtual_dispatch),
+                class_method_call_context_hook
+                    ? class_method_call_context_hook(
+                          process.id,
+                          handle,
+                          method->method_identity,
+                          actuals,
+                          string_actuals,
+                          method->actual_names,
+                          method->actual_directions,
+                          method->inline_constraints,
+                          method->virtual_dispatch)
+                    : class_method_call_hook(
+                          handle,
+                          method->method_identity,
+                          actuals,
+                          string_actuals,
+                          method->actual_names,
+                          method->actual_directions,
+                          method->inline_constraints,
+                          method->virtual_dispatch),
                 method->result_width));
         for (std::size_t index = 0; index < actuals.size(); ++index) {
             const auto string_actual = !method->actual_kinds.empty()
@@ -2099,7 +2219,8 @@ void Interpreter::Impl::handle_boundary(
         const auto dpi = std::string_view { method->method_identity }
             .starts_with(systemverilog_dpi_function_prefix);
         if ((dpi && !dpi_function_call_hook)
-            || (!dpi && !class_static_method_call_hook)) {
+            || (!dpi && !class_static_method_call_hook
+                && !class_static_method_call_context_hook)) {
             fail(process, dpi
                 ? "SystemVerilog DPI function service is unavailable"
                 : "class static method service is unavailable");
@@ -2129,6 +2250,14 @@ void Interpreter::Impl::handle_boundary(
             resize_class_value(
                 dpi
                     ? dpi_function_call_hook(
+                          identity,
+                          actuals,
+                          string_actuals,
+                          method->actual_names,
+                          method->actual_directions)
+                    : class_static_method_call_context_hook
+                    ? class_static_method_call_context_hook(
+                          process.id,
                           identity,
                           actuals,
                           string_actuals,

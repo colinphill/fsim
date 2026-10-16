@@ -599,6 +599,19 @@ void unpack_container_signal_value(
 
 /// Parse bounded IEEE-style read-memory text into a fixed unpacked array.
 /// Tokens may contain underscores, X/Z/? digits, comments, and @addresses.
+struct MemoryLoadResult {
+    /// No-address files whose data count differs from the selected range
+    /// complete with a warning; the supplied data still load successfully.
+    bool word_count_mismatch { };
+};
+
+[[nodiscard]] MemoryLoadResult load_memory_text_with_status(
+    ContainerValue& target,
+    std::string_view text,
+    bool hexadecimal,
+    std::optional<std::int32_t> start = std::nullopt,
+    std::optional<std::int32_t> finish = std::nullopt);
+
 void load_memory_text(
     ContainerValue& target,
     std::string_view text,
@@ -1285,10 +1298,13 @@ struct Yield { };
 enum class ForkJoinKind : std::uint8_t { all,
     any,
     none };
-/// Spawn child PCs sharing the lexical frame; each ends at ForkEnd.
+/// Spawn child PCs at one fork site; each ends at ForkEnd. Ordinary forks
+/// share the lexical frame. Concurrent assertion attempts request a private
+/// register-frame snapshot for each child.
 struct Fork {
     std::vector<InstructionIndex> branches;
     ForkJoinKind join { ForkJoinKind::all };
+    bool isolate_register_frame { };
 };
 struct ForkEnd { };
 struct WaitFork { };
@@ -1371,6 +1387,9 @@ struct ProcessSrandom {
 struct StringObject {
     std::string name;
     std::string initial_value;
+    // Opaque design-local semantic unit identity for package-owned storage.
+    // Zero marks objects without a SystemVerilog package owner.
+    std::uint32_t package_owner_id { };
 };
 
 /// One fixed-array object view backed by a selected range of an earlier
@@ -1391,6 +1410,9 @@ struct ContainerObject {
     std::string name;
     ContainerValue initial_value;
     std::optional<ContainerSliceAlias> slice_alias;
+    // Opaque design-local semantic unit identity for package-owned storage.
+    // Zero marks objects without a SystemVerilog package owner.
+    std::uint32_t package_owner_id { };
 };
 
 struct ContainerSignalAlias {
@@ -1433,6 +1455,7 @@ struct ContainerAggregateSignalAlias {
 struct Sensitivity {
     SignalId signal { };
     EdgeKind edge = EdgeKind::any;
+    /// Edge-qualified sensitivity observes only the least-significant bit.
     /// LSB-normalized interval. Zero width means the complete signal.
     /// Ranges currently apply only to any-change sensitivity.
     std::uint32_t offset { };
@@ -1456,6 +1479,13 @@ void normalize_sensitivities(std::vector<Sensitivity>&);
 enum class ProcessSchedulingDomain : std::uint8_t {
     generic,
     systemverilog,
+};
+
+/// Startup-only execution phase for process instances that initialize
+/// SystemVerilog package static variables before ordinary time-zero work.
+enum class ProcessStartupPhase : std::uint8_t {
+    ordinary,
+    package_static_initializer,
 };
 
 struct Process {
@@ -1533,6 +1563,15 @@ struct Process {
     ProcessSchedulingDomain scheduling_domain {
         ProcessSchedulingDomain::generic
     };
+    ProcessStartupPhase startup_phase { ProcessStartupPhase::ordinary };
+    std::uint64_t startup_order { };
+    /// Opaque design-local semantic unit identity of a package initializer.
+    /// Zero is reserved for processes outside package startup.
+    std::uint32_t startup_package_owner_id { };
+    /// Direct package objects this process may write synchronously during
+    /// its own startup action. These IDs are instance-owned and canonical.
+    std::vector<StringObjectId> startup_writable_string_object_ids { };
+    std::vector<ContainerObjectId> startup_writable_container_object_ids { };
 };
 
 /// Replace candidate's expanded operation stream with representative's
@@ -2094,6 +2133,17 @@ public:
     }
     virtual void commit_region_completion_native() noexcept { }
     virtual void cancel_region_completion_native() noexcept { }
+
+    /// Clone a child executor with private register, string, and container
+    /// register storage. Executors that cannot provide an isolated lexical
+    /// activation must reject this fork form.
+    [[nodiscard]] virtual std::unique_ptr<ProcessExecutor>
+    fork_clone_isolated_register_frame(InstructionIndex)
+    {
+        throw std::logic_error {
+            "executor does not support isolated fork register frames"
+        };
+    }
 };
 
 /// Optional read-only certificate for an executor already parked at the exact
@@ -2229,6 +2279,15 @@ public:
         std::span<const PackedLogic4>,
         std::span<const std::string>,
         std::span<const std::string>)>;
+    // Context-aware class callbacks also receive the currently executing
+    // process. The legacy hooks above remain available to callers that only
+    // need the owning design process or object identity.
+    using ClassAllocateContextHook = std::function<std::uint64_t(
+        ProcessId, ProcessId, std::string_view, std::string_view,
+        std::string_view,
+        std::span<const PackedLogic4>,
+        std::span<const std::string>,
+        std::span<const std::string>)>;
     using ClassPropertyReadHook = std::function<PackedLogic4(
         std::uint64_t, std::string_view)>;
     using ClassPropertyWriteHook = std::function<void(
@@ -2246,10 +2305,27 @@ public:
         std::span<const std::uint8_t>,
         std::span<const SystemVerilogConstraintTemplate>,
         bool)>;
+    using ClassMethodCallContextHook = std::function<PackedLogic4(
+        ProcessId,
+        std::uint64_t,
+        std::string_view,
+        std::vector<PackedLogic4>&,
+        std::vector<std::string>&,
+        std::span<const std::string>,
+        std::span<const std::uint8_t>,
+        std::span<const SystemVerilogConstraintTemplate>,
+        bool)>;
     using ClassStaticPropertyReadHook = std::function<PackedLogic4(std::string_view)>;
     using ClassStaticPropertyWriteHook = std::function<void(
         std::string_view, const PackedLogic4&)>;
     using ClassStaticMethodCallHook = std::function<PackedLogic4(
+        std::string_view,
+        std::vector<PackedLogic4>&,
+        std::vector<std::string>&,
+        std::span<const std::string>,
+        std::span<const std::uint8_t>)>;
+    using ClassStaticMethodCallContextHook = std::function<PackedLogic4(
+        ProcessId,
         std::string_view,
         std::vector<PackedLogic4>&,
         std::vector<std::string>&,
@@ -2289,6 +2365,19 @@ public:
     /// never relocated. This is an optional setup hint, not a process limit.
     void reserve_process_capacity(std::size_t capacity);
     [[nodiscard]] ProcessId add_process(Process process);
+    /// Register a synchronous package-static initializer action. The runtime
+    /// copies the typed write allowlists and callback; the callback itself is
+    /// reconstructed by the application from serialized design metadata and
+    /// is never part of a SimIR artifact. Its order shares the same namespace
+    /// as Process::startup_order and must be unique across both action kinds.
+    /// It runs once during start(), before ordinary time-zero processes, with
+    /// listed package storage writes establishing the silent startup baseline.
+    void register_package_static_startup_callback(
+        std::uint64_t startup_order,
+        std::span<const SignalId> writable_signal_ids,
+        std::span<const StringObjectId> writable_string_object_ids,
+        std::span<const ContainerObjectId> writable_container_object_ids,
+        std::function<void()> callback);
     /// Register and validate one process topology without retaining its
     /// program or allocating its execution frame. The interpreter becomes a
     /// validation-only builder and cannot subsequently start.
@@ -2403,6 +2492,9 @@ public:
         std::unique_ptr<FusedMaskedRegionExecutor> executor);
 
     void start();
+    /// True only while the kernel executes ordered package-static startup
+    /// actions, including tagged SimIR processes and registered callbacks.
+    [[nodiscard]] bool package_static_initialization_active() const noexcept;
     [[nodiscard]] RunResult
     run(std::optional<SimulationTick> until = std::nullopt);
     /// Discard ordinary pending work and execute final processes exactly once.
@@ -2577,15 +2669,20 @@ public:
         CoverageDatabaseControlHook hook);
     void set_fork_spawn_filter(ForkSpawnFilter filter);
     void set_class_allocate_hook(ClassAllocateHook hook);
+    void set_class_allocate_context_hook(ClassAllocateContextHook hook);
     void set_class_property_read_hook(ClassPropertyReadHook hook);
     void set_class_property_write_hook(ClassPropertyWriteHook hook);
     void set_class_property_container_hook(ClassPropertyContainerHook hook);
     void set_class_method_call_hook(ClassMethodCallHook hook);
+    void set_class_method_call_context_hook(
+        ClassMethodCallContextHook hook);
     void set_class_static_property_read_hook(
         ClassStaticPropertyReadHook hook);
     void set_class_static_property_write_hook(
         ClassStaticPropertyWriteHook hook);
     void set_class_static_method_call_hook(ClassStaticMethodCallHook hook);
+    void set_class_static_method_call_context_hook(
+        ClassStaticMethodCallContextHook hook);
     void set_dpi_function_call_hook(DpiFunctionCallHook hook);
 
 private:
@@ -2593,6 +2690,7 @@ private:
     add_process_impl(const Process& process, Process* owned_process);
     friend struct OwnedDriverDemotionTestAccess;
     friend struct NativeRegionAllocationTestAccess;
+    friend struct PackageStaticStartupRuntimeTestAccess;
     friend struct SystemCBridgeTestAccess;
     friend class InterpreterProgramAccess;
     struct Impl;

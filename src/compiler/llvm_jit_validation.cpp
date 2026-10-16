@@ -249,10 +249,10 @@ using namespace runtime::simir;
             break;
         case EdgeKind::posedge:
         case EdgeKind::negedge:
-            if (width != 1) {
+            if (width == 0) {
                 reject(
                     process, sensitivity_instruction,
-                    "edge sensitivity requires a scalar signal");
+                    "edge sensitivity requires a non-empty signal");
             }
             break;
         default:
@@ -724,10 +724,10 @@ using namespace runtime::simir;
                             break;
                         case EdgeKind::posedge:
                         case EdgeKind::negedge:
-                            if (width != 1) {
+                            if (width == 0) {
                                 reject(
                                     process, index,
-                                    "WaitOn edge requires a scalar signal");
+                                    "WaitOn edge requires a non-empty signal");
                             }
                             break;
                         default:
@@ -845,8 +845,13 @@ using namespace runtime::simir;
                     constrain_width(operation.seed, 32U, index);
                 } else if constexpr (
                     std::is_same_v<OperationType, MailboxCreate>) {
-                    if (operation.element_width == 0) {
-                        reject(process, index, "MailboxCreate requires a positive element width");
+                    if (operation.element_kind == MailboxElementKind::packed
+                        ? operation.element_width == 0U
+                        : operation.element_kind == MailboxElementKind::string
+                            ? operation.element_width != 0U
+                            : true) {
+                        reject(process, index,
+                            "MailboxCreate has an invalid element kind or width");
                     }
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 64U, index);
@@ -854,27 +859,51 @@ using namespace runtime::simir;
                     constrain_width(operation.capacity, 32U, index);
                 } else if constexpr (
                     std::is_same_v<OperationType, MailboxPut>) {
-                    if (operation.element_width == 0) {
-                        reject(process, index, "MailboxPut requires a positive element width");
+                    if (operation.element_kind == MailboxElementKind::packed
+                        ? operation.element_width == 0U
+                        : operation.element_kind == MailboxElementKind::string
+                            ? operation.element_width != 0U
+                            : true) {
+                        reject(process, index,
+                            "MailboxPut has an invalid element kind or width");
                     }
                     record_use(operation.receiver, index);
                     constrain_width(operation.receiver, 64U, index);
-                    record_use(operation.source, index);
-                    constrain_width(operation.source, operation.element_width, index);
+                    if (operation.element_kind == MailboxElementKind::string) {
+                        result.uses_strings = true;
+                        validate_string_register(
+                            operation.string_source, index, "source");
+                    } else {
+                        record_use(operation.source, index);
+                        constrain_width(
+                            operation.source, operation.element_width, index);
+                    }
                     if (operation.result) {
                         record_definition(*operation.result, index);
                         constrain_width(*operation.result, 32U, index);
                     }
                 } else if constexpr (
                     std::is_same_v<OperationType, MailboxGet>) {
-                    if (operation.element_width == 0) {
-                        reject(process, index, "MailboxGet requires a positive element width");
+                    if (operation.element_kind == MailboxElementKind::packed
+                        ? operation.element_width == 0U
+                        : operation.element_kind == MailboxElementKind::string
+                            ? operation.element_width != 0U
+                            : true) {
+                        reject(process, index,
+                            "MailboxGet has an invalid element kind or width");
                     }
                     record_use(operation.receiver, index);
                     constrain_width(operation.receiver, 64U, index);
-                    record_definition(operation.destination, index);
-                    constrain_width(
-                        operation.destination, operation.element_width, index);
+                    if (operation.element_kind == MailboxElementKind::string) {
+                        result.uses_strings = true;
+                        validate_string_register(
+                            operation.string_destination, index,
+                            "destination");
+                    } else {
+                        record_definition(operation.destination, index);
+                        constrain_width(
+                            operation.destination, operation.element_width, index);
+                    }
                     if (operation.result) {
                         record_definition(*operation.result, index);
                         constrain_width(*operation.result, 32U, index);

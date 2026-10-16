@@ -428,13 +428,20 @@ bool is_vhdl_environment_call_path_type(const Type& type) noexcept {
 }
 
 std::string VhdlParser::parse_vhdl_selected_name(
-    const std::string_view description) {
+    const std::string_view description,
+    std::string* const source_spelling) {
   const auto first = expect_identifier(description);
   std::string result = vhdl_name(first.text);
+  std::string spelling = first.text;
   while (match(TokenKind::Dot)) {
     const auto part = expect_identifier(description);
     result += '.';
     result += vhdl_name(part.text);
+    spelling += '.';
+    spelling += part.text;
+  }
+  if (source_spelling != nullptr) {
+    *source_spelling = std::move(spelling);
   }
   return result;
 }

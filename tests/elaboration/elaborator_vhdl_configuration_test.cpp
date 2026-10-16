@@ -250,8 +250,12 @@ end configuration;
           return *instance;
         };
     auto missing_direct_configuration = leaf.design;
-    find_direct_configuration_instance(
-        missing_direct_configuration).unit_name =
+    auto& missing_configuration_instance =
+        find_direct_configuration_instance(
+            missing_direct_configuration);
+    missing_configuration_instance.unit_name =
+        "work.absent_direct_configuration";
+    missing_configuration_instance.vhdl_unit_name_spelling =
         "work.absent_direct_configuration";
     const auto missing_direct_result =
         compile_and_elaborate(

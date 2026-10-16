@@ -721,6 +721,88 @@ void test_inline_and_external_roundtrips()
         state, &noncanonical, diagnostics));
 }
 
+void test_typed_mailbox_payload_roundtrip_and_rejection()
+{
+    using namespace fsim::runtime::simir;
+    auto state = make_state();
+    auto& process = state.processes.front();
+    process.register_count = 4U;
+    process.string_register_count = 3U;
+    process.operations = {
+        MailboxCreate { 0U, 1U, 0U, MailboxElementKind::string },
+        MailboxPut { 0U, 0U, 0U, std::nullopt,
+            MailboxElementKind::string, 2U },
+        MailboxGet { 0U, 0U, 0U, 3U, true,
+            MailboxElementKind::string, 1U },
+        MailboxCreate { 2U, 1U, 8U },
+        MailboxPut { 2U, 1U, 8U, std::nullopt },
+        MailboxGet { 2U, 3U, 8U, std::nullopt, false },
+        MailboxNum { 3U, 0U },
+    };
+
+    fsim::diagnostic::Engine diagnostics;
+    const auto encoded
+        = codec::serialize_runtime_path_state(state, nullptr, diagnostics);
+    assert(encoded);
+    const auto decoded = codec::deserialize_runtime_path_state(
+        *encoded, "typed-mailbox-roundtrip", nullptr, diagnostics);
+    assert(decoded && decoded->processes.size() == 1U);
+    const auto* create = operation_get_if<MailboxCreate>(
+        &decoded->processes[0].operations[0]);
+    const auto* put = operation_get_if<MailboxPut>(
+        &decoded->processes[0].operations[1]);
+    const auto* get = operation_get_if<MailboxGet>(
+        &decoded->processes[0].operations[2]);
+    const auto* packed_create = operation_get_if<MailboxCreate>(
+        &decoded->processes[0].operations[3]);
+    const auto* packed_put = operation_get_if<MailboxPut>(
+        &decoded->processes[0].operations[4]);
+    const auto* packed_get = operation_get_if<MailboxGet>(
+        &decoded->processes[0].operations[5]);
+    assert(create && create->element_kind == MailboxElementKind::string
+        && create->element_width == 0U);
+    assert(put && put->element_kind == MailboxElementKind::string
+        && put->string_source == 2U);
+    assert(get && get->element_kind == MailboxElementKind::string
+        && get->string_destination == 1U && get->peek);
+    assert(packed_create
+        && packed_create->element_kind == MailboxElementKind::packed
+        && packed_create->element_width == 8U);
+    assert(packed_put
+        && packed_put->element_kind == MailboxElementKind::packed
+        && packed_put->source == 1U);
+    assert(packed_get
+        && packed_get->element_kind == MailboxElementKind::packed
+        && packed_get->destination == 3U);
+
+    auto malformed = make_state();
+    auto& malformed_process = malformed.processes.front();
+    malformed_process.register_count = 2U;
+    malformed_process.string_register_count = 1U;
+    malformed_process.operations = {
+        MailboxCreate { 0U, 1U, 0U, MailboxElementKind::string },
+        MailboxPut { 0U, 0U, 0U, std::nullopt,
+            MailboxElementKind::string, 1U },
+    };
+    assert(!codec::serialize_runtime_path_state(
+        malformed, nullptr, diagnostics));
+
+    auto invalid_kind = make_state();
+    auto& invalid_kind_process = invalid_kind.processes.front();
+    invalid_kind_process.register_count = 2U;
+    invalid_kind_process.operations = {
+        MailboxCreate { 0U, 1U, 0U,
+            static_cast<MailboxElementKind>(0xffU) },
+    };
+    assert(!codec::serialize_runtime_path_state(
+        invalid_kind, nullptr, diagnostics));
+
+    auto truncated = *encoded;
+    truncated.pop_back();
+    assert(!codec::deserialize_runtime_path_state(
+        truncated, "typed-mailbox-truncated", nullptr, diagnostics));
+}
+
 void test_required_empty_and_bad_reference_rejections()
 {
     fsim::diagnostic::Engine diagnostics;
@@ -860,6 +942,7 @@ void test_decode_allocation_budget_is_bounded()
 
 int main()
 {
+    test_typed_mailbox_payload_roundtrip_and_rejection();
     test_inline_and_external_roundtrips();
     test_container_alias_state_roundtrips_and_validation();
     test_shared_operation_context_path_projection();

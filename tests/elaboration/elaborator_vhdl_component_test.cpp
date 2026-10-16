@@ -10,6 +10,9 @@ void test_vhdl_components() {
     auto leaf = fsim::frontend::parse_text(
         "component_leaf.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity component_leaf is
   generic (constant entity_width : in positive := 9);
   port (
@@ -27,6 +30,9 @@ end architecture;
         R"(
 entity component_top is
 end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of component_top is
   signal first_input : std_logic_vector(3 downto 0);
   signal first_output : std_logic_vector(3 downto 0);
@@ -174,6 +180,9 @@ end architecture;
     auto visible_profiles = fsim::frontend::parse_text(
         "visible_component_profiles.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 package visible_component_profiles is
   component package_leaf is
     port (value : in integer);
@@ -244,6 +253,9 @@ end entity;
 architecture rtl of mode_leaf is
 begin
 end architecture;
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity vector_leaf is
   generic (width : positive := 4);
   port (
@@ -271,6 +283,9 @@ entity visible_component_top is
     port (value : in integer);
   end component;
 end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of visible_component_top is
   signal value : integer;
   signal vector_value : std_logic_vector(3 downto 0);
@@ -369,6 +384,9 @@ end architecture;
     auto composite_types = fsim::frontend::parse_text(
         "composite_component_types.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 package composite_component_types is
   type mode_t is (idle, active, done);
   subtype active_mode_t is mode_t range active to done;
@@ -798,6 +816,9 @@ end entity;
 architecture rtl of overloaded_target is
 begin
 end architecture;
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity unmatched_overload_top is
 end entity;
 architecture rtl of unmatched_overload_top is
@@ -854,11 +875,17 @@ end architecture;
     const auto nominal_profile_mismatch = elaborate_vhdl_component_text(
         "composite_component_nominal_mismatch.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 package first_record_types is
   type packet_t is record
     value : std_logic_vector(3 downto 0);
   end record;
 end package;
+library ieee;
+use ieee.std_logic_1164.all;
+
 package second_record_types is
   type packet_t is record
     value : std_logic_vector(3 downto 0);
@@ -891,6 +918,9 @@ end architecture;
     const auto nominal_actual_mismatch = elaborate_vhdl_component_text(
         "composite_component_actual_mismatch.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 package component_record_types is
   type first_packet_t is record
     value : std_logic_vector(3 downto 0);
@@ -996,6 +1026,9 @@ end entity;
 architecture rtl of bit_vector_leaf is
 begin
 end architecture;
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity array_element_mismatch_top is
 end entity;
 architecture rtl of array_element_mismatch_top is
@@ -1022,6 +1055,9 @@ end entity;
 architecture rtl of unresolved_vector_leaf is
 begin
 end architecture;
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity resolved_vector_top is
 end entity;
 architecture sim of resolved_vector_top is
@@ -1086,6 +1122,9 @@ end architecture;
     const auto composite_default = elaborate_vhdl_component_text(
         "composite_component_default.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 package component_default_types is
   type packet_t is record
     value : std_logic_vector(3 downto 0);

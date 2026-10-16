@@ -2004,6 +2004,9 @@ void HierarchyBuilder::finish()
                   << element_net_census.slice_write_range_fallbacks
                   << '\n';
     }
+    if (!materialize_compiled_systemverilog_package_initializers()) {
+        return;
+    }
     validate_process_drivers();
     initialize_constant_driven_nets();
     design_.finalize_process_rows();

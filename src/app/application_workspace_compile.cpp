@@ -19,6 +19,24 @@ namespace {
 
     using CompiledObject = WorkspaceCompiledObject;
 
+    std::string vhdl_identifier_spelling(
+        const std::string_view name, const bool extended)
+    {
+        if (!extended) {
+            return std::string { name };
+        }
+        std::string result { "\\" };
+        result.reserve(name.size() + 2U);
+        for (const auto character : name) {
+            result.push_back(character);
+            if (character == '\\') {
+                result.push_back('\\');
+            }
+        }
+        result.push_back('\\');
+        return result;
+    }
+
     bool compatible_compile_unit(const library::UnitIndexEntry& unit,
         const project::SourceSet& sources)
     {
@@ -287,10 +305,22 @@ namespace {
         // file defined it (IEEE 1076-2008 13.5); the secondary units of a
         // replaced primary unit are obsolete.
         const auto secondary = [](const library::UnitIndexEntry& unit) {
-            return unit.kind == "architecture" || unit.kind == "package_body";
+            return unit.kind == "architecture" || unit.kind == "package_body"
+                || (unit.kind == "package" && !unit.primary_name.empty());
         };
         std::set<std::string> replaced_units;
         std::set<std::string> replaced_primaries;
+        const auto primary_identity = [](const library::UnitIndexEntry& unit) {
+            auto primary = unit;
+            primary.kind = "primary";
+            primary.name = unit.primary_name.empty() ? unit.name : unit.primary_name;
+            primary.primary_name.clear();
+            primary.architecture.clear();
+            primary.name_form = unit.primary_name.empty()
+                ? unit.name_form : unit.primary_name_form;
+            primary.primary_name_form = library::VhdlIdentifierForm::unknown;
+            return workspace::unit_identity(primary);
+        };
         for (const auto& record : records) {
             for (const auto& owned : record.units) {
                 if (owned.unit.language != "vhdl") {
@@ -298,7 +328,7 @@ namespace {
                 }
                 replaced_units.insert(workspace::unit_identity(owned.unit));
                 if (!secondary(owned.unit)) {
-                    replaced_primaries.insert(owned.unit.name);
+                    replaced_primaries.insert(primary_identity(owned.unit));
                 }
             }
         }
@@ -311,7 +341,7 @@ namespace {
                     || (unit.unit.language == "vhdl"
                         && (replaced_units.contains(workspace::unit_identity(unit.unit))
                             || (secondary(unit.unit)
-                                && replaced_primaries.contains(unit.unit.primary_name))));
+                                && replaced_primaries.contains(primary_identity(unit.unit)))));
             });
         }
         std::erase_if(catalog.artifacts, [](const auto& artifact) {
@@ -426,7 +456,14 @@ namespace {
                 }
                 continue;
             }
-            const auto top = unit.library + "." + unit.primary_name + "(" + unit.name + ")";
+            const auto library = unit.library.empty()
+                ? std::string_view { "work" }
+                : std::string_view { unit.library };
+            const auto top = "vhdl:" + std::string { library } + "."
+                + vhdl_identifier_spelling(
+                    unit.primary_name, unit.extended_primary_name)
+                + "(" + vhdl_identifier_spelling(
+                    unit.name, unit.extended_name) + ")";
             const auto elaborated = elaboration::elaborate(checked, top);
             if (std::ranges::any_of(elaborated.diagnostics, [&](const auto& input) {
                     return incomplete_context(input.code);
@@ -616,14 +653,18 @@ int handle_workspace_compile(const cli::Invocation& invocation, const project::C
     auto& target = catalogs->front();
     replace_catalog_sources(target, replaced_sources, records);
     for (std::size_t index = 0; index < records.size(); ++index) {
-        records[index].dependencies = workspace_dependencies(checked, (*groups)[index].units,
-            *catalogs);
+        auto dependencies = workspace_dependencies(store, checked,
+            (*groups)[index].units, *catalogs, diagnostics);
+        if (!dependencies) {
+            return 1;
+        }
+        records[index].dependencies = std::move(*dependencies);
         std::erase_if(records[index].dependencies, [&](const auto& dependency) {
             return dependency.library == sources.library
                 && std::ranges::any_of(records[index].units, [&](const auto& unit) {
-                    return workspace::unit_identity(unit.unit)
-                        == workspace::unit_identity(dependency.unit);
-                });
+                       return workspace::unit_identity(unit.unit)
+                           == workspace::unit_identity(dependency.unit);
+                   });
         });
     }
     const auto count = records.size();

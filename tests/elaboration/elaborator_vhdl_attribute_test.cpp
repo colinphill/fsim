@@ -99,6 +99,122 @@ end architecture;
       "vhdl:work.attribute_range_direction_controls(rtl)");
   assert(attribute_range_controls_design.ok());
 
+  const auto predefined_object_subtype = fsim::frontend::parse_text(
+      "vhdl_attribute_predefined_object_subtype.vhd",
+      R"(
+package custom_arrays is
+  type integer_vector is array (natural range <>) of bit;
+end package;
+
+entity Predefined_Object_Subtype is end entity;
+architecture rtl of predefined_object_subtype is
+  procedure copy_bit_vector(value : in bit_vector) is
+    variable bit_vector_result : value'subtype;
+  begin
+    null;
+  end procedure;
+
+  procedure copy_boolean_vector(value : in boolean_vector) is
+    variable boolean_vector_result : value'subtype;
+  begin
+    null;
+  end procedure;
+
+  procedure copy_integer(value : in integer_vector) is
+    variable integer_result : value'subtype;
+  begin
+    null;
+  end procedure;
+
+  procedure copy_real_vector(value : in real_vector) is
+    variable real_vector_result : value'subtype;
+  begin
+    null;
+  end procedure;
+
+  procedure copy_time_vector(value : in time_vector) is
+    variable time_vector_result : value'subtype;
+  begin
+    null;
+  end procedure;
+
+  procedure copy_string(value : in string) is
+    variable string_result : value'subtype;
+  begin
+    null;
+  end procedure;
+
+  procedure copy_custom(value : in custom_arrays.integer_vector) is
+    variable custom_result : value'subtype;
+  begin
+    null;
+  end procedure;
+begin
+end architecture;
+
+entity Local_Array_Shadow is end entity;
+architecture rtl of local_array_shadow is
+  type integer_vector is array (natural range <>) of bit;
+  procedure copy_local(value : in integer_vector) is
+    variable local_result : value'subtype;
+  begin
+    local_result := value;
+  end procedure;
+begin
+end architecture;
+)",
+      fsim::frontend::Language::Vhdl2008);
+  assert(predefined_object_subtype.ok());
+  auto predefined_object_subtype_design = compile_test_design(
+      predefined_object_subtype.design);
+  const auto projected_subtype = [&](const std::string_view name) {
+    const auto& declarations =
+        predefined_object_subtype_design.vhdl_hir.declarations();
+    const auto found = std::ranges::find_if(
+        declarations, [&](const auto& declaration) {
+          return declaration.name == name;
+        });
+    assert(found != declarations.end() && found->subtype);
+    return &*found->subtype;
+  };
+  const auto has_projected_array_bounds = [](const auto& subtype) {
+    return subtype.constraints.size() == 1U
+        && subtype.constraints.front().kind
+            == fsim::semantic::vhdl::RangeKind::array_index
+        && subtype.constraints.front().left_expression
+        && subtype.constraints.front().right_expression;
+  };
+  const auto assert_builtin_array_result = [&](const std::string_view name,
+                                               const auto identity) {
+    const auto* subtype = projected_subtype(name);
+    assert(subtype->builtin_type == identity
+        && !subtype->type_mark.target.valid()
+        && has_projected_array_bounds(*subtype));
+  };
+  using BuiltinType = fsim::semantic::vhdl::BuiltinTypeIdentity;
+  assert_builtin_array_result("bit_vector_result",
+      BuiltinType::std_standard_bit_vector);
+  assert_builtin_array_result("boolean_vector_result",
+      BuiltinType::std_standard_boolean_vector);
+  assert_builtin_array_result("integer_result",
+      BuiltinType::std_standard_integer_vector);
+  assert_builtin_array_result("real_vector_result",
+      BuiltinType::std_standard_real_vector);
+  assert_builtin_array_result("time_vector_result",
+      BuiltinType::std_standard_time_vector);
+  assert_builtin_array_result("string_result",
+      BuiltinType::std_standard_string);
+  const auto* custom_result = projected_subtype("custom_result");
+  assert(custom_result->type_mark.target.valid()
+      && custom_result->builtin_type
+          == fsim::semantic::vhdl::BuiltinTypeIdentity::none
+      && has_projected_array_bounds(*custom_result));
+  const auto* local_result = projected_subtype("local_result");
+  assert(local_result->type_mark.target.valid()
+      && local_result->builtin_type
+          == fsim::semantic::vhdl::BuiltinTypeIdentity::none
+      && has_projected_array_bounds(*local_result));
+
   const auto parsed = fsim::frontend::parse_text(
       "vhdl_attribute_closure.vhd",
       R"(

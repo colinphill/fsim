@@ -215,8 +215,7 @@ void Simulation::start()
         impl_->start_vpi();
         impl_->start_systemc();
         impl_->refresh_observation_hooks();
-        impl_->interpreter->start();
-        impl_->refresh_observation_hooks();
+        impl_->start_interpreter();
     } catch (...) {
         impl_->lifecycle = Impl::Lifecycle::poisoned;
         throw;
@@ -286,8 +285,9 @@ runtime::RunResult Simulation::run(
                     = std::chrono::steady_clock::now() - barrier_begin;
             }
         }
-        impl_->interpreter->start();
-        impl_->refresh_observation_hooks();
+#endif
+        impl_->start_interpreter();
+#if defined(FSIM_HAS_LLVM)
         impl_->bind_fused_static_cohorts();
 #endif
         const auto interpreter_begin = profile_phase_split

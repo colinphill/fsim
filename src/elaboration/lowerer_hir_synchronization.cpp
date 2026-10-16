@@ -32,6 +32,38 @@ namespace {
         : nullptr;
 }
 
+[[nodiscard]] std::optional<semantic::sv::TypeReference>
+effective_mailbox_element_type(
+    const semantic::sv::TypeReference& type,
+    const semantic::CompiledDesignResolver& resolver,
+    const semantic::ScopeId scope)
+{
+    auto effective = type;
+    for (std::size_t depth = 0U; depth < 8U; ++depth) {
+        const auto resolved
+            = resolver.effective_systemverilog_type(effective, scope);
+        if (!resolved || *resolved == effective) {
+            break;
+        }
+        effective = *resolved;
+    }
+    return effective;
+}
+
+[[nodiscard]] bool mailbox_string_element(
+    const semantic::sv::TypeReference& type)
+{
+    if (type.value_form == semantic::sv::TypeForm::string) {
+        return true;
+    }
+    auto name = std::string_view { type.target.spelling };
+    if (const auto separator = name.rfind("::");
+        separator != std::string_view::npos) {
+        name.remove_prefix(separator + 2U);
+    }
+    return name == "string";
+}
+
 } // namespace
 
 std::optional<Lowerer::HirSynchronizationTaskProfile>
@@ -140,11 +172,22 @@ bool Lowerer::lower_hir_synchronization_statement(
 
     if (profile->mailbox) {
         const auto* element = mailbox_element_type(receiver_type);
-        const auto width = element
-            ? hir_systemverilog_type_width(*element)
+        const semantic::CompiledDesignResolver resolver {
+            *specialized_hir_unit_, hir_generic_binding_frames_
+        };
+        const auto effective_element = element
+            ? effective_mailbox_element_type(
+                  *element, resolver, hir_process_scope_)
             : std::nullopt;
-        if (!width || *width == 0U
-            || *width > std::numeric_limits<std::uint32_t>::max()) {
+        const bool string_element = effective_element
+            && mailbox_string_element(*effective_element);
+        const auto width = element && !string_element
+            ? hir_systemverilog_type_width(*element, hir_process_scope_)
+            : std::nullopt;
+        if (!effective_element
+            || (!string_element
+                && (!width || *width == 0U
+                    || *width > std::numeric_limits<std::uint32_t>::max()))) {
             report(
                 "FSIM-ELAB-SVSYNC-002",
                 "mailbox operations require exactly one finite positive "
@@ -164,19 +207,39 @@ bool Lowerer::lower_hir_synchronization_statement(
         }
         const auto argument = *statement.task_arguments.front().actual;
         if (profile->method == "put") {
-            auto value = lower_hir_expression(argument, *width);
-            if (!value) {
-                return false;
+            if (string_element) {
+                const auto value = lower_hir_string_expression(argument);
+                if (!value) {
+                    return false;
+                }
+                process_.operations.emplace_back(MailboxPut {
+                    receiver, 0U, 0U, std::nullopt,
+                    MailboxElementKind::string, *value,
+                });
+            } else {
+                auto value = lower_hir_expression(argument, *width);
+                if (!value) {
+                    return false;
+                }
+                if (register_width(*value) != *width) {
+                    value = resize_register(
+                        *value, *width, hir_expression_signed(argument));
+                }
+                process_.operations.emplace_back(MailboxPut {
+                    receiver, *value, static_cast<std::uint32_t>(*width),
+                    std::nullopt,
+                });
             }
-            if (register_width(*value) != *width) {
-                value = resize_register(
-                    *value, *width, hir_expression_signed(argument));
-            }
-            process_.operations.emplace_back(MailboxPut {
-                receiver, *value, static_cast<std::uint32_t>(*width),
-                std::nullopt,
-            });
             return true;
+        }
+        if (string_element) {
+            const auto value = allocate_string_register();
+            process_.operations.emplace_back(MailboxGet {
+                receiver, 0U, 0U, std::nullopt,
+                profile->method == "peek", MailboxElementKind::string,
+                value,
+            });
+            return lower_hir_string_copy_out(argument, value);
         }
         const auto domain = hir_expression_domain(
             argument, hir_process_scope_)
@@ -271,11 +334,22 @@ Lowerer::lower_hir_synchronization_expression(
             64U, frontend::ValueDomain::Bit2);
         if (mailbox) {
             const auto* element = mailbox_element_type(expected_type);
-            const auto width = element
-                ? hir_systemverilog_type_width(*element)
+            const semantic::CompiledDesignResolver resolver {
+                *specialized_hir_unit_, hir_generic_binding_frames_
+            };
+            const auto effective_element = element
+                ? effective_mailbox_element_type(
+                      *element, resolver, hir_process_scope_)
                 : std::nullopt;
-            if (!width || *width == 0U
-                || *width > std::numeric_limits<std::uint32_t>::max()) {
+            const bool string_element = effective_element
+                && mailbox_string_element(*effective_element);
+            const auto width = element && !string_element
+                ? hir_systemverilog_type_width(*element, hir_process_scope_)
+                : std::nullopt;
+            if (!effective_element
+                || (!string_element
+                    && (!width || *width == 0U
+                        || *width > std::numeric_limits<std::uint32_t>::max()))) {
                 report(
                     "FSIM-ELAB-SVSYNC-002",
                     "typed mailbox construction requires exactly one finite "
@@ -284,7 +358,10 @@ Lowerer::lower_hir_synchronization_expression(
                 return { true, false, std::nullopt };
             }
             process_.operations.emplace_back(MailboxCreate {
-                destination, *count, static_cast<std::uint32_t>(*width) });
+                destination, *count,
+                string_element ? 0U : static_cast<std::uint32_t>(*width),
+                string_element ? MailboxElementKind::string
+                               : MailboxElementKind::packed });
         } else {
             process_.operations.emplace_back(
                 SemaphoreCreate { destination, *count });
@@ -326,14 +403,37 @@ Lowerer::lower_hir_synchronization_expression(
             ? resize_register(value, expected_width, false)
             : value;
     };
+    const auto mailbox_result_truth = [&](const RegisterId result) {
+        // try_get/try_peek expose an int result, while their copyout guard is
+        // a SimIR scalar branch condition.
+        const auto is_zero = allocate_register(
+            1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(LogicalNot { is_zero, result });
+        const auto succeeded = allocate_register(
+            1U, frontend::ValueDomain::Logic4);
+        process_.operations.emplace_back(
+            LogicalNot { succeeded, is_zero });
+        return succeeded;
+    };
 
     if (mailbox) {
         const auto* element = mailbox_element_type(receiver_type);
-        const auto width = element
-            ? hir_systemverilog_type_width(*element)
+        const semantic::CompiledDesignResolver resolver {
+            *specialized_hir_unit_, hir_generic_binding_frames_
+        };
+        const auto effective_element = element
+            ? effective_mailbox_element_type(
+                  *element, resolver, hir_process_scope_)
             : std::nullopt;
-        if (!width || *width == 0U
-            || *width > std::numeric_limits<std::uint32_t>::max()) {
+        const bool string_element = effective_element
+            && mailbox_string_element(*effective_element);
+        const auto width = element && !string_element
+            ? hir_systemverilog_type_width(*element, hir_process_scope_)
+            : std::nullopt;
+        if (!effective_element
+            || (!string_element
+                && (!width || *width == 0U
+                    || *width > std::numeric_limits<std::uint32_t>::max()))) {
             report(
                 "FSIM-ELAB-SVSYNC-002",
                 "mailbox operations require exactly one finite positive "
@@ -341,7 +441,8 @@ Lowerer::lower_hir_synchronization_expression(
                 hir_source_span(source.source));
             return { true, false, std::nullopt };
         }
-        const auto element_width = static_cast<std::uint32_t>(*width);
+        const auto element_width
+            = string_element ? 0U : static_cast<std::uint32_t>(*width);
         if (method == "num" && argument_count == 0U) {
             const auto destination = result();
             process_.operations.emplace_back(
@@ -350,6 +451,24 @@ Lowerer::lower_hir_synchronization_expression(
         }
         if ((method == "put" || method == "try_put")
             && argument_count == 1U) {
+            if (string_element) {
+                const auto value = lower_hir_string_expression(
+                    source.operands[1]);
+                if (!value) {
+                    return { true, false, std::nullopt };
+                }
+                std::optional<RegisterId> destination;
+                if (method == "try_put") {
+                    destination = result();
+                }
+                process_.operations.emplace_back(MailboxPut {
+                    *receiver, 0U, 0U, destination,
+                    MailboxElementKind::string, *value,
+                });
+                return { true, true,
+                    destination ? std::optional { resize_result(*destination) }
+                                : std::nullopt };
+            }
             auto value = lower_hir_expression(source.operands[1], *width);
             if (!value) {
                 return { true, false, std::nullopt };
@@ -372,6 +491,42 @@ Lowerer::lower_hir_synchronization_expression(
         const bool get = method == "get" || method == "try_get";
         const bool peek = method == "peek" || method == "try_peek";
         if ((get || peek) && argument_count == 1U) {
+            if (string_element) {
+                const auto value = allocate_string_register();
+                std::optional<RegisterId> success;
+                if (method.starts_with("try_")) {
+                    success = result();
+                }
+                process_.operations.emplace_back(MailboxGet {
+                    *receiver, 0U, 0U, success, peek,
+                    MailboxElementKind::string, value,
+                });
+                if (success) {
+                    const auto condition
+                        = mailbox_result_truth(*success);
+                    const auto branch = process_.operations.size();
+                    process_.operations.emplace_back(Branch {
+                        condition, 0U, 0U, UnknownBranchPolicy::error });
+                    const auto copy_out = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    if (!lower_hir_string_copy_out(
+                            source.operands[1], value)) {
+                        return { true, false, std::nullopt };
+                    }
+                    const auto end = static_cast<InstructionIndex>(
+                        process_.operations.size());
+                    process_.operations[branch] = Branch {
+                        condition, copy_out, end,
+                        UnknownBranchPolicy::error };
+                } else if (!lower_hir_string_copy_out(
+                               source.operands[1], value)) {
+                    return { true, false, std::nullopt };
+                }
+                return success
+                    ? HirSynchronizationAttempt {
+                          true, true, resize_result(*success) }
+                    : HirSynchronizationAttempt { true, true, std::nullopt };
+            }
             const auto domain = hir_expression_domain(
                 source.operands[1], hir_process_scope_)
                                     .value_or(frontend::ValueDomain::Logic4);
@@ -382,7 +537,24 @@ Lowerer::lower_hir_synchronization_expression(
             }
             process_.operations.emplace_back(MailboxGet {
                 *receiver, value, element_width, success, peek });
-            if (!lower_hir_packed_copy_out(source.operands[1], value)) {
+            if (success) {
+                const auto condition
+                    = mailbox_result_truth(*success);
+                const auto branch = process_.operations.size();
+                process_.operations.emplace_back(Branch {
+                    condition, 0U, 0U, UnknownBranchPolicy::error });
+                const auto copy_out = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                if (!lower_hir_packed_copy_out(
+                        source.operands[1], value)) {
+                    return { true, false, std::nullopt };
+                }
+                const auto end = static_cast<InstructionIndex>(
+                    process_.operations.size());
+                process_.operations[branch] = Branch {
+                    condition, copy_out, end, UnknownBranchPolicy::error };
+            } else if (!lower_hir_packed_copy_out(
+                           source.operands[1], value)) {
                 return { true, false, std::nullopt };
             }
             return success

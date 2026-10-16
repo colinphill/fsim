@@ -2,13 +2,18 @@
 # schema=fsim-source-package-exclusions-v1
 # kind<TAB>value<TAB>reason
 root	.agents	workspace agent state
+root	agentwork	frozen LRM candidate and audit evidence
 root	.aws	local cloud tooling state
 root	.cache	local tool cache
 root	.codebase-memory	generated codebase index state
 root	.local-artifacts	local non-source artifacts
 root	.codex	workspace Codex state
+root	.claude	workspace Claude state
 root	.fsim	generated workspace libraries snapshots and caches
 root	.fsim-cache	generated simulator cache
+root-prefix	fsim-compliance-	generated compliance reproduction workspaces
+root	docs/gui-implementation-plan.md	untracked GUI planning document retained outside the source package
+root	docs/theta-gui-plan.md	untracked GUI planning document retained outside the source package
 root	.git	version-control metadata
 root	.idea	local IDE state
 root	.vscode	local IDE state

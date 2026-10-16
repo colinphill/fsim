@@ -266,6 +266,18 @@ LlvmProcessExecutor::LlvmProcessExecutor(
     }
     build_dense_signal_remap(
         signal_remap_, dense_signal_remap_base_, dense_signal_remap_);
+    // This constructor can receive a frame copied from a parent executor.
+    // Rebind its ABI register pointers before binding checks inspect the frame
+    // against this executor's storage (which may be an isolated fork copy).
+    frame_.register_aval = register_aval_.data();
+    frame_.register_bval = register_bval_.data();
+    frame_.register_initialized = register_initialized_.data();
+    frame_.register_logic9_plane2 = register_logic9_plane2_.empty()
+        ? nullptr
+        : register_logic9_plane2_.data();
+    frame_.register_logic9_plane3 = register_logic9_plane3_.empty()
+        ? nullptr
+        : register_logic9_plane3_.data();
     bind_signal_callback_operands(false);
     initialize_hot_cell(nullptr);
     initialize_direct_read_signals();
@@ -1274,6 +1286,35 @@ LlvmProcessExecutor::fork_clone(
     // image of the shared static writer, even though both executors retain the
     // same elaborated process identity.
     clone->stable_direct_update_suppression_allowed_ = false;
+    return clone;
+}
+
+[[nodiscard]] std::unique_ptr<runtime::simir::ProcessExecutor>
+LlvmProcessExecutor::fork_clone_isolated_register_frame(
+    const runtime::simir::InstructionIndex start_instruction)
+{
+    auto isolated_storage = std::make_shared<FrameStorage>(*storage_);
+    auto clone = std::unique_ptr<LlvmProcessExecutor> {
+        new LlvmProcessExecutor {
+            jit_, binding_, process_, signal_widths_, signal_value_kinds_,
+            signal_resolutions_, signal_remap_, generated_process_,
+            std::move(isolated_storage), frame_, start_instruction,
+            program_access_binding_ }
+    };
+    clone->stable_direct_update_suppression_allowed_ = false;
+    for (std::size_t id = 0U; id < clone->container_registers_.size(); ++id) {
+        if (clone->container_registers_[id]) {
+            // Unlike an ordinary fork, a tagged assertion attempt must see a
+            // private snapshot even if the parent mutates first. Copy payloads
+            // here so parent and child can both retain the normal local-frame
+            // mutation path without changing an ordinary fork sibling's
+            // shared FrameStorage.
+            clone->container_registers_[id]
+                = std::make_shared<runtime::simir::ContainerValue>(
+                    *clone->container_registers_[id]);
+            clone->container_register_shared_[id] = 0U;
+        }
+    }
     return clone;
 }
 

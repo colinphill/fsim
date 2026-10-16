@@ -148,10 +148,16 @@ void test_vhdl_ordinary_process_template_replay()
     using namespace fsim::runtime::simir;
     const auto parsed = fsim::frontend::parse_text(
         "vhdl-process-template.vhd", R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity template_leaf is
   port (source : in std_logic_vector(3 downto 0);
         destination : out std_logic_vector(3 downto 0));
 end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of template_leaf is
 begin
   transfer_value : process(source)
@@ -160,8 +166,14 @@ begin
     destination(0) <= source(0);
   end process;
 end architecture;
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity template_top is
 end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of template_top is
   signal left_input, right_input : std_logic_vector(3 downto 0);
   signal left_output, right_output : std_logic_vector(3 downto 0);
@@ -338,10 +350,16 @@ end architecture;
 
     const auto input_alias_write = fsim::frontend::parse_text(
         "vhdl-input-alias-write.vhd", R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity input_alias_leaf is
   port (source : in std_logic_vector(3 downto 0);
         destination : out std_logic_vector(3 downto 0));
 end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of input_alias_leaf is
 begin
   invalid_write : process(destination)
@@ -349,8 +367,14 @@ begin
     source <= destination;
   end process;
 end architecture;
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity input_alias_top is
 end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of input_alias_top is
   signal aliased : std_logic_vector(3 downto 0);
 begin
@@ -369,10 +393,16 @@ end architecture;
 
     const auto input_alias_slice_write = fsim::frontend::parse_text(
         "vhdl-input-alias-slice-write.vhd", R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity input_alias_slice_leaf is
   port (source : in std_logic_vector(3 downto 0);
         destination : out std_logic_vector(3 downto 0));
 end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of input_alias_slice_leaf is
 begin
   invalid_slice_write : process(destination)
@@ -380,8 +410,14 @@ begin
     source(0) <= destination(0);
   end process;
 end architecture;
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity input_alias_slice_top is
 end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of input_alias_slice_top is
   signal aliased : std_logic_vector(3 downto 0);
 begin
@@ -873,6 +909,9 @@ void test_vhdl_concurrent_statement_template_rows()
     using namespace fsim::runtime::simir;
     const auto parsed = fsim::frontend::parse_text(
         "vhdl-concurrent-statement-template.vhd", R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity statement_leaf is
   port (source : in std_logic;
         destination : out std_logic);
@@ -885,6 +924,9 @@ architecture rtl of statement_leaf is
 begin
   transfer_value : destination <= copy_value(source);
 end architecture;
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity statement_top is
 end entity;
 architecture rtl of statement_top is

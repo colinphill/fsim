@@ -542,6 +542,10 @@ public:
     fork_clone(
         runtime::simir::InstructionIndex start_instruction) override;
 
+    [[nodiscard]] std::unique_ptr<runtime::simir::ProcessExecutor>
+    fork_clone_isolated_register_frame(
+        runtime::simir::InstructionIndex start_instruction) override;
+
     void redirect(
         runtime::simir::InstructionIndex instruction) override;
 
@@ -1822,6 +1826,9 @@ struct BindingTarget {
     std::string language;
     std::string qualifier;
     std::string unit;
+    bool unit_extended { };
+    std::string architecture;
+    bool architecture_extended { };
 };
 
 std::optional<BindingTarget> parse_binding_target(std::string_view target);

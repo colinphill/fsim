@@ -10,6 +10,9 @@ void test_vhdl_qualified_expressions_and_conversions() {
 entity Qualified_Conversion is
 end entity;
 
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of qualified_conversion is
   type State_T is (Idle, Run, Done);
   subtype Active_T is State_T range Run to Done;

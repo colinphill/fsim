@@ -24,9 +24,9 @@ design	reader-policy	exact-current-only,formats=0-13-and-future-reject-at-header
 design	relocation	no-producer-paths,relative-payloads,selected-canonical-identities
 library	directory-suffix	.fsimlib,read-only-tree,atomic-sibling-stage-and-rename,no-overwrite
 library	metadata-file	fsim-library.toml,canonical-ordered-text
-library	format	current-writer=6,exact-current-reader
-library	portable-schema	current-writer=15,exact-current-reader
-library	compiled-hir-schema	current-writer=1,exact-current-reader
+library	format	current-writer=7,legacy-reader=6-with-unknown-vhdl-forms
+library	portable-schema	current-writer=16,legacy-reader=15
+library	compiled-hir-schema	current-writer=3,exact-current-reader
 library	compiled-hir-index	contained-relative-artifact,lowercase-sha256,required-payload
 library	identity	logical-library,producer,runtime-schema,trace-archive
 library	dependencies	ordered,unique-safe-logical-library,not-self
@@ -34,7 +34,8 @@ library	standards	ordered,language,revision
 library	vhdl-provenance	standard,predefined-environment,package,revision,source-sha256
 library	source-embedded	logical-name,relative-artifact,sha256,language,standard,compatibility-profile
 library	source-hidden	logical-name-and-language-profile-retained,artifact-and-checksum-both-empty
-library	unit-index	language,kind,name,primary,architecture,standard,profile,metadata-only,no-owning-payload
+library	unit-index	language,kind,name,primary,architecture,standard,profile,name-form,primary-name-form,metadata-only,no-owning-payload
+library	legacy-identity	format-6-schema-15,unknown-forms,unique-checksummed-HIR-hydration-only,selection-and-dependency-matching,missing-or-ambiguous-HIR-fails-closed
 library	auxiliary-portable	unique-kind-and-name,relative-artifact,sha256,revision,compatibility-profile
 library	native-common	kind,relative-artifact,sha256,runtime-abi,target,cpu
 library	native-systemc	systemc-abi,scv-compatibility,compiler-fingerprint,no-llvm-or-optimization-or-cache-fields
@@ -52,3 +53,5 @@ admission	mapped-systemc-preload	validate-scv-and-all-producer-fields-before-rea
 admission	design-systemc-preload	validate-record-metadata-checksum-factories-scv-and-compiler-before-native-load
 admission	publication-order	malformed-embedded-record-rejects-without-destination-or-staging-tree
 admission	transactionality	no-partial-metadata,registry,native-image,cache-or-published-artifact
+workspace	catalog-schema	SQLite-schema-2,unit-and-dependency-identifier-forms,checked-enum-domain
+workspace	legacy-catalog	SQLite-schema-1,unknown-forms,transactional-upgrade-on-successful-write

@@ -189,7 +189,8 @@ app::application_detail::WorkspaceCatalogs provider_catalogs(
     return { std::move(catalog) };
 }
 
-void expect_catalog_dependencies(const semantic::CompiledDesign& consumer,
+void expect_catalog_dependencies(const std::filesystem::path& directory,
+    const semantic::CompiledDesign& consumer,
     const semantic::CompiledDesign& provider, const std::string& library,
     const bool expect_class)
 {
@@ -197,15 +198,18 @@ void expect_catalog_dependencies(const semantic::CompiledDesign& consumer,
         "work", "consumer");
     assert(owner);
     const std::array owners { owner->identity->id };
+    app::workspace::Store store { directory / "dependency-workspace" };
+    diagnostic::Engine diagnostics;
     const auto dependencies = app::application_detail::workspace_dependencies(
-        consumer, owners, provider_catalogs(provider, library));
-    assert(std::ranges::any_of(dependencies, [&](const auto& dependency) {
+        store, consumer, owners, provider_catalogs(provider, library), diagnostics);
+    assert(dependencies && !diagnostics.has_error());
+    assert(std::ranges::any_of(*dependencies, [&](const auto& dependency) {
         return dependency.library == library
             && dependency.unit.language == "systemverilog"
             && dependency.unit.kind == "package" && dependency.unit.name == "values"
             && dependency.fingerprint == "sv-package-fingerprint";
     }));
-    assert(std::ranges::none_of(dependencies, [](const auto& dependency) {
+    assert(std::ranges::none_of(*dependencies, [](const auto& dependency) {
         return dependency.unit.language == "vhdl"
             || dependency.fingerprint == "unrelated-vhdl-fingerprint";
     }));
@@ -217,7 +221,7 @@ void expect_catalog_dependencies(const semantic::CompiledDesign& consumer,
     const auto metadata = app::application_detail::compiled_class_metadata_entry(
         provider, *declaration, library);
     assert(metadata);
-    assert(std::ranges::any_of(dependencies, [&](const auto& dependency) {
+    assert(std::ranges::any_of(*dependencies, [&](const auto& dependency) {
         return dependency.library == library && dependency.unit.kind == "class"
             && dependency.unit.name == metadata->name
             && dependency.fingerprint == "sv-class-fingerprint";
@@ -242,7 +246,7 @@ module consumer;
 endmodule
 )", "work", &provider);
     expect_signal(consumer, "0010101");
-    expect_catalog_dependencies(consumer, provider, library, true);
+    expect_catalog_dependencies(directory, consumer, provider, library, true);
 }
 
 void transitive_package(const std::filesystem::path& directory)
@@ -280,7 +284,7 @@ module consumer;
 endmodule
 )", "work", &provider);
     expect_signal(consumer, "0001110");
-    expect_catalog_dependencies(consumer, provider, "external", false);
+    expect_catalog_dependencies(directory, consumer, provider, "external", false);
     const auto unit = consumer.find_unit(semantic::UnitKind::verilog_module,
         "work", "consumer");
     assert(unit);
@@ -289,6 +293,197 @@ endmodule
             && reference.kind == semantic::CompiledReferenceKind::package
             && reference.library == "external" && reference.name == "values";
     }));
+
+    const auto package_member_call = [](const semantic::CompiledDesign& design) {
+        return std::ranges::find_if(
+            design.systemverilog_hir.expressions(),
+            [](const semantic::sv::Expression& expression) {
+                return expression.kind == semantic::sv::ExpressionKind::call
+                    && expression.referenced_name
+                    && expression.referenced_name->spelling
+                        == "external::values::increment";
+            });
+    };
+    const auto resolved_package_member_identity = [&](
+        const semantic::CompiledDesign& design) {
+        const auto call = package_member_call(design);
+        assert(call != design.systemverilog_hir.expressions().end());
+        assert(call->referenced_name
+            && call->referenced_name->selected);
+        const auto selected_id = *call->referenced_name->selected;
+        const auto declaration = std::ranges::find(
+            design.systemverilog_hir.declarations(), selected_id,
+            &semantic::sv::Declaration::id);
+        assert(declaration != design.systemverilog_hir.declarations().end());
+        assert(declaration->form
+            == semantic::sv::DeclarationForm::function);
+        const auto& semantic_declaration
+            = design.semantics.declarations()[selected_id.value()];
+        assert(semantic_declaration.scope.valid());
+        const auto package_id = design.semantics.scopes()[
+            semantic_declaration.scope.value()].unit;
+        assert(package_id.valid());
+        const auto& package = design.semantics.units()[package_id.value()];
+        const auto& span = design.semantics.source_spans()[
+            declaration->source.value()];
+        const auto& source_file = design.semantics.source_files()[
+            span.file.value()];
+        return semantic::CompiledSystemVerilogPackageDeclarationIdentity {
+            package.library,
+            package.name,
+            declaration->form,
+            declaration->name,
+            source_file.content_digest,
+            span.begin.offset,
+            span.end.offset
+        };
+    };
+    const auto package_member_use = [&](
+        const semantic::CompiledDesign& design) {
+        const auto call = package_member_call(design);
+        assert(call != design.systemverilog_hir.expressions().end());
+        const auto reference = std::ranges::find_if(
+            design.references(), [&](const semantic::CompiledReference& value) {
+                return value.systemverilog_package_member
+                    && value.systemverilog_package_member->expression
+                        == std::optional { call->id };
+            });
+        assert(reference != design.references().end());
+        const auto& use = *reference->systemverilog_package_member;
+        assert(use.selected_present && use.selected_complete);
+        assert(use.package_selected);
+        assert(use.package_selected->library == "external");
+        assert(use.package_selected->package == "values");
+        assert(use.package_selected->form
+            == semantic::sv::DeclarationForm::function);
+        assert(use.package_selected->name == "increment");
+        assert(!use.package_selected->source_digest.empty());
+        assert(use.package_selected->source_begin
+            < use.package_selected->source_end);
+        return *use.package_selected;
+    };
+    const auto expected_identity = resolved_package_member_identity(consumer);
+
+    const std::array consumer_units { unit->identity->id };
+    const std::vector<std::string> no_supporting_libraries;
+    auto projected = semantic::extract_compiled_units(
+        consumer, consumer_units, no_supporting_libraries);
+    assert(projected.ok() && projected.design);
+    assert(std::ranges::none_of(projected.design->systemverilog_hir.units(),
+        [](const semantic::sv::Unit& value) {
+            return value.kind == semantic::sv::UnitKind::package;
+        }));
+    assert(package_member_use(*projected.design) == expected_identity);
+    const auto projected_member_use = std::ranges::find_if(
+        projected.design->mutable_references(),
+        [](const semantic::CompiledReference& reference) {
+            return reference.systemverilog_package_member
+                && reference.systemverilog_package_member->expression;
+        });
+    assert(projected_member_use
+        != projected.design->mutable_references().end());
+    auto& overload_use
+        = *projected_member_use->systemverilog_package_member;
+    overload_use.overloads.clear();
+    // Keep one valid candidate so this round-trip directly covers the
+    // nonempty overload-vector wire representation.
+    overload_use.overload_count = 1U;
+    overload_use.overloads.push_back({ 0U, std::nullopt, expected_identity });
+    assert(projected.design->valid());
+    diagnostic::Engine roundtrip_diagnostics;
+    app::CheckedProject portable_projected;
+    static_cast<semantic::CompiledDesign&>(portable_projected)
+        = std::move(*projected.design);
+    const auto projected_source_mappings
+        = app::application_detail::compiled_cache_source_mappings(
+            portable_projected, directory, roundtrip_diagnostics);
+    assert(projected_source_mappings && !roundtrip_diagnostics.has_error());
+    assert(app::application_detail::relocate_compiled_design_sources(
+        portable_projected, *projected_source_mappings,
+        roundtrip_diagnostics));
+    assert(!roundtrip_diagnostics.has_error());
+    assert(package_member_use(portable_projected) == expected_identity);
+    const auto projected_bytes = app::serialize_compiled_hir_bundle(
+        portable_projected, roundtrip_diagnostics);
+    assert(projected_bytes && !roundtrip_diagnostics.has_error());
+    auto stale_bundle_schema = *projected_bytes;
+    assert(stale_bundle_schema.size() >= 12U);
+    stale_bundle_schema[8] = '\x01';
+    stale_bundle_schema[9] = '\x00';
+    stale_bundle_schema[10] = '\x00';
+    stale_bundle_schema[11] = '\x00';
+    diagnostic::Engine stale_bundle_diagnostics;
+    assert(!app::deserialize_compiled_hir_bundle(stale_bundle_schema,
+        "stale-compiled-hir-bundle", stale_bundle_diagnostics));
+    assert(stale_bundle_diagnostics.has_error());
+    auto roundtrip = app::deserialize_compiled_hir_bundle(
+        *projected_bytes, "projected-package-member-use", roundtrip_diagnostics);
+    assert(roundtrip && !roundtrip_diagnostics.has_error());
+    assert(std::ranges::none_of(roundtrip->systemverilog_hir.units(),
+        [](const semantic::sv::Unit& value) {
+            return value.kind == semantic::sv::UnitKind::package;
+        }));
+    assert(package_member_use(*roundtrip) == expected_identity);
+    const auto roundtrip_member_use = std::ranges::find_if(
+        roundtrip->references(),
+        [](const semantic::CompiledReference& reference) {
+            return reference.systemverilog_package_member
+                && reference.systemverilog_package_member->expression;
+        });
+    assert(roundtrip_member_use != roundtrip->references().end());
+    assert(roundtrip_member_use->systemverilog_package_member->overload_count
+        == 1U);
+    assert(roundtrip_member_use->systemverilog_package_member->overloads.size()
+        == 1U);
+    assert(roundtrip_member_use->systemverilog_package_member->overloads[0]
+            .position
+        == 0U);
+    assert(roundtrip_member_use->systemverilog_package_member->overloads[0]
+            .package_declaration
+        == std::optional { expected_identity });
+
+    std::vector<semantic::CompiledDesign> link_inputs;
+    link_inputs.push_back(std::move(*roundtrip));
+    link_inputs.push_back(provider);
+    auto relinked = semantic::link_compiled_designs(std::move(link_inputs));
+    assert(relinked.ok() && relinked.design);
+    const auto restored_call = std::ranges::find_if(
+        relinked.design->systemverilog_hir.expressions(),
+        [](const semantic::sv::Expression& expression) {
+            return expression.kind == semantic::sv::ExpressionKind::call
+                && expression.referenced_name
+                && expression.referenced_name->spelling
+                    == "external::values::increment";
+        });
+    assert(restored_call
+        != relinked.design->systemverilog_hir.expressions().end());
+    assert(restored_call->referenced_name
+        && restored_call->referenced_name->selected);
+    const auto selected_id = *restored_call->referenced_name->selected;
+    assert(restored_call->referenced_name->overloads.size() == 1U);
+    assert(restored_call->referenced_name->overloads.front() == selected_id);
+    const auto selected_decl = std::ranges::find(
+        relinked.design->systemverilog_hir.declarations(), selected_id,
+        &semantic::sv::Declaration::id);
+    assert(selected_decl
+        != relinked.design->systemverilog_hir.declarations().end());
+    const auto& semantic_decl
+        = relinked.design->semantics.declarations()[selected_id.value()];
+    const auto package_id
+        = relinked.design->semantics.scopes()[semantic_decl.scope.value()].unit;
+    const auto& package
+        = relinked.design->semantics.units()[package_id.value()];
+    const auto& selected_span
+        = relinked.design->semantics.source_spans()[
+            selected_decl->source.value()];
+    const auto& selected_file
+        = relinked.design->semantics.source_files()[
+            selected_span.file.value()];
+    assert(package.library == expected_identity.library);
+    assert(package.name == expected_identity.package);
+    assert(selected_decl->name == expected_identity.name);
+    assert(selected_file.content_digest == expected_identity.source_digest);
+    assert(selected_span.begin.offset == expected_identity.source_begin);
 }
 
 void inherited_package_class(const std::filesystem::path& directory)
@@ -344,9 +539,13 @@ endmodule
             && reference.target;
     }));
     const std::array owners { owner->identity->id };
+    app::workspace::Store store { directory / "dependency-workspace" };
+    diagnostic::Engine dependency_diagnostics;
     const auto dependencies = app::application_detail::workspace_dependencies(
-        consumer, owners, provider_catalogs(provider, "external"));
-    assert(std::ranges::any_of(dependencies, [&](const auto& dependency) {
+        store, consumer, owners, provider_catalogs(provider, "external"),
+        dependency_diagnostics);
+    assert(dependencies && !dependency_diagnostics.has_error());
+    assert(std::ranges::any_of(*dependencies, [&](const auto& dependency) {
         return dependency.library == "external" && dependency.unit.kind == "class"
             && dependency.unit.name == semantic::sv::class_declaration_identity(*declaration)
             && dependency.fingerprint == "sv-class-fingerprint";
@@ -385,6 +584,141 @@ endmodule
             }));
         }
     }
+
+    const auto owner = consumer.find_unit(semantic::UnitKind::verilog_module,
+        "work", "package_task_consumer");
+    assert(owner);
+    const std::array owner_selection { owner->identity->id };
+    const std::vector<std::string> no_supporting_libraries;
+    auto projected = semantic::extract_compiled_units(
+        consumer, owner_selection, no_supporting_libraries);
+    assert(projected.ok() && projected.design);
+    assert(std::ranges::none_of(projected.design->systemverilog_hir.units(),
+        [](const semantic::sv::Unit& unit) {
+            return unit.kind == semantic::sv::UnitKind::package;
+        }));
+    // The package sidecar keeps the resolved identity through projection.
+    const auto task_statement = [](const semantic::CompiledDesign& design) {
+        const auto package_task_use = std::ranges::find_if(
+            design.references(),
+            [](const semantic::CompiledReference& reference) {
+                if (!reference.systemverilog_package_member)
+                    return false;
+                const auto& use = *reference.systemverilog_package_member;
+                return use.statement && use.package_selected
+                    && use.package_selected->library == "external"
+                    && use.package_selected->package == "values"
+                    && use.package_selected->form
+                        == semantic::sv::DeclarationForm::task
+                    && use.package_selected->name == "ping";
+            });
+        if (package_task_use == design.references().end())
+            return design.systemverilog_hir.statements().end();
+        const auto statement_id
+            = package_task_use->systemverilog_package_member->statement;
+        return std::ranges::find_if(
+            design.systemverilog_hir.statements(),
+            [&](const semantic::sv::Statement& statement) {
+                return statement.kind
+                        == semantic::sv::StatementKind::task_call
+                    && statement.id == *statement_id;
+            });
+    };
+    const auto projected_task = task_statement(*projected.design);
+    assert(projected_task
+        != projected.design->systemverilog_hir.statements().end());
+    const auto package_task_use = [&](const semantic::CompiledDesign& design) {
+        const auto call = task_statement(design);
+        assert(call != design.systemverilog_hir.statements().end());
+        const auto reference = std::ranges::find_if(
+            design.references(), [&](const semantic::CompiledReference& value) {
+                return value.systemverilog_package_member
+                    && value.systemverilog_package_member->statement
+                    == std::optional { call->id };
+            });
+        assert(reference != design.references().end());
+        const auto& use = *reference->systemverilog_package_member;
+        assert(use.selected_present && use.selected_complete);
+        assert(use.package_selected);
+        assert(use.package_selected->library == "external");
+        assert(use.package_selected->package == "values");
+        assert(use.package_selected->form == semantic::sv::DeclarationForm::task);
+        assert(use.package_selected->name == "ping");
+        return *use.package_selected;
+    };
+    const auto expected_task_identity = package_task_use(*projected.design);
+    diagnostic::Engine roundtrip_diagnostics;
+    app::CheckedProject portable_projected;
+    static_cast<semantic::CompiledDesign&>(portable_projected)
+        = std::move(*projected.design);
+    const auto projected_source_mappings
+        = app::application_detail::compiled_cache_source_mappings(
+            portable_projected, directory, roundtrip_diagnostics);
+    assert(projected_source_mappings && !roundtrip_diagnostics.has_error());
+    assert(app::application_detail::relocate_compiled_design_sources(
+        portable_projected, *projected_source_mappings,
+        roundtrip_diagnostics));
+    assert(!roundtrip_diagnostics.has_error());
+    assert(package_task_use(portable_projected) == expected_task_identity);
+    const auto bytes = app::serialize_compiled_hir_bundle(
+        portable_projected, roundtrip_diagnostics);
+    assert(bytes && !roundtrip_diagnostics.has_error());
+    auto roundtrip = app::deserialize_compiled_hir_bundle(
+        *bytes, "projected-package-task-use", roundtrip_diagnostics);
+    assert(roundtrip && !roundtrip_diagnostics.has_error());
+    assert(package_task_use(*roundtrip) == expected_task_identity);
+
+    std::vector<semantic::CompiledDesign> link_inputs;
+    link_inputs.push_back(std::move(*roundtrip));
+    link_inputs.push_back(provider);
+    auto relinked = semantic::link_compiled_designs(std::move(link_inputs));
+    assert(relinked.ok() && relinked.design);
+    const auto restored_task = task_statement(*relinked.design);
+    assert(restored_task
+        != relinked.design->systemverilog_hir.statements().end());
+    assert(restored_task->task.selected);
+    const auto selected_id = *restored_task->task.selected;
+    assert(selected_id.valid());
+    assert(selected_id.value()
+        < relinked.design->semantics.declarations().size());
+    const auto declaration = std::ranges::find(
+        relinked.design->systemverilog_hir.declarations(),
+        selected_id, &semantic::sv::Declaration::id);
+    assert(declaration != relinked.design->systemverilog_hir.declarations().end());
+    assert(declaration->form == semantic::sv::DeclarationForm::task);
+    assert(declaration->name == "ping");
+    const auto& semantic_declaration
+        = relinked.design->semantics.declarations()[selected_id.value()];
+    assert(semantic_declaration.scope.valid());
+    assert(semantic_declaration.scope.value()
+        < relinked.design->semantics.scopes().size());
+    const auto package_id = relinked.design->semantics.scopes()[
+        semantic_declaration.scope.value()].unit;
+    assert(package_id.valid());
+    assert(package_id.value() < relinked.design->semantics.units().size());
+    const auto& package
+        = relinked.design->semantics.units()[package_id.value()];
+    assert(declaration->source.valid());
+    assert(declaration->source.value()
+        < relinked.design->semantics.source_spans().size());
+    const auto& selected_span = relinked.design->semantics.source_spans()[
+        declaration->source.value()];
+    assert(selected_span.file.valid());
+    assert(selected_span.file.value()
+        < relinked.design->semantics.source_files().size());
+    const auto& selected_file = relinked.design->semantics.source_files()[
+        selected_span.file.value()];
+    const semantic::CompiledSystemVerilogPackageDeclarationIdentity
+        restored_task_identity {
+            package.library,
+            package.name,
+            declaration->form,
+            declaration->name,
+            selected_file.content_digest,
+            selected_span.begin.offset,
+            selected_span.end.offset
+        };
+    assert(restored_task_identity == expected_task_identity);
 }
 
 void ambiguous_package(const std::filesystem::path& directory)

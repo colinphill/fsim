@@ -412,6 +412,9 @@ endmodule
         "udp-vhdl-parent.vhd",
         R"(
 entity udp_vhdl_parent is end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of udp_vhdl_parent is
   component udp_boundary_wrapper is
     port (d : in std_logic; q : out std_logic);

@@ -559,7 +559,17 @@ void Interpreter::Impl::execute(ProcessId id)
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, SignalEvent>) {
                     (void)get_signal(op.signal);
-                    const auto& event = signal_events[op.signal];
+                    const auto* selected = op.selection
+                        ? find_signal_selection_history(
+                              op.signal, *op.selection)
+                        : nullptr;
+                    if (op.selection && selected == nullptr) {
+                        fail(process,
+                            "selected SimIR event range was not registered");
+                    }
+                    const auto& event = selected != nullptr
+                        ? selected->last_event
+                        : signal_events[op.signal];
                     const auto active = event
                         && event->first == scheduler.now()
                         && event->second == scheduler.delta();
@@ -568,6 +578,21 @@ void Interpreter::Impl::execute(ProcessId id)
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, SignalLastValue>) {
                     (void)get_signal(op.signal);
+                    if (op.selection) {
+                        const auto* selected = find_signal_selection_history(
+                            op.signal, *op.selection);
+                        if (selected == nullptr) {
+                            fail(process,
+                                "selected SimIR last-value range was not registered");
+                        }
+                        get_register(process, op.destination)
+                            = coerce_value_kind(
+                                selected->last_value,
+                                register_value_kind(
+                                    process, op.destination));
+                        ++process.pc;
+                        return;
+                    }
                     get_register(process, op.destination) = coerce_value_kind(
                         logical_signal_last_value(op.signal),
                         register_value_kind(
@@ -575,7 +600,17 @@ void Interpreter::Impl::execute(ProcessId id)
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, SignalLastEvent>) {
                     (void)get_signal(op.signal);
-                    const auto& event = signal_events[op.signal];
+                    const auto* selected = op.selection
+                        ? find_signal_selection_history(
+                              op.signal, *op.selection)
+                        : nullptr;
+                    if (op.selection && selected == nullptr) {
+                        fail(process,
+                            "selected SimIR last-event range was not registered");
+                    }
+                    const auto& event = selected != nullptr
+                        ? selected->last_event
+                        : signal_events[op.signal];
                     const auto elapsed = event
                         ? scheduler.now() - event->first
                         : static_cast<SimulationTick>(
@@ -599,7 +634,17 @@ void Interpreter::Impl::execute(ProcessId id)
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, SignalActive>) {
                     (void)get_signal(op.signal);
-                    const auto& transaction = signal_transactions[op.signal];
+                    const auto* selected = op.selection
+                        ? find_signal_selection_history(
+                              op.signal, *op.selection)
+                        : nullptr;
+                    if (op.selection && selected == nullptr) {
+                        fail(process,
+                            "selected SimIR active range was not registered");
+                    }
+                    const auto& transaction = selected != nullptr
+                        ? selected->last_transaction
+                        : signal_transactions[op.signal];
                     const auto active = transaction
                         && transaction->first == scheduler.now()
                         && transaction->second == scheduler.delta();
@@ -608,27 +653,42 @@ void Interpreter::Impl::execute(ProcessId id)
                     ++process.pc;
                 } else if constexpr (
                     std::is_same_v<OperationType, SignalLastActive>) {
-                    const auto elapsed = signal_attribute_detail::last_active(
-                        *this, op.signal);
+                    SimulationTick elapsed { };
+                    if (op.selection) {
+                        const auto* selected = find_signal_selection_history(
+                            op.signal, *op.selection);
+                        if (selected == nullptr) {
+                            fail(process,
+                                "selected SimIR last-active range was not registered");
+                        }
+                        elapsed = selected->last_transaction
+                            ? scheduler.now()
+                                - selected->last_transaction->first
+                            : static_cast<SimulationTick>(
+                                  std::numeric_limits<std::int64_t>::max());
+                    } else {
+                        elapsed = signal_attribute_detail::last_active(
+                            *this, op.signal);
+                    }
                     get_register(process, op.destination) = PackedLogic4::from_aval_bval(64, elapsed, 0);
                     ++process.pc;
                 } else if constexpr (
                     std::is_same_v<OperationType, SignalDriving>) {
                     const auto driving = signal_attribute_detail::driving(
-                        *this, process.id, op.signal);
+                        *this, process.id, op.signal, op.selection);
                     get_register(process, op.destination) = PackedLogic4(
                         1, driving ? Logic4::one : Logic4::zero);
                     ++process.pc;
                 } else if constexpr (
                     std::is_same_v<OperationType, SignalDrivingValue>) {
                     if (!signal_attribute_detail::driving(
-                            *this, process.id, op.signal)) {
+                            *this, process.id, op.signal, op.selection)) {
                         fail(process,
                             "VHDL 'driving_value queried a signal without a driver");
                     }
                     get_register(process, op.destination) = coerce_value_kind(
                         signal_attribute_detail::driving_value(
-                            *this, process.id, op.signal),
+                            *this, process.id, op.signal, op.selection),
                         register_value_kind(process, op.destination));
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, CopyRegister>) {
@@ -651,7 +711,8 @@ void Interpreter::Impl::execute(ProcessId id)
                     get_register(process, op.destination) = std::move(converted);
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, ClassAllocate>) {
-                    if (!class_allocate_hook) {
+                    if (!class_allocate_hook
+                        && !class_allocate_context_hook) {
                         fail(process, "class allocation service is unavailable");
                     }
                     std::vector<PackedLogic4> actuals;
@@ -672,14 +733,24 @@ void Interpreter::Impl::execute(ProcessId id)
                                 ? process.frame->string_registers.at(actual)
                                 : std::string { });
                     }
-                    const auto handle = class_allocate_hook(
-                        process.cold().design_process,
-                        process.program().name(),
-                        op.specialization_identity,
-                        op.declared_type,
-                        actuals,
-                        string_actuals,
-                        op.constructor_actual_names);
+                    const auto handle = class_allocate_context_hook
+                        ? class_allocate_context_hook(
+                              process.id,
+                              process.cold().design_process,
+                              process.program().name(),
+                              op.specialization_identity,
+                              op.declared_type,
+                              actuals,
+                              string_actuals,
+                              op.constructor_actual_names)
+                        : class_allocate_hook(
+                              process.cold().design_process,
+                              process.program().name(),
+                              op.specialization_identity,
+                              op.declared_type,
+                              actuals,
+                              string_actuals,
+                              op.constructor_actual_names);
                     get_register(process, op.destination) = PackedLogic4::from_aval_bval(64, handle, 0);
                     ++process.pc;
                 } else if constexpr (
@@ -704,7 +775,8 @@ void Interpreter::Impl::execute(ProcessId id)
                     ++process.pc;
                 } else if constexpr (
                     std::is_same_v<OperationType, ClassMethodCall>) {
-                    if (!class_method_call_hook) {
+                    if (!class_method_call_hook
+                        && !class_method_call_context_hook) {
                         fail(process, "class method service is unavailable");
                     }
                     std::vector<PackedLogic4> actuals;
@@ -724,15 +796,27 @@ void Interpreter::Impl::execute(ProcessId id)
                                 : std::string { });
                     }
                     const auto handle = get_register(process, op.receiver).low_word().aval;
-                    get_register(process, op.destination) = class_method_call_hook(
-                        handle,
-                        op.method_identity,
-                        actuals,
-                        string_actuals,
-                        op.actual_names,
-                        op.actual_directions,
-                        op.inline_constraints,
-                        op.virtual_dispatch);
+                    get_register(process, op.destination)
+                        = class_method_call_context_hook
+                        ? class_method_call_context_hook(
+                              process.id,
+                              handle,
+                              op.method_identity,
+                              actuals,
+                              string_actuals,
+                              op.actual_names,
+                              op.actual_directions,
+                              op.inline_constraints,
+                              op.virtual_dispatch)
+                        : class_method_call_hook(
+                              handle,
+                              op.method_identity,
+                              actuals,
+                              string_actuals,
+                              op.actual_names,
+                              op.actual_directions,
+                              op.inline_constraints,
+                              op.virtual_dispatch);
                     for (std::size_t index = 0; index < actuals.size(); ++index) {
                         const auto string_actual = !op.actual_kinds.empty()
                             && op.actual_kinds[index] == 1U;
@@ -769,7 +853,8 @@ void Interpreter::Impl::execute(ProcessId id)
                     const auto dpi = std::string_view { op.method_identity }
                         .starts_with(systemverilog_dpi_function_prefix);
                     if ((dpi && !dpi_function_call_hook)
-                        || (!dpi && !class_static_method_call_hook)) {
+                        || (!dpi && !class_static_method_call_hook
+                            && !class_static_method_call_context_hook)) {
                         fail(process, dpi
                             ? "SystemVerilog DPI function service is unavailable"
                             : "class static method service is unavailable");
@@ -796,6 +881,14 @@ void Interpreter::Impl::execute(ProcessId id)
                         : std::string_view { op.method_identity };
                     get_register(process, op.destination) = dpi
                         ? dpi_function_call_hook(
+                              identity,
+                              actuals,
+                              string_actuals,
+                              op.actual_names,
+                              op.actual_directions)
+                        : class_static_method_call_context_hook
+                        ? class_static_method_call_context_hook(
+                              process.id,
                               identity,
                               actuals,
                               string_actuals,
@@ -835,6 +928,14 @@ void Interpreter::Impl::execute(ProcessId id)
                     get_string_register(process, op.destination) = get_string_object(op.object).initial_value;
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, WriteStringObject>) {
+                    if (package_static_initialization_active) {
+                        initialize_package_static_string_object(
+                            op.object,
+                            get_string_register(process, op.source),
+                            process.id);
+                        ++process.pc;
+                        return;
+                    }
                     get_string_object(op.object).initial_value = get_string_register(process, op.source);
                     ++process.pc;
                 } else if constexpr (std::is_same_v<OperationType, ConcatenateStrings>) {

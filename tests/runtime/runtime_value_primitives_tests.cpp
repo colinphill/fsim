@@ -1075,11 +1075,34 @@ void test_systemverilog_scalar_values() {
       signed_packed.value.as_real() == -1.0
           && unsigned_packed.value.as_real() == 255.0,
       "packed-to-real conversion must retain declared signedness");
+  const auto x_to_real = systemverilog_scalar_from_packed(
+      PackedLogic4::from_msb_string("10X1"), false,
+      SystemVerilogScalarKind::Real);
+  const auto z_to_real = systemverilog_scalar_from_packed(
+      PackedLogic4::from_msb_string("10Z1"), false,
+      SystemVerilogScalarKind::Real);
+  const auto signed_x_to_real = systemverilog_scalar_from_packed(
+      PackedLogic4::from_msb_string("10X1"), true,
+      SystemVerilogScalarKind::Real);
   require(
-      systemverilog_scalar_from_packed(
-          PackedLogic4::from_msb_string("10X1"), false,
-          SystemVerilogScalarKind::Real).error == Error::UnknownValue,
-      "packed X/Z values must not fabricate a real payload");
+      x_to_real && x_to_real.value.as_real() == 9.0,
+      "packed X bits convert to zero upon real conversion");
+  require(
+      z_to_real && z_to_real.value.as_real() == 9.0,
+      "packed Z bits convert to zero upon real conversion");
+  require(
+      signed_x_to_real && signed_x_to_real.value.as_real() == -7.0,
+      "packed X bits convert to zero before signed real conversion");
+  const auto x_to_integral = systemverilog_scalar_from_packed(
+      PackedLogic4::from_msb_string("10X1"), false,
+      SystemVerilogScalarKind::None);
+  const auto z_to_integral = systemverilog_scalar_from_packed(
+      PackedLogic4::from_msb_string("10Z1"), false,
+      SystemVerilogScalarKind::None);
+  require(
+      x_to_integral.error == Error::UnknownValue
+          && z_to_integral.error == Error::UnknownValue,
+      "packed X/Z bits remain invalid for integral conversion");
   const auto packed_rounded = systemverilog_scalar_to_packed(
       SystemVerilogScalarValue::real(3.5), 8, false);
   require(

@@ -3,6 +3,7 @@
 #include "llvm_jit_validation_class.hpp"
 
 #include <limits>
+#include <optional>
 #include <type_traits>
 #include <variant>
 #include <vector>
@@ -32,6 +33,22 @@ void validate_prefix_operation(
     const auto unify_registers = context.unify_registers;
     const auto validate_string_register = context.validate_string_register;
     const auto validate_container_register = context.validate_container_register;
+    const auto selected_signal_width = [&](
+        const SignalId signal,
+        const std::optional<SignalSelection>& selection) -> std::size_t {
+        const auto root_width = exact_signal_width(signal, index);
+        if (!selection) {
+            return static_cast<std::size_t>(root_width);
+        }
+        if (selection->width == 0U
+            || selection->offset > root_width
+            || selection->width > root_width - selection->offset) {
+            reject(process, index,
+                "selected signal query range is outside its signal");
+            return std::size_t { 0 };
+        }
+        return static_cast<std::size_t>(selection->width);
+    };
 
     fsim::runtime::simir::visit_operation(
         [&](const auto& operation) {
@@ -88,13 +105,14 @@ void validate_prefix_operation(
                             && operation.kind == SignalReadKind::current);
                 } else if constexpr (std::is_same_v<OperationType, SignalEvent>) {
                     result.uses_signal_event = true;
-                    (void)referenced_signal_width(operation.signal, index);
+                    (void)selected_signal_width(
+                        operation.signal, operation.selection);
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 1U, index);
                 } else if constexpr (std::is_same_v<OperationType, SignalLastValue>) {
                     record_definition(operation.destination, index);
-                    const auto width = exact_signal_width(
-                        operation.signal, index);
+                    const auto width = selected_signal_width(
+                        operation.signal, operation.selection);
                     if (width <= 64U) {
                         result.uses_signal_last_value = true;
                     }
@@ -104,7 +122,8 @@ void validate_prefix_operation(
                         index);
                 } else if constexpr (std::is_same_v<OperationType, SignalLastEvent>) {
                     result.uses_signal_last_event = true;
-                    (void)referenced_signal_width(operation.signal, index);
+                    (void)selected_signal_width(
+                        operation.signal, operation.selection);
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 64U, index);
                 } else if constexpr (
@@ -166,26 +185,29 @@ void validate_prefix_operation(
                     }
                 } else if constexpr (std::is_same_v<OperationType, SignalActive>) {
                     result.uses_signal_active = true;
-                    (void)referenced_signal_width(operation.signal, index);
+                    (void)selected_signal_width(
+                        operation.signal, operation.selection);
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 1U, index);
                 } else if constexpr (
                     std::is_same_v<OperationType, SignalLastActive>) {
                     result.uses_signal_last_active = true;
-                    (void)referenced_signal_width(operation.signal, index);
+                    (void)selected_signal_width(
+                        operation.signal, operation.selection);
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 64U, index);
                 } else if constexpr (
                     std::is_same_v<OperationType, SignalDriving>) {
                     result.uses_signal_driving = true;
-                    (void)referenced_signal_width(operation.signal, index);
+                    (void)selected_signal_width(
+                        operation.signal, operation.selection);
                     record_definition(operation.destination, index);
                     constrain_width(operation.destination, 1U, index);
                 } else if constexpr (
                     std::is_same_v<OperationType, SignalDrivingValue>) {
                     record_definition(operation.destination, index);
-                    const auto width = exact_signal_width(
-                        operation.signal, index);
+                    const auto width = selected_signal_width(
+                        operation.signal, operation.selection);
                     if (width <= 64U) {
                         result.uses_signal_driving_value = true;
                     }

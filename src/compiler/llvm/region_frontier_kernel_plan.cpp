@@ -41,6 +41,7 @@ using Builder = llvm::IRBuilder<>;
 enum class BodyOperationKind : std::uint8_t {
     load_constant,
     copy_register,
+    convert_to_two_state,
     extract,
     concatenate,
     conditional_select,
@@ -53,6 +54,7 @@ enum class BodyOperationKind : std::uint8_t {
     reduction_xor,
     shift,
     debug_noop,
+    copy_logic9_to_logic4,
 };
 
 struct BodyOperation {
@@ -156,6 +158,53 @@ struct WordValue {
     return (UINT64_C(1) << tail) - 1U;
 }
 
+[[nodiscard]] llvm::Value* constant_i64(Builder& builder,
+    std::uint64_t value);
+
+[[nodiscard]] std::optional<WordValue> emit_logic9_to_logic4_copy(
+    Builder& builder, const WordValue& source, const std::uint32_t width)
+{
+    const auto logic9_source = logic9_word_value(source);
+    if (source.value_kind != ValueKind::logic9 || source.width != width
+        || !llvm_detail::logic9_word_value_is_well_formed(
+            logic9_source, builder.getContext())) {
+        return std::nullopt;
+    }
+
+    WordValue converted;
+    converted.width = width;
+    converted.value_kind = ValueKind::logic4;
+    const auto word_count = word_count_for(width);
+    converted.aval.reserve(word_count);
+    converted.bval.reserve(word_count);
+    // Match coerce_value_kind: U/X/W/- become X, 0/L become 0,
+    // 1/H become 1, and Z remains Z.
+    for (std::uint32_t word = 0U; word < word_count; ++word) {
+        const auto p0 = source.aval[word];
+        const auto p1 = source.bval[word];
+        const auto p2 = source.plane2[word];
+        const auto p3 = source.plane3[word];
+        const auto zero = builder.CreateAnd(
+            builder.CreateAnd(builder.CreateNot(p3), p1),
+            builder.CreateNot(p0));
+        const auto one = builder.CreateAnd(
+            builder.CreateAnd(builder.CreateNot(p3), p1), p0);
+        const auto high_z = builder.CreateAnd(
+            builder.CreateAnd(
+                builder.CreateAnd(builder.CreateNot(p3), p2),
+                builder.CreateNot(p1)),
+            builder.CreateNot(p0));
+        const auto unknown = builder.CreateNot(builder.CreateOr(zero,
+            builder.CreateOr(one, high_z)));
+        const auto mask = constant_i64(builder, word_mask(width, word));
+        converted.aval.push_back(builder.CreateAnd(
+            builder.CreateOr(one, unknown), mask));
+        converted.bval.push_back(builder.CreateAnd(
+            builder.CreateOr(high_z, unknown), mask));
+    }
+    return converted;
+}
+
 void append_number(std::string& identity, const std::uint64_t value)
 {
     identity.append(std::to_string(value));
@@ -254,7 +303,7 @@ struct MemberShapeCensusKeys {
     };
 
     auto& key = keys.template_key;
-    key.append("frontier-operation-body-descriptor-candidate-v1;");
+    key.append("frontier-operation-body-descriptor-candidate-v2;");
     append_number(key, body.has_unknown_constant ? 1U : 0U);
     append_number(key, body.has_logic9_value ? 1U : 0U);
 
@@ -271,6 +320,8 @@ struct MemberShapeCensusKeys {
             }
             break;
         case BodyOperationKind::copy_register:
+        case BodyOperationKind::copy_logic9_to_logic4:
+        case BodyOperationKind::convert_to_two_state:
         case BodyOperationKind::extract:
         case BodyOperationKind::unary_not:
         case BodyOperationKind::reduction_and:
@@ -370,6 +421,8 @@ struct MemberShapeCensusKeys {
             }
             break;
         case BodyOperationKind::copy_register:
+        case BodyOperationKind::copy_logic9_to_logic4:
+        case BodyOperationKind::convert_to_two_state:
         case BodyOperationKind::extract:
         case BodyOperationKind::unary_not:
         case BodyOperationKind::reduction_and:
@@ -646,6 +699,12 @@ void emit_member_shape_census(
         identity.append("P:");
         append_number(identity, copy->destination);
         append_number(identity, copy->source);
+        return true;
+    } else if (const auto* convert
+        = operation_get_if<ConvertToTwoState>(&operation)) {
+        identity.append("T:");
+        append_number(identity, convert->destination);
+        append_number(identity, convert->source);
         return true;
     } else if (const auto* extract = operation_get_if<Extract>(&operation)) {
         identity.append("E:");
@@ -1764,6 +1823,51 @@ void emit_member_operations(Builder& builder,
             values.insert_or_assign(operation.destination, std::move(value));
             break;
         }
+        case BodyOperationKind::copy_logic9_to_logic4: {
+            const auto& source = lookup(operation.first_source);
+            auto converted = emit_logic9_to_logic4_copy(
+                builder, source, operation.width);
+            if (!converted) {
+                throw std::logic_error(
+                    "certified Logic9-to-Logic4 copy has an invalid static shape");
+            }
+            if (operation.output_site != UINT32_MAX) {
+                emit_stage_write(builder, frame, member,
+                    sites[operation.output_site], *converted, bound_process_id,
+                    generic_execution, binding, operation.output_site);
+            }
+            values.insert_or_assign(operation.destination,
+                std::move(*converted));
+            break;
+        }
+        case BodyOperationKind::convert_to_two_state: {
+            const auto& source = lookup(operation.first_source);
+            if (source.value_kind != ValueKind::logic4
+                || source.width != operation.width
+                || source.aval.size() != word_count_for(operation.width)
+                || source.bval.size() != word_count_for(operation.width)) {
+                throw std::logic_error(
+                    "certified two-state conversion has an invalid Logic4 shape");
+            }
+            WordValue converted;
+            converted.width = operation.width;
+            converted.value_kind = ValueKind::logic4;
+            converted.aval.reserve(source.aval.size());
+            converted.bval.reserve(source.bval.size());
+            for (std::size_t word = 0U; word < source.aval.size(); ++word) {
+                const auto mask = constant_i64(builder,
+                    word_mask(operation.width,
+                        static_cast<std::uint32_t>(word)));
+                converted.aval.push_back(builder.CreateAnd(
+                    builder.CreateAnd(source.aval[word],
+                        builder.CreateNot(source.bval[word])),
+                    mask));
+                converted.bval.push_back(constant_i64(builder, 0U));
+            }
+            values.insert_or_assign(operation.destination,
+                std::move(converted));
+            break;
+        }
         case BodyOperationKind::extract: {
             const auto& source = lookup(operation.first_source);
             WordValue value;
@@ -1937,12 +2041,17 @@ void emit_member_operations(Builder& builder,
                     value.aval.push_back(builder.CreateAnd(known_aval, mask));
                     value.bval.push_back(constant_i64(builder, 0U));
                 } else {
-                    const auto different = builder.CreateAnd(
+                    auto different = builder.CreateAnd(
                         builder.CreateOr(
                             builder.CreateXor(when_true.aval[word],
                                 when_false.aval[word]),
                             builder.CreateXor(when_true.bval[word],
-                                when_false.bval[word])), mask);
+                                when_false.bval[word])),
+                        mask);
+                    // IEEE 1800-2017 Table 11-20 maps equal X/Z bits to X
+                    // when the complete operands are not logically equivalent.
+                    different = builder.CreateOr(different,
+                        builder.CreateAnd(when_true.bval[word], mask));
                     const auto same = builder.CreateXor(different, mask);
                     const auto merged_aval = builder.CreateOr(
                         builder.CreateAnd(when_true.aval[word], same),
@@ -3056,19 +3165,35 @@ std::optional<RegionFrontierKernelPlan> RegionFrontierKernelPlan::try_create(
                     || register_shapes[copy->destination].width == 0U
                     || register_shapes[copy->destination].width
                         != register_shapes[copy->source].width
-                    || register_shapes[copy->destination].value_kind
-                        != register_shapes[copy->source].value_kind
                     || (!input_registers.contains(copy->source)
                         && !defined_registers.contains(copy->source))) {
                     return reject(__LINE__);
                 }
-                lowered.kind = BodyOperationKind::copy_register;
+                const auto destination_kind
+                    = register_shapes[copy->destination].value_kind;
+                const auto source_kind = register_shapes[copy->source].value_kind;
+                const auto same_logic4_kind
+                    = destination_kind == ValueKind::logic4
+                    && source_kind == ValueKind::logic4;
+                const auto same_logic9_kind
+                    = destination_kind == ValueKind::logic9
+                    && source_kind == ValueKind::logic9;
+                const auto logic9_to_logic4
+                    = destination_kind == ValueKind::logic4
+                    && source_kind == ValueKind::logic9;
+                if (!same_logic4_kind && !same_logic9_kind
+                    && !logic9_to_logic4) {
+                    return reject(__LINE__);
+                }
+                lowered.kind = logic9_to_logic4
+                    ? BodyOperationKind::copy_logic9_to_logic4
+                    : BodyOperationKind::copy_register;
                 lowered.destination = copy->destination;
                 lowered.first_source = copy->source;
                 lowered.width = register_shapes[copy->destination].width;
                 body.has_logic9_value = body.has_logic9_value
-                    || register_shapes[copy->destination].value_kind
-                        == ValueKind::logic9;
+                    || source_kind == ValueKind::logic9
+                    || destination_kind == ValueKind::logic9;
                 const auto site = output_site_by_instruction.find(
                     { static_cast<std::uint32_t>(member_index), instruction });
                 if (site != output_site_by_instruction.end()) {
@@ -3080,8 +3205,7 @@ std::optional<RegionFrontierKernelPlan> RegionFrontierKernelPlan::try_create(
                     const auto& descriptor = impl->write_sites[site->second];
                     if (descriptor.width != lowered.width
                         || descriptor.value_kind
-                            != frontier_value_kind(register_shapes[
-                                copy->destination].value_kind)) {
+                            != frontier_value_kind(register_shapes[copy->destination].value_kind)) {
                         return reject(__LINE__);
                     }
                     const auto output
@@ -3096,6 +3220,27 @@ std::optional<RegionFrontierKernelPlan> RegionFrontierKernelPlan::try_create(
                     }
                 }
                 defined_registers.insert(copy->destination);
+            } else if (const auto* convert
+                = operation_get_if<ConvertToTwoState>(&operation)) {
+                if (convert->destination >= register_shapes.size()
+                    || convert->source >= register_shapes.size()
+                    || register_shapes[convert->source].width == 0U
+                    || register_shapes[convert->source].width
+                        != register_shapes[convert->destination].width
+                    || register_shapes[convert->source].value_kind
+                        != ValueKind::logic4
+                    || register_shapes[convert->destination].value_kind
+                        != ValueKind::logic4
+                    || (!input_registers.contains(convert->source)
+                        && !defined_registers.contains(convert->source))) {
+                    return reject(__LINE__);
+                }
+                lowered.kind = BodyOperationKind::convert_to_two_state;
+                lowered.destination = convert->destination;
+                lowered.first_source = convert->source;
+                lowered.width = register_shapes[
+                    convert->destination].width;
+                defined_registers.insert(convert->destination);
             } else if (const auto* extract
                 = operation_get_if<Extract>(&operation)) {
                 if (extract->destination >= register_shapes.size()
@@ -3317,6 +3462,8 @@ std::optional<RegionFrontierKernelPlan> RegionFrontierKernelPlan::try_create(
             case BodyOperationKind::debug_noop:
                 break;
             case BodyOperationKind::copy_register:
+            case BodyOperationKind::copy_logic9_to_logic4:
+            case BodyOperationKind::convert_to_two_state:
             case BodyOperationKind::extract:
             case BodyOperationKind::unary_not:
             case BodyOperationKind::reduction_and:
@@ -3377,7 +3524,8 @@ std::optional<RegionFrontierKernelPlan> RegionFrontierKernelPlan::try_create(
     impl->identity
         = "fsim-region-frontier-v2;generic-deferred-update-contract-v1;"
           "typed-logic4-logic9-planes-v2;"
-          "known-logic4-guarded-member-body-v1;logic9-word-ops-copy-not-and-or-xor-v1;"
+          "known-logic4-guarded-member-body-v2;logic4-to-two-state-conversion-v1;"
+          "logic9-word-ops-copy-not-and-or-xor-v1;"
           "logic4-unsigned-shift-v1;";
     if (generic_deferred_update) {
         impl->identity.append("generic-topology-fanout-zero-mask-v1;");
@@ -4091,7 +4239,7 @@ std::optional<RegionFrontierKernelPlan> RegionFrontierKernelPlan::try_create(
             for (const auto& operation : body.operations) {
                 if (static_cast<std::uint8_t>(operation.kind)
                     > static_cast<std::uint8_t>(
-                        BodyOperationKind::debug_noop)) {
+                        BodyOperationKind::copy_logic9_to_logic4)) {
                     body_shape_supported = false;
                     break;
                 }

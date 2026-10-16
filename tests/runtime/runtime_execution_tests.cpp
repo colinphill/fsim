@@ -1798,8 +1798,8 @@ void test_simir_alternate_executor_dynamic_wait()
                 == reference_result.callbacks_executed,
         "alternate dynamic wait must preserve run completion state");
     const std::vector<Change> expected {
-        { 2, 1, "1" },
-        { 3, 1, "0" },
+        { 2, 2, "1" },
+        { 3, 2, "0" },
     };
     require(
         reference_changes == expected
@@ -1812,29 +1812,53 @@ void test_simir_alternate_executor_dynamic_wait()
             == std::vector<InstructionIndex> { 0, 1, 4 },
         "alternate dynamic-wait frame resume sequence");
 
-    Interpreter invalid_dynamic_edge;
-    const auto vector_trigger = invalid_dynamic_edge.add_signal(
-        { "top.vector_trigger",
-            PackedLogic4::from_msb_string("00000000") });
+    Interpreter zero_width_dynamic_edge;
+    const auto empty_trigger = zero_width_dynamic_edge.add_signal(
+        { "top.empty_trigger",
+            PackedLogic4 { } });
     Process invalid_waiter;
     invalid_waiter.id = 0;
-    invalid_waiter.name = "invalid_dynamic_edge";
+    invalid_waiter.name = "zero_width_dynamic_edge";
     invalid_waiter.operations = {
-        WaitOn { { vector_trigger }, { EdgeKind::posedge } }, Halt { }
+        WaitOn { { empty_trigger }, { EdgeKind::posedge } }, Halt { }
     };
-    (void)invalid_dynamic_edge.add_process(
+    (void)zero_width_dynamic_edge.add_process(
         std::move(invalid_waiter));
     try {
-        (void)invalid_dynamic_edge.run();
+        (void)zero_width_dynamic_edge.run();
         throw std::runtime_error(
-            "a vector dynamic edge wait was accepted");
+            "a zero-width dynamic edge wait was accepted");
     } catch (const InterpreterError& error) {
         require(
             std::string_view { error.what() }.find(
-                "WaitOn edge requires a scalar signal")
+                "WaitOn edge requires a non-empty signal")
                 != std::string_view::npos,
             "dynamic edge width diagnostic");
     }
+
+    Interpreter zero_width_static_edge;
+    const auto empty_static_trigger = zero_width_static_edge.add_signal(
+        { "top.empty_static_trigger",
+            PackedLogic4 { } });
+    Process invalid_static_edge;
+    invalid_static_edge.id = 0;
+    invalid_static_edge.name = "zero_width_static_edge";
+    invalid_static_edge.static_sensitivity = {
+        { empty_static_trigger, EdgeKind::posedge }
+    };
+    invalid_static_edge.operations = { WaitSensitivity { }, Halt { } };
+    bool rejected_static_edge = false;
+    try {
+        (void)zero_width_static_edge.add_process(
+            std::move(invalid_static_edge));
+    } catch (const std::invalid_argument& error) {
+        rejected_static_edge = std::string_view { error.what() }.find(
+                                   "edge sensitivity requires a non-empty signal")
+            != std::string_view::npos;
+    }
+    require(
+        rejected_static_edge,
+        "a zero-width static edge sensitivity must be rejected");
 
     Interpreter wait_pla_rearm;
     ContainerType memory_type;

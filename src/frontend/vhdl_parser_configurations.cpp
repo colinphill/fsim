@@ -34,7 +34,11 @@ VhdlParser::parse_vhdl_binding_indication(
     result.kind = VhdlBindingAspectKind::Entity;
     result.entity_name =
         parse_vhdl_selected_name(
-            "entity aspect in configuration binding");
+            "entity aspect in configuration binding",
+            &result.entity_reference_spelling);
+    result.entity_name_extended = previous().text.size() >= 2U
+        && previous().text.front() == '\\'
+        && previous().text.back() == '\\';
     // The architecture is optional (IEEE 1076-2008 7.3.2.2).
     if (match(TokenKind::LeftParen)) {
       const auto architecture =
@@ -42,6 +46,10 @@ VhdlParser::parse_vhdl_binding_indication(
               "architecture name in configuration binding");
       result.architecture_name =
           vhdl_name(architecture.text);
+      result.architecture_name_spelling = architecture.text;
+      result.architecture_name_extended = architecture.text.size() >= 2U
+          && architecture.text.front() == '\\'
+          && architecture.text.back() == '\\';
       expect(
           TokenKind::RightParen,
           "')' after configured architecture name",
@@ -51,7 +59,11 @@ VhdlParser::parse_vhdl_binding_indication(
     result.kind = VhdlBindingAspectKind::Configuration;
     result.configuration_name =
         parse_vhdl_selected_name(
-            "configuration aspect in configuration binding");
+            "configuration aspect in configuration binding",
+            &result.configuration_reference_spelling);
+    result.configuration_name_extended = previous().text.size() >= 2U
+        && previous().text.front() == '\\'
+        && previous().text.back() == '\\';
   } else if (match_keyword("open", true)) {
     result.kind = VhdlBindingAspectKind::Open;
   } else {
@@ -208,6 +220,8 @@ VhdlParser::parse_vhdl_block_configuration(
       expect_identifier(
           "block or generate name in configuration");
   result.block_name = vhdl_name(block.text);
+  result.block_name_extended = block.text.size() >= 2U
+      && block.text.front() == '\\' && block.text.back() == '\\';
   if (match(TokenKind::LeftParen)) {
     // A generate specification is a static expression or a static discrete
     // range (IEEE 1076-2008 3.4.2).
@@ -289,6 +303,9 @@ DesignUnit VhdlParser::parse_vhdl_configuration(
   const auto entity_name =
       parse_vhdl_selected_name(
           "entity name in configuration declaration");
+  unit.vhdl_extended_primary_name = previous().text.size() >= 2U
+      && previous().text.front() == '\\'
+      && previous().text.back() == '\\';
   const auto separator = entity_name.find_last_of('.');
   unit.primary_name =
       entity_name.substr(

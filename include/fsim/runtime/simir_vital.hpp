@@ -512,6 +512,9 @@ void project_vital_memory_path_delay(
     SimulationTick now);
 
 struct VitalPathRuntimeValue {
+  // No prior event is represented by TIME'HIGH (the int64 max returned by
+  // SignalLastEvent) or the legacy UINT64_MAX direct-runtime sentinel. Every
+  // other value is interpreted as a real elapsed age.
   SimulationTick input_change_time{};
   bool condition{};
   std::array<SimulationTick, 6> delays{};

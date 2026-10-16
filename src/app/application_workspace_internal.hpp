@@ -20,11 +20,15 @@ bool workspace_error(diagnostic::Engine&, std::string);
     std::string_view replacement_library, std::span<const std::string> replaced_sources,
     diagnostic::Engine&);
 bool validate_workspace_dependencies(const WorkspaceCatalogs&, diagnostic::Engine&);
-[[nodiscard]] std::vector<workspace::UnitDependency> workspace_dependencies(
-    const semantic::CompiledDesign&, std::span<const semantic::UnitId>,
-    const WorkspaceCatalogs&);
-bool resolve_workspace_tops(project::Config&, const WorkspaceCatalogs&,
+bool hydrate_workspace_artifact_vhdl_identifier_forms(
+    const workspace::Store&, const workspace::LibraryLocation&,
+    workspace::ArtifactRecord&, diagnostic::Engine&);
+[[nodiscard]] std::optional<std::vector<workspace::UnitDependency>>
+workspace_dependencies(const workspace::Store&, const semantic::CompiledDesign&,
+    std::span<const semantic::UnitId>, const WorkspaceCatalogs&,
     diagnostic::Engine&);
+bool resolve_workspace_tops(project::Config&, const workspace::Store&,
+    WorkspaceCatalogs&, diagnostic::Engine&);
 
 // Shared phase implementation preserves the AOT receipt path after managed
 // object selection and transactional snapshot publication.

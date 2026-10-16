@@ -929,6 +929,102 @@ endmodule
                 }),
         "a procedural loop update still requires assignment or increment "
         "syntax");
+
+    const auto chained_receiver_assignments = parse_verilog(
+        SourceText { "chained_receiver_assignment.sv",
+            R"(
+class chained_receiver_assignment;
+  int entries[0:3];
+  function chained_receiver_assignment receiver_step();
+    return this;
+  endfunction
+  function int index_step();
+    return 1;
+  endfunction
+  function int value_step();
+    return 7;
+  endfunction
+  function void exercise();
+    receiver_step().entries[index_step()] = value_step();
+    process::self().srandom(7);
+  endfunction
+  task exercise_assignment_kinds();
+    receiver_step().entries[index_step()] <= value_step();
+    receiver_step().entries[index_step()] += value_step();
+  endtask
+endclass
+)" },
+        StandardRevision::SystemVerilog2017);
+    require(
+        chained_receiver_assignments.ok()
+            && chained_receiver_assignments.design.systemverilog_classes.size() == 1U,
+        "selected function-result assignment parses in a legal function body");
+    const auto& methods = chained_receiver_assignments.design
+                              .systemverilog_classes.front()
+                              .methods;
+    const auto selected_member_target_is_single_evaluation =
+        [](const Statement& statement) {
+            if (statement.kind != StatementKind::Assignment
+                || statement.target.kind != ExpressionKind::Index
+                || statement.target.operands.size() != 2U) {
+                return false;
+            }
+            const auto& selected_member = statement.target.operands.front();
+            const auto& index = statement.target.operands.back();
+            return selected_member.kind == ExpressionKind::Call
+                && selected_member.text == "@sv-select:entries"
+                && selected_member.operands.size() == 1U
+                && selected_member.operands.front().kind == ExpressionKind::Call
+                && selected_member.operands.front().text == "receiver_step"
+                && index.kind == ExpressionKind::Call
+                && index.text == "index_step";
+        };
+    require(
+        methods.size() == 5U
+            && methods[3].kind == SystemVerilogClassMethodKind::Function
+            && methods[3].statements.size() == 2U
+            && selected_member_target_is_single_evaluation(
+                methods[3].statements[0])
+            && methods[3].statements[0].assignment_kind
+                == AssignmentKind::Blocking
+            && methods[3].statements[0].value.kind == ExpressionKind::Call
+            && methods[3].statements[0].value.text == "value_step"
+            && methods[3].statements[1].kind == StatementKind::ContainerMethod
+            && methods[3].statements[1].value.kind == ExpressionKind::Call
+            && methods[3].statements[1].value.text == ".srandom"
+            && methods[4].kind == SystemVerilogClassMethodKind::Task
+            && methods[4].statements.size() == 2U
+            && selected_member_target_is_single_evaluation(
+                methods[4].statements[0])
+            && methods[4].statements[0].assignment_kind
+                == AssignmentKind::NonBlocking
+            && selected_member_target_is_single_evaluation(
+                methods[4].statements[1])
+            && methods[4].statements[1].procedural_update_kind
+                == ProceduralUpdateKind::Compound
+            && methods[4].statements[1].procedural_update_operator == "+"
+            && methods[4].statements[1].value.kind == ExpressionKind::Binary
+            && methods[4].statements[1].value.operands.size() == 2U
+            && methods[4].statements[1].value.operands[1].kind
+                == ExpressionKind::Call
+            && methods[4].statements[1].value.operands[1].text == "value_step",
+        "selected assignment receiver and index stay single-evaluation; task "
+        "updates retain nonblocking and compound forms");
+
+    const auto bare_call_result_assignment = parse_verilog(
+        SourceText { "bare_call_result_assignment.sv",
+            R"(
+module bare_call_result_assignment;
+  function int receiver_step();
+    return 0;
+  endfunction
+  initial receiver_step() = 1;
+endmodule
+)" },
+        StandardRevision::SystemVerilog2017);
+    require(
+        !bare_call_result_assignment.ok(),
+        "a bare function result remains invalid as an assignment target");
 }
 
 void test_verilog_repeat_statements()

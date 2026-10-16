@@ -81,7 +81,8 @@ endif()
 fsim_collect_source_package_files("${FSIM_SOURCE_DIR}" FSIM_ACTUAL_FILES)
 fsim_load_source_package_exclusions("${FSIM_SOURCE_DIR}")
 foreach(FSIM_GENERATED IN ITEMS
-    .aws src/app/example.cpp.orig
+    .aws .claude agentwork fsim-compliance-policy-probe
+    src/app/example.cpp.orig
     .fsim .fsim/libraries/work/library.sqlite3
     examples/sample/.fsim/snapshots/default/runtime.bin)
   fsim_source_package_is_excluded("${FSIM_GENERATED}" FSIM_EXCLUDED)
@@ -89,7 +90,19 @@ foreach(FSIM_GENERATED IN ITEMS
     message(FATAL_ERROR "source-package policy includes workspace state: ${FSIM_GENERATED}")
   endif()
 endforeach()
+foreach(FSIM_LOCAL_DOC IN ITEMS
+    docs/gui-implementation-plan.md
+    docs/theta-gui-plan.md)
+  fsim_source_package_is_excluded("${FSIM_LOCAL_DOC}" FSIM_EXCLUDED)
+  if(NOT FSIM_EXCLUDED)
+    message(FATAL_ERROR
+      "source-package policy includes unrelated GUI planning document: "
+      "${FSIM_LOCAL_DOC}")
+  endif()
+endforeach()
 foreach(FSIM_OWNED IN ITEMS
+    docs/.claude/settings.json docs/agentwork/candidate.patch
+    docs/fsim-compliance-policy-probe/README.md
     docs/workspace-mode.md src/app/application_workspace_store.cpp
     third_party/sqlite-3.53.4/sqlite-amalgamation-3530400.zip
     third_party/mimalloc-3.5.3/mimalloc-3.5.3.tar.gz)
@@ -199,5 +212,5 @@ endforeach()
 
 list(LENGTH FSIM_MANIFEST_FILES FSIM_FILE_COUNT)
 message(STATUS
-  "source-package manifest: ${FSIM_FILE_COUNT} ordered files, 29 exclusions, "
+  "source-package manifest: ${FSIM_FILE_COUNT} ordered files, 34 exclusions, "
   "five negative classes")

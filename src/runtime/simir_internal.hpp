@@ -256,6 +256,8 @@ void validate_container_value(const ContainerValue& value);
 [[nodiscard]] bool edge_matches(EdgeKind edge, Logic4 old_value,
     Logic4 new_value) noexcept;
 
+[[nodiscard]] Logic4 edge_value(const PackedLogic4& value) noexcept;
+
 [[nodiscard]] PackedLogic4 unary_not(const PackedLogic4& source);
 
 [[nodiscard]] Logic4 truth_value(const PackedLogic4& source);
@@ -1150,6 +1152,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
         bool callable_registers_suspended { };
         // A mailbox wake result must survive stale sibling activation captures.
         std::optional<RegisterId> pending_mailbox_result;
+        std::optional<StringRegisterId> pending_mailbox_string_result;
         std::optional<ProcessId> fork_parent;
         std::optional<InstructionIndex> fork_site;
         std::optional<std::uint64_t> fork_group;
@@ -1510,6 +1513,7 @@ struct Interpreter::Impl : SchedulerBatchTask {
     struct MailboxReader {
         ProcessId process { };
         RegisterId destination { };
+        StringRegisterId string_destination { };
         bool peek { };
     };
 
@@ -1553,12 +1557,15 @@ struct Interpreter::Impl : SchedulerBatchTask {
     struct MailboxWriter {
         ProcessId process { };
         PackedLogic4 value;
+        std::string string_value;
     };
 
     struct MailboxState {
+        MailboxElementKind element_kind { MailboxElementKind::packed };
         std::uint32_t element_width { };
         std::size_t capacity { };
         std::deque<PackedLogic4> entries;
+        std::deque<std::string> string_entries;
         std::deque<MailboxReader> readers;
         std::deque<MailboxWriter> writers;
     };
@@ -2030,6 +2037,21 @@ struct Interpreter::Impl : SchedulerBatchTask {
     std::vector<std::optional<ScheduledTaskHandle>> charge_decay_handles;
     std::vector<std::unique_ptr<PackedLogic4>> charge_values;
     std::vector<PackedLogic4> signal_last_values;
+    struct SignalSelectionHistory {
+        SignalSelection selection;
+        PackedLogic4 last_value;
+        std::optional<std::pair<SimulationTick, std::uint64_t>> last_event;
+        std::optional<std::pair<SimulationTick, std::uint64_t>>
+            last_transaction;
+        bool transaction_pending { };
+    };
+    std::vector<std::vector<SignalSelectionHistory>>
+        signal_selection_histories;
+    std::vector<std::uint8_t>
+        signal_selection_transaction_region_pending;
+    std::vector<std::uint8_t>
+        signal_selection_transaction_pending_listed;
+    std::vector<SignalId> signal_selection_pending_transaction_signals;
     std::vector<std::uint64_t> signal_value_revisions;
     std::vector<PackedLogic4> sampled_values;
     std::vector<PackedLogic4> sampled_defaults;
@@ -3909,13 +3931,16 @@ struct Interpreter::Impl : SchedulerBatchTask {
     CoverageDatabaseControlHook coverage_database_control_hook;
     std::shared_ptr<const ForkSpawnFilter> fork_spawn_filter;
     ClassAllocateHook class_allocate_hook;
+    ClassAllocateContextHook class_allocate_context_hook;
     ClassPropertyReadHook class_property_read_hook;
     ClassPropertyWriteHook class_property_write_hook;
     ClassPropertyContainerHook class_property_container_hook;
     ClassMethodCallHook class_method_call_hook;
+    ClassMethodCallContextHook class_method_call_context_hook;
     ClassStaticPropertyReadHook class_static_property_read_hook;
     ClassStaticPropertyWriteHook class_static_property_write_hook;
     ClassStaticMethodCallHook class_static_method_call_hook;
+    ClassStaticMethodCallContextHook class_static_method_call_context_hook;
     DpiFunctionCallHook dpi_function_call_hook;
     std::optional<MonitorInstall> monitor;
     std::vector<std::uint8_t> monitor_signal_watch_mask;
@@ -3931,6 +3956,27 @@ struct Interpreter::Impl : SchedulerBatchTask {
     bool has_bidirectional_switches { };
     bool switch_refreshing { };
     bool started { };
+    struct PackageStaticStartupCallback {
+        std::uint64_t startup_order { };
+        std::vector<SignalId> writable_signal_ids;
+        std::vector<StringObjectId> writable_string_object_ids;
+        std::vector<ContainerObjectId> writable_container_object_ids;
+        std::function<void()> callback;
+    };
+    std::vector<PackageStaticStartupCallback>
+        package_static_startup_callbacks;
+    bool package_static_startup_registration_closed { };
+    bool package_static_startup_actions_entered { };
+    bool start_in_progress { };
+    bool package_static_initialization_active { };
+    bool package_static_initialization_callback_active { };
+    std::size_t package_static_initialization_callback_index {
+        std::numeric_limits<std::size_t>::max()
+    };
+    ProcessId package_static_initialization_process {
+        std::numeric_limits<ProcessId>::max()
+    };
+    std::vector<ProcessId> package_static_startup_signal_processes;
     bool validation_only { };
     bool stopped_by_design { };
     // A `$stop` executed by a final procedure (IEEE 1800-2017 9.2.3).
@@ -4399,6 +4445,10 @@ struct Interpreter::Impl : SchedulerBatchTask {
         ProcessState& process,
         const RegisterId destination,
         const PackedLogic4& value);
+    void write_process_string_register(
+        ProcessState& process,
+        StringRegisterId destination,
+        std::string_view value);
 
     void install_deferred_executor(ProcessState& process);
     void advance_process_executor_generation(ProcessState& process) noexcept;
@@ -4880,6 +4930,18 @@ struct Interpreter::Impl : SchedulerBatchTask {
         // Only a caller holding a complete prepared A4 write may skip the
         // ordinary prewrite unbind and stored-plane mirror.
         bool authoritative_write_prepared = false);
+    void register_signal_selection(
+        SignalId signal_id, SignalSelection selection);
+    [[nodiscard]] const SignalSelectionHistory* find_signal_selection_history(
+        SignalId signal_id, SignalSelection selection) const noexcept;
+    void stage_selected_signal_transaction(
+        SignalId signal_id, std::size_t offset, std::size_t width);
+    void stage_selected_signal_transaction_mask(
+        SignalId signal_id, std::span<const std::uint64_t> mask_words);
+    void note_selected_signal_transaction(SignalId signal_id);
+    void clear_pending_selected_signal_transactions() noexcept;
+    void update_selected_signal_value_history(
+        SignalId signal_id, std::uint64_t generic_delta);
     void publish_value_change(
         SignalId signal_id,
         bool notify_fanout,
@@ -4924,6 +4986,18 @@ struct Interpreter::Impl : SchedulerBatchTask {
         SignalId signal_id,
         PackedLogic4 value,
         SignalChangeOrigin origin = { });
+
+    void initialize_package_static_signal(
+        SignalId signal_id,
+        PackedLogic4 value);
+    void initialize_package_static_string_object(
+        StringObjectId object_id,
+        std::string_view value,
+        std::optional<ProcessId> process = std::nullopt);
+    void initialize_package_static_container_object(
+        ContainerObjectId object_id,
+        const ContainerValue& value,
+        std::optional<ProcessId> process = std::nullopt);
 
     void commit_direct_single_driver(
         SignalId signal_id, PackedLogic4 value);

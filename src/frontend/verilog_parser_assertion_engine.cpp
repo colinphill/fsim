@@ -25,15 +25,24 @@
 namespace fsim::frontend {
 namespace {
 
-constexpr std::size_t maximum_states = 192U;
+constexpr std::size_t maximum_states = 2048U;
 constexpr std::int64_t unbounded = -1;
 
 struct SequenceNode;
 using SequencePointer = std::shared_ptr<SequenceNode>;
 
+struct SequenceMatchItem {
+    std::string target;
+    Expression value;
+    SourceSpan span;
+};
+using SequenceMatchItems = std::vector<SequenceMatchItem>;
+using PropertyLocalNames = std::set<std::string, std::less<>>;
+
 enum class SequenceKind {
     boolean,
     concatenation,
+    match_items,
     repetition,
     goto_repetition,
     nonconsecutive_repetition,
@@ -51,6 +60,7 @@ enum class SequenceKind {
 struct SequenceNode {
     SequenceKind kind { SequenceKind::boolean };
     std::optional<Expression> condition;
+    SequenceMatchItems match_items;
     SequencePointer left;
     SequencePointer right;
     std::int64_t minimum { };
@@ -86,10 +96,14 @@ class PropertyParser {
 public:
     PropertyParser(std::span<const Token> tokens, const DesignUnit& unit,
         std::function<std::optional<Expression>(std::span<const Token>)>
-            boolean)
+            boolean,
+        bool local_flow_mode = false,
+        const PropertyLocalNames* local_names = nullptr)
         : tokens_(tokens.begin(), tokens.end())
         , unit_(unit)
         , boolean_(std::move(boolean))
+        , local_flow_mode_(local_flow_mode)
+        , local_names_(local_names)
     {
     }
 
@@ -313,7 +327,8 @@ private:
             PropertyParser inner { std::span<const Token> {
                                        tokens_.data() + position_ + 2U,
                                        *close - position_ - 2U },
-                unit_, boolean_ };
+                unit_, boolean_, local_flow_mode_, local_names_ };
+            inner.depth_ = depth_;
             auto sequence = inner.parse_sequence_only();
             if (!sequence) {
                 return nullptr;
@@ -331,7 +346,8 @@ private:
                 PropertyParser inner { std::span<const Token> {
                                            tokens_.data() + position_ + 1U,
                                            *close - position_ - 1U },
-                    unit_, boolean_ };
+                    unit_, boolean_, local_flow_mode_, local_names_ };
+                inner.depth_ = depth_;
                 if (auto property = inner.parse();
                     property && property->kind != PropertyKind::sequence) {
                     position_ = *close + 1U;
@@ -679,8 +695,9 @@ private:
         if (!body) {
             return nullptr;
         }
-        PropertyParser inner { *body, unit_, boolean_ };
-        inner.depth_ = depth_;
+        PropertyParser inner {
+            *body, unit_, boolean_, local_flow_mode_, local_names_ };
+        inner.depth_ = depth_ + 1U;
         return inner.parse_sequence_only();
     }
 
@@ -690,7 +707,10 @@ private:
         const SystemVerilogAssertionDeclaration& declaration,
         std::span<const Token> actual_tokens)
     {
-        if (++depth_ > 16U) {
+        if (!declaration.local_variables.empty()) {
+            return std::nullopt;
+        }
+        if (depth_ >= 16U) {
             return std::nullopt;
         }
         std::vector<std::vector<Token>> actuals;
@@ -773,14 +793,196 @@ private:
         if (!body) {
             return nullptr;
         }
-        PropertyParser inner { *body, unit_, boolean_ };
-        inner.depth_ = depth_;
+        PropertyParser inner {
+            *body, unit_, boolean_, local_flow_mode_, local_names_ };
+        inner.depth_ = depth_ + 1U;
         auto property = inner.parse_property();
         if (!property || inner.position_ != inner.tokens_.size()) {
             return nullptr;
         }
         position_ = next;
         return property;
+    }
+
+    [[nodiscard]] bool mentions_local(
+        const std::span<const Token> tokens) const
+    {
+        return local_names_ != nullptr
+            && std::ranges::any_of(tokens, [&](const Token& token) {
+                return token.kind == TokenKind::Identifier
+                    && local_names_->contains(token.text);
+            });
+    }
+
+    [[nodiscard]] std::optional<Expression> flow_item_value(
+        const std::span<const Token> tokens) const
+    {
+        if (tokens.empty()) {
+            return std::nullopt;
+        }
+        if (auto value = boolean_(tokens)) {
+            return value;
+        }
+        if (mentions_local(tokens)) {
+            return std::nullopt;
+        }
+        // The local-flow pass only inspects local references. A legal
+        // nonlocal expression outside its bounded expression grammar cannot
+        // read an attempt-local value.
+        const auto span = cover(tokens.front().span, tokens.back().span);
+        return Expression { ExpressionKind::BooleanLiteral, "1", { }, span };
+    }
+
+    [[nodiscard]] std::optional<SequenceMatchItem> local_flow_match_item(
+        const std::span<const Token> item) const
+    {
+        if (item.empty()) {
+            return std::nullopt;
+        }
+        const auto span = cover(item.front().span, item.back().span);
+        const auto assignment_operator = [](const TokenKind kind)
+            -> std::optional<std::string_view> {
+            switch (kind) {
+            case TokenKind::Assign:
+                return std::string_view { };
+            case TokenKind::PlusAssign:
+                return "+";
+            case TokenKind::MinusAssign:
+                return "-";
+            case TokenKind::StarAssign:
+                return "*";
+            case TokenKind::SlashAssign:
+                return "/";
+            case TokenKind::PercentAssign:
+                return "%";
+            case TokenKind::AmpersandAssign:
+                return "&";
+            case TokenKind::PipeAssign:
+                return "|";
+            case TokenKind::CaretAssign:
+                return "^";
+            case TokenKind::ShiftLeftAssign:
+                return "<<";
+            case TokenKind::ShiftRightAssign:
+                return ">>";
+            case TokenKind::ArithmeticShiftLeftAssign:
+                return "<<<";
+            case TokenKind::ArithmeticShiftRightAssign:
+                return ">>>";
+            default:
+                return std::nullopt;
+            }
+        };
+        if (item.size() >= 3U
+            && item.front().kind == TokenKind::Identifier) {
+            if (const auto operation = assignment_operator(item[1U].kind)) {
+                auto value = flow_item_value(item.subspan(2U));
+                if (!value) {
+                    return std::nullopt;
+                }
+                if (!operation->empty()) {
+                    value = Expression {
+                        ExpressionKind::Binary, std::string { *operation },
+                        { Expression { ExpressionKind::Identifier,
+                              item.front().text, { }, item.front().span },
+                            std::move(*value) },
+                        span };
+                }
+                return SequenceMatchItem {
+                    item.front().text, std::move(*value), span };
+            }
+        }
+        if (item.size() == 2U) {
+            const auto target = item.front().kind == TokenKind::Identifier
+                    && (item.back().kind == TokenKind::PlusPlus
+                        || item.back().kind == TokenKind::MinusMinus)
+                ? &item.front()
+                : item.back().kind == TokenKind::Identifier
+                        && (item.front().kind == TokenKind::PlusPlus
+                            || item.front().kind == TokenKind::MinusMinus)
+                ? &item.back()
+                : nullptr;
+            if (target != nullptr) {
+                const bool increment = item.front().kind == TokenKind::PlusPlus
+                    || item.back().kind == TokenKind::PlusPlus;
+                Expression value {
+                    ExpressionKind::Binary, increment ? "+" : "-",
+                    { Expression { ExpressionKind::Identifier,
+                          target->text, { }, target->span },
+                        Expression { ExpressionKind::IntegerLiteral,
+                            "1", { }, target->span } },
+                    span };
+                return SequenceMatchItem { target->text,
+                    std::move(value), span };
+            }
+        }
+        if (item.size() >= 3U
+            && item.front().kind == TokenKind::Identifier
+            && item[1U].kind == TokenKind::LeftParen
+            && item.back().kind == TokenKind::RightParen) {
+            const auto arguments = item.subspan(2U, item.size() - 3U);
+            const auto actuals = arguments.empty()
+                ? std::vector<std::vector<Token>> { }
+                : split_top_level(arguments, TokenKind::Comma);
+            const auto callable_name = item.front().text;
+            const auto task = std::ranges::find_if(unit_.tasks,
+                [&](const TaskDeclaration& declaration) {
+                    return declaration.name == callable_name;
+                });
+            const auto function = std::ranges::find_if(unit_.functions,
+                [&](const FunctionDeclaration& declaration) {
+                    return declaration.name == callable_name;
+                });
+            const auto has_writable_local_actual = [&](const auto& formals) {
+                for (std::size_t index = 0U;
+                    index < actuals.size(); ++index) {
+                    if (!mentions_local(
+                            std::span<const Token> { actuals[index] })) {
+                        continue;
+                    }
+                    if (index >= formals.size()
+                        || formals[index].direction != PortDirection::Input
+                        || (formals[index].reference
+                            && !formals[index].const_reference)) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            const bool has_local_argument = std::ranges::any_of(actuals,
+                [&](const std::vector<Token>& actual) {
+                    return mentions_local(std::span<const Token> { actual });
+                });
+            if (has_local_argument
+                && ((task != unit_.tasks.end()
+                        && has_writable_local_actual(task->arguments))
+                    || (function != unit_.functions.end()
+                        && has_writable_local_actual(function->arguments))
+                    || (task == unit_.tasks.end()
+                        && function == unit_.functions.end()))) {
+                return std::nullopt;
+            }
+            Expression call {
+                ExpressionKind::Call, callable_name, { }, span };
+            for (const auto& actual_tokens : actuals) {
+                const std::span<const Token> actual { actual_tokens };
+                if (actual.empty()) {
+                    return std::nullopt;
+                }
+                auto value = flow_item_value(actual);
+                if (!value) {
+                    return std::nullopt;
+                }
+                call.operands.push_back(std::move(*value));
+            }
+            return SequenceMatchItem { { }, std::move(call), span };
+        }
+        if (mentions_local(item)) {
+            return std::nullopt;
+        }
+        return SequenceMatchItem {
+            { }, Expression { ExpressionKind::BooleanLiteral, "1", { }, span },
+            span };
     }
 
     [[nodiscard]] SequencePointer parse_primary()
@@ -794,12 +996,51 @@ private:
             if (!close) {
                 return nullptr;
             }
-            PropertyParser inner { std::span<const Token> {
-                                       tokens_.data() + position_ + 2U,
-                                       *close - position_ - 2U },
-                unit_, boolean_ };
+            const std::span<const Token> inside {
+                tokens_.data() + position_ + 2U,
+                *close - position_ - 2U };
+            if (!local_flow_mode_) {
+                PropertyParser inner { inside, unit_, boolean_ };
+                inner.depth_ = depth_;
+                auto sequence = inner.parse_sequence_only();
+                if (!sequence) {
+                    return nullptr;
+                }
+                position_ = *close + 1U;
+                return sequence;
+            }
+            const auto elements = split_top_level(inside, TokenKind::Comma);
+            if (elements.empty()
+                || std::ranges::any_of(elements,
+                    [](const std::span<const Token> element) {
+                        return element.empty();
+                    })) {
+                return nullptr;
+            }
+            PropertyParser inner {
+                elements.front(), unit_, boolean_, local_flow_mode_,
+                local_names_ };
+            inner.depth_ = depth_;
+            auto sequence = inner.parse_sequence_only();
+            if (!sequence) {
+                return nullptr;
+            }
+            if (elements.size() > 1U) {
+                auto node = std::make_shared<SequenceNode>();
+                node->kind = SequenceKind::match_items;
+                node->left = std::move(sequence);
+                for (std::size_t index = 1U;
+                    index < elements.size(); ++index) {
+                    auto parsed = local_flow_match_item(elements[index]);
+                    if (!parsed) {
+                        return nullptr;
+                    }
+                    node->match_items.push_back(std::move(*parsed));
+                }
+                sequence = std::move(node);
+            }
             position_ = *close + 1U;
-            return inner.parse_sequence_only();
+            return sequence;
         }
         // A named sequence, with or without actual arguments.
         if (tokens_[position_].kind == TokenKind::Identifier) {
@@ -842,9 +1083,40 @@ private:
             }
             const std::span<const Token> inside {
                 tokens_.data() + position_ + 1U, *close - position_ - 1U };
+            const auto elements = split_top_level(inside, TokenKind::Comma);
+            if (elements.size() > 1U) {
+                auto condition = boolean_(elements.front());
+                if (!condition) {
+                    return nullptr;
+                }
+                SequenceMatchItems match_items;
+                for (std::size_t item_index = 1U;
+                    item_index < elements.size(); ++item_index) {
+                    const auto item = elements[item_index];
+                    if (item.size() < 3U
+                        || item.front().kind != TokenKind::Identifier
+                        || item[1U].kind != TokenKind::Assign) {
+                        return nullptr;
+                    }
+                    const std::span<const Token> item_tokens { item };
+                    auto value = boolean_(item_tokens.subspan(2U));
+                    if (!value) {
+                        return nullptr;
+                    }
+                    match_items.push_back({ item.front().text,
+                        std::move(*value),
+                        cover(item.front().span, item.back().span) });
+                }
+                auto node = std::make_shared<SequenceNode>();
+                node->condition = std::move(condition);
+                node->match_items = std::move(match_items);
+                position_ = *close + 1U;
+                return node;
+            }
             if (boolean_end(*close + 1U) == *close + 1U
                 && !boolean_(inside)) {
-                PropertyParser inner { inside, unit_, boolean_ };
+                PropertyParser inner {
+                    inside, unit_, boolean_, local_flow_mode_, local_names_ };
                 inner.depth_ = depth_;
                 auto sequence = inner.parse_sequence_only();
                 if (sequence) {
@@ -871,6 +1143,8 @@ private:
     std::vector<Token> tokens_;
     const DesignUnit& unit_;
     std::function<std::optional<Expression>(std::span<const Token>)> boolean_;
+    bool local_flow_mode_ { };
+    const PropertyLocalNames* local_names_ { };
     std::size_t position_ { };
     std::size_t depth_ { };
 };
@@ -882,6 +1156,7 @@ struct Automaton {
         std::size_t from { };
         std::size_t to { };
         std::optional<Expression> guard;
+        SequenceMatchItems match_items;
     };
     std::size_t states { };
     std::vector<Transition> transitions;
@@ -947,7 +1222,12 @@ public:
         }
         switch (node.kind) {
         case SequenceKind::boolean:
-            return consume(conjunction(guard, node.condition, span_));
+            return consume(conjunction(guard, node.condition, span_),
+                node.match_items);
+        case SequenceKind::match_items:
+            // This wrapper exists only in the local-flow parser. Runtime
+            // sequence match actions are retained by assertion resolution.
+            return std::nullopt;
         case SequenceKind::throughout:
             return build(*node.left, conjunction(guard, node.condition, span_));
         case SequenceKind::alternation: {
@@ -1009,9 +1289,9 @@ public:
             const auto end = automaton_.add();
             automaton_.epsilons.emplace_back(repeated->end, end);
             automaton_.transitions.push_back(
-                { repeated->end, tail, conjunction(guard, negated, span_) });
+                { repeated->end, tail, conjunction(guard, negated, span_), { } });
             automaton_.transitions.push_back(
-                { tail, tail, conjunction(guard, negated, span_) });
+                { tail, tail, conjunction(guard, negated, span_), { } });
             automaton_.epsilons.emplace_back(tail, end);
             return Fragment { repeated->start, end };
         }
@@ -1023,6 +1303,7 @@ private:
     struct Move {
         std::size_t to { };
         std::optional<Expression> guard;
+        SequenceMatchItems match_items;
         bool accepting { };
     };
     static constexpr std::size_t done = std::numeric_limits<std::size_t>::max();
@@ -1035,6 +1316,7 @@ private:
             for (const auto& transition : automaton.transitions) {
                 if (transition.from == source) {
                     result.push_back({ transition.to, transition.guard,
+                        transition.match_items,
                         automaton.closure(transition.to).contains(end) });
                 }
             }
@@ -1078,10 +1360,10 @@ private:
             pending.pop_back();
             const auto from = states.at({ a, b });
             const auto a_moves = a == done
-                ? std::vector<Move> { Move { done, std::nullopt, true } }
+                ? std::vector<Move> { Move { done, std::nullopt, { }, true } }
                 : moves(left_automaton, a, left->end);
             const auto b_moves = b == done
-                ? std::vector<Move> { Move { done, std::nullopt, true } }
+                ? std::vector<Move> { Move { done, std::nullopt, { }, true } }
                 : moves(right_automaton, b, right->end);
             for (const auto& a_move : a_moves) {
                 for (const auto& b_move : b_moves) {
@@ -1089,19 +1371,27 @@ private:
                         conjunction(a_move.guard, b_move.guard, span_), span_);
                     if (a_move.accepting && b_move.accepting) {
                         automaton_.transitions.push_back(
-                            { from, result.end, combined });
+                            { from, result.end, combined,
+                                merge_match_items(a_move.match_items,
+                                    b_move.match_items) });
                     }
                     if (a_move.to != done && b_move.to != done) {
                         automaton_.transitions.push_back(
-                            { from, state(a_move.to, b_move.to), combined });
+                            { from, state(a_move.to, b_move.to), combined,
+                                merge_match_items(a_move.match_items,
+                                    b_move.match_items) });
                     }
                     if (conjunctive && a_move.accepting && b_move.to != done) {
                         automaton_.transitions.push_back(
-                            { from, state(done, b_move.to), combined });
+                            { from, state(done, b_move.to), combined,
+                                merge_match_items(a_move.match_items,
+                                    b_move.match_items) });
                     }
                     if (conjunctive && b_move.accepting && a_move.to != done) {
                         automaton_.transitions.push_back(
-                            { from, state(a_move.to, done), combined });
+                            { from, state(a_move.to, done), combined,
+                                merge_match_items(a_move.match_items,
+                                    b_move.match_items) });
                     }
                 }
             }
@@ -1112,10 +1402,20 @@ private:
         return result;
     }
 
-    [[nodiscard]] Fragment consume(const std::optional<Expression>& guard)
+    [[nodiscard]] static SequenceMatchItems merge_match_items(
+        const SequenceMatchItems& left, const SequenceMatchItems& right)
+    {
+        auto result = left;
+        result.insert(result.end(), right.begin(), right.end());
+        return result;
+    }
+
+    [[nodiscard]] Fragment consume(const std::optional<Expression>& guard,
+        const SequenceMatchItems& match_items = { })
     {
         const Fragment result { automaton_.add(), automaton_.add() };
-        automaton_.transitions.push_back({ result.start, result.end, guard });
+        automaton_.transitions.push_back(
+            { result.start, result.end, guard, match_items });
         return result;
     }
 
@@ -1145,12 +1445,12 @@ private:
             if (step == chain_end) {
                 if (maximum == unbounded) {
                     automaton_.transitions.push_back(
-                        { previous, previous, guard });
+                        { previous, previous, guard, { } });
                 }
                 break;
             }
             const auto next = automaton_.add();
-            automaton_.transitions.push_back({ previous, next, guard });
+            automaton_.transitions.push_back({ previous, next, guard, { } });
             previous = next;
         }
         return Fragment { left.start, right.end };
@@ -1173,7 +1473,8 @@ private:
                     continue;
                 }
                 automaton_.transitions.push_back({ last.from, first.to,
-                    conjunction(last.guard, first.guard, span_) });
+                    conjunction(last.guard, first.guard, span_),
+                    merge_match_items(last.match_items, first.match_items) });
             }
         }
     }
@@ -1227,19 +1528,61 @@ public:
     using TextParser
         = std::function<std::optional<Statement>(const std::string&)>;
 
+    struct Guard {
+        Expression expression;
+        std::string slot_index;
+    };
+
     EvaluationBuilder(const GeneralPropertyActions& actions, TextParser parse)
         : actions_(actions)
         , parse_(std::move(parse))
     {
+        for (std::size_t index = 0U; index < actions_.locals.size(); ++index) {
+            const auto& local = actions_.locals[index];
+            const auto storage = actions_.name_prefix + "_local"
+                + std::to_string(index);
+            if (local.name.empty() || local.type_spelling.empty()
+                || !local_storage_.emplace(local.name, storage).second) {
+                invalid_locals_ = true;
+                continue;
+            }
+            declarations_ += local.type_spelling + " " + storage + " [0:63]; ";
+        }
     }
 
     [[nodiscard]] std::optional<Statement> property(const PropertyNode& node)
     {
+        if (!local_flow_valid(node)) {
+            return std::nullopt;
+        }
+        // This evaluator represents one attempt per slot. Conditional
+        // properties and negated sequences need their own scoped attempt
+        // topology before local values can be forwarded safely.
+        if (!actions_.locals.empty()
+            && (node.kind == PropertyKind::conditional
+                || node.kind == PropertyKind::negation)) {
+            return std::nullopt;
+        }
         // New attempts start through a forked branch so that assertion
         // control ($assertoff, $assertkill) stops them; running attempts
         // continue (IEEE 1800-2017 20.12).
         std::string steps = "__fsim_pnew = 0; fork __fsim_pnew = 1; join ";
-        if (!step(node, "__fsim_pnew", steps)) {
+        if (!actions_.locals.empty()) {
+            steps += "if (__fsim_pnew == 0) __fsim_po = 0; ";
+        }
+        for (const auto& local : actions_.locals) {
+            const auto& storage = local_storage_.at(local.name);
+            steps += "if (__fsim_pnew != 0) begin " + storage
+                + "[__fsim_ps] = 'x; ";
+            if (local.initializer) {
+                steps += storage + "[__fsim_ps] = "
+                    + guard(*local.initializer, "__fsim_ps") + "; ";
+            }
+            steps += "end ";
+        }
+        if (!step(node,
+                actions_.locals.empty() ? "__fsim_pnew" : "__fsim_po",
+                steps)) {
             return std::nullopt;
         }
         // Outcomes are counted while the attempts advance and their actions
@@ -1283,8 +1626,62 @@ public:
         return statement;
     }
 
+    [[nodiscard]] bool local_flow_valid(const PropertyNode& node) const
+    {
+        if (invalid_locals_) {
+            return false;
+        }
+        if (!actions_.locals.empty() && actions_.disable
+            && expression_references_local(*actions_.disable)) {
+            // IEEE 1800-2017 16.12 prohibits local-variable references in a
+            // disable condition; check this on specialized routes as well.
+            return false;
+        }
+        LocalNames initially_assigned;
+        for (const auto& local : actions_.locals) {
+            if (local.initializer) {
+                if (!local_references_assigned(
+                        *local.initializer, initially_assigned)) {
+                    return false;
+                }
+                initially_assigned.insert(local.name);
+            }
+        }
+        if (actions_.locals.empty()) {
+            return true;
+        }
+        LocalFlowState flow;
+        return analyze_property_local_flow(
+            node, initially_assigned, flow);
+    }
+
 private:
     enum class Report { success, failure, vacuous };
+
+    [[nodiscard]] static bool automaton_has_cycle(
+        const Automaton& automaton, std::size_t start)
+    {
+        std::vector<std::vector<std::size_t>> edges(automaton.states);
+        for (const auto& [from, to] : automaton.epsilons) {
+            edges[from].push_back(to);
+        }
+        for (const auto& transition : automaton.transitions) {
+            edges[transition.from].push_back(transition.to);
+        }
+        std::vector<std::uint8_t> color(automaton.states);
+        const auto visit = [&](const auto& self, std::size_t state) -> bool {
+            color[state] = 1U;
+            for (const auto next : edges[state]) {
+                if (color[next] == 1U
+                    || (color[next] == 0U && self(self, next))) {
+                    return true;
+                }
+            }
+            color[state] = 2U;
+            return false;
+        };
+        return start < automaton.states && visit(visit, start);
+    }
 
     // The counter of `report` outcomes in this tick.
     [[nodiscard]] static std::string report_name(Report report)
@@ -1305,11 +1702,454 @@ private:
         return "__fsim_p" + std::to_string(next_name_++) + std::string { stem };
     }
 
-    std::string guard(const Expression& expression)
+    std::string guard(const Expression& expression,
+        std::string slot_index = { })
     {
         const auto name = "__fsim_g" + std::to_string(guards_.size());
-        guards_.push_back(expression);
+        guards_.push_back(
+            { expression, scope_generated_name(std::move(slot_index)) });
         return name;
+    }
+
+    [[nodiscard]] std::string scope_generated_name(std::string name) const
+    {
+        for (const std::string_view stem : { "__fsim_p", "__fsim_r" }) {
+            const auto replacement = actions_.name_prefix + "_"
+                + std::string { stem.substr(7U) };
+            for (auto at = name.find(stem); at != std::string::npos;
+                at = name.find(stem, at + replacement.size())) {
+                name.replace(at, stem.size(), replacement);
+            }
+        }
+        return name;
+    }
+
+    [[nodiscard]] bool expression_references_local(
+        const Expression& expression) const
+    {
+        if (expression.kind == ExpressionKind::Identifier
+            && local_storage_.contains(expression.text)) {
+            return true;
+        }
+        return std::ranges::any_of(expression.operands,
+            [&](const Expression& operand) {
+                return expression_references_local(operand);
+            });
+    }
+
+    using LocalNames = std::set<std::string, std::less<>>;
+
+    struct LocalFlowState {
+        LocalNames assigned;
+        LocalNames blocked;
+    };
+
+    [[nodiscard]] bool local_references_assigned(
+        const Expression& expression, const LocalNames& assigned) const
+    {
+        LocalNames references;
+        collect_local_references(expression, references);
+        return std::ranges::all_of(references,
+            [&](const std::string& name) {
+                return assigned.contains(name);
+            });
+    }
+
+    void collect_local_references(
+        const Expression& expression, LocalNames& references) const
+    {
+        if (expression.kind == ExpressionKind::Identifier
+            && local_storage_.contains(expression.text)) {
+            references.insert(expression.text);
+        }
+        for (const auto& operand : expression.operands) {
+            collect_local_references(operand, references);
+        }
+    }
+
+    void collect_local_references(
+        const SequenceNode& sequence, LocalNames& references) const
+    {
+        // IEEE 1800-2017 F.5.4 defines R[*0] as sampling no local variables.
+        // Its syntactic body cannot read or write an attempt-local value.
+        if (sequence.kind == SequenceKind::repetition
+            && sequence.maximum == 0) {
+            return;
+        }
+        if (sequence.condition) {
+            collect_local_references(*sequence.condition, references);
+        }
+        for (const auto& item : sequence.match_items) {
+            collect_local_references(item.value, references);
+        }
+        if (sequence.left) {
+            collect_local_references(*sequence.left, references);
+        }
+        if (sequence.right) {
+            collect_local_references(*sequence.right, references);
+        }
+    }
+
+    void collect_local_assignments(
+        const SequenceNode& sequence, LocalNames& assignments) const
+    {
+        // R[*0] has no sampled local variables, even when its parsed body
+        // contains match items.
+        if (sequence.kind == SequenceKind::repetition
+            && sequence.maximum == 0) {
+            return;
+        }
+        for (const auto& item : sequence.match_items) {
+            if (local_storage_.contains(item.target)) {
+                assignments.insert(item.target);
+            }
+        }
+        if (sequence.left) {
+            collect_local_assignments(*sequence.left, assignments);
+        }
+        if (sequence.right) {
+            collect_local_assignments(*sequence.right, assignments);
+        }
+    }
+
+    [[nodiscard]] bool has_local_activity(
+        const SequenceNode& sequence) const
+    {
+        LocalNames references;
+        LocalNames assignments;
+        collect_local_references(sequence, references);
+        collect_local_assignments(sequence, assignments);
+        return !references.empty() || !assignments.empty();
+    }
+
+    [[nodiscard]] bool analyze_sequence_local_flow(
+        const SequenceNode& sequence, const LocalNames& incoming,
+        LocalFlowState& output) const
+    {
+        output.assigned = incoming;
+        output.blocked.clear();
+        switch (sequence.kind) {
+        case SequenceKind::boolean:
+            if (sequence.condition
+                && !local_references_assigned(
+                    *sequence.condition, output.assigned)) {
+                return false;
+            }
+            for (const auto& item : sequence.match_items) {
+                if (!local_references_assigned(item.value, output.assigned)) {
+                    return false;
+                }
+                if (local_storage_.contains(item.target)) {
+                    output.assigned.insert(item.target);
+                    output.blocked.erase(item.target);
+                }
+            }
+            return true;
+        case SequenceKind::match_items:
+            if (!sequence.left
+                || !analyze_sequence_local_flow(
+                    *sequence.left, incoming, output)) {
+                return false;
+            }
+            for (const auto& item : sequence.match_items) {
+                if (!local_references_assigned(item.value, output.assigned)) {
+                    return false;
+                }
+                if (local_storage_.contains(item.target)) {
+                    output.assigned.insert(item.target);
+                    output.blocked.erase(item.target);
+                }
+            }
+            return true;
+        case SequenceKind::concatenation: {
+            LocalFlowState left;
+            if (sequence.left) {
+                if (!analyze_sequence_local_flow(
+                        *sequence.left, incoming, left)) {
+                    return false;
+                }
+            } else {
+                left.assigned = incoming;
+            }
+            if (!sequence.right) {
+                output = std::move(left);
+                return true;
+            }
+            if (!analyze_sequence_local_flow(
+                    *sequence.right, left.assigned, output)) {
+                return false;
+            }
+            for (const auto& name : left.blocked) {
+                if (!output.assigned.contains(name)) {
+                    output.blocked.insert(name);
+                }
+            }
+            return true;
+        }
+        case SequenceKind::alternation: {
+            if (!sequence.left || !sequence.right) {
+                return false;
+            }
+            LocalNames left_references;
+            LocalNames right_references;
+            LocalNames left_assignments;
+            LocalNames right_assignments;
+            collect_local_references(*sequence.left, left_references);
+            collect_local_references(*sequence.right, right_references);
+            collect_local_assignments(*sequence.left, left_assignments);
+            collect_local_assignments(*sequence.right, right_assignments);
+            for (const auto& [local, storage] : local_storage_) {
+                static_cast<void>(storage);
+                if ((left_references.contains(local)
+                        && right_assignments.contains(local))
+                    || (right_references.contains(local)
+                        && left_assignments.contains(local))) {
+                    return false;
+                }
+            }
+            LocalFlowState left;
+            LocalFlowState right;
+            if (!analyze_sequence_local_flow(
+                    *sequence.left, incoming, left)
+                || !analyze_sequence_local_flow(
+                    *sequence.right, incoming, right)) {
+                return false;
+            }
+            output.assigned.clear();
+            for (const auto& name : left.assigned) {
+                if (right.assigned.contains(name)) {
+                    output.assigned.insert(name);
+                }
+            }
+            output.blocked = std::move(left.blocked);
+            output.blocked.insert(
+                right.blocked.begin(), right.blocked.end());
+            for (const auto& name : output.assigned) {
+                output.blocked.erase(name);
+            }
+            return true;
+        }
+        case SequenceKind::conjunction:
+        case SequenceKind::intersection: {
+            if (!sequence.left || !sequence.right) {
+                return false;
+            }
+            LocalFlowState left;
+            LocalFlowState right;
+            if (!analyze_sequence_local_flow(
+                    *sequence.left, incoming, left)
+                || !analyze_sequence_local_flow(
+                    *sequence.right, incoming, right)) {
+                return false;
+            }
+            LocalNames left_references;
+            LocalNames right_references;
+            LocalNames left_assignments;
+            LocalNames right_assignments;
+            collect_local_references(*sequence.left, left_references);
+            collect_local_references(*sequence.right, right_references);
+            collect_local_assignments(*sequence.left, left_assignments);
+            collect_local_assignments(*sequence.right, right_assignments);
+            for (const auto& [local, storage] : local_storage_) {
+                static_cast<void>(storage);
+                if ((left_references.contains(local)
+                        && right_assignments.contains(local))
+                    || (right_references.contains(local)
+                        && left_assignments.contains(local))) {
+                    return false;
+                }
+            }
+            output.assigned.clear();
+            output.blocked = std::move(left.blocked);
+            output.blocked.insert(
+                right.blocked.begin(), right.blocked.end());
+            for (const auto& [local, storage] : local_storage_) {
+                static_cast<void>(storage);
+                const bool left_samples = left_assignments.contains(local);
+                const bool right_samples = right_assignments.contains(local);
+                const bool left_assigns_and_flows
+                    = left_samples
+                    && left.assigned.contains(local);
+                const bool right_assigns_and_flows
+                    = right_samples
+                    && right.assigned.contains(local);
+                // IEEE 1800-2017 F.5.4 blocks intersect on sampled overlap;
+                // `and` blocks only when the assignment flows out of both.
+                const bool blocks_parallel_flow
+                    = sequence.kind == SequenceKind::intersection
+                    ? left_samples && right_samples
+                    : left_assigns_and_flows && right_assigns_and_flows;
+                const bool blocked = output.blocked.contains(local)
+                    || blocks_parallel_flow;
+                if (blocked) {
+                    output.blocked.insert(local);
+                    continue;
+                }
+                if (left.assigned.contains(local)
+                    || right.assigned.contains(local)) {
+                    output.assigned.insert(local);
+                }
+            }
+            return true;
+        }
+        case SequenceKind::repetition: {
+            if (!sequence.left) {
+                return false;
+            }
+            LocalFlowState current;
+            current.assigned = incoming;
+            std::vector<std::pair<std::int64_t, LocalFlowState>> seen;
+            bool has_match_state = false;
+            std::int64_t count { };
+            std::int64_t cycle_start { -1 };
+            std::int64_t cycle_length { };
+            for (;;) {
+                if (count >= sequence.minimum
+                    && (sequence.maximum == unbounded
+                        || count <= sequence.maximum)) {
+                    if (!has_match_state) {
+                        output = current;
+                        has_match_state = true;
+                    } else {
+                        for (auto assigned = output.assigned.begin();
+                             assigned != output.assigned.end();) {
+                            if (!current.assigned.contains(*assigned)) {
+                                assigned = output.assigned.erase(assigned);
+                            } else {
+                                ++assigned;
+                            }
+                        }
+                        output.blocked.insert(
+                            current.blocked.begin(), current.blocked.end());
+                    }
+                }
+                if (sequence.maximum != unbounded
+                    && count >= sequence.maximum) {
+                    break;
+                }
+                auto prior = std::ranges::find_if(seen,
+                    [&](const auto& entry) {
+                        return entry.second.assigned == current.assigned
+                            && entry.second.blocked == current.blocked;
+                    });
+                if (prior != seen.end()) {
+                    if (cycle_length == 0) {
+                        cycle_start = prior->first;
+                        cycle_length = count - cycle_start;
+                    }
+                    if (cycle_length <= 0) {
+                        return false;
+                    }
+                    if (count < sequence.minimum) {
+                        const auto distance = sequence.minimum - count;
+                        count += (distance / cycle_length) * cycle_length;
+                    }
+                    if (count >= std::max(sequence.minimum, cycle_start)
+                            + cycle_length) {
+                        break;
+                    }
+                } else {
+                    seen.emplace_back(count, current);
+                }
+
+                LocalFlowState next;
+                if (!analyze_sequence_local_flow(
+                        *sequence.left, current.assigned, next)) {
+                    return false;
+                }
+                for (const auto& name : current.blocked) {
+                    if (!next.assigned.contains(name)) {
+                        next.blocked.insert(name);
+                    }
+                }
+                current = std::move(next);
+                if (count == std::numeric_limits<std::int64_t>::max()) {
+                    return false;
+                }
+                ++count;
+            }
+            return has_match_state;
+        }
+        case SequenceKind::throughout:
+            if ((sequence.condition
+                    && expression_references_local(*sequence.condition))
+                || (sequence.left
+                    && has_local_activity(*sequence.left))) {
+                return false;
+            }
+            return !sequence.left
+                || analyze_sequence_local_flow(
+                    *sequence.left, incoming, output);
+        case SequenceKind::goto_repetition:
+        case SequenceKind::nonconsecutive_repetition:
+            if (has_local_activity(sequence)) {
+                return false;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    [[nodiscard]] bool analyze_property_local_flow(
+        const PropertyNode& property, const LocalNames& incoming,
+        LocalFlowState& output) const
+    {
+        switch (property.kind) {
+        case PropertyKind::sequence:
+            return property.sequence
+                && analyze_sequence_local_flow(
+                    *property.sequence, incoming, output);
+        case PropertyKind::implication:
+        case PropertyKind::followed_by: {
+            if (!property.sequence || !property.first) {
+                return false;
+            }
+            LocalFlowState antecedent;
+            if (!analyze_sequence_local_flow(
+                    *property.sequence, incoming, antecedent)
+                || !analyze_property_local_flow(
+                    *property.first, antecedent.assigned, output)) {
+                return false;
+            }
+            for (const auto& name : antecedent.blocked) {
+                if (!output.assigned.contains(name)) {
+                    output.blocked.insert(name);
+                }
+            }
+            return true;
+        }
+        case PropertyKind::conditional:
+        case PropertyKind::negation:
+            return false;
+        }
+        return false;
+    }
+
+    bool substitute_local_references(Expression& expression,
+        const std::string& slot_index) const
+    {
+        if (expression.kind == ExpressionKind::Identifier) {
+            const auto local = local_storage_.find(expression.text);
+            if (local != local_storage_.end()) {
+                if (slot_index.empty()) {
+                    return false;
+                }
+                const auto span = expression.span;
+                expression = Expression { ExpressionKind::Index, "index",
+                    { Expression { ExpressionKind::Identifier,
+                          local->second, { }, span },
+                        Expression { ExpressionKind::Identifier,
+                            slot_index, { }, span } },
+                    span };
+                return true;
+            }
+        }
+        for (auto& operand : expression.operands) {
+            if (!substitute_local_references(operand, slot_index)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     // Emits the steps of `node` for `start` new attempts this tick.
@@ -1321,12 +2161,18 @@ private:
             return sequence(*node.sequence, start, true, Report::success,
                 Report::failure, out, nullptr);
         case PropertyKind::negation:
+            if (!actions_.locals.empty()) {
+                return false;
+            }
             if (node.first->kind != PropertyKind::sequence) {
                 return false;
             }
             return sequence(*node.first->sequence, start, true,
                 Report::failure, Report::success, out, nullptr);
         case PropertyKind::conditional: {
+            if (!actions_.locals.empty()) {
+                return false;
+            }
             const auto first = fresh("_k1");
             const auto second = fresh("_k2");
             const auto vacuous = fresh("_kv");
@@ -1380,8 +2226,9 @@ private:
             if (delayed) {
                 const auto previous = fresh("_dp");
                 const auto current = fresh("_dc");
-                declarations_ += "int unsigned " + previous + ", " + current
-                    + "; ";
+                declarations_ += actions_.locals.empty()
+                    ? "int unsigned " + previous + ", " + current + "; "
+                    : "bit [63:0] " + previous + ", " + current + "; ";
                 cleared_.push_back(previous);
                 out += current + " = " + previous + "; " + previous + " = "
                     + matches + "; ";
@@ -1439,6 +2286,46 @@ private:
                 sources.push_back(index);
             }
         }
+        const bool has_match_items = std::ranges::any_of(
+            automaton.transitions, [](const auto& transition) {
+                return !transition.match_items.empty();
+            });
+        const bool track_local_slots = !actions_.locals.empty();
+        if (has_match_items || (track_local_slots && !first_match)) {
+            std::map<std::size_t, std::size_t> outgoing;
+            for (const auto& transition : automaton.transitions) {
+                ++outgoing[transition.from];
+            }
+            if (std::ranges::any_of(outgoing, [](const auto& entry) {
+                    return entry.second > 1U;
+                })) {
+                return false;
+            }
+            const auto active_transitions = [&](
+                                                const std::set<std::size_t>& closure) {
+                return std::ranges::count_if(closure,
+                    [&](const std::size_t state) {
+                        return outgoing.contains(state);
+                    });
+            };
+            if (active_transitions(automaton.closure(fragment->start)) > 1) {
+                return false;
+            }
+            for (const auto& transition : automaton.transitions) {
+                if (active_transitions(
+                        automaton.closure(transition.to))
+                    > 1) {
+                    return false;
+                }
+            }
+            if (track_local_slots && !first_match
+                && automaton_has_cycle(automaton, fragment->start)) {
+                // A repeated antecedent can match more than once while one
+                // attempt's local slot is live. This representation cannot
+                // fork a separate consequent-local snapshot for each match.
+                return false;
+            }
+        }
         const auto prefix = fresh("");
         const auto state = [&](std::size_t index) {
             return prefix + "_s" + std::to_string(index);
@@ -1464,43 +2351,94 @@ private:
         cleared_.push_back(active);
         cleared_.push_back(ever);
 
-        out += "if (" + start + " != 0) begin ";
-        for (const auto source : sources) {
-            out += state(source) + " = " + state(source) + " & ~__fsim_po; ";
-        }
-        out += count + "[__fsim_ps] = " + start + "; " + active + " = "
-            + active + " | __fsim_po; " + ever + " = " + ever
-            + " & ~__fsim_po; ";
         const std::set<std::size_t> declared(sources.begin(), sources.end());
-        for (const auto entry : automaton.closure(fragment->start)) {
-            if (declared.contains(entry)) {
-                out += state(entry) + " = " + state(entry) + " | __fsim_po; ";
+        if (track_local_slots) {
+            out += "if (" + start + " != 0) begin ";
+            out += "for (" + index + " = 0; " + index + " < 64; " + index
+                + "++) if (" + start + "[" + index + "]) begin ";
+            for (const auto source : sources) {
+                out += state(source) + " = " + state(source)
+                    + " & ~(64'd1 << " + index + "); ";
             }
+            out += count + "[" + index + "] = 1; " + active + " = "
+                + active + " | (64'd1 << " + index + "); " + ever + " = "
+                + ever + " & ~(64'd1 << " + index + "); ";
+            for (const auto entry : automaton.closure(fragment->start)) {
+                if (declared.contains(entry)) {
+                    out += state(entry) + " = " + state(entry)
+                        + " | (64'd1 << " + index + "); ";
+                }
+            }
+            out += "end end ";
+        } else {
+            out += "if (" + start + " != 0) begin ";
+            for (const auto source : sources) {
+                out += state(source) + " = " + state(source)
+                    + " & ~__fsim_po; ";
+            }
+            out += count + "[__fsim_ps] = " + start + "; " + active + " = "
+                + active + " | __fsim_po; " + ever + " = " + ever
+                + " & ~__fsim_po; ";
+            for (const auto entry : automaton.closure(fragment->start)) {
+                if (declared.contains(entry)) {
+                    out += state(entry) + " = " + state(entry)
+                        + " | __fsim_po; ";
+                }
+            }
+            out += "end ";
         }
-        out += "end ";
         for (const auto source : sources) {
             out += next(source) + " = 0; ";
         }
         out += accept + " = 0; ";
+        const auto for_each = [&](const std::string& mask,
+                                  const std::string& body) {
+            return "if (" + mask + " != 0) for (" + index + " = 0; " + index
+                + " < 64; " + index + "++) if (" + mask + "[" + index
+                + "]) begin " + body + "end ";
+        };
         for (const auto& transition : automaton.transitions) {
             if (!declared.contains(transition.from)) {
                 continue;
             }
+            const bool per_slot = !transition.match_items.empty()
+                || (transition.guard
+                    && expression_references_local(*transition.guard));
             std::string effects;
+            if (per_slot) {
+                for (const auto& item : transition.match_items) {
+                    const auto storage = local_storage_.find(item.target);
+                    if (storage == local_storage_.end()) {
+                        return false;
+                    }
+                    effects += storage->second + "[" + index + "] = "
+                        + guard(item.value, index) + "; ";
+                }
+            }
             for (const auto target : automaton.closure(transition.to)) {
                 if (declared.contains(target)) {
                     effects += next(target) + " = " + next(target) + " | "
-                        + state(transition.from) + "; ";
+                        + (per_slot ? "(64'd1 << " + index + ")"
+                                    : state(transition.from))
+                        + "; ";
                 }
             }
             if (automaton.closure(transition.to).contains(fragment->end)) {
                 effects += accept + " = " + accept + " | "
-                    + state(transition.from) + "; ";
+                    + (per_slot ? "(64'd1 << " + index + ")"
+                                : state(transition.from))
+                    + "; ";
             }
             if (effects.empty()) {
                 continue;
             }
-            if (transition.guard) {
+            if (per_slot) {
+                const auto body = transition.guard
+                    ? "if (" + guard(*transition.guard, index) + ") begin "
+                        + effects + "end "
+                    : effects;
+                out += for_each(state(transition.from), body);
+            } else if (transition.guard) {
                 out += "if (" + guard(*transition.guard) + ") begin " + effects
                     + "end ";
             } else {
@@ -1511,12 +2449,6 @@ private:
             out += state(source) + " = " + next(source) + "; ";
         }
         out += accept + " = " + accept + " & " + active + "; ";
-        const auto for_each = [&](const std::string& mask,
-                                  const std::string& body) {
-            return "if (" + mask + " != 0) for (" + index + " = 0; " + index
-                + " < 64; " + index + "++) if (" + mask + "[" + index
-                + "]) begin " + body + "end ";
-        };
         const auto repeated = [&](Report report) {
             return report_name(report) + " = " + report_name(report) + " + "
                 + count + "[" + index + "]; ";
@@ -1530,18 +2462,48 @@ private:
             out += active + " = " + active + " & ~" + accept + "; ";
         } else {
             const auto total = prefix + "_k";
-            declarations_ += "int unsigned " + total + "; ";
+            declarations_ += track_local_slots
+                ? "bit [63:0] " + total + "; "
+                : "int unsigned " + total + "; ";
             out += total + " = 0; ";
-            out += for_each(accept,
-                total + " = " + total + " + " + count + "[" + index + "]; ");
+            if (track_local_slots) {
+                out += total + " = " + accept + "; ";
+            } else {
+                out += for_each(accept,
+                    total + " = " + total + " + " + count + "[" + index
+                        + "]; ");
+            }
             out += ever + " = " + ever + " | " + accept + "; ";
             *matches = total;
         }
-        out += remaining + " = 0";
+        std::vector<std::string> remaining_terms;
+        remaining_terms.reserve(sources.size() + 1U);
+        remaining_terms.emplace_back("0");
         for (const auto source : sources) {
-            out += " | " + state(source);
+            remaining_terms.push_back(state(source));
         }
-        out += "; " + dead + " = " + active + " & ~" + remaining + "; ";
+        while (remaining_terms.size() > 1U) {
+            std::vector<std::string> combined_terms;
+            combined_terms.reserve(remaining_terms.size() / 2U
+                + remaining_terms.size() % 2U);
+            for (std::size_t term { }; term < remaining_terms.size();
+                term += 2U) {
+                if (term + 1U == remaining_terms.size()) {
+                    combined_terms.push_back(
+                        std::move(remaining_terms[term]));
+                    continue;
+                }
+                std::string combined { "(" };
+                combined += remaining_terms[term];
+                combined += " | ";
+                combined += remaining_terms[term + 1U];
+                combined += ')';
+                combined_terms.push_back(std::move(combined));
+            }
+            remaining_terms = std::move(combined_terms);
+        }
+        out += remaining + " = " + remaining_terms.front()
+            + "; " + dead + " = " + active + " & ~" + remaining + "; ";
         out += for_each(dead,
             first_match ? repeated(on_dead)
                         : "if (!" + ever + "[" + index + "]) "
@@ -1566,7 +2528,11 @@ private:
                 if (ordinal >= guards_.size()) {
                     return false;
                 }
-                expression = guards_[ordinal];
+                expression = guards_[ordinal].expression;
+                if (!substitute_local_references(
+                        expression, guards_[ordinal].slot_index)) {
+                    return false;
+                }
                 return true;
             }
         }
@@ -1594,8 +2560,15 @@ private:
             statement = std::move(replacement);
             return true;
         }
-        if (!substitute(statement.condition)) {
+        if (!substitute(statement.condition)
+            || !substitute(statement.target)
+            || !substitute(statement.value)) {
             return false;
+        }
+        for (auto& argument : statement.task_arguments) {
+            if (!substitute(argument)) {
+                return false;
+            }
         }
         for (auto& child : statement.statements) {
             if (!substitute(child)) {
@@ -1613,7 +2586,9 @@ private:
     const GeneralPropertyActions& actions_;
     TextParser parse_;
     std::size_t next_name_ { };
-    std::vector<Expression> guards_;
+    std::vector<Guard> guards_;
+    std::map<std::string, std::string, std::less<>> local_storage_;
+    bool invalid_locals_ { };
     std::string declarations_;
     std::vector<std::string> cleared_;
 };
@@ -1638,6 +2613,26 @@ std::optional<Statement> VerilogParser::general_property_evaluation(
                 synthetic_tokens(text, actions.span), actions.span);
         } };
     return builder.property(*property);
+}
+
+bool VerilogParser::general_property_local_flow_valid(
+    const std::span<const Token> tokens, const DesignUnit& unit,
+    const GeneralPropertyActions& actions)
+{
+    PropertyLocalNames local_names;
+    for (const auto& local : actions.locals) {
+        local_names.insert(local.name);
+    }
+    PropertyParser parser { tokens, unit,
+        [this](std::span<const Token> operand) {
+            return assertion_expression(operand);
+        }, true, &local_names };
+    const auto property = parser.parse();
+    if (!property) {
+        return false;
+    }
+    EvaluationBuilder builder { actions, { } };
+    return builder.local_flow_valid(*property);
 }
 
 } // namespace fsim::frontend

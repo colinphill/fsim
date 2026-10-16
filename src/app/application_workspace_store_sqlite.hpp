@@ -24,6 +24,7 @@ public:
     [[nodiscard]] bool initialize_schema(std::string& error);
     sqlite3* handle { nullptr };
     std::size_t decoded_bytes { 0U };
+    int schema_version { 0 };
 };
 
 class Statement final {
@@ -44,7 +45,7 @@ private:
 };
 
 [[nodiscard]] std::optional<library::UnitIndexEntry> read_unit(
-    Statement&, int offset, std::string& error);
+    Statement&, int offset, std::string& error, bool has_identifier_forms);
 [[nodiscard]] bool bind_unit(Statement&, int offset,
     const library::UnitIndexEntry&, std::string& error);
 

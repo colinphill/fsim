@@ -2,6 +2,7 @@
 #include "elaborator_test_support.hpp"
 
 #include <algorithm>
+#include <cstdlib>
 #include <iostream>
 #include <optional>
 #include <string>
@@ -2505,6 +2506,43 @@ endmodule
     assert(has_diagnostic(
         rejected_ports, "FSIM-ELAB-SVPORT-009"));
 
+    const auto rank_one_query = fsim::frontend::parse_text(
+        "dynamic-query-rank-one.sv",
+        R"(module dynamic_query_rank_one;
+  int dynamic_values[];
+  logic [31:0] integer_dimension_result;
+  logic [31:0] out_of_rank_result;
+  initial begin
+    integer_dimension_result = $size(dynamic_values, 2);
+    out_of_rank_result = $size(dynamic_values, 3);
+  end
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(rank_one_query.ok());
+    const auto rank_one_query_elaborated = compile_and_elaborate(
+        rank_one_query.design, "dynamic_query_rank_one");
+    assert(rank_one_query_elaborated.ok());
+    assert(rank_one_query_elaborated.design);
+    const auto integer_dimension_result
+        = rank_one_query_elaborated.design->find_signal(
+            "dynamic_query_rank_one.integer_dimension_result");
+    const auto out_of_rank_result
+        = rank_one_query_elaborated.design->find_signal(
+            "dynamic_query_rank_one.out_of_rank_result");
+    assert(integer_dimension_result);
+    assert(out_of_rank_result);
+    auto rank_one_interpreter
+        = rank_one_query_elaborated.design->create_interpreter();
+    assert(rank_one_interpreter->run().status
+        == fsim::runtime::RunStatus::completed);
+    assert(rank_one_interpreter->signal_value(*integer_dimension_result)
+               .to_msb_string()
+        == std::string(26U, '0') + "100000");
+    assert(rank_one_interpreter->signal_value(*out_of_rank_result)
+               .to_msb_string()
+        == std::string(32U, 'X'));
+
     const auto invalid_dynamic_ports = fsim::frontend::parse_text(
         "dynamic-container-port-invalid.sv",
         R"(
@@ -2594,6 +2632,18 @@ endmodule
     const auto rejected_dynamic_ports = compile_and_elaborate(
         invalid_dynamic_ports.design,
         "bad_dynamic_port_top");
+    if (std::getenv("FSIM_DYNAMIC_PORT_QUERY_DIAGNOSTIC") != nullptr) {
+        std::cerr << "DYNAMIC_PORT_QUERY_DIAGNOSTIC_BEGIN count="
+                  << rejected_dynamic_ports.diagnostics.size() << '\n';
+        for (const auto& diagnostic : rejected_dynamic_ports.diagnostics) {
+            std::cerr << "DYNAMIC_PORT_QUERY_DIAGNOSTIC "
+                      << diagnostic.code << ": " << diagnostic.message
+                      << " at " << diagnostic.span.source_name.str() << ':'
+                      << diagnostic.span.begin.line << ':'
+                      << diagnostic.span.begin.column << '\n';
+        }
+        std::cerr << "DYNAMIC_PORT_QUERY_DIAGNOSTIC_END\n";
+    }
     assert(!rejected_dynamic_ports.ok());
     assert(has_diagnostic(
         rejected_dynamic_ports, "FSIM-ELAB-SVPORT-005"));
@@ -2605,8 +2655,22 @@ endmodule
         rejected_dynamic_ports, "FSIM-ELAB-SVPORT-008"));
     assert(has_diagnostic(
         rejected_dynamic_ports, "FSIM-ELAB-SVPORT-009"));
+    const auto invalid_variable_dimension_query = fsim::frontend::parse_text(
+        "invalid-variable-dimension-query.sv",
+        R"(module invalid_variable_dimension_query;
+  int values[3][][5];
+  int result;
+  initial result = $size(values, 2);
+endmodule
+)",
+        fsim::frontend::Language::SystemVerilog2017);
+    assert(invalid_variable_dimension_query.ok());
+    const auto rejected_variable_dimension_query = compile_and_elaborate(
+        invalid_variable_dimension_query.design,
+        "invalid_variable_dimension_query");
+    assert(!rejected_variable_dimension_query.ok());
     assert(has_diagnostic(
-        rejected_dynamic_ports, "FSIM-ELAB-SVQUERY-002"));
+        rejected_variable_dimension_query, "FSIM-ELAB-SVQUERY-002"));
     const auto rejected_query_arity = fsim::frontend::parse_text(
         "invalid-query-arity.sv",
         R"(module invalid_query_arity;

@@ -680,6 +680,17 @@ Expression VhdlParser::parse_primary()
         const bool unary_symbol = symbol == "not" || symbol == "abs";
         if (binary_symbol || unary_symbol) {
             const auto start = current();
+            std::optional<std::string> selected_operator_prefix;
+            if (lookahead != 0U) {
+                std::string prefix;
+                for (std::size_t index { }; index < lookahead; index += 2U) {
+                    if (!prefix.empty()) {
+                        prefix.push_back('.');
+                    }
+                    prefix += current(index).text;
+                }
+                selected_operator_prefix = std::move(prefix);
+            }
             for (std::size_t index { }; index <= lookahead; ++index) {
                 advance();
             }
@@ -697,16 +708,22 @@ Expression VhdlParser::parse_primary()
                 "')' after operator symbol actuals", "FSIM-VHDL-PARSE-034");
             const auto span = cover(start.span, previous().span);
             if (actuals.size() == 2U && binary_symbol) {
-                return Expression { ExpressionKind::Binary, symbol,
+                auto expression = Expression { ExpressionKind::Binary, symbol,
                     std::move(actuals), span };
+                expression.selected_operator_prefix
+                    = std::move(selected_operator_prefix);
+                return expression;
             }
             if (actuals.size() == 1U
                 && (unary_symbol || symbol == "+" || symbol == "-"
                     || symbol == "and" || symbol == "or"
                     || symbol == "nand" || symbol == "nor"
                     || symbol == "xor" || symbol == "xnor")) {
-                return Expression { ExpressionKind::Unary, symbol,
+                auto expression = Expression { ExpressionKind::Unary, symbol,
                     std::move(actuals), span };
+                expression.selected_operator_prefix
+                    = std::move(selected_operator_prefix);
+                return expression;
             }
             error(start, "FSIM-VHDL-PARSE-300",
                 "an operator symbol function call requires the operator's "
@@ -1033,7 +1050,11 @@ Expression VhdlParser::parse_primary()
             expression.span = name.span;
             return expression;
         }
+        std::string selected_spelling { name.text };
         Expression selected { ExpressionKind::Identifier, canonical, { }, name.span };
+        if (selected_spelling.find('\\') != std::string::npos) {
+            selected.vhdl_selected_name_spelling = selected_spelling;
+        }
         bool saw_dereference = false;
         // An index or element selected through an access object reaches
         // the designated object (IEEE 1076-2008 8.3).
@@ -1064,10 +1085,15 @@ Expression VhdlParser::parse_primary()
                     { std::move(selected) },
                     cover(name.span, part.span) };
             } else {
+                selected_spelling += '.';
+                selected_spelling += part.text;
                 canonical += '.';
                 canonical += canonical_part;
                 selected.text = canonical;
                 selected.span = cover(name.span, part.span);
+                if (selected_spelling.find('\\') != std::string::npos) {
+                    selected.vhdl_selected_name_spelling = selected_spelling;
+                }
             }
         }
         if (const auto api = vhdl_simulator_api(selected.text);
@@ -1126,10 +1152,14 @@ Expression VhdlParser::parse_primary()
         if (match(TokenKind::Apostrophe)) {
             if (at(TokenKind::LeftParen)) {
                 auto value = parse_primary();
-                return Expression { ExpressionKind::Call,
+                auto qualified = Expression { ExpressionKind::Call,
                     "@vhdl-qualified:" + canonical,
                     { std::move(value) },
                     cover(name.span, previous().span) };
+                if (selected_spelling.find('\\') != std::string::npos) {
+                    qualified.vhdl_selected_name_spelling = selected_spelling;
+                }
+                return qualified;
             }
             const auto attribute = expect_identifier("attribute designator");
             const auto designator = vhdl_name(attribute.text);
@@ -1257,8 +1287,13 @@ Expression VhdlParser::parse_primary()
                     "the predefined '" + designator
                         + " attribute does not denote a value expression");
             }
+            auto attribute_prefix = Expression {
+                ExpressionKind::Identifier, canonical, { }, name.span };
+            if (selected_spelling.find('\\') != std::string::npos) {
+                attribute_prefix.vhdl_selected_name_spelling = selected_spelling;
+            }
             std::vector<Expression> operands {
-                Expression { ExpressionKind::Identifier, canonical, { }, name.span }
+                std::move(attribute_prefix)
             };
             if (match(TokenKind::LeftParen)) {
                 operands.push_back(parse_expression());
@@ -1310,7 +1345,11 @@ Expression VhdlParser::parse_primary()
                 error(current(), "FSIM-VHDL-PARSE-303",
                     "VHDL parentheses after a name cannot be empty");
             }
-            const auto base = Expression { ExpressionKind::Identifier, canonical, { }, name.span };
+            auto base = Expression {
+                ExpressionKind::Identifier, canonical, { }, name.span };
+            if (selected_spelling.find('\\') != std::string::npos) {
+                base.vhdl_selected_name_spelling = selected_spelling;
+            }
             std::vector<Expression> arguments;
             std::vector<std::string> argument_names;
             bool saw_named = false;
@@ -1375,6 +1414,9 @@ Expression VhdlParser::parse_primary()
                 "FSIM-VHDL-PARSE-033");
             Expression call { ExpressionKind::Call, std::move(canonical),
                 std::move(arguments), cover(name.span, previous().span) };
+            if (selected_spelling.find('\\') != std::string::npos) {
+                call.vhdl_selected_name_spelling = selected_spelling;
+            }
             if (saw_named) {
                 call.call_argument_names = std::move(argument_names);
             }
@@ -1438,9 +1480,12 @@ Expression VhdlParser::parse_primary()
                     name.span } },
                 name.span };
         }
-        return Expression {
+        auto expression = Expression {
             ExpressionKind::Identifier, std::move(canonical), { }, name.span
         };
+        expression.vhdl_selected_name_spelling
+            = std::move(selected.vhdl_selected_name_spelling);
+        return expression;
     }
     if (match(TokenKind::LeftParen)) {
         const auto open = previous();

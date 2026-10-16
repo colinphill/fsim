@@ -170,14 +170,6 @@ void add_range_to_mask(std::span<std::uint64_t> mask,
     }
 }
 
-Logic4 edge_value(const PackedLogic4& value) noexcept
-{
-    if (value.is_logic9()) {
-        return to_logic4(value.get_logic9(0U));
-    }
-    return value.get(0U);
-}
-
 } // namespace
 
 AuthoritativeSignalPlanes::PreparedGroupScratch::PreparedGroupScratch(
@@ -5276,12 +5268,13 @@ void RegionGroupedFanout::mark_transition(
                         clause.offset, clause.width);
             } else if ((edge == EdgeKind::posedge
                            || edge == EdgeKind::negedge)
-                && previous.width() == 1U && current.width() == 1U) {
+                && previous.width() != 0U
+                && previous.width() == current.width()) {
                 matches = edge_matches(clause.edge,
                     edge_value(previous), edge_value(current));
             } else if (edge == EdgeKind::posedge
                 || edge == EdgeKind::negedge) {
-                // An invalid/non-scalar edge shape must not lose a wakeup.
+                // An invalid width shape must not lose a wakeup.
                 matches = true;
             }
             if (matches) {

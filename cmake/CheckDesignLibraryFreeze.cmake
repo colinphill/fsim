@@ -50,15 +50,15 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "22b67bce18e5d8e637a871198871c896549729ce796f5ebdb101f9158d594679")
+  "0c9292e41eeaaae065fb96ea678518f2aa83f35c7a15574a146d171ccd466f5a")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "design/library contract digest changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
 endif()
 file(STRINGS "${FSIM_CONTRACT}" FSIM_ROWS)
 list(LENGTH FSIM_ROWS FSIM_ROW_COUNT)
-if(NOT FSIM_ROW_COUNT EQUAL 54)
-  message(FATAL_ERROR "design/library contract requires SPDX, header and 52 rows")
+if(NOT FSIM_ROW_COUNT EQUAL 57)
+  message(FATAL_ERROR "design/library contract requires SPDX, header and 55 rows")
 endif()
 list(GET FSIM_ROWS 0 FSIM_SPDX)
 list(GET FSIM_ROWS 1 FSIM_HEADER)
@@ -66,7 +66,7 @@ if(NOT FSIM_SPDX STREQUAL "# SPDX-License-Identifier: Apache-2.0" OR
    NOT FSIM_HEADER STREQUAL "kind\tname\tcontract")
   message(FATAL_ERROR "design/library contract header or SPDX policy changed")
 endif()
-foreach(FSIM_INDEX RANGE 2 53)
+foreach(FSIM_INDEX RANGE 2 56)
   list(GET FSIM_ROWS ${FSIM_INDEX} FSIM_ROW)
   string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_ROW}")
   list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
@@ -91,9 +91,9 @@ fsim_require_design_library_tokens("${FSIM_DESIGN_HEADER}"
   "std::string scv_compatibility"
   "Producer paths are deliberately")
 fsim_require_design_library_tokens("${FSIM_LIBRARY_HEADER}"
-  "kFormatVersion = 6"
-  "kPortableSchemaVersion = 15"
-  "kCompiledHirSchemaVersion = 1"
+  "kFormatVersion = 7"
+  "kPortableSchemaVersion = 16"
+  "kCompiledHirSchemaVersion = 3"
   "std::filesystem::path compiled_hir_artifact"
   "std::string compiled_hir_checksum"
   "struct AuxiliaryArtifact"
@@ -163,9 +163,9 @@ fsim_require_design_library_tokens("${FSIM_DESIGN_TEST}"
   "oversized-root"
   "rejected-plugin")
 fsim_require_design_library_tokens("${FSIM_LIBRARY_TEST}"
-  "kFormatVersion == 6"
-  "kPortableSchemaVersion == 15"
-  "kCompiledHirSchemaVersion == 1"
+  "kFormatVersion == 7"
+  "kPortableSchemaVersion == 16"
+  "kCompiledHirSchemaVersion == 3"
   "invalid-auxiliary.fsimlib"
   "duplicate-auxiliary.fsimlib"
   "source-hidden.fsimlib"
@@ -190,4 +190,4 @@ fsim_require_design_library_tokens("${FSIM_TEST_BUILD}"
   "CheckDesignLibraryFreeze.cmake")
 
 message(STATUS
-  "design/library schema freeze passed: rows=52 digest=${FSIM_CONTRACT_DIGEST}")
+  "design/library schema freeze passed: rows=55 digest=${FSIM_CONTRACT_DIGEST}")

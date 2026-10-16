@@ -11,6 +11,9 @@ void test_assertion_types_and_random_lowering()
     const auto invalid_vhdl_assertion = fsim::frontend::parse_text(
         "invalid_assertion.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity invalid_assertion is
   port (gate : in std_logic);
 end entity;
@@ -1149,6 +1152,9 @@ endmodule
     const auto array_source = fsim::frontend::parse_text(
         "vhdl_arrays.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 package Scalar_Types is
   subtype External_Logic_T is std_logic;
 end package;
@@ -1171,6 +1177,8 @@ entity Array_Dut is
   );
 end entity;
 
+library ieee;
+use ieee.std_logic_1164.all;
 use work.array_types.all;
 architecture rtl of Array_Dut is
   signal Local_Bits : Bits_T(-1 to 2);
@@ -1590,6 +1598,9 @@ end architecture;
         R"(
 entity Composite_Array_Layout is
 end entity;
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of Composite_Array_Layout is
   type Matrix_T is array (0 to 1, 3 downto 1) of bit;
   type Packed_Rows_T is array (1 downto 0) of bit_vector(3 downto 0);
@@ -2148,6 +2159,216 @@ endmodule
         [](const auto& diagnostic) {
             return diagnostic.code == "FSIM-SV-PARSE-350";
         }));
+}
+
+void test_systemverilog_builtin_net_type_legality()
+{
+    using fsim::frontend::Language;
+
+    const auto inline_two_state_net = fsim::frontend::parse_text(
+        "inline_two_state_net.sv",
+        R"(
+module inline_two_state_net;
+  wire bit [3:0] direct_bad;
+endmodule
+)",
+        Language::SystemVerilog2017);
+    assert(!inline_two_state_net.ok());
+
+    const auto typedef_two_state_net = fsim::frontend::parse_text(
+        "typedef_two_state_net.sv",
+        R"(
+module typedef_two_state_net;
+  typedef bit [3:0] stage_t;
+  wire stage_t bad;
+endmodule
+)",
+        Language::SystemVerilog2017);
+    assert(typedef_two_state_net.ok());
+    const auto rejected_typedef_two_state_net = compile_and_elaborate(
+        typedef_two_state_net.design,
+        "sv:work.typedef_two_state_net");
+    assert(!rejected_typedef_two_state_net.ok());
+    assert(has_diagnostic(
+        rejected_typedef_two_state_net, "FSIM-ELAB-SVNETTYPE-005"));
+
+    const auto illegal_real_net = fsim::frontend::parse_text(
+        "illegal_real_net.sv",
+        R"(
+module illegal_real_net;
+  typedef real real_t;
+  wire real_t bad;
+endmodule
+)",
+        Language::SystemVerilog2017);
+    assert(illegal_real_net.ok());
+    const auto rejected_real_net = compile_and_elaborate(
+        illegal_real_net.design, "sv:work.illegal_real_net");
+    assert(!rejected_real_net.ok());
+    assert(has_diagnostic(
+        rejected_real_net, "FSIM-ELAB-SVNETTYPE-005"));
+
+    const auto illegal_shortreal_net = fsim::frontend::parse_text(
+        "illegal_shortreal_net.sv",
+        R"(
+module illegal_shortreal_net;
+  typedef shortreal shortreal_t;
+  wire shortreal_t bad;
+endmodule
+)",
+        Language::SystemVerilog2017);
+    assert(illegal_shortreal_net.ok());
+    const auto rejected_shortreal_net = compile_and_elaborate(
+        illegal_shortreal_net.design, "sv:work.illegal_shortreal_net");
+    assert(!rejected_shortreal_net.ok());
+    assert(has_diagnostic(
+        rejected_shortreal_net, "FSIM-ELAB-SVNETTYPE-005"));
+
+    const auto legal_logic_nets = fsim::frontend::parse_text(
+        "legal_logic_nets.sv",
+        R"(
+module legal_logic_nets;
+  typedef logic [3:0] stage_t;
+  typedef logic [3:0] stage_array_t [1:0];
+  wire logic [3:0] direct_good;
+  wire stage_t alias_good;
+  wire stage_array_t array_good;
+endmodule
+)",
+        Language::SystemVerilog2017);
+    assert(legal_logic_nets.ok());
+    assert(compile_and_elaborate(
+        legal_logic_nets.design, "sv:work.legal_logic_nets").ok());
+
+    const auto legal_mixed_packed_net = fsim::frontend::parse_text(
+        "legal_mixed_packed_net.sv",
+        R"(
+module legal_mixed_packed_net;
+  typedef struct packed {
+    bit two_state_member;
+    logic four_state_member;
+  } mixed_t;
+  wire mixed_t good;
+endmodule
+)",
+        Language::SystemVerilog2017);
+    assert(legal_mixed_packed_net.ok());
+    assert(compile_and_elaborate(
+        legal_mixed_packed_net.design,
+        "sv:work.legal_mixed_packed_net").ok());
+
+    const auto legal_mixed_packed_union_net = fsim::frontend::parse_text(
+        "legal_mixed_packed_union_net.sv",
+        R"(
+module legal_mixed_packed_union_net;
+  typedef union packed {
+    bit [3:0] two_state_member;
+    logic [3:0] four_state_member;
+  } mixed_t;
+  wire mixed_t good;
+endmodule
+)",
+        Language::SystemVerilog2017);
+    assert(legal_mixed_packed_union_net.ok());
+    assert(compile_and_elaborate(
+        legal_mixed_packed_union_net.design,
+        "sv:work.legal_mixed_packed_union_net").ok());
+
+    const auto illegal_unpacked_net = fsim::frontend::parse_text(
+        "illegal_unpacked_net.sv",
+        R"(
+module illegal_unpacked_net;
+  typedef struct {
+    bit two_state_member;
+    logic four_state_member;
+  } mixed_t;
+  wire mixed_t bad;
+endmodule
+)",
+        Language::SystemVerilog2017);
+    assert(illegal_unpacked_net.ok());
+    const auto rejected_unpacked_net = compile_and_elaborate(
+        illegal_unpacked_net.design, "sv:work.illegal_unpacked_net");
+    assert(!rejected_unpacked_net.ok());
+    assert(has_diagnostic(
+        rejected_unpacked_net, "FSIM-ELAB-SVNETTYPE-005"));
+
+    const auto illegal_unpacked_union_net = fsim::frontend::parse_text(
+        "illegal_unpacked_union_net.sv",
+        R"(
+module illegal_unpacked_union_net;
+  typedef union {
+    logic [3:0] first_member;
+    logic [3:0] second_member;
+  } logic_union_t;
+  wire logic_union_t bad;
+endmodule
+)",
+        Language::SystemVerilog2017);
+    assert(illegal_unpacked_union_net.ok());
+    const auto rejected_unpacked_union_net = compile_and_elaborate(
+        illegal_unpacked_union_net.design,
+        "sv:work.illegal_unpacked_union_net");
+    assert(!rejected_unpacked_union_net.ok());
+    assert(has_diagnostic(
+        rejected_unpacked_union_net, "FSIM-ELAB-SVNETTYPE-005"));
+
+    const auto illegal_two_state_net_array = fsim::frontend::parse_text(
+        "illegal_two_state_net_array.sv",
+        R"(
+module illegal_two_state_net_array;
+  typedef bit [3:0] stage_array_t [1:0];
+  wire stage_array_t bad;
+endmodule
+)",
+        Language::SystemVerilog2017);
+    assert(illegal_two_state_net_array.ok());
+    const auto rejected_two_state_net_array = compile_and_elaborate(
+        illegal_two_state_net_array.design,
+        "sv:work.illegal_two_state_net_array");
+    assert(!rejected_two_state_net_array.ok());
+    assert(has_diagnostic(
+        rejected_two_state_net_array, "FSIM-ELAB-SVNETTYPE-005"));
+
+    const auto user_bit_nettype = fsim::frontend::parse_text(
+        "user_bit_nettype.sv",
+        R"(
+package user_bit_nettype_pkg;
+  nettype bit [3:0] custom_bit_net;
+endpackage
+module user_bit_nettype;
+  import user_bit_nettype_pkg::*;
+  custom_bit_net value;
+endmodule
+)",
+        Language::SystemVerilog2017);
+    assert(user_bit_nettype.ok());
+    const auto user_bit_nettype_result = compile_and_elaborate(
+        user_bit_nettype.design, "sv:work.user_bit_nettype");
+    assert(!has_diagnostic(
+        user_bit_nettype_result, "FSIM-ELAB-SVNETTYPE-005"));
+    assert(user_bit_nettype_result.ok());
+
+    const auto user_union_nettype = fsim::frontend::parse_text(
+        "user_union_nettype.sv",
+        R"(
+package user_union_nettype_pkg;
+  typedef union {
+    logic [3:0] four_state_member;
+    bit [3:0] two_state_member;
+  } mixed_t;
+  nettype mixed_t custom_union_net;
+endpackage
+module user_union_nettype;
+  import user_union_nettype_pkg::*;
+  custom_union_net value;
+endmodule
+)",
+        Language::SystemVerilog2017);
+    assert(user_union_nettype.ok());
+    const auto user_union_nettype_result = compile_and_elaborate(
+        user_union_nettype.design, "sv:work.user_union_nettype");
+    assert(user_union_nettype_result.ok());
 }
 
 } // namespace fsim::tests::elaboration

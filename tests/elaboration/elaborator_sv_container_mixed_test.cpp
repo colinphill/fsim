@@ -13,6 +13,9 @@ void test_mixed_container_port_rejections(
 entity mixed_port_top is
 end entity;
 
+library ieee;
+use ieee.std_logic_1164.all;
+
 architecture rtl of mixed_port_top is
   signal source : std_logic_vector(7 downto 0);
   signal result : std_logic_vector(7 downto 0);
@@ -56,6 +59,9 @@ end architecture;
         R"(
 entity mixed_dynamic_port_top is
 end entity;
+
+library ieee;
+use ieee.std_logic_1164.all;
 
 architecture rtl of mixed_dynamic_port_top is
   signal source : integer;

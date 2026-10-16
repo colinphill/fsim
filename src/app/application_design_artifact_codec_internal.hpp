@@ -335,9 +335,20 @@ namespace codec_detail {
                     >= runtime::simir::ProcessSchedulingDomain::generic
                 && value
                     <= runtime::simir::ProcessSchedulingDomain::systemverilog;
+        } else if constexpr (
+            std::same_as<T, runtime::simir::ProcessStartupPhase>) {
+            return value
+                    >= runtime::simir::ProcessStartupPhase::ordinary
+                && value
+                    <= runtime::simir::ProcessStartupPhase::
+                        package_static_initializer;
         } else if constexpr (std::same_as<T, semantic::CompiledReferenceKind>) {
             return value >= semantic::CompiledReferenceKind::package
                 && value <= semantic::CompiledReferenceKind::context;
+        } else if constexpr (
+            std::same_as<T, semantic::sv::DeclarationForm>) {
+            return value >= semantic::sv::DeclarationForm::parameter
+                && value <= semantic::sv::DeclarationForm::nettype_declaration;
         } else if constexpr (std::same_as<T, frontend::SystemVerilogScalarKind>) {
             return value >= frontend::SystemVerilogScalarKind::None
                 && value <= frontend::SystemVerilogScalarKind::Chandle;
@@ -557,6 +568,10 @@ namespace codec_detail {
             return value >= runtime::simir::CoverageSampleTrigger::explicit_sample
                 && value <= runtime::simir::CoverageSampleTrigger::event;
         } else if constexpr (
+            std::same_as<T, runtime::simir::MailboxElementKind>) {
+            return value >= runtime::simir::MailboxElementKind::packed
+                && value <= runtime::simir::MailboxElementKind::string;
+        } else if constexpr (
             std::same_as<T, runtime::CodeCoverageMetric>) {
             return value >= runtime::CodeCoverageMetric::Statement
                 && value <= runtime::CodeCoverageMetric::Line;
@@ -678,7 +693,7 @@ namespace codec_detail {
             std::same_as<T, semantic::vhdl::BuiltinTypeIdentity>) {
             return value >= semantic::vhdl::BuiltinTypeIdentity::none
                 && value <= semantic::vhdl::BuiltinTypeIdentity::
-                    ieee_std_logic_1164_std_ulogic_vector;
+                    std_standard_time_vector;
         } else if constexpr (
             std::same_as<T, semantic::vhdl::BuiltinOperatorIdentity>) {
             return value >= semantic::vhdl::BuiltinOperatorIdentity::none
@@ -865,7 +880,11 @@ namespace codec_detail {
             value.switch_width, value.switch_active_high,
             value.switch_bidirectional, value.switch_resistive,
             value.initialize, value.observed, value.reactive,
-            value.program_owner, value.postponed, value.final);
+            value.program_owner, value.postponed, value.final,
+            value.startup_phase, value.startup_order,
+            value.startup_package_owner_id,
+            value.startup_writable_string_object_ids,
+            value.startup_writable_container_object_ids);
     }
 
     template <typename T>
@@ -1605,6 +1624,11 @@ namespace codec_detail {
                 write(instance.program_owner);
                 write(instance.postponed);
                 write(instance.final);
+                write(instance.startup_phase);
+                write(instance.startup_order);
+                write(instance.startup_package_owner_id);
+                write(instance.startup_writable_string_object_ids);
+                write(instance.startup_writable_container_object_ids);
             }
             if (account) {
                 std::fprintf(stderr,
@@ -2393,7 +2417,12 @@ namespace codec_detail {
                     || !read(instance.reactive)
                     || !read(instance.program_owner)
                     || !read(instance.postponed)
-                    || !read(instance.final)) {
+                    || !read(instance.final)
+                    || !read(instance.startup_phase)
+                    || !read(instance.startup_order)
+                    || !read(instance.startup_package_owner_id)
+                    || !read(instance.startup_writable_string_object_ids)
+                    || !read(instance.startup_writable_container_object_ids)) {
                     return false;
                 }
             }

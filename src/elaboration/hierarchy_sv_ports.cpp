@@ -7,11 +7,13 @@
 #include "lowerer_internal.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <cstdint>
 #include <limits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 namespace fsim::elaboration::hierarchy_sv_ports_detail {
@@ -1172,18 +1174,69 @@ bool HierarchyBuilder::bind_compiled_systemverilog_ports(
                         systemverilog_container_type(
                             *child_interface_specialization,
                             formal_element_array);
-                const auto same_element_profile = [](
-                                                      const ContainerType& left,
-                                                      const ContainerType& right) {
-                    return left.element_kind == right.element_kind
-                        && left.scalar_kind == right.scalar_kind
-                        && left.element_width == right.element_width
-                        && left.two_state == right.two_state
-                        && left.signed_elements
-                        == right.signed_elements
-                        && left.element_nominal_type
-                        == right.element_nominal_type;
-                };
+                // IEEE 1800-2017 6.22.2(c) makes packed arrays, structures,
+                // and unions equivalent when their representation matches.
+                // Keep enum identity strict because it is not in that rule.
+                const auto is_packed_aggregate_nominal =
+                    [](const std::string_view nominal_type,
+                        const semantic::SpecializedHirUnit& specialization) {
+                        constexpr std::string_view identity_prefix {
+                            "@sv-type:" };
+                        if (!nominal_type.starts_with(identity_prefix)) {
+                            return false;
+                        }
+                        const auto digits
+                            = nominal_type.substr(identity_prefix.size());
+                        std::uint32_t type_index { };
+                        const auto [end, error] = std::from_chars(
+                            digits.data(), digits.data() + digits.size(),
+                            type_index);
+                        if (error != std::errc { }
+                            || end != digits.data() + digits.size()) {
+                            return false;
+                        }
+                        const auto definition
+                            = specialization.find_type(
+                                semantic::TypeId::from_index(type_index));
+                        if (!definition
+                            || definition->systemverilog == nullptr) {
+                            return false;
+                        }
+                        const auto form = definition->systemverilog->form;
+                        return form
+                                   == semantic::sv::TypeForm::packed_structure
+                            || form
+                                   == semantic::sv::TypeForm::packed_union;
+                    };
+                const auto same_element_profile =
+                    [&is_packed_aggregate_nominal,
+                        &working_specialization,
+                        &child_interface_specialization](
+                        const ContainerType& left,
+                        const ContainerType& right) {
+                        if (left.element_kind != right.element_kind
+                            || left.scalar_kind != right.scalar_kind
+                            || left.element_width != right.element_width
+                            || left.two_state != right.two_state
+                            || left.signed_elements
+                                != right.signed_elements) {
+                            return false;
+                        }
+                        if (left.element_nominal_type
+                            == right.element_nominal_type) {
+                            return true;
+                        }
+                        if (!left.element_nominal_type.empty()
+                            && !is_packed_aggregate_nominal(
+                                left.element_nominal_type,
+                                working_specialization)) {
+                            return false;
+                        }
+                        return right.element_nominal_type.empty()
+                            || is_packed_aggregate_nominal(
+                                right.element_nominal_type,
+                                *child_interface_specialization);
+                    };
                 if (!formal_element_profile
                     || formal_element_profile->element_kind
                         != ContainerElementKind::Packed

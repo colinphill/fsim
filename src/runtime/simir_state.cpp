@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "simir_internal.hpp"
+#include "fsim/runtime/systemverilog_string.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -1399,6 +1400,81 @@ void Interpreter::Impl::write_process_register(
     get_register(process, destination) = converted;
 }
 
+void Interpreter::Impl::write_process_string_register(
+    Interpreter::Impl::ProcessState& process,
+    const StringRegisterId destination,
+    const std::string_view value)
+{
+    if (value.size() > maximum_string_bytes) {
+        fail(process, "string mailbox value exceeds the byte limit");
+    }
+    (void)systemverilog_string_length(value);
+    const std::string copied { value };
+    const auto update_context = [&] (
+        ProcessState::CallableFrameState& context) {
+        const auto found = std::ranges::find(
+            context.string_ids, destination);
+        if (found == context.string_ids.end()) {
+            return false;
+        }
+        const auto index = static_cast<std::size_t>(
+            std::distance(context.string_ids.begin(), found));
+        context.strings[index] = copied;
+        return true;
+    };
+    if (process.cold().callable_registers_suspended) {
+        if (process.cold().suspended_callable_context
+            && update_context(
+                *process.cold().suspended_callable_context)) {
+            return;
+        }
+        for (auto context
+            = process.cold().escaping_callable_contexts.rbegin();
+            context != process.cold().escaping_callable_contexts.rend();
+            ++context) {
+            if (!*context) {
+                fail(process, "escaping automatic callable context is null");
+            }
+            if (update_context(**context)) {
+                return;
+            }
+        }
+    } else {
+        const auto& frames = process.cold().callable_frames;
+        const ProcessState::CallableFrameState* owner_frame { };
+        for (auto frame = frames.rbegin(); frame != frames.rend(); ++frame) {
+            if (std::ranges::find(frame->string_ids, destination)
+                != frame->string_ids.end()) {
+                owner_frame = &*frame;
+                break;
+            }
+        }
+        if (owner_frame != nullptr) {
+            if (owner_frame->escaping_context) {
+                (void)update_context(*owner_frame->escaping_context);
+            }
+        } else {
+            for (auto context
+                = process.cold().escaping_callable_contexts.rbegin();
+                context != process.cold().escaping_callable_contexts.rend();
+                ++context) {
+                if (!*context) {
+                    fail(process,
+                        "escaping automatic callable context is null");
+                }
+                if (update_context(**context)) {
+                    break;
+                }
+            }
+        }
+    }
+    if (process.executor) {
+        process.executor->write_string_register(destination, copied);
+        return;
+    }
+    get_string_register(process, destination) = copied;
+}
+
 void Interpreter::Impl::clear_wait_timeout_nonempty(ProcessState& process)
 {
     auto* const dynamic_wait
@@ -1896,15 +1972,11 @@ void Interpreter::Impl::mark_region_value_change(
     }
     state->fanout().mark_transition(signal, previous, current,
         EdgeKind::any, state->readiness());
-    if (previous.width() != 1U || current.width() != 1U) {
+    if (previous.width() == 0U || current.width() == 0U) {
         return;
     }
-    const auto low_logic4 = [](const PackedLogic4& value) {
-        return value.is_logic9()
-            ? to_logic4(value.get_logic9(0U)) : value.get(0U);
-    };
     const auto transition = decode_static_transition(
-        low_logic4(previous), low_logic4(current));
+        edge_value(previous), edge_value(current));
     if (transition.posedge) {
         state->fanout().mark_transition(signal, previous, current,
             EdgeKind::posedge, state->readiness());
@@ -2757,6 +2829,7 @@ void Interpreter::Impl::stamp_signal_event(
     const std::uint64_t generic_delta,
     const SignalChangeOrigin origin)
 {
+    update_selected_signal_value_history(signal, generic_delta);
     signal_events.at(signal)
         = std::pair { scheduler.now(), generic_delta };
     const auto systemverilog_round
@@ -2774,6 +2847,175 @@ void Interpreter::Impl::record_signal_event(
 {
     stamp_signal_event(signal, generic_delta, origin);
     capture_sampled_history_clock(signal, generic_delta, origin);
+}
+
+void Interpreter::Impl::register_signal_selection(
+    const SignalId signal,
+    const SignalSelection selection)
+{
+    if (signal >= signals.size() || signal >= signal_selection_histories.size()
+        || selection.width == 0U
+        || selection.offset > signals[signal].initial_value.width()
+        || selection.width
+            > signals[signal].initial_value.width() - selection.offset) {
+        throw std::invalid_argument {
+            "selected SimIR signal query has an invalid range"
+        };
+    }
+    auto& histories = signal_selection_histories[signal];
+    if (std::ranges::any_of(histories, [&](const auto& history) {
+            return history.selection == selection;
+        })) {
+        return;
+    }
+    const auto current = logical_signal_value(signal).extract_bits(
+        selection.offset, selection.width);
+    histories.push_back(SignalSelectionHistory {
+        .selection = selection,
+        .last_value = current,
+        .last_event = std::nullopt,
+        .last_transaction = std::nullopt,
+        .transaction_pending = false,
+    });
+}
+
+const Interpreter::Impl::SignalSelectionHistory*
+Interpreter::Impl::find_signal_selection_history(
+    const SignalId signal,
+    const SignalSelection selection) const noexcept
+{
+    if (signal >= signal_selection_histories.size()) {
+        return nullptr;
+    }
+    const auto& histories = signal_selection_histories[signal];
+    const auto found = std::ranges::find(
+        histories, selection, &SignalSelectionHistory::selection);
+    return found == histories.end() ? nullptr : &*found;
+}
+
+void Interpreter::Impl::stage_selected_signal_transaction(
+    const SignalId signal,
+    const std::size_t offset,
+    const std::size_t width)
+{
+    if (signal >= signal_selection_histories.size()
+        || signal_selection_histories[signal].empty()) {
+        return;
+    }
+    if (width == 0U || offset > signals[signal].initial_value.width()
+        || width > signals[signal].initial_value.width() - offset) {
+        throw std::invalid_argument {
+            "selected SimIR transaction has an invalid range"
+        };
+    }
+    if (signal_selection_transaction_region_pending[signal] == 0U) {
+        signal_selection_transaction_region_pending[signal] = 1U;
+        if (signal_selection_transaction_pending_listed[signal] == 0U) {
+            signal_selection_pending_transaction_signals.push_back(signal);
+            signal_selection_transaction_pending_listed[signal] = 1U;
+        }
+    }
+    const auto end = offset + width;
+    for (auto& history : signal_selection_histories[signal]) {
+        const auto selected_end = static_cast<std::size_t>(
+            history.selection.offset + history.selection.width);
+        history.transaction_pending = history.transaction_pending
+            || (offset < selected_end && history.selection.offset < end);
+    }
+}
+
+void Interpreter::Impl::stage_selected_signal_transaction_mask(
+    const SignalId signal,
+    const std::span<const std::uint64_t> mask_words)
+{
+    if (signal >= signal_selection_histories.size()
+        || signal_selection_histories[signal].empty()) {
+        return;
+    }
+    if (signal_selection_transaction_region_pending[signal] == 0U) {
+        signal_selection_transaction_region_pending[signal] = 1U;
+        if (signal_selection_transaction_pending_listed[signal] == 0U) {
+            signal_selection_pending_transaction_signals.push_back(signal);
+            signal_selection_transaction_pending_listed[signal] = 1U;
+        }
+    }
+    for (auto& history : signal_selection_histories[signal]) {
+        const auto end = static_cast<std::size_t>(
+            history.selection.offset + history.selection.width);
+        for (auto bit = static_cast<std::size_t>(history.selection.offset);
+             bit < end; ++bit) {
+            const auto word = bit / 64U;
+            if (word < mask_words.size()
+                && ((mask_words[word] >> (bit % 64U)) & UINT64_C(1)) != 0U) {
+                history.transaction_pending = true;
+                break;
+            }
+        }
+    }
+}
+
+void Interpreter::Impl::note_selected_signal_transaction(
+    const SignalId signal)
+{
+    if (signal >= signal_selection_histories.size()
+        || signal_selection_histories[signal].empty()) {
+        return;
+    }
+    auto& histories = signal_selection_histories[signal];
+    if (signal_selection_transaction_region_pending[signal] == 0U) {
+        for (auto& history : histories) {
+            history.transaction_pending = true;
+        }
+    }
+    const auto stamp = std::pair { scheduler.now(), scheduler.delta() + 1U };
+    for (auto& history : histories) {
+        if (history.transaction_pending) {
+            history.last_transaction = stamp;
+            history.transaction_pending = false;
+        }
+    }
+    signal_selection_transaction_region_pending[signal] = 0U;
+    if (signal_selection_transaction_pending_listed[signal] != 0U) {
+        std::erase(signal_selection_pending_transaction_signals, signal);
+        signal_selection_transaction_pending_listed[signal] = 0U;
+    }
+}
+
+void Interpreter::Impl::clear_pending_selected_signal_transactions() noexcept
+{
+    for (const auto signal : signal_selection_pending_transaction_signals) {
+        if (signal >= signal_selection_histories.size()) {
+            continue;
+        }
+        for (auto& history : signal_selection_histories[signal]) {
+            history.transaction_pending = false;
+        }
+        signal_selection_transaction_region_pending[signal] = 0U;
+        signal_selection_transaction_pending_listed[signal] = 0U;
+    }
+    signal_selection_pending_transaction_signals.clear();
+}
+
+void Interpreter::Impl::update_selected_signal_value_history(
+    const SignalId signal,
+    const std::uint64_t generic_delta)
+{
+    if (signal >= signal_selection_histories.size()
+        || signal_selection_histories[signal].empty()) {
+        return;
+    }
+    const auto& previous = logical_signal_last_value(signal);
+    const auto& current = logical_signal_value(signal);
+    for (auto& history : signal_selection_histories[signal]) {
+        const auto before = previous.extract_bits(
+            history.selection.offset, history.selection.width);
+        const auto after = current.extract_bits(
+            history.selection.offset, history.selection.width);
+        if (before != after) {
+            history.last_value = before;
+            history.last_event = std::pair { scheduler.now(), generic_delta };
+        }
+    }
 }
 
 [[nodiscard]] std::uint64_t Interpreter::Impl::invalidate_event(
@@ -3841,7 +4083,8 @@ bool Interpreter::Impl::can_publish_native_logic9_word_prevalidated(
 bool Interpreter::Impl::can_publish_blocking_word(
     const SignalId signal_id) noexcept
 {
-    if (signal_id >= signals.size()
+    if (package_static_initialization_active
+        || signal_id >= signals.size()
         || signal_id >= dynamic_fanout.size()
         || signal_id >= signal_container_aliases.size()
         || native_signal_has_runtime_dependency(signal_id)
@@ -3877,6 +4120,11 @@ void Interpreter::Impl::publish_native_word(
     Logic4Word value,
     const SignalChangeOrigin origin)
 {
+    if (package_static_initialization_active) {
+        throw std::logic_error {
+            "native signal publication is disabled during package startup"
+        };
+    }
     require_region_forwarding_role_journal_flushed_for_signal(signal_id);
 
     const auto wide_offset = direct_wide_signal_offsets[signal_id];
@@ -3989,12 +4237,12 @@ void Interpreter::Impl::publish_native_word(
                     : (aval ? Logic4::one : Logic4::zero);
     };
     auto transition = StaticTransitionMatches { };
-    const bool has_scalar_edge_fanout
+    const bool has_edge_fanout
         = !static_fanout_indices_for(
                signal_id, EdgeKind::posedge).empty()
         || !static_fanout_indices_for(
                signal_id, EdgeKind::negedge).empty();
-    if (width == 1U && has_scalar_edge_fanout) {
+    if (width != 0U && has_edge_fanout) {
         transition = decode_static_transition(
             decode_low(current), decode_low(value));
     }
@@ -4143,12 +4391,12 @@ void Interpreter::Impl::publish_native_logic9_word(
         return to_logic4(logic9);
     };
     auto transition = StaticTransitionMatches { };
-    const bool has_scalar_edge_fanout
+    const bool has_edge_fanout
         = !static_fanout_indices_for(
                signal_id, EdgeKind::posedge).empty()
         || !static_fanout_indices_for(
                signal_id, EdgeKind::negedge).empty();
-    if (width == 1U && has_scalar_edge_fanout) {
+    if (width != 0U && has_edge_fanout) {
         transition = decode_static_transition(
             decode_low(current), decode_low(value));
     }
@@ -4179,6 +4427,7 @@ void Interpreter::Impl::note_signal_transaction(
     scheduler.note_signal_transaction(signal_id);
     const bool group_static_fanout = fanout_cohort_grouping_enabled;
     signal_transactions[signal_id] = std::pair { scheduler.now(), scheduler.delta() + 1 };
+    note_selected_signal_transaction(signal_id);
     if (signal_id < signal_container_element_aliases.size()
         && signal_container_element_aliases[signal_id]) {
         const auto object
@@ -4464,10 +4713,11 @@ void Interpreter::Impl::publish_value_change(
                    signal_id, EdgeKind::posedge).empty()
             || !static_fanout_indices_for(
                    signal_id, EdgeKind::negedge).empty();
-        if (old_value.width() == 1U && signal.initial_value.width() == 1U
+        if (old_value.width() != 0U
+            && signal.initial_value.width() != 0U
             && has_static_edge_fanout) {
             transition = decode_static_transition(
-                old_value.get(0), signal.initial_value.get(0));
+                edge_value(old_value), edge_value(signal.initial_value));
             transition_decoded = true;
         }
         notify_static_value_change(
@@ -4477,13 +4727,13 @@ void Interpreter::Impl::publish_value_change(
         const auto dynamic = dynamic_fanout[signal_id];
         for (const auto& registration : dynamic) {
             if (registration.edge != EdgeKind::any) {
-                if (old_value.width() != 1U
-                    || signal.initial_value.width() != 1U) {
+                if (old_value.width() == 0U
+                    || signal.initial_value.width() == 0U) {
                     continue;
                 }
                 if (!transition_decoded) {
                     transition = decode_static_transition(
-                        old_value.get(0), signal.initial_value.get(0));
+                        edge_value(old_value), edge_value(signal.initial_value));
                     transition_decoded = true;
                 }
                 if (!transition.matches(registration.edge)) {

@@ -14,6 +14,7 @@
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 
@@ -56,6 +57,8 @@ fsim::library::Metadata example_metadata()
         { "verilog", "primitive", "invert_udp", { }, { }, { }, { },
             "2005", "none" }
     };
+    metadata.units[1].name_form = fsim::library::VhdlIdentifierForm::extended;
+    metadata.units[1].primary_name_form = fsim::library::VhdlIdentifierForm::basic;
     metadata.auxiliary_artifacts = { { "sdf-annotation", "timing",
         "auxiliary/timing.fsimsdf", std::string(64, 'a'), "4.0",
         "none" } };
@@ -87,17 +90,14 @@ bool has_identity_diagnostic(
 
 int main()
 {
-    static_assert(fsim::library::kFormatVersion == 6);
-    static_assert(fsim::library::kPortableSchemaVersion == 15);
-    static_assert(fsim::library::kCompiledHirSchemaVersion == 1);
+    static_assert(fsim::library::kFormatVersion == 7);
+    static_assert(fsim::library::kPortableSchemaVersion == 16);
+    static_assert(fsim::library::kCompiledHirSchemaVersion == 3);
     const auto expected = example_metadata();
     const auto serialized = fsim::library::serialize_metadata(expected);
-    assert(fsim::support::Sha256::hex(
-        fsim::support::Sha256::digest(serialized))
-        == "5959f55b12a09d8a1faad8dd7139c9688b22d3b5e765befc98ccd708b5643bf7");
     assert(serialized.starts_with(
-        "format = 6\nlibrary = \"vendor\"\nproducer = \"fsim 0.2.0-dev\"\n"));
-    assert(serialized.find("compiled_hir_schema = 1")
+        "format = 7\nlibrary = \"vendor\"\nproducer = \"fsim 0.2.0-dev\"\n"));
+    assert(serialized.find("compiled_hir_schema = 3")
         != std::string::npos);
     assert(serialized.find("trace_archive = \"\"") != std::string::npos);
     assert(serialized.find("[[dependency]]") != std::string::npos);
@@ -111,6 +111,10 @@ int main()
     assert(serialized.find("[[auxiliary]]") != std::string::npos);
     assert(serialized.find("kind = \"sdf-annotation\"")
         != std::string::npos);
+    assert(serialized.find("name_form = \"extended\"")
+        != std::string::npos);
+    assert(serialized.find("primary_name_form = \"basic\"")
+        != std::string::npos);
 
     fsim::diagnostic::Engine parse_diagnostics;
     const auto parsed = fsim::library::parse_metadata(
@@ -119,6 +123,89 @@ int main()
     assert(!parse_diagnostics.has_error());
     assert(*parsed == expected);
     assert(fsim::library::serialize_metadata(*parsed) == serialized);
+
+    auto invalid_form_text = serialized;
+    const auto invalid_form_position
+        = invalid_form_text.find("name_form = \"extended\"");
+    assert(invalid_form_position != std::string::npos);
+    invalid_form_text.replace(
+        invalid_form_position, std::string { "name_form = \"extended\"" }.size(),
+        "name_form = \"invalid\"");
+    fsim::diagnostic::Engine invalid_form_diagnostics;
+    assert(!fsim::library::parse_metadata(
+        invalid_form_text, "invalid-identifier-form.fsimlib",
+        invalid_form_diagnostics));
+    assert(std::ranges::any_of(
+        invalid_form_diagnostics.diagnostics(), [](const auto& diagnostic) {
+            return diagnostic.code == "FSIM-LIB-0001"
+                && diagnostic.message.find(
+                    "requires 'unknown', 'basic', or 'extended'")
+                    != std::string::npos;
+        }));
+
+    auto legacy_text = serialized;
+    legacy_text.replace(legacy_text.find("format = 7"),
+        std::string { "format = 7" }.size(), "format = 6");
+    legacy_text.replace(legacy_text.find("portable_schema = 16"),
+        std::string { "portable_schema = 16" }.size(),
+        "portable_schema = 15");
+    for (const auto key : { "name_form = ", "primary_name_form = " }) {
+        std::size_t position = 0U;
+        while ((position = legacy_text.find(key, position)) != std::string::npos) {
+            const auto line_start = legacy_text.rfind('\n', position);
+            const auto line_end = legacy_text.find('\n', position);
+            const auto first = line_start == std::string::npos
+                ? 0U : line_start + 1U;
+            const auto last = line_end == std::string::npos
+                ? legacy_text.size() : line_end + 1U;
+            legacy_text.erase(first, last - first);
+            position = first;
+        }
+    }
+    auto legacy_expected = expected;
+    legacy_expected.format = 6U;
+    legacy_expected.portable_schema = 15U;
+    for (auto& unit : legacy_expected.units) {
+        unit.name_form = fsim::library::VhdlIdentifierForm::unknown;
+        unit.primary_name_form = fsim::library::VhdlIdentifierForm::unknown;
+    }
+    fsim::diagnostic::Engine legacy_parse_diagnostics;
+    const auto legacy_parsed = fsim::library::parse_metadata(
+        legacy_text, "legacy-v6.fsimlib", legacy_parse_diagnostics);
+    assert(legacy_parsed == std::optional { legacy_expected });
+    assert(!legacy_parse_diagnostics.has_error());
+    const auto upgraded_legacy_text
+        = fsim::library::serialize_metadata(*legacy_parsed);
+    assert(upgraded_legacy_text.starts_with("format = 7\n"));
+    assert(upgraded_legacy_text.find("portable_schema = 16\n")
+        != std::string::npos);
+    assert(upgraded_legacy_text.find("name_form = \"unknown\"")
+        != std::string::npos);
+    auto upgraded_legacy_expected = legacy_expected;
+    upgraded_legacy_expected.format = fsim::library::kFormatVersion;
+    upgraded_legacy_expected.portable_schema
+        = fsim::library::kPortableSchemaVersion;
+    fsim::diagnostic::Engine upgraded_legacy_diagnostics;
+    const auto upgraded_legacy = fsim::library::parse_metadata(
+        upgraded_legacy_text, "upgraded-legacy.fsimlib",
+        upgraded_legacy_diagnostics);
+    assert(upgraded_legacy == std::optional { upgraded_legacy_expected });
+    assert(!upgraded_legacy_diagnostics.has_error());
+    for (const auto [format, schema] : {
+             std::pair { 7U, 15U }, std::pair { 6U, 16U } }) {
+        auto mismatched_text = serialized;
+        mismatched_text.replace(mismatched_text.find("format = 7"),
+            std::string { "format = 7" }.size(),
+            "format = " + std::to_string(format));
+        mismatched_text.replace(mismatched_text.find("portable_schema = 16"),
+            std::string { "portable_schema = 16" }.size(),
+            "portable_schema = " + std::to_string(schema));
+        fsim::diagnostic::Engine mismatch_diagnostics;
+        assert(!fsim::library::parse_metadata(
+            mismatched_text, "mismatched-version-pair.fsimlib",
+            mismatch_diagnostics));
+        assert(mismatch_diagnostics.has_error());
+    }
 
     auto legacy_udp_metadata = expected;
     legacy_udp_metadata.units.back().artifact = "units/invert.fsimudp";
@@ -224,6 +311,8 @@ int main()
             fsim::support::Sha256::digest(payloads[3].bytes));
     auto stale_publication_metadata = published_metadata;
     stale_publication_metadata.format = fsim::library::kFormatVersion - 1U;
+    stale_publication_metadata.portable_schema
+        = fsim::library::kPortableSchemaVersion - 1U;
     const auto stale_publication = directory.parent_path() / "stale-publication.fsimlib";
     fsim::diagnostic::Engine stale_publication_diagnostics;
     assert(!fsim::library::publish(
@@ -231,8 +320,8 @@ int main()
         stale_publication_diagnostics));
     assert(has_identity_diagnostic(
         stale_publication_diagnostics, ".fsimlib publication",
-        "format 5 and portable-unit schema 15 and compiled-HIR schema 1",
-        "format 6 and portable-unit schema 15 and compiled-HIR schema 1",
+        "format 6 and portable-unit schema 15 and compiled-HIR schema 3",
+        "format 7 and portable-unit schema 16 and compiled-HIR schema 3",
         ".fsimlib"));
     assert(!std::filesystem::exists(stale_publication));
     fsim::diagnostic::Engine publish_diagnostics;
@@ -343,36 +432,36 @@ int main()
 
     auto incompatible_text = serialized;
     incompatible_text.replace(
-        incompatible_text.find("format = 6"),
-        std::string { "format = 6" }.size(), "format = 99");
+        incompatible_text.find("format = 7"),
+        std::string { "format = 7" }.size(), "format = 99");
     fsim::diagnostic::Engine schema_diagnostics;
     assert(!fsim::library::parse_metadata(
         incompatible_text, "future.toml", schema_diagnostics));
     assert(has_identity_diagnostic(
-        schema_diagnostics, ".fsimlib", "format 99", "format 6",
+        schema_diagnostics, ".fsimlib", "format 99", "format 7 or 6",
         ".fsimlib"));
 
     for (std::uint32_t format = 0;
-        format < fsim::library::kFormatVersion; ++format) {
+        format < fsim::library::kFormatVersion - 1U; ++format) {
         auto stale_text = serialized;
         stale_text.replace(
-            stale_text.find("format = 6"),
-            std::string { "format = 6" }.size(),
+            stale_text.find("format = 7"),
+            std::string { "format = 7" }.size(),
             "format = " + std::to_string(format));
         fsim::diagnostic::Engine stale_schema_diagnostics;
         assert(!fsim::library::parse_metadata(
             stale_text, "stale.toml", stale_schema_diagnostics));
         assert(has_identity_diagnostic(
             stale_schema_diagnostics, ".fsimlib",
-            "format " + std::to_string(format), "format 6", ".fsimlib"));
+            "format " + std::to_string(format), "format 7 or 6", ".fsimlib"));
     }
 
     for (std::uint32_t schema = 0;
-        schema < fsim::library::kPortableSchemaVersion; ++schema) {
+        schema < fsim::library::kPortableSchemaVersion - 1U; ++schema) {
         auto stale_portable_text = serialized;
         stale_portable_text.replace(
-            stale_portable_text.find("portable_schema = 15"),
-            std::string { "portable_schema = 15" }.size(),
+            stale_portable_text.find("portable_schema = 16"),
+            std::string { "portable_schema = 16" }.size(),
             "portable_schema = " + std::to_string(schema));
         fsim::diagnostic::Engine stale_portable_diagnostics;
         assert(!fsim::library::parse_metadata(
@@ -381,12 +470,12 @@ int main()
         assert(has_identity_diagnostic(
             stale_portable_diagnostics, ".fsimlib",
             "portable-unit schema " + std::to_string(schema),
-            "portable-unit schema 15", ".fsimlib"));
+            "portable-unit schema 16 or 15", ".fsimlib"));
     }
     auto v2_library_text = serialized;
     v2_library_text.replace(
-        v2_library_text.find("portable_schema = 15"),
-        std::string { "portable_schema = 15" }.size(),
+        v2_library_text.find("portable_schema = 16"),
+        std::string { "portable_schema = 16" }.size(),
         "portable_schema = 10");
     for (const auto* const source : { "v2-library.toml",
              "v2-library-repeat.toml" }) {
@@ -395,39 +484,39 @@ int main()
             v2_library_text, source, v2_library_diagnostics));
         assert(has_identity_diagnostic(
             v2_library_diagnostics, ".fsimlib", "portable-unit schema 10",
-            "portable-unit schema 15", ".fsimlib"));
+            "portable-unit schema 16 or 15", ".fsimlib"));
     }
 
     auto future_portable_text = serialized;
     future_portable_text.replace(
-        future_portable_text.find("portable_schema = 15"),
-        std::string { "portable_schema = 15" }.size(),
-        "portable_schema = 16");
+        future_portable_text.find("portable_schema = 16"),
+        std::string { "portable_schema = 16" }.size(),
+        "portable_schema = 17");
     fsim::diagnostic::Engine future_portable_diagnostics;
     assert(!fsim::library::parse_metadata(
         future_portable_text, "future-portable.toml",
         future_portable_diagnostics));
     assert(has_identity_diagnostic(
         future_portable_diagnostics, ".fsimlib",
-        "portable-unit schema 16", "portable-unit schema 15", ".fsimlib"));
+        "portable-unit schema 17", "portable-unit schema 16 or 15", ".fsimlib"));
 
-    for (const std::uint32_t schema : { 0U, 2U }) {
+    for (const std::uint32_t schema : { 0U, 1U, 2U, 4U }) {
         auto incompatible_compiled_hir_text = serialized;
         incompatible_compiled_hir_text.replace(
             incompatible_compiled_hir_text.find(
-                "compiled_hir_schema = 1"),
-            std::string { "compiled_hir_schema = 1" }.size(),
+                "compiled_hir_schema = 3"),
+            std::string { "compiled_hir_schema = 3" }.size(),
             "compiled_hir_schema = " + std::to_string(schema));
         fsim::diagnostic::Engine compiled_hir_schema_diagnostics;
         assert(!fsim::library::parse_metadata(
             incompatible_compiled_hir_text,
-            schema == 0U ? "stale-compiled-hir.toml"
-                         : "future-compiled-hir.toml",
+            schema == 4U ? "future-compiled-hir.toml"
+                         : "stale-compiled-hir.toml",
             compiled_hir_schema_diagnostics));
         assert(has_identity_diagnostic(
             compiled_hir_schema_diagnostics, ".fsimlib",
             "compiled-HIR schema " + std::to_string(schema),
-            "compiled-HIR schema 1", ".fsimlib"));
+            "compiled-HIR schema 3", ".fsimlib"));
     }
 
     auto systemc_metadata = expected;

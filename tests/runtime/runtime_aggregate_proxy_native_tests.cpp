@@ -755,7 +755,8 @@ void check_proxy_slice_matches_full_leaf_write()
                 == std::array<bool, 3U> { false, true, true }
             && low_first->last_event
                 == std::array<SimulationTick, 3U> {
-                    std::numeric_limits<SimulationTick>::max(), 0U, 0U }
+                    static_cast<SimulationTick>(
+                        std::numeric_limits<std::int64_t>::max()), 0U, 0U }
             && low_first->last_active == low_first->last_event
             && low_first->raw_proxy_driver == "ZZZZ1010"
             && low_second->current
@@ -771,7 +772,8 @@ void check_proxy_slice_matches_full_leaf_write()
                 == std::array<bool, 3U> { false, true, true }
             && low_second->last_event
                 == std::array<SimulationTick, 3U> {
-                    std::numeric_limits<SimulationTick>::max(), 0U, 0U }
+                    static_cast<SimulationTick>(
+                        std::numeric_limits<std::int64_t>::max()), 0U, 0U }
             && low_second->last_active == low_second->last_event
             && low_second->raw_proxy_driver == "ZZZZ0110"
             && proxy_first->current == low_first->current

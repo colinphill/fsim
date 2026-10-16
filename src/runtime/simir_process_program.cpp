@@ -122,6 +122,13 @@ ProcessInstanceProgram::ProcessInstanceProgram(Process process)
     , program_owner { process.program_owner }
     , postponed { process.postponed }
     , final { process.final }
+    , startup_phase { process.startup_phase }
+    , startup_order { process.startup_order }
+    , startup_package_owner_id { process.startup_package_owner_id }
+    , startup_writable_string_object_ids {
+          std::move(process.startup_writable_string_object_ids) }
+    , startup_writable_container_object_ids {
+          std::move(process.startup_writable_container_object_ids) }
 {
 }
 
@@ -148,6 +155,13 @@ ProcessInstanceProgram::ProcessInstanceProgram(
     , program_owner { process.program_owner() }
     , postponed { process.postponed() }
     , final { process.final() }
+    , startup_phase { process.startup_phase() }
+    , startup_order { process.startup_order() }
+    , startup_package_owner_id { process.startup_package_owner_id() }
+    , startup_writable_string_object_ids {
+          process.startup_writable_string_object_ids() }
+    , startup_writable_container_object_ids {
+          process.startup_writable_container_object_ids() }
 {
 }
 
@@ -633,6 +647,42 @@ ProcessProgramView::scheduling_domain() const noexcept
                               : common_->scheduling_domain;
 }
 
+const ProcessStartupPhase&
+ProcessProgramView::startup_phase() const noexcept
+{
+    return facade_ != nullptr ? facade_->startup_phase
+                              : instance_->startup_phase;
+}
+
+const std::uint64_t& ProcessProgramView::startup_order() const noexcept
+{
+    return facade_ != nullptr ? facade_->startup_order
+                              : instance_->startup_order;
+}
+
+const std::uint32_t&
+ProcessProgramView::startup_package_owner_id() const noexcept
+{
+    return facade_ != nullptr ? facade_->startup_package_owner_id
+                              : instance_->startup_package_owner_id;
+}
+
+const std::vector<StringObjectId>&
+ProcessProgramView::startup_writable_string_object_ids() const noexcept
+{
+    return facade_ != nullptr
+        ? facade_->startup_writable_string_object_ids
+        : instance_->startup_writable_string_object_ids;
+}
+
+const std::vector<ContainerObjectId>&
+ProcessProgramView::startup_writable_container_object_ids() const noexcept
+{
+    return facade_ != nullptr
+        ? facade_->startup_writable_container_object_ids
+        : instance_->startup_writable_container_object_ids;
+}
+
 Process ProcessProgramView::materialize() const
 {
     return materialize_impl(true);
@@ -688,6 +738,13 @@ Process ProcessProgramView::materialize_impl(
     process.final = final();
     process.expression_profiles = expression_profiles();
     process.scheduling_domain = scheduling_domain();
+    process.startup_phase = startup_phase();
+    process.startup_order = startup_order();
+    process.startup_package_owner_id = startup_package_owner_id();
+    process.startup_writable_string_object_ids
+        = startup_writable_string_object_ids();
+    process.startup_writable_container_object_ids
+        = startup_writable_container_object_ids();
     return process;
 }
 

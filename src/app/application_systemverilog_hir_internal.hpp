@@ -4,13 +4,79 @@
 #include "application_internal.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <functional>
 #include <map>
 #include <unordered_map>
+#include <vector>
 
 namespace fsim::app::application_detail::systemverilog_hir_detail {
 
 namespace sv = semantic::sv;
+
+// Copy effective type properties for a named typedef use while retaining the
+// selected typedef identity in reference.target.
+inline void inherit_named_systemverilog_type_shape(
+    sv::TypeReference& reference, const sv::Hir& hir)
+{
+    if (!reference.target.target.valid())
+        return;
+
+    std::vector<semantic::TypeId> visited;
+    auto target = reference.target.target;
+    while (target.valid()
+        && std::ranges::find(visited, target) == visited.end()) {
+        visited.push_back(target);
+        const auto definition = std::ranges::find(
+            hir.types(), target, &sv::TypeDefinition::id);
+        if (definition == hir.types().end())
+            return;
+
+        const auto& base = definition->base;
+        const bool has_shape = base.value_form.has_value()
+            || !base.class_identity.empty()
+            || base.virtual_interface
+            || !base.interface_type.empty()
+            || !base.interface_modport.empty()
+            || !base.systemverilog_net_type.empty()
+            || !base.systemverilog_resolution_function.empty()
+            || base.packed_range.has_value()
+            || !base.packed_dimensions.empty()
+            || base.signed_value
+            || base.container_form.has_value()
+            || !base.unpacked_dimensions.empty()
+            || base.executable_width.has_value()
+            || base.four_state;
+        if (has_shape) {
+            reference.value_form = base.value_form;
+            if (!reference.value_form
+                && definition->form != sv::TypeForm::unresolved) {
+                reference.value_form = definition->form;
+            }
+            reference.class_identity = base.class_identity;
+            reference.virtual_interface = base.virtual_interface;
+            reference.interface_type = base.interface_type;
+            reference.interface_modport = base.interface_modport;
+            reference.systemverilog_net_type = base.systemverilog_net_type;
+            reference.systemverilog_resolution_function
+                = base.systemverilog_resolution_function;
+            reference.packed_range = base.packed_range;
+            reference.packed_dimensions = base.packed_dimensions;
+            reference.signed_value = base.signed_value;
+            reference.container_form = base.container_form;
+            reference.unpacked_dimensions = base.unpacked_dimensions;
+            reference.executable_width = base.executable_width;
+            reference.four_state = base.four_state;
+            return;
+        }
+        if (!base.target.target.valid()) {
+            if (definition->form != sv::TypeForm::unresolved)
+                reference.value_form = definition->form;
+            return;
+        }
+        target = base.target.target;
+    }
+}
 
 [[nodiscard]] sv::UnitKind unit_kind(frontend::UnitKind kind) noexcept;
 [[nodiscard]] sv::Direction direction(frontend::PortDirection value) noexcept;

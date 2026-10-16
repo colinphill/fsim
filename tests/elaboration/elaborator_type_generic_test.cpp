@@ -756,4 +756,80 @@ endmodule
         rejected_cross_language, "FSIM-ELAB-GENTYPE-004"));
 }
 
+
+void test_vhdl_numeric_bit_subtype_identity()
+{
+    const auto positive = fsim::frontend::parse_text(
+        "numeric-bit-subtype-identity.vhd",
+        R"(
+library ieee;
+entity numeric_bit_subtype_identity is
+end entity;
+library ieee;
+use ieee.numeric_bit.all;
+architecture rtl of numeric_bit_subtype_identity is
+  signal qualified_unsigned : ieee.numeric_bit.unsigned(7 downto 0);
+  signal qualified_signed : ieee.numeric_bit.signed(7 downto 0);
+  signal imported_unsigned : unsigned(7 downto 0);
+  signal imported_signed : signed(7 downto 0);
+begin
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(positive.ok());
+    const auto accepted = compile_and_elaborate(
+        positive.design, "vhdl:work.numeric_bit_subtype_identity(rtl)");
+    assert(accepted.ok());
+
+    const auto negative = fsim::frontend::parse_text(
+        "numeric-bit-subtype-shadow-negative.vhd",
+        R"(
+library ieee;
+use ieee.numeric_bit.all;
+entity numeric_bit_subtype_shadow_negative is
+end entity;
+library ieee;
+use ieee.numeric_bit.all;
+architecture rtl of numeric_bit_subtype_shadow_negative is
+  type unsigned is (small, large);
+  subtype invalid_unsigned is unsigned(3 downto 0);
+  signal invalid_value : invalid_unsigned;
+begin
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(negative.ok());
+    const auto rejected = compile_and_elaborate(
+        negative.design,
+        "vhdl:work.numeric_bit_subtype_shadow_negative(rtl)");
+    assert(!rejected.ok());
+    assert(has_diagnostic(rejected, "FSIM-ELAB-VHSUBTYPE-003"));
+
+    const auto ambiguous = fsim::frontend::parse_text(
+        "numeric-bit-subtype-ambiguous-import-negative.vhd",
+        R"(
+library ieee;
+use ieee.numeric_std.all;
+use ieee.numeric_bit.all;
+entity numeric_bit_subtype_ambiguous_import_negative is
+end entity;
+library ieee;
+use ieee.numeric_std.all;
+use ieee.numeric_bit.all;
+architecture rtl of numeric_bit_subtype_ambiguous_import_negative is
+  subtype ambiguous_unsigned is unsigned(3 downto 0);
+  signal invalid_value : ambiguous_unsigned;
+begin
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(ambiguous.ok());
+    const auto rejected_ambiguous = compile_and_elaborate(
+        ambiguous.design,
+        "vhdl:work.numeric_bit_subtype_ambiguous_import_negative(rtl)");
+    assert(!rejected_ambiguous.ok());
+    assert(has_diagnostic(
+        rejected_ambiguous, "FSIM-ELAB-VHSUBTYPE-003"));
+}
+
 } // namespace fsim::tests::elaboration

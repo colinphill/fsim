@@ -25,6 +25,8 @@ constexpr std::string_view kSchemaCode = "FSIM-LIB-0002";
 constexpr std::string_view kValueCode = "FSIM-LIB-0003";
 constexpr std::string_view kIoCode = "FSIM-LIB-0004";
 constexpr std::string_view kPublishCode = "FSIM-LIB-0005";
+constexpr std::uint32_t kPreviousFormatVersion = 6;
+constexpr std::uint32_t kPreviousPortableSchemaVersion = 15;
 
 enum class Section {
   root,
@@ -156,6 +158,38 @@ bool checksum_spelling(const std::string_view value) {
            return std::isdigit(character) != 0
                || (character >= 'a' && character <= 'f');
          });
+}
+
+std::string_view identifier_form_name(const VhdlIdentifierForm form) {
+  switch (form) {
+  case VhdlIdentifierForm::unknown:
+    return "unknown";
+  case VhdlIdentifierForm::basic:
+    return "basic";
+  case VhdlIdentifierForm::extended:
+    return "extended";
+  }
+  return "invalid";
+}
+
+std::optional<VhdlIdentifierForm> parse_identifier_form(
+    const std::string_view value) {
+  if (value == "unknown") {
+    return VhdlIdentifierForm::unknown;
+  }
+  if (value == "basic") {
+    return VhdlIdentifierForm::basic;
+  }
+  if (value == "extended") {
+    return VhdlIdentifierForm::extended;
+  }
+  return std::nullopt;
+}
+
+bool valid_identifier_form(const VhdlIdentifierForm form) {
+  return form == VhdlIdentifierForm::unknown
+      || form == VhdlIdentifierForm::basic
+      || form == VhdlIdentifierForm::extended;
 }
 
 bool library_name(const std::string_view value) {
@@ -360,7 +394,11 @@ std::string serialize_metadata(const Metadata& metadata) {
            << "checksum = \"" << escape(unit.checksum) << "\"\n"
            << "standard = \"" << escape(unit.standard) << "\"\n"
            << "compatibility_profile = \""
-           << escape(unit.compatibility_profile) << "\"\n";
+           << escape(unit.compatibility_profile) << "\"\n"
+           << "name_form = \"" << identifier_form_name(unit.name_form)
+           << "\"\n"
+           << "primary_name_form = \""
+           << identifier_form_name(unit.primary_name_form) << "\"\n";
   }
   for (const auto& auxiliary : metadata.auxiliary_artifacts) {
     output << "\n[[auxiliary]]\n"
@@ -708,6 +746,19 @@ std::optional<Metadata> parse_metadata(
       unit.standard = *text;
     } else if (key == "compatibility_profile") {
       unit.compatibility_profile = *text;
+    } else if (key == "name_form" || key == "primary_name_form") {
+      const auto form = text ? parse_identifier_form(*text) : std::nullopt;
+      if (!form) {
+        error(
+            diagnostics, kSyntaxCode,
+            "metadata key '" + key
+                + "' requires 'unknown', 'basic', or 'extended'",
+            source_name, line_number);
+      } else if (key == "name_form") {
+        unit.name_form = *form;
+      } else {
+        unit.primary_name_form = *form;
+      }
     } else {
       error(
           diagnostics, kSyntaxCode,
@@ -715,24 +766,60 @@ std::optional<Metadata> parse_metadata(
     }
   }
 
+  if (metadata.format == kPreviousFormatVersion
+      && metadata.portable_schema == kPreviousPortableSchemaVersion) {
+    // The v6/15 schema did not define identifier-form fields. Ignore any
+    // similarly named extension rather than treating it as authoritative.
+    for (auto& unit : metadata.units) {
+      unit.name_form = VhdlIdentifierForm::unknown;
+      unit.primary_name_form = VhdlIdentifierForm::unknown;
+    }
+  }
+
   const auto document_line = std::max<std::uint32_t>(line_number, 1);
-  if (metadata.format != kFormatVersion) {
+  const bool current_format
+      = metadata.format == kFormatVersion
+          && metadata.portable_schema == kPortableSchemaVersion;
+  const bool legacy_format
+      = metadata.format == kPreviousFormatVersion
+          && metadata.portable_schema == kPreviousPortableSchemaVersion;
+  if (!current_format && !legacy_format) {
+    if (metadata.format != kFormatVersion
+        && metadata.format != kPreviousFormatVersion) {
       error(
           diagnostics, kSchemaCode,
           diagnostic::unsupported_artifact_identity(
               ".fsimlib", "format " + std::to_string(metadata.format),
-              "format " + std::to_string(kFormatVersion), ".fsimlib"),
+            "format " + std::to_string(kFormatVersion) + " or "
+                + std::to_string(kPreviousFormatVersion), ".fsimlib"),
           source_name, document_line);
-  }
-  if (metadata.portable_schema != kPortableSchemaVersion) {
+    }
+    if (metadata.portable_schema != kPortableSchemaVersion
+        && metadata.portable_schema != kPreviousPortableSchemaVersion) {
       error(
           diagnostics, kSchemaCode,
           diagnostic::unsupported_artifact_identity(
               ".fsimlib", "portable-unit schema " + std::to_string(metadata.portable_schema),
               "portable-unit schema "
-                  + std::to_string(kPortableSchemaVersion),
+                  + std::to_string(kPortableSchemaVersion) + " or "
+                  + std::to_string(kPreviousPortableSchemaVersion),
               ".fsimlib"),
           source_name, document_line);
+    }
+    if (metadata.format == kFormatVersion
+        && metadata.portable_schema != kPortableSchemaVersion) {
+      error(
+          diagnostics, kSchemaCode,
+          "format 7 requires portable-unit schema 16",
+          source_name, document_line);
+    }
+    if (metadata.format == kPreviousFormatVersion
+        && metadata.portable_schema != kPreviousPortableSchemaVersion) {
+      error(
+          diagnostics, kSchemaCode,
+          "format 6 requires portable-unit schema 15",
+          source_name, document_line);
+    }
   }
   if (metadata.compiled_hir_schema != kCompiledHirSchemaVersion) {
     error(
@@ -860,8 +947,16 @@ std::optional<Metadata> parse_metadata(
           return standard.language == unit.language
               && standard.revision == unit.standard;
         });
+    const bool forms_valid = valid_identifier_form(unit.name_form)
+        && valid_identifier_form(unit.primary_name_form)
+        && (unit.language == "vhdl"
+            || (unit.name_form == VhdlIdentifierForm::unknown
+                && unit.primary_name_form == VhdlIdentifierForm::unknown))
+        && (!unit.primary_name.empty()
+            || unit.primary_name_form == VhdlIdentifierForm::unknown);
     if (unit.language.empty() || unit.kind.empty() || unit.name.empty()
         || !unit.artifact.empty() || !unit.checksum.empty() || !known_standard
+        || !forms_valid
         || unit.compatibility_profile.empty()
         || (unit.language == "vhdl"
             && unit.compatibility_profile == "none")) {

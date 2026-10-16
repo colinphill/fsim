@@ -1757,6 +1757,26 @@ void lower_process_operations(ProcessLoweringContext& state)
         fsim::runtime::simir::visit_operation(
             [&](const auto& operation) {
                 using OperationType = std::decay_t<decltype(operation)>;
+                const bool selected_signal_query = [&] {
+                    if constexpr (
+                        std::is_same_v<OperationType, runtime::simir::SignalEvent>
+                        || std::is_same_v<OperationType, runtime::simir::SignalLastValue>
+                        || std::is_same_v<OperationType, runtime::simir::SignalLastEvent>
+                        || std::is_same_v<OperationType, runtime::simir::SignalActive>
+                        || std::is_same_v<OperationType, runtime::simir::SignalLastActive>
+                        || std::is_same_v<OperationType, runtime::simir::SignalDriving>
+                        || std::is_same_v<OperationType, runtime::simir::SignalDrivingValue>) {
+                        return operation.selection.has_value();
+                    }
+                    return false;
+                }();
+                if (selected_signal_query) {
+                    return_result(
+                        FSIM_JIT_RESUME_STATUS_SIMIR_BOUNDARY_V2,
+                        instruction, 0, FSIM_JIT_FRAME_STATE_READY_V2,
+                        next_instruction);
+                    return;
+                }
                 if constexpr (std::is_same_v<OperationType, LoadConstant>) {
                     if (std::ranges::binary_search(
                             bound_literal_sites, instruction)) {

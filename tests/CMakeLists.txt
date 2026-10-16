@@ -4433,6 +4433,7 @@ if(FSIM_WITH_LLVM)
   include("${CMAKE_CURRENT_SOURCE_DIR}/native_frontier_generic_update.cmake")
   include("${CMAKE_CURRENT_SOURCE_DIR}/native_frontier_generic_partial_prefix.cmake")
   include("${CMAKE_CURRENT_SOURCE_DIR}/native_frontier_v2_first_generic.cmake")
+  include("${CMAKE_CURRENT_SOURCE_DIR}/native_frontier_selected_signal_history.cmake")
   include("${CMAKE_CURRENT_SOURCE_DIR}/app/native_frontier_generic_update_failure.cmake")
 
   add_executable(fsim_llvm_tests compiler/llvm_jit_test.cpp)
@@ -5091,6 +5092,15 @@ if(TARGET fsim_application)
       0 classes app/application_classes_case.cpp
       fsim.application.classes
       class uvm artifact llvm debug cache)
+    fsim_add_application_case(
+      0 class_hir_failure_routes
+      app/application_class_hir_failure_routes_case.cpp
+      fsim.application.class_hir_failure_routes
+      fast class hir exception llvm)
+    fsim_add_application_case(
+      0 class_hir_reports app/application_class_hir_reports_case.cpp
+      fsim.application.class_hir_reports
+      fast class hir report exception llvm)
     fsim_add_application_case(
       0 systemc_matrix app/application_systemc_matrix_test.cpp
       fsim.application.systemc_matrix
@@ -6516,6 +6526,22 @@ fsim_register_simple_test(
   )
   target_link_libraries(fsim_application_tests PRIVATE fsim_application)
   add_test(NAME fsim.application COMMAND fsim_application_tests)
+  add_test(
+    NAME fsim.application.class_hir_failure_routes
+    COMMAND fsim_application_tests class_hir_failure_routes
+  )
+  set_tests_properties(
+    fsim.application.class_hir_failure_routes
+    PROPERTIES LABELS "fast;class;hir;exception;llvm"
+  )
+  add_test(
+    NAME fsim.application.class_hir_reports
+    COMMAND fsim_application_tests class_hir_reports
+  )
+  set_tests_properties(
+    fsim.application.class_hir_reports
+    PROPERTIES LABELS "fast;class;hir;report;exception;llvm"
+  )
   set_tests_properties(fsim.application PROPERTIES TIMEOUT 1200)
   if(
     WIN32

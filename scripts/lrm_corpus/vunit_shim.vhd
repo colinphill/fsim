@@ -43,6 +43,10 @@ package vunit_shim_pkg is
   procedure error(constant msg : in string);
   procedure failure(constant msg : in string);
 
+  -- VUnit check API: result() prepends this result marker to user text.
+  constant check_result_tag : string := "<+/->";
+  function result(str : string := "") return string;
+
   procedure check(constant expr : in boolean; constant msg : in string := "");
   procedure check_true(constant expr : in boolean; constant msg : in string := "");
   procedure check_false(constant expr : in boolean; constant msg : in string := "");
@@ -68,6 +72,11 @@ package vunit_shim_pkg is
 end package;
 
 package body vunit_shim_pkg is
+  function result(str : string) return string is
+  begin
+    return check_result_tag & str;
+  end function;
+
   -- Each test_suite iteration runs the next test case: run() counts its
   -- calls within the iteration and selects the call at the current index.
   -- VUnit testbenches call run() from one if/elsif chain, so the order is

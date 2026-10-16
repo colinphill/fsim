@@ -85,7 +85,7 @@ string(REPLACE "\r\n" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(REPLACE "\r" "\n" FSIM_CONTRACT_TEXT "${FSIM_CONTRACT_TEXT}")
 string(SHA256 FSIM_CONTRACT_DIGEST "${FSIM_CONTRACT_TEXT}")
 set(FSIM_EXPECTED_DIGEST
-  "2325863ed536b1bdaa1db05dab4f0f45d4678bb61fd3755d2fa20e84e7f40e0d")
+  "83cf257f1f6970eff7b9c8a3ee71a8c63f4ab30af6218989e4a177986a646831")
 if(NOT FSIM_CONTRACT_DIGEST STREQUAL FSIM_EXPECTED_DIGEST)
   message(FATAL_ERROR
     "schema/producer diagnostic contract changed: expected ${FSIM_EXPECTED_DIGEST}, got ${FSIM_CONTRACT_DIGEST}")
@@ -106,8 +106,11 @@ if(NOT FSIM_SPDX STREQUAL "# SPDX-License-Identifier: Apache-2.0" OR
 endif()
 foreach(FSIM_INDEX RANGE 2 35)
   list(GET FSIM_ROWS ${FSIM_INDEX} FSIM_ROW)
-  string(REPLACE "\t" ";" FSIM_FIELDS "${FSIM_ROW}")
-  list(LENGTH FSIM_FIELDS FSIM_FIELD_COUNT)
+  # Count TSV delimiters directly. Replacing tabs with CMake list separators
+  # would also split semicolons embedded in an identity cell.
+  string(REGEX MATCHALL "\t" FSIM_TABS "${FSIM_ROW}")
+  list(LENGTH FSIM_TABS FSIM_TAB_COUNT)
+  math(EXPR FSIM_FIELD_COUNT "${FSIM_TAB_COUNT} + 1")
   if(NOT FSIM_FIELD_COUNT EQUAL 6)
     message(FATAL_ERROR
       "schema/producer diagnostic row ${FSIM_INDEX} requires six fields")
@@ -224,8 +227,8 @@ fsim_require_schema_diagnostic_tokens("${FSIM_DESIGN_TEST}"
   "stale-publication")
 fsim_require_schema_diagnostic_tokens("${FSIM_LIBRARY_TEST}"
   "has_identity_diagnostic"
-  "portable-unit schema 15"
-  "compiled-HIR schema 1"
+  "portable-unit schema 16"
+  "compiled-HIR schema 3"
   "stale-publication.fsimlib")
 fsim_require_schema_diagnostic_tokens("${FSIM_APPLICATION_TEST}"
   "unsupported design state FSIMUVM1 identity: found"

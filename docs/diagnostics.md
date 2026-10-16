@@ -2071,6 +2071,7 @@ scheduler.
 | `FSIM-ELAB-SVNETTYPE-002` | error | A SystemVerilog nettype resolution function is ambiguous or has conflicting visible bodies. |
 | `FSIM-ELAB-SVNETTYPE-003` | error | A SystemVerilog nettype resolution function does not accept one dynamic array of the net base type and return that base type. |
 | `FSIM-ELAB-SVNETTYPE-004` | error | A SystemVerilog nettype resolution function uses a body outside the retained deterministic resolution forms. |
+| `FSIM-ELAB-SVNETTYPE-005` | error | A built-in net data type is not four-state integral or a fixed aggregate recursively composed of valid net types. |
 | `FSIM-ELAB-SVALIAS-001` | error | A SystemVerilog alias terminal is not a locally static packed-net lvalue, selects an invalid range, or names a variable. |
 | `FSIM-ELAB-SVALIAS-002` | error | A SystemVerilog alias terminal does not name a packed net in its declaration region. |
 | `FSIM-ELAB-SVALIAS-003` | error | SystemVerilog alias terminals have different bit lengths or incompatible net/data types. |

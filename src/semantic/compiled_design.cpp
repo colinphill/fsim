@@ -1341,6 +1341,107 @@ bool CompiledDesign::valid() const
                 && reference.target->value() >= semantics.units().size())) {
             return false;
         }
+        if (!reference.systemverilog_package_member) {
+            continue;
+        }
+        if (reference.kind != CompiledReferenceKind::package) {
+            return false;
+        }
+        const auto& use = *reference.systemverilog_package_member;
+        if (use.expression.has_value() == use.statement.has_value()) {
+            return false;
+        }
+        const auto valid_identity = [](
+            const CompiledSystemVerilogPackageDeclarationIdentity& identity) {
+            return !identity.library.empty() && !identity.package.empty()
+                && (identity.form == sv::DeclarationForm::function
+                    || identity.form == sv::DeclarationForm::task)
+                && !identity.name.empty() && !identity.source_digest.empty()
+                && identity.source_begin < identity.source_end;
+        };
+        const auto valid_callable_declaration = [&](const DeclarationId id) {
+            if (!id.valid() || id.value() >= semantics.declarations().size()) {
+                return false;
+            }
+            const auto declaration = std::ranges::find(
+                systemverilog_hir.declarations(), id, &sv::Declaration::id);
+            return declaration != systemverilog_hir.declarations().end()
+                && (declaration->form == sv::DeclarationForm::function
+                    || declaration->form == sv::DeclarationForm::task);
+        };
+        const auto valid_callsite_owner = [&](const ScopeId scope) {
+            return scope.valid() && scope.value() < semantics.scopes().size()
+                && semantics.scopes()[scope.value()].unit == reference.owner;
+        };
+        if (use.expression) {
+            if (!use.expression->valid()
+                || use.expression->value()
+                    >= semantics.expression_identities().size()) {
+                return false;
+            }
+            const auto expression = std::ranges::find(
+                systemverilog_hir.expressions(), *use.expression,
+                &sv::Expression::id);
+            if (expression == systemverilog_hir.expressions().end()
+                || expression->kind != sv::ExpressionKind::call
+                || !expression->referenced_name
+                || !valid_callsite_owner(expression->scope)) {
+                return false;
+            }
+        } else {
+            if (!use.statement->valid()
+                || use.statement->value()
+                    >= semantics.statement_identities().size()) {
+                return false;
+            }
+            const auto statement = std::ranges::find(
+                systemverilog_hir.statements(), *use.statement,
+                &sv::Statement::id);
+            if (statement == systemverilog_hir.statements().end()
+                || statement->kind != sv::StatementKind::task_call
+                || !valid_callsite_owner(statement->scope)) {
+                return false;
+            }
+        }
+        if (use.selected_present && use.selected_complete) {
+            if (use.retained_selected.has_value()
+                    == use.package_selected.has_value()
+                || (use.retained_selected
+                    && !valid_callable_declaration(*use.retained_selected))
+                || (use.package_selected
+                    && !valid_identity(*use.package_selected))) {
+                return false;
+            }
+        } else if ((!use.selected_present
+                       && (use.retained_selected || use.package_selected))
+            || (!use.selected_complete
+                && (use.retained_selected || use.package_selected))) {
+            return false;
+        }
+        if (use.overloads.size() != use.overload_count) {
+            return false;
+        }
+        std::uint32_t expected_position { };
+        for (const auto& overload : use.overloads) {
+            if (overload.position != expected_position
+                || (overload.retained_declaration
+                    && overload.package_declaration)
+                || (use.overloads_complete
+                    && !overload.retained_declaration
+                    && !overload.package_declaration)) {
+                return false;
+            }
+            ++expected_position;
+            if (overload.retained_declaration
+                && !valid_callable_declaration(
+                    *overload.retained_declaration)) {
+                return false;
+            }
+            if (overload.package_declaration
+                && !valid_identity(*overload.package_declaration)) {
+                return false;
+            }
+        }
     }
     return true;
 }

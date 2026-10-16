@@ -92,6 +92,8 @@ struct TargetSpec {
     std::string library;
     std::string unit;
     std::optional<std::string> architecture;
+    bool unit_extended { };
+    bool architecture_extended { };
 };
 
 std::optional<TargetSpec> parse_target(std::string_view spelling);

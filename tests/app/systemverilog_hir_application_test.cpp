@@ -756,11 +756,13 @@ endmodule
 package values;
   import "DPI-C" pure function int c_abs(input int value);
   typedef logic signed [3:0] key_t;
+  typedef logic [3:0] unsigned_key_t;
+  typedef int unsigned_score_array_t[unsigned_key_t];
   typedef enum logic [1:0] {idle = 0, busy = 1} state_t;
   typedef struct packed { logic valid; logic [2:0] data; } packet_t;
   typedef struct {
     logic [3:0] prefix = 4'ha;
-    packet_t packet = '{valid: 1'b1, data: 3'h5};
+    packet_t packet = packet_t'{valid: 1'b1, data: 3'h5};
   } initialized_t;
   typedef union packed {
     logic [15:0] wide;
@@ -808,6 +810,7 @@ interface bus_if #(
   int dynamic_values[];
   byte bounded_values[$:3];
   logic [15:0] scores[values::key_t];
+  logic [15:0] unsigned_scores[values::unsigned_key_t];
   logic [7:0] static_values[3:0];
   function automatic ITEM sample(input ITEM increment);
     return data + increment;
@@ -1437,12 +1440,15 @@ endmodule
     const auto dynamic = declaration_for("dynamic_values");
     const auto bounded = declaration_for("bounded_values");
     const auto associative = declaration_for("scores");
+    const auto unsigned_associative = declaration_for("unsigned_scores");
     const auto static_values = declaration_for("static_values");
     assert(type_parameter
         != checked->systemverilog_hir.declarations().end());
     assert(dynamic != checked->systemverilog_hir.declarations().end());
     assert(bounded != checked->systemverilog_hir.declarations().end());
     assert(associative != checked->systemverilog_hir.declarations().end());
+    assert(unsigned_associative
+        != checked->systemverilog_hir.declarations().end());
     assert(static_values
         != checked->systemverilog_hir.declarations().end());
     assert(type_parameter->form
@@ -1459,6 +1465,18 @@ endmodule
     // Linked package references include their effective library identity.
     assert(associative->type->associative_index->spelling
         == "work::values::key_t");
+    assert(associative->type->associative_index_metadata);
+    assert(associative->type->associative_index_metadata->target.spelling
+        == "work::values::key_t");
+    assert(associative->type->associative_index_metadata->signed_value);
+    assert(associative->type->associative_index_metadata->executable_width
+        == 4U);
+    assert(unsigned_associative->type->associative_index_metadata);
+    assert(unsigned_associative->type->associative_index_metadata->target.spelling
+        == "work::values::unsigned_key_t");
+    assert(!unsigned_associative->type->associative_index_metadata->signed_value);
+    assert(unsigned_associative->type->associative_index_metadata->executable_width
+        == 4U);
     assert(static_values->type->container_form
         == fsim::semantic::sv::TypeForm::static_array);
     assert(static_values->type->unpacked_dimensions.size() == 1);
@@ -1470,6 +1488,14 @@ endmodule
     const auto packet_type = std::ranges::find_if(
         checked->systemverilog_hir.types(), [](const auto& type) {
             return type.name == "packet_t";
+        });
+    const auto unsigned_key_type = std::ranges::find_if(
+        checked->systemverilog_hir.types(), [](const auto& type) {
+            return type.name == "unsigned_key_t";
+        });
+    const auto unsigned_score_array_type = std::ranges::find_if(
+        checked->systemverilog_hir.types(), [](const auto& type) {
+            return type.name == "unsigned_score_array_t";
         });
     const auto ordinary_type = std::ranges::find_if(
         checked->systemverilog_hir.types(), [](const auto& type) {
@@ -1489,6 +1515,29 @@ endmodule
         });
     assert(state_type != checked->systemverilog_hir.types().end());
     assert(packet_type != checked->systemverilog_hir.types().end());
+    const auto typed_packet_pattern = std::ranges::find_if(
+        checked->systemverilog_hir.expressions(), [](const auto& expression) {
+            return expression.kind
+                    == fsim::semantic::sv::ExpressionKind::assignment_pattern
+                && expression.nominal_type == "packet_t"
+                && expression.nominal_type_target.has_value();
+        });
+    assert(typed_packet_pattern
+        != checked->systemverilog_hir.expressions().end());
+    assert(typed_packet_pattern->nominal_type_target == packet_type->id);
+    assert(unsigned_key_type != checked->systemverilog_hir.types().end());
+    assert(unsigned_score_array_type
+        != checked->systemverilog_hir.types().end());
+    assert(unsigned_score_array_type->container);
+    assert(unsigned_score_array_type->container->associative_index);
+    assert(unsigned_score_array_type->container->associative_index
+                ->target.target
+        == unsigned_key_type->id);
+    assert(!unsigned_score_array_type->container->associative_index
+                ->signed_value
+        && unsigned_score_array_type->container->associative_index
+                ->executable_width
+            == 4U);
     assert(ordinary_type != checked->systemverilog_hir.types().end());
     assert(tagged_type != checked->systemverilog_hir.types().end());
     assert(initialized_type != checked->systemverilog_hir.types().end());
@@ -1899,6 +1948,7 @@ endmodule
         });
     const auto& fork = statement_for(fork_id);
     assert(fork.fork_join == fsim::semantic::sv::ForkJoinKind::any);
+    assert(!fork.fork_isolate_register_frame);
     assert(fork.nested_scope && fork.statements.size() == 2);
     const auto selection_id = *std::ranges::find_if(
         executable.statements, [&](const auto id) {
@@ -1940,6 +1990,17 @@ endmodule
     const auto retained_expression_count = checked->systemverilog_hir.expressions().size();
     const auto retained_alias_terminals = top->aliases.front().terminals;
     const auto retained_package_let_expression = package_let.expression;
+    const auto isolated_fork_count = [](const auto& hir) {
+        return std::ranges::count_if(
+            hir.statements(), [](const auto& statement) {
+                return statement.kind
+                    == fsim::semantic::sv::StatementKind::fork
+                    && statement.fork_isolate_register_frame;
+            });
+    };
+    const auto isolated_forks
+        = isolated_fork_count(checked->systemverilog_hir);
+    assert(isolated_forks > 0);
     fsim::diagnostic::Engine hir_state_diagnostics;
     const auto hir_state = fsim::app::serialize_systemverilog_constraint_hir_state(
         checked->systemverilog_hir, checked->semantics,
@@ -1949,6 +2010,50 @@ endmodule
         *hir_state, "systemverilog-hir-state",
         checked->semantics, hir_state_diagnostics);
     assert(restored_hir && !hir_state_diagnostics.has_error());
+    assert(isolated_fork_count(*restored_hir) == isolated_forks);
+    fsim::diagnostic::Engine compiled_bundle_diagnostics;
+    const auto bundle_source_mappings
+        = fsim::app::application_detail::compiled_cache_source_mappings(
+            *checked, config.base_directory, compiled_bundle_diagnostics);
+    if (!bundle_source_mappings
+        || compiled_bundle_diagnostics.has_error()) {
+        fsim::diagnostic::print_text(
+            std::cerr, compiled_bundle_diagnostics);
+    }
+    assert(bundle_source_mappings
+        && !compiled_bundle_diagnostics.has_error());
+    const auto bundle_sources_relocated
+        = fsim::app::application_detail::relocate_compiled_design_sources(
+            *checked, *bundle_source_mappings, compiled_bundle_diagnostics);
+    if (!bundle_sources_relocated) {
+        fsim::diagnostic::print_text(
+            std::cerr, compiled_bundle_diagnostics);
+    }
+    assert(bundle_sources_relocated
+        && !compiled_bundle_diagnostics.has_error());
+    const auto compiled_bundle = fsim::app::serialize_compiled_hir_bundle(
+        *checked, compiled_bundle_diagnostics);
+    assert(compiled_bundle && !compiled_bundle_diagnostics.has_error());
+    const auto restored_compiled_bundle
+        = fsim::app::deserialize_compiled_hir_bundle(
+            *compiled_bundle, "isolated-fork-compiled-hir-bundle",
+            compiled_bundle_diagnostics);
+    assert(restored_compiled_bundle
+        && !compiled_bundle_diagnostics.has_error());
+    assert(isolated_fork_count(
+               restored_compiled_bundle->systemverilog_hir)
+        == isolated_forks);
+    const auto restored_typed_packet_pattern = std::ranges::find(
+        restored_hir->expressions(), typed_packet_pattern->id,
+        &fsim::semantic::sv::Expression::id);
+    assert(restored_typed_packet_pattern
+        != restored_hir->expressions().end());
+    assert(restored_typed_packet_pattern->nominal_type
+        == typed_packet_pattern->nominal_type);
+    assert(restored_typed_packet_pattern->nominal_type_target
+        == typed_packet_pattern->nominal_type_target);
+    assert(restored_typed_packet_pattern->nominal_type_target
+        == packet_type->id);
     std::string schema8_hir_state { "FSIMSVCH" };
     append_u32(schema8_hir_state, 8U);
     schema8_hir_state.append(hir_state->data() + 12U, hir_state->size() - 12U);
@@ -1957,6 +2062,24 @@ endmodule
         schema8_hir_state, "systemverilog-hir-schema-8",
         checked->semantics, schema8_hir_diagnostics));
     assert(schema8_hir_diagnostics.has_error());
+    std::string schema12_hir_state { "FSIMSVCH" };
+    append_u32(schema12_hir_state, 12U);
+    schema12_hir_state.append(
+        hir_state->data() + 12U, hir_state->size() - 12U);
+    fsim::diagnostic::Engine schema12_hir_diagnostics;
+    assert(!fsim::app::deserialize_systemverilog_constraint_hir_state(
+        schema12_hir_state, "systemverilog-hir-schema-12",
+        checked->semantics, schema12_hir_diagnostics));
+    assert(schema12_hir_diagnostics.has_error());
+    std::string schema13_hir_state { "FSIMSVCH" };
+    append_u32(schema13_hir_state, 13U);
+    schema13_hir_state.append(
+        hir_state->data() + 12U, hir_state->size() - 12U);
+    fsim::diagnostic::Engine schema13_hir_diagnostics;
+    assert(!fsim::app::deserialize_systemverilog_constraint_hir_state(
+        schema13_hir_state, "systemverilog-hir-schema-13",
+        checked->semantics, schema13_hir_diagnostics));
+    assert(schema13_hir_diagnostics.has_error());
     assert_signed_expression_retention(*restored_hir);
     const auto restored_top = std::ranges::find_if(
         restored_hir->units(), [](const auto& unit) {
@@ -1978,6 +2101,46 @@ endmodule
     assert(restored_values != restored_hir->units().end());
     assert(restored_external_probe != restored_hir->units().end());
     assert(restored_configuration != restored_hir->units().end());
+    const auto restored_interface = std::ranges::find(
+        restored_hir->units(), std::string { "bus_if" },
+        &fsim::semantic::sv::Unit::name);
+    assert(restored_interface != restored_hir->units().end());
+    const auto restored_unsigned_score_array_type = std::ranges::find_if(
+        restored_hir->types(), [](const auto& type) {
+            return type.name == "unsigned_score_array_t";
+        });
+    assert(restored_unsigned_score_array_type
+        != restored_hir->types().end());
+    assert(restored_unsigned_score_array_type->container);
+    assert(restored_unsigned_score_array_type->container->associative_index
+        == unsigned_score_array_type->container->associative_index);
+    assert(!restored_unsigned_score_array_type->container
+                ->associative_index->signed_value
+        && restored_unsigned_score_array_type->container
+               ->associative_index->executable_width
+            == 4U);
+    const auto restored_associative = std::ranges::find_if(
+        restored_hir->declarations(), [&](const auto& declaration) {
+            return declaration.scope == restored_interface->scope
+                && declaration.name == "scores";
+        });
+    const auto restored_unsigned_associative = std::ranges::find_if(
+        restored_hir->declarations(), [&](const auto& declaration) {
+            return declaration.scope == restored_interface->scope
+                && declaration.name == "unsigned_scores";
+        });
+    assert(restored_associative != restored_hir->declarations().end());
+    assert(restored_unsigned_associative
+        != restored_hir->declarations().end());
+    assert(restored_associative->type->associative_index_metadata
+        == associative->type->associative_index_metadata);
+    assert(restored_unsigned_associative->type->associative_index_metadata
+        == unsigned_associative->type->associative_index_metadata);
+    assert(!restored_unsigned_associative->type
+                ->associative_index_metadata->signed_value
+        && restored_unsigned_associative->type
+               ->associative_index_metadata->executable_width
+            == 4U);
     const auto restored_port_slot_unit = std::ranges::find(
         restored_hir->units(), std::string { "port_slot_roundtrip" },
         &fsim::semantic::sv::Unit::name);

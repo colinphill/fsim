@@ -9,6 +9,9 @@ void test_vhdl_procedure_waits() {
   const auto parsed = fsim::frontend::parse_text(
       "vhdl-procedure-waits.vhd",
       R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity procedure_waits is end entity;
 architecture rtl of procedure_waits is
   signal trigger : boolean;

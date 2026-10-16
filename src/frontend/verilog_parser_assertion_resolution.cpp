@@ -245,7 +245,15 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                         == SystemVerilogAssertionDeclarationKind::Sequence
                         && candidate.name == predicate_tokens.front().text;
                 });
-            if (found != unit.systemverilog_assertion_declarations.end()) {
+            // Only classify a leading name as the whole invocation when the
+            // remainder is an argument list; composite sequence expressions
+            // are expanded by PropertyParser.
+            const bool starts_instance
+                = predicate_tokens.size() == 1U
+                || (predicate_tokens.size() > 1U
+                    && predicate_tokens[1U].kind == TokenKind::LeftParen);
+            if (found != unit.systemverilog_assertion_declarations.end()
+                && starts_instance) {
                 sequence = &*found;
                 std::vector<std::vector<Token>> actuals;
                 const bool empty_call = predicate_tokens.size() == 3U
@@ -1164,10 +1172,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
         // expression.
         std::vector<Token> named_sequence_tokens;
         if (whole_instance && sequence != nullptr
-            && sequence != (directive.inline_sequence
-                    ? &*directive.inline_sequence
-                    : nullptr)
-            && sequence->local_variables.empty()) {
+            && sequence != (directive.inline_sequence ? &*directive.inline_sequence : nullptr)) {
             named_sequence_tokens = substituted_sequence_tokens.empty()
                 ? sequence->expression_tokens
                 : substituted_sequence_tokens;
@@ -1180,13 +1185,47 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             = named_sequence_tokens.empty()
             ? predicate_tokens
             : std::span<const Token> { named_sequence_tokens };
+        std::vector<GeneralPropertyActions::LocalState>
+            general_property_locals;
+        bool invalid_general_property_initializer { };
+        for (const auto& local : executable_locals) {
+            if (!local.declaration) {
+                continue;
+            }
+            GeneralPropertyActions::LocalState state;
+            state.name = local.declaration->name;
+            for (const auto& token : local.declaration->type_tokens) {
+                if (!state.type_spelling.empty()) {
+                    state.type_spelling += ' ';
+                }
+                state.type_spelling += token.text;
+            }
+            if (!local.initializer_tokens.empty()) {
+                state.initializer
+                    = assertion_expression(local.initializer_tokens);
+                if (!state.initializer) {
+                    error(
+                        local.initializer_tokens.front(),
+                        "FSIM-SV-SEM-199",
+                        "an executable assertion local initializer requires a scalar "
+                        "integral expression");
+                    invalid_general_property_initializer = true;
+                    break;
+                }
+            }
+            general_property_locals.push_back(std::move(state));
+        }
+        if (invalid_general_property_initializer)
+            continue;
         // A whole named sequence that a specialized slice evaluates stays
         // there; the general automaton takes the others.
+        GeneralPropertyActions general_property_probe;
+        general_property_probe.locals = general_property_locals;
         if ((!condition || names_sequence)
             && assertion_clock
             && !property_abort
             && general_property_evaluation(general_tokens, unit,
-                GeneralPropertyActions { })) {
+                general_property_probe)) {
             general_property = true;
             condition = Expression {
                 ExpressionKind::IntegerLiteral, "1", { }, directive.span };
@@ -1224,6 +1263,25 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 continue;
             }
         }
+        if (!general_property_locals.empty()) {
+            if (disable_condition)
+                general_property_probe.disable = *disable_condition;
+            // A property abort wraps its property operand in a scalar route;
+            // validate that operand's local reads without rejecting aborts
+            // that do not use locals or whose locals are initialized.
+            const std::span<const Token> local_flow_tokens = property_abort
+                ? abort_property_tokens
+                : general_tokens;
+            if (!general_property_local_flow_valid(
+                    local_flow_tokens, unit, general_property_probe)) {
+                error(
+                    directive.property_tokens.front(),
+                    "FSIM-SV-SEM-200",
+                    "the concurrent property has invalid local-variable initialization "
+                    "or read flow");
+                continue;
+            }
+        }
         if (!condition) {
             error(
                 directive.property_tokens.front(),
@@ -1247,6 +1305,31 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                     "FSIM-SV-SEM-199",
                     "executable property and sequence local-variable names must "
                     "be unique within one assertion attempt");
+                invalid_assertion_local = true;
+                break;
+            }
+            const auto& declarator_tokens
+                = local.declaration->declarator_tokens;
+            const bool has_unsupported_declarator
+                = declarator_tokens.empty()
+                || declarator_tokens.front().kind != TokenKind::Identifier
+                || declarator_tokens.front().text
+                    != local.declaration->name
+                || (local.initializer_tokens.empty()
+                        ? declarator_tokens.size() != 1U
+                        : declarator_tokens.size() < 3U
+                            || declarator_tokens[1U].kind != TokenKind::Assign);
+            if (has_unsupported_declarator) {
+                error(
+                    local.declaration->name_span.empty()
+                        ? directive.property_tokens.front()
+                        : Token {
+                              TokenKind::Identifier,
+                              local.declaration->name,
+                              local.declaration->name_span,
+                              { } },
+                    "FSIM-SV-SEM-199", "an executable assertion local variable cannot use "
+                                       "unpacked dimensions or unsupported declarator syntax");
                 invalid_assertion_local = true;
                 break;
             }
@@ -1319,7 +1402,9 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             ? "$assertion$" + std::to_string(index + 1U)
             : directive.label;
         process.span = directive.span;
-        process.variables = std::move(assertion_local_variables);
+        if (!general_property) {
+            process.variables = std::move(assertion_local_variables);
+        }
         if (assertion_clock) {
             const auto event = assertion_clock_tokens;
             const auto signal = std::ranges::find_if(
@@ -1507,11 +1592,16 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 attempt.kind = StatementKind::Fork;
                 attempt.span = directive.span;
                 attempt.fork_join_kind = ForkJoinKind::None;
-                attempt.statements.insert(
-                    attempt.statements.end(),
+                attempt.fork_isolate_register_frame = true;
+                Statement branch_body;
+                branch_body.kind = StatementKind::Block;
+                branch_body.span = directive.span;
+                branch_body.statements.insert(
+                    branch_body.statements.end(),
                     assertion_local_initializers.begin(),
                     assertion_local_initializers.end());
-                attempt.statements.push_back(std::move(evaluation));
+                branch_body.statements.push_back(std::move(evaluation));
+                attempt.statements.push_back(std::move(branch_body));
                 if (!disable_condition) {
                     process.statements.push_back(std::move(attempt));
                     return;
@@ -1539,6 +1629,7 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
             actions.clock = process.sensitivities;
             actions.span = directive.span;
             actions.name_prefix = "__fsim_a" + std::to_string(index);
+            actions.locals = general_property_locals;
             if (disable_condition) {
                 actions.disable = std::move(*disable_condition);
                 actions.abort.push_back(coverage_marker("abort"));
@@ -1558,9 +1649,11 @@ void VerilogParser::resolve_assertion_references(DesignUnit& unit)
                 evaluation->declarations.begin(),
                 evaluation->declarations.end());
             evaluation->declarations.clear();
-            process.statements.insert(process.statements.end(),
-                assertion_local_initializers.begin(),
-                assertion_local_initializers.end());
+            if (general_property_locals.empty()) {
+                process.statements.insert(process.statements.end(),
+                    assertion_local_initializers.begin(),
+                    assertion_local_initializers.end());
+            }
             process.statements.push_back(std::move(*evaluation));
         } else if (property_abort) {
             Statement aborted;

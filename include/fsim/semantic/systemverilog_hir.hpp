@@ -315,6 +315,9 @@ struct Expression {
     ResidualDependencies dependencies;
     bool folded { };
     GeneratedTextKind generated_text { GeneratedTextKind::none };
+    // Exact semantic type selected for an explicitly typed assignment pattern.
+    // Invalid or unresolved names leave this disengaged.
+    std::optional<TypeId> nominal_type_target;
 };
 
 /// The expression-sized cast introduced by the frontend stores its constant
@@ -433,6 +436,8 @@ struct Statement {
     bool loop_runtime { };
     bool loop_post_test { };
     ForkJoinKind fork_join { ForkJoinKind::all };
+    // Concurrent assertion attempts own independent local register frames.
+    bool fork_isolate_register_frame { };
     AssignmentControl assignment_control { AssignmentControl::none };
     bool assignment_control_repeated { };
     UpdateKind update_kind { UpdateKind::none };
@@ -515,6 +520,33 @@ struct PackedRange {
 
 struct ActualAssociation;
 
+// An associative index is represented on a TypeReference without embedding
+// another complete TypeReference recursively. Keep the scalar shape that is
+// needed to distinguish integral index types (for example `int unsigned` and
+// `bit [7:0]`) while retaining enough form data to reject non-integral types.
+struct AssociativeIndexTypeReference {
+    semantic::TypeReference target;
+    std::optional<TypeForm> value_form;
+    std::string class_identity;
+    bool virtual_interface { };
+    std::string interface_type;
+    std::string interface_modport;
+    std::string systemverilog_net_type;
+    std::string systemverilog_resolution_function;
+    std::optional<PackedRange> packed_range;
+    std::vector<PackedRange> packed_dimensions;
+    bool signed_value { };
+    std::optional<TypeForm> container_form;
+    std::vector<PackedRange> unpacked_dimensions;
+    std::optional<std::uint64_t> executable_width;
+    bool four_state { };
+    std::uint64_t source_order { };
+
+    friend bool operator==(
+        const AssociativeIndexTypeReference&,
+        const AssociativeIndexTypeReference&) = default;
+};
+
 struct TypeReference {
     semantic::TypeReference target;
     std::optional<TypeForm> value_form;
@@ -532,7 +564,10 @@ struct TypeReference {
     bool signed_value { };
     std::optional<TypeForm> container_form;
     std::optional<ExpressionId> queue_maximum;
+    // Keep the identity reference for existing consumers and carry the full
+    // scalar shape separately for queries that need index width/sign details.
     std::optional<semantic::TypeReference> associative_index;
+    std::optional<AssociativeIndexTypeReference> associative_index_metadata;
     std::vector<PackedRange> unpacked_dimensions;
     std::vector<TypeReference> container_element_types;
     std::optional<std::uint64_t> executable_width;
@@ -566,6 +601,54 @@ struct ActualAssociation {
     friend bool operator==(
         const ActualAssociation&, const ActualAssociation&) = default;
 };
+
+inline AssociativeIndexTypeReference make_associative_index_metadata(
+    const TypeReference& type)
+{
+    AssociativeIndexTypeReference output;
+    output.target = type.target;
+    output.value_form = type.value_form;
+    output.class_identity = type.class_identity;
+    output.virtual_interface = type.virtual_interface;
+    output.interface_type = type.interface_type;
+    output.interface_modport = type.interface_modport;
+    output.systemverilog_net_type = type.systemverilog_net_type;
+    output.systemverilog_resolution_function
+        = type.systemverilog_resolution_function;
+    output.packed_range = type.packed_range;
+    output.packed_dimensions = type.packed_dimensions;
+    output.signed_value = type.signed_value;
+    output.container_form = type.container_form;
+    output.unpacked_dimensions = type.unpacked_dimensions;
+    output.executable_width = type.executable_width;
+    output.four_state = type.four_state;
+    output.source_order = type.source_order;
+    return output;
+}
+
+inline TypeReference type_reference_from_associative_index_metadata(
+    const AssociativeIndexTypeReference& type)
+{
+    TypeReference output;
+    output.target = type.target;
+    output.value_form = type.value_form;
+    output.class_identity = type.class_identity;
+    output.virtual_interface = type.virtual_interface;
+    output.interface_type = type.interface_type;
+    output.interface_modport = type.interface_modport;
+    output.systemverilog_net_type = type.systemverilog_net_type;
+    output.systemverilog_resolution_function
+        = type.systemverilog_resolution_function;
+    output.packed_range = type.packed_range;
+    output.packed_dimensions = type.packed_dimensions;
+    output.signed_value = type.signed_value;
+    output.container_form = type.container_form;
+    output.unpacked_dimensions = type.unpacked_dimensions;
+    output.executable_width = type.executable_width;
+    output.four_state = type.four_state;
+    output.source_order = type.source_order;
+    return output;
+}
 
 struct Instance {
     InstanceId id;

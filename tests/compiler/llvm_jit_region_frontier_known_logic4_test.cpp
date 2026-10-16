@@ -24,6 +24,7 @@
 #include <cstdint>
 #include <iterator>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -1657,6 +1658,128 @@ void check_internal_fanout_sidecar_contract()
         "the flattened sidecar rejects unreferenced trailing ranges");
 }
 
+[[nodiscard]] RegionConeActivationKernel make_conversion_identity_kernel(
+    const runtime::simir::RegisterId conversion_source)
+{
+    constexpr std::uint32_t width = 8U;
+    constexpr ProcessId graph_producer_id = 0U;
+    constexpr ProcessId graph_consumer_id = 1U;
+    constexpr ProcessId producer_id = 7U;
+    constexpr ProcessId consumer_id = 23U;
+    constexpr SignalId first_input_id = 0U;
+    constexpr SignalId second_input_id = 1U;
+    constexpr SignalId internal_id = 2U;
+    constexpr SignalId output_id = 3U;
+
+    std::vector<RegionSignalDescriptor> signals {
+        RegionSignalDescriptor { width },
+        RegionSignalDescriptor { width },
+        RegionSignalDescriptor { width },
+        RegionSignalDescriptor { width },
+    };
+    signals[output_id].observations = RegionObservation::current;
+
+    Process producer;
+    producer.id = graph_producer_id;
+    producer.name = "frontier_conversion_identity_producer";
+    producer.scheduling_domain = ProcessSchedulingDomain::systemverilog;
+    producer.register_count = 4U;
+    producer.register_value_kinds.assign(4U, ValueKind::logic4);
+    producer.static_sensitivity = {
+        { first_input_id, EdgeKind::any },
+        { second_input_id, EdgeKind::any },
+    };
+    producer.driver_regions = { { internal_id, 0U, 0U, true } };
+    producer.operations = {
+        runtime::simir::ReadSignal { 0U, first_input_id },
+        runtime::simir::ReadSignal { 1U, second_input_id },
+        runtime::simir::Binary {
+            runtime::simir::BinaryOperator::bit_or, 2U, 0U, 1U },
+        runtime::simir::ConvertToTwoState { 3U, conversion_source },
+        runtime::simir::WriteUpdate {
+            internal_id, 3U, SignalUpdateDomain::systemverilog_active },
+        runtime::simir::WaitSensitivity { },
+        runtime::simir::Jump { 0U },
+    };
+
+    Process consumer;
+    consumer.id = graph_consumer_id;
+    consumer.name = "frontier_conversion_identity_consumer";
+    consumer.scheduling_domain = ProcessSchedulingDomain::systemverilog;
+    consumer.register_count = 1U;
+    consumer.register_value_kinds = { ValueKind::logic4 };
+    consumer.static_sensitivity = { { internal_id, EdgeKind::any } };
+    consumer.driver_regions = { { output_id, 0U, 0U, true } };
+    consumer.operations = {
+        runtime::simir::ReadSignal { 0U, internal_id },
+        runtime::simir::WriteUpdate {
+            output_id, 0U, SignalUpdateDomain::systemverilog_active },
+        runtime::simir::WaitSensitivity { },
+        runtime::simir::Jump { 0U },
+    };
+
+    const std::array<const Process*, 2U> programs { &producer, &consumer };
+    const auto graph = RegionGraph::build(programs, signals);
+    auto compute_program = graph.build_compute_program(0U, programs);
+    require(compute_program.has_value(),
+        "the conversion-identity fixture builds a certified compute kernel");
+    auto kernel = std::move(compute_program->activation_kernel);
+    for (auto& member : kernel.members) {
+        if (member.process == graph_producer_id) {
+            member.process = producer_id;
+        } else if (member.process == graph_consumer_id) {
+            member.process = consumer_id;
+        }
+    }
+    for (auto& output : kernel.outputs) {
+        if (output.owner == graph_producer_id) {
+            output.owner = producer_id;
+        } else if (output.owner == graph_consumer_id) {
+            output.owner = consumer_id;
+        }
+    }
+    return kernel;
+}
+
+[[nodiscard]] std::optional<runtime::simir::RegisterId>
+conversion_source(const RegionConeActivationKernel& kernel)
+{
+    for (std::size_t index = 0U; index < kernel.program.operations.size();
+        ++index) {
+        const auto operation = kernel.program.operations.expanded(index);
+        if (const auto* conversion
+            = runtime::simir::operation_get_if<runtime::simir::ConvertToTwoState>(
+                &operation)) {
+            return conversion->source;
+        }
+    }
+    return std::nullopt;
+}
+
+void check_conversion_operation_cache_identity()
+{
+    const auto reads_first = make_conversion_identity_kernel(0U);
+    const auto reads_second = make_conversion_identity_kernel(1U);
+    require(reads_first.inputs == reads_second.inputs
+            && reads_first.outputs == reads_second.outputs
+            && reads_first.internal_signals == reads_second.internal_signals
+            && reads_first.members == reads_second.members
+            && reads_first.program.register_count
+                == reads_second.program.register_count
+            && reads_first.program.register_value_kinds
+                == reads_second.program.register_value_kinds,
+        "converter identity controls keep identical bindings, outputs, and register shapes");
+    require(conversion_source(reads_first) != conversion_source(reads_second),
+        "converter identity controls differ only in the source register operand");
+
+    const auto first_plan = RegionFrontierKernelPlan::try_create(reads_first);
+    const auto second_plan = RegionFrontierKernelPlan::try_create(reads_second);
+    require(first_plan.has_value() && second_plan.has_value(),
+        "both Logic4 conversion plans are admitted");
+    require(first_plan->cache_identity() != second_plan->cache_identity(),
+        "the conversion source register participates in the native frontier cache identity");
+}
+
 } // namespace
 
 void run_region_frontier_known_logic4_tests()
@@ -1683,6 +1806,7 @@ void run_region_frontier_known_logic4_tests()
     check_unknown_constant_ir_shape();
     check_sensitivity_range_plan_contract();
     check_internal_fanout_sidecar_contract();
+    check_conversion_operation_cache_identity();
     check_partial_boundary_output_plan_contract();
     check_structural_census_identity();
     for (const auto optimization : {

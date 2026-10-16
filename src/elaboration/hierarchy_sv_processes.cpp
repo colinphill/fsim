@@ -1006,7 +1006,9 @@ void HierarchyBuilder::initialize_constant_driven_nets()
     // writes the value the variable already holds.
     for (std::size_t index = 0U; index < design_.process_count(); ++index) {
         const auto view = design_.process_view(index);
-        if (view.name().find("$declaration_initializer_") == std::string::npos
+        if (view.startup_phase()
+                == ProcessStartupPhase::package_static_initializer
+            || view.name().find("$declaration_initializer_") == std::string::npos
             || !(view.language_standard() == "2009"
                 || view.language_standard() == "2012"
                 || view.language_standard() == "2017"

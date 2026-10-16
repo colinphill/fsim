@@ -28,60 +28,23 @@ void VhdlHirBuilder::add_statement_regions(
                 statement_source,
                 child_origin);
             std::vector<semantic::DeclarationId> children;
-            add_children(
-                statement.constants,
+            const auto span = [](const auto& values) {
+                return std::span { values.data(), values.size() };
+            };
+            queue_vhdl_local_declarations(
+                span(statement.constants),
+                span(statement.type_aliases),
+                span(statement.signal_aliases),
+                span(statement.package_instances),
+                span(statement.functions),
+                span(statement.procedures),
+                span(statement.declarations),
+                span(statement.vhdl_attributes),
+                span(statement.vhdl_groups),
+                std::nullopt,
                 child_scope,
                 child_origin,
-                children,
-                &VhdlHirBuilder::add_parameter);
-            add_children(
-                statement.type_aliases,
-                child_scope,
-                child_origin,
-                children,
-                &VhdlHirBuilder::add_type_declaration);
-            add_children(
-                statement.signal_aliases,
-                child_scope,
-                child_origin,
-                children,
-                &VhdlHirBuilder::add_alias);
-            add_children(
-                statement.package_instances,
-                child_scope,
-                child_origin,
-                children,
-                &VhdlHirBuilder::add_package_instance);
-            add_children(
-                statement.functions,
-                child_scope,
-                child_origin,
-                children,
-                &VhdlHirBuilder::add_function);
-            add_children(
-                statement.procedures,
-                child_scope,
-                child_origin,
-                children,
-                &VhdlHirBuilder::add_procedure);
-            add_children(
-                statement.declarations,
-                child_scope,
-                child_origin,
-                children,
-                &VhdlHirBuilder::add_variable);
-            add_children(
-                statement.vhdl_attributes,
-                child_scope,
-                child_origin,
-                children,
-                &VhdlHirBuilder::add_attribute);
-            add_children(
-                statement.vhdl_groups,
-                child_scope,
-                child_origin,
-                children,
-                &VhdlHirBuilder::add_group);
+                children);
         }
         add_statement_regions(
             statement.statements, child_scope, child_origin);

@@ -2,6 +2,8 @@
 #include "simir_internal.hpp"
 
 #include <charconv>
+#include <cstdint>
+#include <limits>
 
 namespace fsim::runtime::simir {
 namespace {
@@ -14,6 +16,13 @@ std::optional<std::size_t> direction(
   if (before == 1U && after == 2U) return 0U;
   if (before == 2U && after == 1U) return 1U;
   return std::nullopt;
+}
+
+bool no_vital_path_input_event(const SimulationTick age) noexcept {
+  constexpr auto time_high = static_cast<SimulationTick>(
+      std::numeric_limits<std::int64_t>::max());
+  return age == time_high
+      || age == std::numeric_limits<SimulationTick>::max();
 }
 
 bool too_soon(
@@ -1812,8 +1821,7 @@ void Interpreter::Impl::execute_vital_delay(
   bool selected{};
   for (const auto& path : values.paths) {
     if (!path.condition
-        || path.input_change_time
-            == std::numeric_limits<SimulationTick>::max()) {
+        || no_vital_path_input_event(path.input_change_time)) {
       continue;
     }
     const auto path_delay = vital_transition_delay(

@@ -45,13 +45,30 @@ int fsim_application_case_core_non_project_cli() {
       &fsim::test::ApplicationTestFixture::test_non_project_cli);
 }
 
-int main() {
 #if defined(FSIM_MERGED_APPLICATION_TESTS)
+int main() {
   // Each phase below is registered as its own selectable CTest case in merged
   // builds. Keep the historical umbrella name as a cheap dispatcher sentinel
   // without executing the same application coverage twice.
   std::cerr << "application: partitioned cases registered separately\n";
 #else
+int main(const int argc, const char* const argv[]) {
+  if (argc == 2
+      && std::string_view{argv[1]} == "class_hir_failure_routes") {
+    return run_application_case(
+        "class HIR failure routes",
+        &fsim::test::ApplicationTestFixture::test_class_hir_failure_routes);
+  }
+  if (argc == 2 && std::string_view{argv[1]} == "class_hir_reports") {
+    return run_application_case(
+        "class HIR report and exception routes",
+        &fsim::test::ApplicationTestFixture::test_class_hir_report_exceptions);
+  }
+  if (argc != 1) {
+    std::cerr << "usage: " << argv[0]
+              << " [class_hir_failure_routes|class_hir_reports]\n";
+    return 2;
+  }
   run_application_case("systemc integration",
       &fsim::test::ApplicationTestFixture::test_systemc_integration);
   run_application_case("systemc scheduling matrix",

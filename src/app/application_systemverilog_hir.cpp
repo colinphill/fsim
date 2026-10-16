@@ -530,7 +530,40 @@ namespace systemverilog_hir_detail {
         output.source = span;
         output.origin = expression_origin;
         output.nominal_type = input.nominal_type;
+        if (input.kind == frontend::ExpressionKind::Aggregate
+            && !input.nominal_type.empty()) {
+            const auto selected_type = find_type(
+                scope, input.nominal_type, std::nullopt,
+                input.systemverilog_source_order);
+            if (selected_type.valid()) {
+                output.nominal_type_target = selected_type;
+            }
+        }
         output.class_identity = input.nominal_type;
+        // Keep class operation identity in the primary HIR. The executable
+        // completion pass can reuse this expression by source and origin.
+        const auto bind_class_operation = [&](const std::string_view prefix) {
+            if (!input.text.starts_with(prefix))
+                return false;
+            const auto payload = input.text.substr(prefix.size());
+            output.class_member_identity = payload;
+            if (output.class_identity.empty()) {
+                const auto separator = payload.rfind("::");
+                output.class_identity = separator == std::string::npos
+                    ? payload
+                    : payload.substr(0, separator);
+            }
+            return true;
+        };
+        if (!bind_class_operation("@sv-new:")
+            && !bind_class_operation("@sv-dollar-cast:")
+            && !bind_class_operation("@sv-property:")
+            && !bind_class_operation("@sv-static-property:")
+            && !bind_class_operation("@sv-base-method:")
+            && !bind_class_operation("@sv-method:")
+            && !bind_class_operation("@sv-static-method:")) {
+            output.class_member_identity.clear();
+        }
         output.signed_value = input.kind
                 == frontend::ExpressionKind::IntegerLiteral
             || (input.kind == frontend::ExpressionKind::LogicLiteral

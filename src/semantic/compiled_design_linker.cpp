@@ -1046,6 +1046,9 @@ vhdl::Hir project_hir(
     const vhdl::Hir& input,
     const Projection& projection);
 
+std::vector<CompiledReference> project_systemverilog_package_member_uses(
+    const CompiledDesign& design, const Projection& projection);
+
 template <typename UnitPredicate, typename LibraryPredicate,
     typename ScopePredicate, typename ClassPredicate, typename UdpPredicate>
 CompiledLinkResult project_compiled_design(
@@ -1079,6 +1082,10 @@ CompiledLinkResult project_compiled_design(
     CompiledDesign output {
         std::move(*model), std::move(systemverilog), std::move(vhdl)
     };
+    for (auto& reference : project_systemverilog_package_member_uses(
+             design, projection)) {
+        output.mutable_references().push_back(std::move(reference));
+    }
     refresh_compiled_design_metadata(output);
     if (!normalize_compiled_design(output)) {
         return { std::nullopt, std::string { invalid_projection } };
@@ -1366,6 +1373,30 @@ std::string vhdl_link_name(
         : lower_ascii(name);
 }
 
+std::string vhdl_reference_name(
+    const std::string_view name, const bool extended = false)
+{
+    const bool already_escaped = name.size() >= 2U
+        && name.front() == '\\' && name.back() == '\\';
+    if (already_escaped) {
+        return std::string { name };
+    }
+    if (!extended) {
+        return lower_ascii(name);
+    }
+    std::string result;
+    result.reserve(name.size() + 2U);
+    result.push_back('\\');
+    for (const char character : name) {
+        result.push_back(character);
+        if (character == '\\') {
+            result.push_back('\\');
+        }
+    }
+    result.push_back('\\');
+    return result;
+}
+
 UnitKey unit_key(const CompiledDesign& design, const Unit& unit)
 {
     const auto language = unit.language == Language::verilog
@@ -1433,7 +1464,37 @@ std::string lower_ascii(const std::string_view text)
 bool same_vhdl_identifier(
     const std::string_view left, const std::string_view right)
 {
+    const auto extended = [](const std::string_view value) {
+        return value.size() >= 2U && value.front() == '\\'
+            && value.back() == '\\';
+    };
+    if (extended(left) || extended(right)) {
+        return left == right;
+    }
     return lower_ascii(left) == lower_ascii(right);
+}
+
+bool same_vhdl_unit_name(
+    const vhdl::Unit& unit, const std::string_view spelling)
+{
+    const bool extended = spelling.size() >= 2U
+        && spelling.front() == '\\' && spelling.back() == '\\';
+    if (unit.extended_name != extended) {
+        return false;
+    }
+    if (!extended) {
+        return same_vhdl_identifier(unit.name, spelling);
+    }
+    std::string decoded;
+    decoded.reserve(spelling.size() - 2U);
+    for (std::size_t index = 1U; index + 1U < spelling.size(); ++index) {
+        decoded.push_back(spelling[index]);
+        if (spelling[index] == '\\' && index + 2U < spelling.size()
+            && spelling[index + 1U] == '\\') {
+            ++index;
+        }
+    }
+    return unit.name == decoded;
 }
 
 const Unit* reference_owner(
@@ -1475,6 +1536,7 @@ bool reference_kind_matches(
 }
 
 bool reference_name_matches(
+    const CompiledDesign& design,
     const CompiledReference& reference, const Unit& unit)
 {
     if (!reference_kind_matches(reference.kind, unit)) {
@@ -1488,6 +1550,20 @@ bool reference_name_matches(
     if (!equals(normalized_library(unit.library),
             normalized_library(reference.library))) {
         return false;
+    }
+    if (unit.kind == UnitKind::vhdl_context) {
+        const auto context = std::ranges::find(
+            design.vhdl_hir.units(), unit.id, &vhdl::Unit::id);
+        return context != design.vhdl_hir.units().end()
+            && same_vhdl_unit_name(*context, reference.name);
+    }
+    if (unit.kind == UnitKind::vhdl_package) {
+        const auto package = std::ranges::find(
+            design.vhdl_hir.units(), unit.id, &vhdl::Unit::id);
+        return package != design.vhdl_hir.units().end()
+            && same_vhdl_unit_name(*package, reference.name)
+            && (reference.secondary_name.empty()
+                || equals(unit.secondary_name, reference.secondary_name));
     }
     if (unit.kind == UnitKind::vhdl_architecture) {
         return equals(unit.secondary_name, reference.name)
@@ -1529,7 +1605,7 @@ std::optional<UnitId> resolve_reference(
     }
     const auto* owner = reference_owner(design, reference);
     const auto matches = [&](const Unit& unit) {
-        if (!reference_name_matches(reference, unit)) {
+        if (!reference_name_matches(design, reference, unit)) {
             return false;
         }
         if (owner == nullptr) {
@@ -1869,21 +1945,31 @@ std::vector<std::string_view> selected_name_parts(
     const std::string_view selected)
 {
     std::vector<std::string_view> result;
-    std::size_t begin = 0;
-    while (begin < selected.size()) {
-        const auto end = selected.find('.', begin);
-        const auto part = selected.substr(begin,
-            end == std::string_view::npos
-                ? std::string_view::npos
-                : end - begin);
-        if (!part.empty()) {
-            result.push_back(part);
+    std::size_t begin { };
+    bool in_extended_identifier { };
+    for (std::size_t index { }; index < selected.size(); ++index) {
+        if (selected[index] == '\\') {
+            if (in_extended_identifier && index + 1U < selected.size()
+                && selected[index + 1U] == '\\') {
+                ++index;
+                continue;
+            }
+            in_extended_identifier = !in_extended_identifier;
+            continue;
         }
-        if (end == std::string_view::npos) {
-            break;
+        if (selected[index] != '.' || in_extended_identifier) {
+            continue;
         }
-        begin = end + 1U;
+        if (index == begin) {
+            return { };
+        }
+        result.push_back(selected.substr(begin, index - begin));
+        begin = index + 1U;
     }
+    if (begin == selected.size()) {
+        return { };
+    }
+    result.push_back(selected.substr(begin));
     return result;
 }
 
@@ -1994,7 +2080,7 @@ void add_vhdl_use_reference(std::vector<CompiledReference>& references,
         CompiledReferenceKind::package,
         owner.id,
         lower_ascii(library),
-        lower_ascii(package_name),
+        vhdl_reference_name(package_name),
         {},
         source,
         std::nullopt,
@@ -2006,13 +2092,22 @@ void add_vhdl_selected_package_reference(const CompiledDesign& design,
     const std::string_view owner_library,
     const vhdl::Expression& expression)
 {
-    if (expression.kind != vhdl::ExpressionKind::name) {
+    if (expression.kind != vhdl::ExpressionKind::name
+        && (expression.kind != vhdl::ExpressionKind::call
+            || !expression.referenced_name)) {
         return;
     }
-    const auto spelling = expression.referenced_name
-            && !expression.referenced_name->canonical.empty()
-        ? std::string_view { expression.referenced_name->canonical }
-        : std::string_view { expression.text };
+    const auto raw_spelling = expression.referenced_name
+        ? std::string_view { expression.referenced_name->spelling }
+        : std::string_view { };
+    const auto has_extended_identifier
+        = raw_spelling.find('\\') != std::string_view::npos;
+    const auto spelling = has_extended_identifier
+        ? raw_spelling
+        : expression.referenced_name
+                && !expression.referenced_name->canonical.empty()
+            ? std::string_view { expression.referenced_name->canonical }
+            : std::string_view { expression.text };
     const auto parts = selected_name_parts(spelling);
     if (parts.size() != 2U && parts.size() != 3U) {
         return;
@@ -2030,7 +2125,7 @@ void add_vhdl_selected_package_reference(const CompiledDesign& design,
         design.vhdl_units(), [&](const vhdl::Unit& candidate) {
             if (candidate.kind != vhdl::UnitKind::package
                 || !candidate.primary_name.empty()
-                || !same_vhdl_identifier(candidate.name, package_name)
+                || !same_vhdl_unit_name(candidate, package_name)
                 || !same_vhdl_identifier(
                     normalized_library(candidate.library), library)) {
                 return false;
@@ -2051,7 +2146,7 @@ void add_vhdl_selected_package_reference(const CompiledDesign& design,
         CompiledReferenceKind::package,
         owner,
         lower_ascii(library),
-        lower_ascii(package_name),
+        vhdl_reference_name(package_name),
         {},
         expression.source,
         std::nullopt,
@@ -2078,8 +2173,8 @@ void add_vhdl_context_reference(std::vector<CompiledReference>& references,
     references.push_back(CompiledReference {
         CompiledReferenceKind::context,
         owner,
-        lower_ascii(library),
-        lower_ascii(parts.back()),
+        std::string { library },
+        std::string { parts.back() },
         {},
         source,
         std::nullopt,
@@ -2104,7 +2199,85 @@ void add_class_reference(std::vector<CompiledReference>& references,
     });
 }
 
-void add_vhdl_binding_references(
+void add_vhdl_default_architecture_references(
+    const CompiledDesign& design,
+    std::vector<CompiledReference>& references, const UnitId owner,
+    const std::string_view owner_library,
+    const vhdl::BindingIndication& binding)
+{
+    const auto spelling = binding.entity.canonical.empty()
+        ? std::string_view { binding.entity.spelling }
+        : std::string_view { binding.entity.canonical };
+    const auto parts = selected_name_parts(spelling);
+    if (parts.empty() || parts.size() > 2U) {
+        return;
+    }
+
+    const auto entity_name = parts.back();
+    const bool extended = entity_name.size() >= 2U
+        && entity_name.front() == '\\' && entity_name.back() == '\\';
+    if (extended) {
+        return;
+    }
+    auto library = parts.size() == 2U
+        ? std::string { parts.front() }
+        : std::string { normalized_library(owner_library) };
+    if (same_vhdl_identifier(library, "work")) {
+        library = std::string { normalized_library(owner_library) };
+    } else {
+        library = std::string { normalized_library(library) };
+    }
+
+    const vhdl::Unit* primary { };
+    std::size_t matching_entities { };
+    for (const auto& candidate : design.vhdl_hir.units()) {
+        if (candidate.kind != vhdl::UnitKind::entity
+            || !same_vhdl_identifier(
+                normalized_library(candidate.library), library)
+            || !same_vhdl_identifier(candidate.name, entity_name)) {
+            continue;
+        }
+        ++matching_entities;
+        if (!candidate.extended_name) {
+            primary = &candidate;
+        }
+    }
+    // The binding HIR stores the decoded name. Do not infer through a
+    // basic/extended collision or an extended-only target when form has been
+    // lost; only a unique basic entity can use the legacy reference matcher.
+    if (matching_entities != 1U || primary == nullptr) {
+        return;
+    }
+
+    std::vector<const vhdl::Unit*> architectures;
+    for (const auto& candidate : design.vhdl_hir.units()) {
+        if (candidate.kind != vhdl::UnitKind::architecture
+            || !same_vhdl_identifier(
+                normalized_library(candidate.library), library)
+            || !same_vhdl_identifier(candidate.primary_name, primary->name)) {
+            continue;
+        }
+        // Do not partially close the candidate set through the legacy
+        // name-only architecture matcher.
+        if (candidate.extended_primary_name || candidate.extended_name) {
+            return;
+        }
+        architectures.push_back(&candidate);
+    }
+    for (const auto* architecture : architectures) {
+        references.push_back(CompiledReference {
+            CompiledReferenceKind::architecture,
+            owner,
+            library,
+            vhdl_reference_name(primary->name),
+            vhdl_reference_name(architecture->name),
+            binding.source,
+            std::nullopt,
+        });
+    }
+}
+
+void add_vhdl_binding_references(const CompiledDesign& design,
     std::vector<CompiledReference>& references, const UnitId owner,
     const std::string_view owner_library,
     const vhdl::BindingIndication& binding)
@@ -2116,6 +2289,9 @@ void add_vhdl_binding_references(
             add_reference(references, CompiledReferenceKind::architecture,
                 owner, owner_library, binding.entity, binding.source,
                 binding.architecture);
+        } else {
+            add_vhdl_default_architecture_references(
+                design, references, owner, owner_library, binding);
         }
     } else if (binding.kind == vhdl::BindingKind::configuration) {
         add_reference(references, CompiledReferenceKind::configuration,
@@ -2123,37 +2299,37 @@ void add_vhdl_binding_references(
     }
 }
 
-void add_vhdl_block_references(
+void add_vhdl_block_references(const CompiledDesign& design,
     std::vector<CompiledReference>& references, const UnitId owner,
     const std::string_view owner_library,
     const vhdl::BlockConfiguration& block);
 
-void add_vhdl_component_references(
+void add_vhdl_component_references(const CompiledDesign& design,
     std::vector<CompiledReference>& references, const UnitId owner,
     const std::string_view owner_library,
     const std::vector<vhdl::ComponentConfiguration>& components)
 {
     for (const auto& component : components) {
         add_vhdl_binding_references(
-            references, owner, owner_library, component.binding);
+            design, references, owner, owner_library, component.binding);
         if (component.block_configuration) {
             add_vhdl_block_references(
-                references, owner, owner_library,
+                design, references, owner, owner_library,
                 *component.block_configuration);
         }
     }
 }
 
-void add_vhdl_block_references(
+void add_vhdl_block_references(const CompiledDesign& design,
     std::vector<CompiledReference>& references, const UnitId owner,
     const std::string_view owner_library,
     const vhdl::BlockConfiguration& block)
 {
     add_vhdl_component_references(
-        references, owner, owner_library, block.components);
+        design, references, owner, owner_library, block.components);
     for (const auto& child : block.blocks) {
         add_vhdl_block_references(
-            references, owner, owner_library, child);
+            design, references, owner, owner_library, child);
     }
 }
 
@@ -2429,12 +2605,455 @@ void append_systemverilog_package_uses(const CompiledDesign& design,
     }
 }
 
+bool systemverilog_callable_form(const sv::DeclarationForm form)
+{
+    return form == sv::DeclarationForm::function
+        || form == sv::DeclarationForm::task;
+}
+
+struct SystemVerilogPackageTarget {
+    UnitId unit;
+    std::string library;
+    std::string package;
+    std::optional<CompiledSystemVerilogPackageDeclarationIdentity>
+        declaration;
+};
+
+std::optional<CompiledSystemVerilogPackageDeclarationIdentity>
+systemverilog_package_declaration_identity(
+    const CompiledDesign& design, const sv::Declaration& declaration,
+    const sv::Unit& package)
+{
+    if (!systemverilog_callable_form(declaration.form)
+        || !declaration.id.valid()
+        || declaration.id.value() >= design.semantics.declarations().size()
+        || !declaration.source.valid()
+        || declaration.source.value() >= design.semantics.source_spans().size()) {
+        return std::nullopt;
+    }
+    const auto& semantic_declaration
+        = design.semantics.declarations()[declaration.id.value()];
+    if (!semantic_declaration.scope.valid()
+        || semantic_declaration.scope.value()
+            >= design.semantics.scopes().size()
+        || design.semantics.scopes()[semantic_declaration.scope.value()].unit
+            != package.id) {
+        return std::nullopt;
+    }
+    const auto& span
+        = design.semantics.source_spans()[declaration.source.value()];
+    if (!span.file.valid()
+        || span.file.value() >= design.semantics.source_files().size()) {
+        return std::nullopt;
+    }
+    const auto& digest
+        = design.semantics.source_files()[span.file.value()].content_digest;
+    if (digest.empty() || span.begin.offset >= span.end.offset) {
+        return std::nullopt;
+    }
+    return CompiledSystemVerilogPackageDeclarationIdentity {
+        std::string { normalized_library(package.library) }, package.name,
+        declaration.form, declaration.name, digest,
+        span.begin.offset, span.end.offset
+    };
+}
+
+std::optional<SystemVerilogPackageTarget>
+external_systemverilog_package_target(const CompiledDesign& design,
+    const DeclarationId declaration_id, const UnitId owner,
+    const std::vector<const sv::Declaration*>& declarations)
+{
+    if (!declaration_id.valid()
+        || declaration_id.value() >= declarations.size()
+        || declarations[declaration_id.value()] == nullptr) {
+        return std::nullopt;
+    }
+    const auto& declaration = *declarations[declaration_id.value()];
+    if (!systemverilog_callable_form(declaration.form)
+        || !declaration.scope.valid()
+        || declaration.scope.value() >= design.semantics.scopes().size()) {
+        return std::nullopt;
+    }
+    const auto provider
+        = design.semantics.scopes()[declaration.scope.value()].unit;
+    if (!provider.valid() || provider == owner
+        || provider.value() >= design.semantics.units().size()
+        || design.semantics.units()[provider.value()].kind
+            != UnitKind::systemverilog_package) {
+        return std::nullopt;
+    }
+    const auto package = std::ranges::find(
+        design.systemverilog_hir.units(), provider, &sv::Unit::id);
+    if (package == design.systemverilog_hir.units().end()
+        || package->kind != sv::UnitKind::package) {
+        return std::nullopt;
+    }
+    return SystemVerilogPackageTarget {
+        provider,
+        std::string { normalized_library(package->library) },
+        package->name,
+        systemverilog_package_declaration_identity(
+            design, declaration, *package)
+    };
+}
+
+void mark_projected_package_member_use(
+    const CompiledSystemVerilogPackageMemberUse& original,
+    CompiledSystemVerilogPackageMemberUse& projected)
+{
+    if (original.selected_present && original.selected_complete
+        && original.retained_selected && !projected.retained_selected) {
+        projected.selected_complete = false;
+    }
+    if (original.overloads.size() != projected.overloads.size()) {
+        projected.overloads_complete = false;
+        return;
+    }
+    for (std::size_t index = 0; index < original.overloads.size(); ++index) {
+        if (original.overloads[index].retained_declaration
+            && !projected.overloads[index].retained_declaration) {
+            projected.overloads_complete = false;
+        }
+    }
+}
+
+std::vector<CompiledReference> project_systemverilog_package_member_uses(
+    const CompiledDesign& design, const Projection& projection)
+{
+    std::vector<CompiledReference> result;
+    for (const auto& source : design.references()) {
+        if (!source.systemverilog_package_member) {
+            continue;
+        }
+        auto reference = source;
+        project(reference, projection);
+        if (!reference.systemverilog_package_member
+            || !reference.owner.valid()) {
+            continue;
+        }
+        auto& projected = *reference.systemverilog_package_member;
+        mark_projected_package_member_use(
+            *source.systemverilog_package_member, projected);
+        if ((!projected.expression || !projected.expression->valid())
+            && (!projected.statement || !projected.statement->valid())) {
+            continue;
+        }
+        result.push_back(std::move(reference));
+    }
+
+    std::vector<const sv::Declaration*> declarations(
+        design.semantics.declarations().size());
+    for (const auto& declaration : design.systemverilog_hir.declarations()) {
+        if (declaration.id.valid()
+            && declaration.id.value() < declarations.size()) {
+            declarations[declaration.id.value()] = &declaration;
+        }
+    }
+
+    const auto append_use = [&](const ScopeId scope,
+                                const SourceSpanId source,
+                                const sv::Name& name,
+                                const std::optional<ExpressionId> expression,
+                                const std::optional<StatementId> statement) {
+        if (!scope.valid() || scope.value() >= design.semantics.scopes().size()) {
+            return;
+        }
+        const auto owner = design.semantics.scopes()[scope.value()].unit;
+        if (!owner.valid() || owner.value() >= design.semantics.units().size()) {
+            return;
+        }
+
+        CompiledSystemVerilogPackageMemberUse use;
+        use.expression = expression;
+        use.statement = statement;
+        std::optional<SystemVerilogPackageTarget> anchor;
+        const auto package_target = [&](const DeclarationId id) {
+            return external_systemverilog_package_target(
+                design, id, owner, declarations);
+        };
+        const auto choose_anchor = [&](
+                                    const std::optional<SystemVerilogPackageTarget>& target) {
+            if (target && !anchor) {
+                anchor = target;
+            }
+        };
+
+        if (name.selected) {
+            use.selected_present = true;
+            if (const auto target = package_target(*name.selected)) {
+                choose_anchor(target);
+                if (target->declaration) {
+                    use.package_selected = target->declaration;
+                } else {
+                    use.retained_selected = *name.selected;
+                }
+            } else {
+                if (name.selected->valid()
+                    && name.selected->value() < declarations.size()
+                    && declarations[name.selected->value()] != nullptr
+                    && systemverilog_callable_form(
+                        declarations[name.selected->value()]->form)) {
+                    use.retained_selected = *name.selected;
+                } else {
+                    use.selected_complete = false;
+                }
+            }
+        }
+        if (name.overloads.size()
+            > std::numeric_limits<std::uint32_t>::max()) {
+            return;
+        }
+        use.overload_count = static_cast<std::uint32_t>(name.overloads.size());
+        use.overloads.reserve(name.overloads.size());
+        for (std::size_t index = 0; index < name.overloads.size(); ++index) {
+            CompiledSystemVerilogPackageOverloadIdentity overload;
+            overload.position = static_cast<std::uint32_t>(index);
+            if (const auto target = package_target(name.overloads[index])) {
+                choose_anchor(target);
+                if (target->declaration) {
+                    overload.package_declaration = target->declaration;
+                } else {
+                    overload.retained_declaration = name.overloads[index];
+                }
+            } else {
+                const auto id = name.overloads[index];
+                if (id.valid() && id.value() < declarations.size()
+                    && declarations[id.value()] != nullptr
+                    && systemverilog_callable_form(
+                        declarations[id.value()]->form)) {
+                    overload.retained_declaration = id;
+                } else {
+                    use.overloads_complete = false;
+                }
+            }
+            use.overloads.push_back(std::move(overload));
+        }
+        if (!anchor) {
+            return;
+        }
+
+        CompiledReference reference {
+            CompiledReferenceKind::package,
+            owner,
+            anchor->library,
+            anchor->package,
+            {},
+            source,
+            anchor->unit,
+            std::move(use),
+        };
+        const auto original_use = *reference.systemverilog_package_member;
+        project(reference, projection);
+        if (!reference.systemverilog_package_member
+            || !reference.owner.valid()) {
+            return;
+        }
+        auto& projected_use = *reference.systemverilog_package_member;
+        mark_projected_package_member_use(original_use, projected_use);
+        if ((!projected_use.expression || !projected_use.expression->valid())
+            && (!projected_use.statement || !projected_use.statement->valid())) {
+            return;
+        }
+        result.push_back(std::move(reference));
+    };
+
+    for (const auto& expression : design.systemverilog_hir.expressions()) {
+        if (expression.kind == sv::ExpressionKind::call
+            && expression.referenced_name) {
+            append_use(expression.scope, expression.source,
+                *expression.referenced_name, expression.id, std::nullopt);
+        }
+    }
+    for (const auto& statement : design.systemverilog_hir.statements()) {
+        if (statement.kind == sv::StatementKind::task_call) {
+            append_use(statement.scope, statement.source, statement.task,
+                std::nullopt, statement.id);
+        }
+    }
+    return result;
+}
+
+using SystemVerilogPackageDeclarationIndex =
+    std::map<CompiledSystemVerilogPackageDeclarationIdentity,
+        std::vector<DeclarationId>>;
+
+SystemVerilogPackageDeclarationIndex
+systemverilog_package_declaration_index(const CompiledDesign& design)
+{
+    SystemVerilogPackageDeclarationIndex result;
+    std::vector<const sv::Unit*> units(design.semantics.units().size());
+    for (const auto& unit : design.systemverilog_hir.units()) {
+        if (unit.id.valid() && unit.id.value() < units.size()) {
+            units[unit.id.value()] = &unit;
+        }
+    }
+    for (const auto& declaration : design.systemverilog_hir.declarations()) {
+        if (!declaration.id.valid()
+            || declaration.id.value() >= design.semantics.declarations().size()
+            || !declaration.scope.valid()
+            || declaration.scope.value() >= design.semantics.scopes().size()) {
+            continue;
+        }
+        const auto package_id
+            = design.semantics.scopes()[declaration.scope.value()].unit;
+        if (!package_id.valid() || package_id.value() >= units.size()
+            || units[package_id.value()] == nullptr
+            || units[package_id.value()]->kind != sv::UnitKind::package) {
+            continue;
+        }
+        if (auto identity = systemverilog_package_declaration_identity(
+                design, declaration, *units[package_id.value()])) {
+            result[*identity].push_back(declaration.id);
+        }
+    }
+    return result;
+}
+
+std::optional<DeclarationId> resolve_systemverilog_package_declaration(
+    const SystemVerilogPackageDeclarationIndex& index,
+    const CompiledSystemVerilogPackageDeclarationIdentity& identity)
+{
+    const auto found = index.find(identity);
+    if (found == index.end() || found->second.size() != 1U) {
+        return std::nullopt;
+    }
+    return found->second.front();
+}
+
+void restore_systemverilog_package_member_uses(CompiledDesign& design)
+{
+    using Callsite = std::pair<bool, std::uint32_t>;
+    std::map<Callsite, CompiledSystemVerilogPackageMemberUse> uses;
+    std::set<Callsite> ambiguous;
+    for (const auto& reference : design.references()) {
+        if (!reference.systemverilog_package_member) {
+            continue;
+        }
+        const auto& use = *reference.systemverilog_package_member;
+        if (use.expression && use.expression->valid()) {
+            const Callsite callsite { false, use.expression->value() };
+            const auto [found, inserted] = uses.emplace(callsite, use);
+            if (!inserted && found->second != use) {
+                ambiguous.insert(callsite);
+            }
+        } else if (use.statement && use.statement->valid()) {
+            const Callsite callsite { true, use.statement->value() };
+            const auto [found, inserted] = uses.emplace(callsite, use);
+            if (!inserted && found->second != use) {
+                ambiguous.insert(callsite);
+            }
+        }
+    }
+    if (uses.empty()) {
+        return;
+    }
+    const auto declaration_index
+        = systemverilog_package_declaration_index(design);
+    const auto resolve_candidate = [&](
+                                    const CompiledSystemVerilogPackageOverloadIdentity& candidate)
+        -> std::optional<DeclarationId> {
+        if (candidate.retained_declaration
+            && !candidate.package_declaration) {
+            return candidate.retained_declaration;
+        }
+        if (!candidate.retained_declaration
+            && candidate.package_declaration) {
+            return resolve_systemverilog_package_declaration(
+                declaration_index, *candidate.package_declaration);
+        }
+        return std::nullopt;
+    };
+    const auto restore_name = [&](sv::Name& name,
+                                  const CompiledSystemVerilogPackageMemberUse& use,
+                                  const Callsite callsite) {
+        if (ambiguous.contains(callsite)) {
+            name.selected.reset();
+            name.overloads.clear();
+            return;
+        }
+        if (use.selected_present) {
+            std::optional<DeclarationId> selected;
+            if (use.selected_complete) {
+                if (use.retained_selected && !use.package_selected) {
+                    selected = use.retained_selected;
+                } else if (!use.retained_selected && use.package_selected) {
+                    selected = resolve_systemverilog_package_declaration(
+                        declaration_index, *use.package_selected);
+                }
+            }
+            name.selected = selected;
+        } else {
+            name.selected.reset();
+        }
+
+        if (!use.overloads_complete
+            || use.overloads.size() != use.overload_count) {
+            name.overloads.clear();
+            return;
+        }
+        std::vector<DeclarationId> overloads;
+        overloads.reserve(use.overloads.size());
+        for (std::size_t position = 0; position < use.overloads.size();
+            ++position) {
+            const auto& candidate = use.overloads[position];
+            if (candidate.position != position) {
+                name.overloads.clear();
+                return;
+            }
+            const auto declaration = resolve_candidate(candidate);
+            if (!declaration) {
+                name.overloads.clear();
+                return;
+            }
+            overloads.push_back(*declaration);
+        }
+        name.overloads = std::move(overloads);
+    };
+
+    for (const auto& [callsite, use] : uses) {
+        if (callsite.first) {
+            const auto statement = std::ranges::find(
+                design.systemverilog_hir.statements(),
+                StatementId::from_index(callsite.second), &sv::Statement::id);
+            if (statement == design.systemverilog_hir.statements().end()) {
+                continue;
+            }
+            const auto position = static_cast<std::size_t>(std::distance(
+                design.systemverilog_hir.statements().begin(), statement));
+            auto& task
+                = design.systemverilog_hir.mutable_statements()[position].task;
+            restore_name(task, use, callsite);
+        } else {
+            const auto expression = std::ranges::find(
+                design.systemverilog_hir.expressions(),
+                ExpressionId::from_index(callsite.second),
+                &sv::Expression::id);
+            if (expression == design.systemverilog_hir.expressions().end()) {
+                continue;
+            }
+            const auto position = static_cast<std::size_t>(std::distance(
+                design.systemverilog_hir.expressions().begin(), expression));
+            auto& record
+                = design.systemverilog_hir.mutable_expressions()[position];
+            if (record.referenced_name) {
+                restore_name(*record.referenced_name, use, callsite);
+            }
+        }
+    }
+}
+
 } // namespace
 
 void refresh_compiled_design_metadata(CompiledDesign& design)
 {
     auto& dependencies = design.mutable_dependencies();
     auto& references = design.mutable_references();
+    std::vector<CompiledReference> package_member_uses;
+    for (const auto& reference : references) {
+        if (reference.systemverilog_package_member) {
+            package_member_uses.push_back(reference);
+        }
+    }
     dependencies.clear();
     references.clear();
     for (const auto& unit : design.systemverilog_hir.units()) {
@@ -2484,7 +3103,8 @@ void refresh_compiled_design_metadata(CompiledDesign& design)
                 CompiledReferenceKind::package,
                 unit.id,
                 std::string { normalized_library(unit.library) },
-                unit.primary_name,
+                vhdl_reference_name(
+                    unit.primary_name, unit.extended_primary_name),
                 {},
                 unit.source,
                 std::nullopt,
@@ -2515,10 +3135,10 @@ void refresh_compiled_design_metadata(CompiledDesign& design)
                 declaration->package->template_name,
                 declaration->source);
         }
-        add_vhdl_component_references(references, unit.id,
+        add_vhdl_component_references(design, references, unit.id,
             unit.library, unit.component_configurations);
         if (unit.configuration) {
-            add_vhdl_block_references(references, unit.id,
+            add_vhdl_block_references(design, references, unit.id,
                 unit.library, *unit.configuration);
         }
     }
@@ -2567,6 +3187,9 @@ void refresh_compiled_design_metadata(CompiledDesign& design)
                 instance.source);
         }
     }
+    references.insert(references.end(),
+        std::make_move_iterator(package_member_uses.begin()),
+        std::make_move_iterator(package_member_uses.end()));
     sort_unique(dependencies, [](const CompiledDependency& dependency) {
         return std::tuple {
             dependency.owner, dependency.logical_name,
@@ -2575,7 +3198,8 @@ void refresh_compiled_design_metadata(CompiledDesign& design)
     sort_unique(references, [](const CompiledReference& reference) {
         return std::tuple {
             reference.owner, reference.kind, reference.library,
-            reference.name, reference.secondary_name, reference.source };
+            reference.name, reference.secondary_name, reference.source,
+            reference.systemverilog_package_member };
     });
     design.refresh_lookup_indexes();
     for (auto& reference : references) {
@@ -2868,6 +3492,7 @@ CompiledLinkResult exclude_compiled_libraries(
 static CompiledLinkResult finalize_linked_design(CompiledDesign output)
 {
     refresh_compiled_design_metadata(output);
+    restore_systemverilog_package_member_uses(output);
     if (const auto error = vhdl_architecture_primary_profile_error(output);
         !error.empty()) {
         return { std::nullopt, error, "FSIM-FE-VHORDER-011" };
@@ -2933,6 +3558,13 @@ CompiledLinkResult link_compiled_designs(
         relocate(input_records, relocation);
         relocate_hir(input.systemverilog_hir, relocation);
         relocate_hir(input.vhdl_hir, relocation);
+        for (auto reference : input.references()) {
+            if (!reference.systemverilog_package_member) {
+                continue;
+            }
+            relocate(reference, relocation);
+            output.mutable_references().push_back(std::move(reference));
+        }
         append_records(records, std::move(input_records));
         append_hir(
             output.systemverilog_hir,

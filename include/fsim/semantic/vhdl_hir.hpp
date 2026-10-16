@@ -285,12 +285,18 @@ struct Name {
     bool operator==(const Name&) const = default;
 };
 
-/// Compiler-owned IEEE std_logic_1164 vector types whose package declarations
+/// Compiler-owned predefined vector identities whose package declarations
 /// may be absent from a compiled-HIR bundle.
 enum class BuiltinTypeIdentity : std::uint8_t {
     none,
     ieee_std_logic_1164_std_logic_vector,
     ieee_std_logic_1164_std_ulogic_vector,
+    std_standard_string,
+    std_standard_bit_vector,
+    std_standard_boolean_vector,
+    std_standard_integer_vector,
+    std_standard_real_vector,
+    std_standard_time_vector,
 };
 
 /// Operator overload families with compiler-owned IEEE std_logic_1164
@@ -865,6 +871,88 @@ struct PredefinedEnvironment {
     std::string default_time_unit;
     std::vector<std::string> attributes;
 };
+
+/// Return the compiler-owned STD.STANDARD identity for an exact visible name
+/// when the selected language profile exposes that declaration. Unqualified
+/// names require implicit STD.STANDARD visibility; qualified names accept
+/// only the exact STANDARD or STD.STANDARD package path. Callers must first
+/// rule out a visible source declaration or an ambiguous lookup.
+[[nodiscard]] inline BuiltinTypeIdentity
+standard_array_builtin_type_identity(
+    const std::string_view spelling,
+    const PredefinedEnvironment& environment) noexcept
+{
+    constexpr auto standard_profile =
+        std::string_view { "ieee-1076-standard:" };
+    if (!environment.identity.starts_with(standard_profile)
+        || spelling.empty() || spelling.find('@') != std::string_view::npos) {
+        return BuiltinTypeIdentity::none;
+    }
+    const auto same_identifier = [](const std::string_view left,
+                                    const std::string_view right) {
+        if (left.size() != right.size()) {
+            return false;
+        }
+        for (std::size_t index { }; index < left.size(); ++index) {
+            const auto lower = [](const char value) {
+                return value >= 'A' && value <= 'Z'
+                    ? static_cast<char>(value - 'A' + 'a')
+                    : value;
+            };
+            if (lower(left[index]) != lower(right[index])) {
+                return false;
+            }
+        }
+        return true;
+    };
+    const auto listed = [&](const std::span<const std::string> names,
+                            const std::string_view name) {
+        for (const auto& candidate : names) {
+            if (same_identifier(candidate, name)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    auto simple = spelling;
+    const auto separator = spelling.find_last_of(".:");
+    if (separator != std::string_view::npos) {
+        const auto qualifier = spelling.substr(0U, separator);
+        if (!same_identifier(qualifier, "standard")
+            && !same_identifier(qualifier, "std.standard")
+            && !same_identifier(qualifier, "std:standard")) {
+            return BuiltinTypeIdentity::none;
+        }
+        simple = spelling.substr(separator + 1U);
+    } else if (!listed(environment.implicit_packages, "std.standard.all")) {
+        return BuiltinTypeIdentity::none;
+    }
+    if (same_identifier(simple, "string")
+        && listed(environment.declarations, "string")) {
+        return BuiltinTypeIdentity::std_standard_string;
+    }
+    if (same_identifier(simple, "bit_vector")
+        && listed(environment.declarations, "bit_vector")) {
+        return BuiltinTypeIdentity::std_standard_bit_vector;
+    }
+    if (same_identifier(simple, "boolean_vector")
+        && listed(environment.declarations, "boolean_vector")) {
+        return BuiltinTypeIdentity::std_standard_boolean_vector;
+    }
+    if (same_identifier(simple, "integer_vector")
+        && listed(environment.declarations, "integer_vector")) {
+        return BuiltinTypeIdentity::std_standard_integer_vector;
+    }
+    if (same_identifier(simple, "real_vector")
+        && listed(environment.declarations, "real_vector")) {
+        return BuiltinTypeIdentity::std_standard_real_vector;
+    }
+    if (same_identifier(simple, "time_vector")
+        && listed(environment.declarations, "time_vector")) {
+        return BuiltinTypeIdentity::std_standard_time_vector;
+    }
+    return BuiltinTypeIdentity::none;
+}
 
 struct Unit {
     UnitId id;

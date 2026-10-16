@@ -296,6 +296,10 @@ GenericSliceCohortResult run_generic_slice_cohort(
     const auto output = interpreter.add_signal({
         "generic_slice_output", PackedLogic4 { width, Logic4::z },
         ResolutionKind::sv_wire });
+    const auto reader_trigger = interpreter.add_signal({
+        "generic_slice_reader_trigger", PackedLogic4 { 1U, Logic4::zero } });
+    const auto reader_sink = interpreter.add_signal({
+        "generic_slice_reader_sink", PackedLogic4 { 1U, Logic4::zero } });
 
     const auto add_owner = [&](const ProcessId id,
                                const std::uint32_t offset,
@@ -320,6 +324,30 @@ GenericSliceCohortResult run_generic_slice_cohort(
     };
     const auto low_owner = add_owner(0U, 0U, 64U);
     const auto high_owner = add_owner(1U, 64U, 1U);
+
+    // A pure full-output read joins the two writer clusters in the graph
+    // certificate. Its private sink and separate trigger keep it outside the
+    // owner cohort and leave their writes unchanged.
+    Process component_reader;
+    component_reader.id = 2U;
+    component_reader.name = "generic_slice_component_reader";
+    component_reader.scheduling_domain = ProcessSchedulingDomain::generic;
+    component_reader.register_count = 2U;
+    component_reader.initialize = false;
+    component_reader.static_sensitivity = {
+        { reader_trigger, EdgeKind::any }
+    };
+    component_reader.driver_regions = {
+        { reader_sink, 0U, 1U, true },
+    };
+    component_reader.operations = {
+        ReadSignal { 0U, output },
+        LoadConstant { 1U, PackedLogic4 { 1U, Logic4::zero } },
+        WriteUpdate { reader_sink, 1U, SignalUpdateDomain::generic },
+        WaitSensitivity { }, Jump { 0U },
+    };
+    require(interpreter.add_process(std::move(component_reader)) == 2U,
+        "the generic full-output bridge has a dense process ID");
 
     interpreter.schedule_signal_at(trigger,
         PackedLogic4 { 1U, Logic4::one }, 1U, 0U);
@@ -609,6 +637,25 @@ void check_active_update_cohort_stays_in_active_phase()
     };
     const auto low_owner = add_owner(0U, 0U, 64U);
     const auto high_owner = add_owner(1U, 64U, 1U);
+
+    const auto reader_trigger = interpreter.add_signal({
+        "active_slice_reader_trigger", PackedLogic4 { 1U, Logic4::zero } });
+    Process active_component_reader;
+    active_component_reader.id = 2U;
+    active_component_reader.name = "active_slice_component_reader";
+    active_component_reader.scheduling_domain
+        = ProcessSchedulingDomain::systemverilog;
+    active_component_reader.register_count = 1U;
+    active_component_reader.initialize = false;
+    active_component_reader.static_sensitivity = {
+        { reader_trigger, EdgeKind::any }
+    };
+    active_component_reader.operations = {
+        ReadSignal { 0U, output },
+        WaitSensitivity { }, Jump { 0U },
+    };
+    require(interpreter.add_process(std::move(active_component_reader)) == 2U,
+        "the Active full-output bridge has a dense process ID");
 
     auto expected = PackedLogic4 { width, Logic4::zero };
     expected.set(0U, Logic4::one);

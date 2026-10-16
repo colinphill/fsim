@@ -994,6 +994,24 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
             runtime::simir::Return>(&operation);
         const auto* read_signal = fsim::runtime::simir::operation_get_if<
             runtime::simir::ReadSignal>(&operation);
+        const auto selected_signal_query = [](const auto* query) {
+            return query != nullptr && query->selection.has_value();
+        };
+        const bool has_selected_signal_query =
+            selected_signal_query(fsim::runtime::simir::operation_get_if<
+                runtime::simir::SignalEvent>(&operation))
+            || selected_signal_query(fsim::runtime::simir::operation_get_if<
+                runtime::simir::SignalLastValue>(&operation))
+            || selected_signal_query(fsim::runtime::simir::operation_get_if<
+                runtime::simir::SignalLastEvent>(&operation))
+            || selected_signal_query(fsim::runtime::simir::operation_get_if<
+                runtime::simir::SignalActive>(&operation))
+            || selected_signal_query(fsim::runtime::simir::operation_get_if<
+                runtime::simir::SignalLastActive>(&operation))
+            || selected_signal_query(fsim::runtime::simir::operation_get_if<
+                runtime::simir::SignalDriving>(&operation))
+            || selected_signal_query(fsim::runtime::simir::operation_get_if<
+                runtime::simir::SignalDrivingValue>(&operation));
         const auto* last_value = fsim::runtime::simir::operation_get_if<
             runtime::simir::SignalLastValue>(&operation);
         const auto* driving_value = fsim::runtime::simir::operation_get_if<
@@ -1005,7 +1023,8 @@ LlvmProcessExecutor::~LlvmProcessExecutor()
                 && attribute->signal < signal_widths_.size()
                 && signal_widths_[attribute->signal] > 64U;
         };
-        const auto host_boundary = (read_signal != nullptr
+        const auto host_boundary = has_selected_signal_query
+            || (read_signal != nullptr
                                        && read_signal->kind
                                            != runtime::simir::SignalReadKind::current)
             || wide_attribute_boundary(last_value)

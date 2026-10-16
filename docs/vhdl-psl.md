@@ -51,7 +51,7 @@ The governed runner requires exact equality through:
 - source-independent replay and portable VHPI checkpoint remapping;
 - duplicated/reordered VHDL roots and adjacent SystemVerilog/SystemC roots.
 
-Compiled-HIR bundle schema 1 and VHDL HIR schema 5 preserve analyzed PSL state
+Compiled-HIR bundle schema 3 and VHDL HIR schema 8 preserve analyzed PSL state
 through objects, mapped libraries, ordinary compilation caches, and standalone
 designs. Load rejects incompatible schema, checksum, trailing bytes, enum
 values, duplicate identities, invalid semantic links, or cross-payload

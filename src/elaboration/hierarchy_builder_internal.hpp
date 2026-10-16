@@ -1346,6 +1346,20 @@ private:
         const semantic::SpecializedHirUnit* specialization { };
     };
 
+    struct PendingSystemVerilogPackageInitializer {
+        semantic::UnitId unit;
+        semantic::DeclarationId declaration;
+        semantic::ExpressionId initializer;
+        runtime::simir::SignalId signal;
+    };
+
+    struct PendingSystemVerilogPackageClassInitializer {
+        semantic::UnitId unit;
+        semantic::DeclarationId declaration;
+        runtime::simir::SignalId signal;
+        semantic::ExpressionId initializer;
+    };
+
     void resolve_compiled_systemverilog_virtual_interface_initializers(
         const semantic::sv::Unit& unit,
         const std::vector<PendingVirtualInterfaceInitializer>& initializers);
@@ -1480,7 +1494,8 @@ private:
         const SystemVerilogPackedTypeResolver& packed_type_resolver,
         const SystemVerilogPackedDefaultResolver& packed_default_resolver,
         const SystemVerilogPackedFallbackResolver&
-            packed_fallback_resolver);
+            packed_fallback_resolver,
+        bool runtime_package_initializer = false);
 
     // The element indices of an instance array in declared order: literal
     // bounds from the parser, or bounds evaluated in the specialization.
@@ -1506,6 +1521,7 @@ private:
         const SystemVerilogPackedTypeResolver& packed_type_resolver,
         const SystemVerilogPackedDefaultResolver& packed_default_resolver,
         const SystemVerilogPackedFallbackResolver& packed_fallback_resolver);
+    bool materialize_compiled_systemverilog_package_initializers();
     // The design-global container object of a package unpacked-array
     // variable, materialized on its first use.
     std::optional<ContainerObjectId>
@@ -1710,8 +1726,15 @@ private:
         vhdl_package_constant_signals_;
     std::unordered_map<std::uint32_t, std::optional<SignalId>>
         systemverilog_package_variable_signals_;
+    std::vector<semantic::UnitId> systemverilog_package_units_;
+    std::vector<PendingSystemVerilogPackageInitializer>
+        systemverilog_package_initializers_;
+    std::vector<PendingSystemVerilogPackageClassInitializer>
+        systemverilog_package_class_initializers_;
     std::unordered_map<std::uint32_t, ContainerObjectId>
         systemverilog_package_container_objects_;
+    std::unordered_map<std::uint32_t, StringObjectId>
+        systemverilog_package_string_objects_;
     std::vector<std::pair<std::string, std::string>> root_generic_overrides_;
     std::vector<semantic::SpecializedHirActualIdentity>
     compiled_vhdl_root_generic_actuals(const semantic::vhdl::Unit& root);

@@ -74,6 +74,7 @@ else()
     active_inactive_nba_verilog
     nba_batch_before_active
     derived_clock_nba
+    packed_vector_edge_sensitivity
     strobe_end_of_slot
     strobe_end_of_slot_verilog
     monitor_once_per_slot
@@ -129,6 +130,15 @@ foreach(case_name IN LISTS cases)
       AND case_name STREQUAL "a1_alias_leaf_native_read")
     set(ENV{FSIM_PROFILE_JIT_PROCESSES} 1)
     set(ENV{FSIM_PROFILE_JIT_PROCESSES_ALL} 1)
+  endif()
+  if(FSIM_SCHEDULING_ENGINE STREQUAL "llvm"
+      AND case_name STREQUAL "packed_vector_edge_sensitivity")
+    # Correlate the vector process operations in SimIR with per-process JIT
+    # executions. The ordinary design-wide JIT count cannot prove that either
+    # the vector static-sensitivity or dynamic-WaitOn process ran natively.
+    set(ENV{FSIM_PROFILE_JIT_PROCESSES} 1)
+    set(ENV{FSIM_PROFILE_JIT_PROCESSES_ALL} 1)
+    set(ENV{FSIM_PROFILE_JIT_OPERATIONS} 1)
   endif()
   run_fsim_step("${case_name}" elaborate
     elaborate -q --top "${case_name}" --no-aot
@@ -247,6 +257,54 @@ foreach(case_name IN LISTS cases)
       file(WRITE "${case_dir}/native-direct-read-admission.txt"
         "${FSIM_SCHEDULING_OPTIMIZATION} direct_read_slots="
         "${native_direct_read_slots}\n")
+    endif()
+    if(case_name STREQUAL "packed_vector_edge_sensitivity")
+      string(REGEX MATCHALL
+        "fsim-profile: jit-operation-summary id=[0-9]+ count=[1-9][0-9]* type=[^\r\n]*(WaitOn|WaitSensitivity)[^\r\n]*"
+        vector_edge_operation_lines "${native_evidence}")
+      set(vector_wait_on_processes 0)
+      set(vector_static_wait_processes 0)
+      foreach(operation_line IN LISTS vector_edge_operation_lines)
+        string(REGEX MATCH
+          "fsim-profile: jit-operation-summary id=([0-9]+)"
+          operation_id_match "${operation_line}")
+        set(operation_process_id "${CMAKE_MATCH_1}")
+        string(REGEX MATCH
+          "fsim-profile: jit-process id=${operation_process_id} generated_id=[^\r\n]* resumes=[1-9][0-9]*[^\r\n]*"
+          process_profile_line "${native_evidence}")
+        if(NOT process_profile_line)
+          message(FATAL_ERROR
+            "packed_vector_edge_sensitivity SimIR process ${operation_process_id} "
+            "contains an edge-wait operation but has no native JIT execution "
+            "at ${FSIM_SCHEDULING_OPTIMIZATION}\n${native_evidence}\n"
+            "workspace: ${case_dir}")
+        endif()
+        if(operation_line MATCHES "WaitOn")
+          math(EXPR vector_wait_on_processes
+            "${vector_wait_on_processes} + 1")
+        elseif(operation_line MATCHES "WaitSensitivity")
+          if(NOT process_profile_line MATCHES "static_waits=[1-9][0-9]*")
+            message(FATAL_ERROR
+              "packed_vector_edge_sensitivity static-wait process "
+              "${operation_process_id} ran natively without its static wait "
+              "at ${FSIM_SCHEDULING_OPTIMIZATION}\n${native_evidence}\n"
+              "workspace: ${case_dir}")
+          endif()
+          math(EXPR vector_static_wait_processes
+            "${vector_static_wait_processes} + 1")
+        endif()
+      endforeach()
+      if(vector_wait_on_processes LESS 1
+          OR vector_static_wait_processes LESS 1)
+        message(FATAL_ERROR
+          "packed_vector_edge_sensitivity lacks per-process native admission "
+          "for vector WaitOn and static-wait operations at "
+          "${FSIM_SCHEDULING_OPTIMIZATION}\n${native_evidence}\n"
+          "workspace: ${case_dir}")
+      endif()
+      file(WRITE "${case_dir}/vector-edge-native-admission.txt"
+        "${FSIM_SCHEDULING_OPTIMIZATION} WaitOn=${vector_wait_on_processes} "
+        "WaitSensitivity=${vector_static_wait_processes}\n")
     endif()
     if(case_name STREQUAL "a1_alias_leaf_native_read")
       unset(ENV{FSIM_PROFILE_JIT_PROCESSES})

@@ -251,13 +251,15 @@ endclass
 
 class BrokenPreDerived extends AppDerived;
   function void pre_randomize();
-    if (1'bx) hook_pre = 99;
+    assert (1'b0);
+    hook_pre = 99;
   endfunction
 endclass
 
 class BrokenPostDerived extends AppDerived;
   function void post_randomize();
-    if (1'bx) hook_post = 99;
+    assert (1'b0);
+    hook_post = 99;
   endfunction
 endclass
 
@@ -949,6 +951,9 @@ vhdl_wait_source = directory / "vhdl_wait.vhd";
 {
   std::ofstream output(vhdl_wait_source);
   output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity vhdl_wait is
 end entity;
 architecture rtl of vhdl_wait is
@@ -1263,6 +1268,9 @@ vhdl_select_concat_source =
 {
   std::ofstream output(vhdl_select_concat_source);
   output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity vhdl_select_concat_app is
 end entity;
 
@@ -1311,6 +1319,10 @@ vhdl_signed_source =
 {
   std::ofstream output(vhdl_signed_source);
   output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+use ieee.numeric_std.all;
+
 entity vhdl_signed_app is
 end entity;
 
@@ -1462,6 +1474,9 @@ vhdl_conditional_statement_source =
 {
   std::ofstream output(vhdl_conditional_statement_source);
   output << R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity vhdl_conditional_statement_app is
 end entity;
 

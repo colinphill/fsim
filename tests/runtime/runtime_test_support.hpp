@@ -71,6 +71,7 @@ void test_fused_masked_fallback_semantics();
 void test_fused_static_cohorts();
 void test_fused_projected_cohorts();
 void test_generic_update_region_runtime();
+void test_package_static_startup_runtime();
 void test_scheduler_stop_resume();
 void test_scheduler_ownership_and_failure_containment();
 void test_scheduler_batch_contract();

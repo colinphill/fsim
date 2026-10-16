@@ -13,9 +13,11 @@
 #include <cassert>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <ranges>
 #include <set>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -62,6 +64,437 @@ void assert_compiled_class_inventory(const Project& project)
 
 } // namespace
 
+void ApplicationTestFixture::test_class_hir_failure_routes()
+{
+    std::cerr << "application classes: HIR failure routes\n";
+    const auto failure_source = directory / "class_hir_failure_routes.sv";
+    {
+        std::ofstream output(failure_source);
+        output << R"sv(
+class NestedNotificationReceiver;
+  int marker;
+  static int nested_total;
+
+  function void mutate();
+    marker = marker + 1;
+    nested_total = nested_total + 1;
+  endfunction
+endclass
+
+class NestedNotificationCaller;
+  NestedNotificationReceiver peer;
+
+  function void outer();
+    peer.mutate();
+  endfunction
+
+  function void fail_after_mutation();
+    peer.mutate();
+    $fatal(1, "expected nested method failure");
+  endfunction
+endclass
+
+class FailingNestedNotificationConstructor;
+  int transient_marker;
+
+  function new(NestedNotificationReceiver receiver);
+    receiver.mutate();
+    transient_marker = 1;
+    $fatal(1, "expected nested constructor failure");
+  endfunction
+endclass
+
+module nested_method_failure_top;
+  NestedNotificationReceiver peer;
+  NestedNotificationCaller caller;
+
+  initial begin
+    peer = new;
+    caller = new;
+    caller.peer = peer;
+    caller.fail_after_mutation();
+    $fatal(1, "expected the method failure to escape");
+  end
+endmodule
+
+module nested_constructor_failure_top;
+  NestedNotificationReceiver peer;
+  FailingNestedNotificationConstructor failing;
+
+  initial begin
+    peer = new;
+    failing = new(peer);
+    $fatal(1, "expected the constructor failure to escape");
+  end
+endmodule
+)sv";
+    }
+
+    const auto make_sv_config =
+        [&](std::string project_name, std::string top_name,
+            const std::filesystem::path& source_path,
+            std::string cache_name) {
+            auto config = base_config();
+            config.project.name = std::move(project_name);
+            config.project.top = std::move(top_name);
+            config.build.cache_path = directory / std::move(cache_name);
+            config.source_sets.clear();
+            fsim::project::SourceSet sources;
+            sources.language = fsim::project::Language::system_verilog;
+            sources.standard = "2023";
+            sources.library = "work";
+            sources.compilation_unit = "file";
+            sources.files = { source_path };
+            config.source_sets.push_back(std::move(sources));
+            return config;
+        };
+
+    // Keep the three failure routes distinct: the interpreter method's
+    // direct observer throw precedes later operations; the compiled method
+    // and both constructors reach failure Reports after their writes.
+    const std::array failure_controls {
+        std::pair {
+            std::string_view { "nested-method-failure" },
+            std::string_view { "sv:work.nested_method_failure_top" },
+        },
+        std::pair {
+            std::string_view { "nested-constructor-failure" },
+            std::string_view { "sv:work.nested_constructor_failure_top" },
+        },
+    };
+    for (const auto engine : {
+             fsim::app::SimulationEngine::interpreter,
+             fsim::app::SimulationEngine::compiled }) {
+        const auto engine_name = engine
+                == fsim::app::SimulationEngine::interpreter
+            ? std::string { "interpreter" }
+            : std::string { "compiled" };
+        for (const auto& [control_name, top_name] : failure_controls) {
+            auto failure_config = make_sv_config(
+                std::string { control_name } + "-" + engine_name,
+                std::string { top_name }, failure_source,
+                std::string { control_name } + "-" + engine_name + "-cache");
+            fsim::diagnostic::Engine failure_diagnostics;
+            auto failure_built = fsim::app::build_project(
+                failure_config, failure_diagnostics);
+            if (!failure_built) {
+                for (const auto& diagnostic :
+                    failure_diagnostics.diagnostics()) {
+                    std::cerr << diagnostic.code << ": "
+                              << diagnostic.message << '\n';
+                }
+            }
+            assert(failure_built && !failure_diagnostics.has_error());
+
+            fsim::app::Simulation failure_simulation(
+                std::move(*failure_built),
+                failure_config.run.max_deltas, engine);
+            std::size_t receiver_events { };
+            std::size_t static_events { };
+            failure_simulation.set_class_property_change_hook(
+                [&](const auto handle, const std::string_view property,
+                    const auto& value, const auto, const auto) {
+                    if (!property.ends_with(
+                            "::NestedNotificationReceiver::marker")) {
+                        return;
+                    }
+                    assert(handle != 0U);
+                    assert(value.low_word().bval == 0U);
+                    assert(value.low_word().aval == 1U);
+                    ++receiver_events;
+                    if (control_name == "nested-method-failure"
+                        && engine
+                            == fsim::app::SimulationEngine::interpreter) {
+                        throw std::runtime_error {
+                            "direct SimIR property-change callback failure"
+                        };
+                    }
+                });
+            failure_simulation.set_class_static_property_change_hook(
+                [&](const std::string_view specialization,
+                    const std::string_view property, const auto& value,
+                    const auto, const auto) {
+                    if (!specialization.ends_with(
+                            "::NestedNotificationReceiver<>")
+                        || !property.ends_with("nested_total")) {
+                        return;
+                    }
+                    assert(value.low_word().bval == 0U);
+                    assert(value.low_word().aval == 1U);
+                    ++static_events;
+                });
+            bool original_exception_observed { };
+            bool direct_callback_exception_observed { };
+            bool nested_method_simir_assertion_observed { };
+            bool constructor_simir_assertion_observed { };
+            try {
+                (void)failure_simulation.run();
+            } catch (const fsim::runtime::simir::AssertionError& error) {
+                const auto expected_text
+                    = control_name == "nested-method-failure"
+                    ? "expected nested method failure"
+                    : "expected nested constructor failure";
+                const auto expected_message
+                    = "SimIR process " + std::to_string(error.process())
+                    + ", instruction " + std::to_string(error.instruction())
+                    + ": " + expected_text;
+                const bool expected_simir_assertion
+                    = error.severity()
+                        == fsim::runtime::simir::AssertionSeverity::failure
+                    && error.reported()
+                    && error.what() == expected_message;
+                nested_method_simir_assertion_observed
+                    = control_name == "nested-method-failure"
+                    && expected_simir_assertion;
+                constructor_simir_assertion_observed
+                    = control_name == "nested-constructor-failure"
+                    && expected_simir_assertion;
+            } catch (const std::invalid_argument& error) {
+                original_exception_observed = std::string_view {
+                    error.what()
+                } == "class method executed $fatal";
+            } catch (const std::runtime_error& error) {
+                direct_callback_exception_observed = std::string_view {
+                    error.what()
+                } == "direct SimIR property-change callback failure";
+            }
+            const bool direct_simir_callback_case
+                = control_name == "nested-method-failure"
+                && engine == fsim::app::SimulationEngine::interpreter;
+            if (direct_simir_callback_case) {
+                // This failure occurs inside direct SimIR property-write
+                // execution. With no HIR exception active, the observer's
+                // exception propagates and stops the method before its $fatal.
+                assert(direct_callback_exception_observed);
+                assert(!original_exception_observed);
+                assert(receiver_events == 1U);
+                assert(static_events == 0U);
+            } else if (control_name == "nested-constructor-failure") {
+                // This constructor reaches a failure Report in SimIR. Both
+                // interpreter and generated execution preserve its typed
+                // AssertionError, separately from the class-HIR method path.
+                assert(constructor_simir_assertion_observed);
+                assert(!original_exception_observed);
+                assert(!direct_callback_exception_observed);
+                assert(receiver_events == 1U);
+                assert(static_events == 1U);
+            } else {
+                // The compiled nested method is lowered to SimIR: both
+                // property writes complete, then its failure Report raises
+                // AssertionError with the method's own text.
+                assert(nested_method_simir_assertion_observed);
+                assert(!original_exception_observed);
+                assert(!direct_callback_exception_observed);
+                assert(receiver_events == 1U);
+                assert(static_events == 1U);
+            }
+        }
+    }
+}
+
+void ApplicationTestFixture::test_class_hir_report_exceptions()
+{
+    std::cerr << "application classes: HIR reports and fatal unwind\n";
+    const auto report_source = directory / "class_hir_report_exception.sv";
+    {
+        std::ofstream output(report_source);
+        output << R"sv(
+package class_report_value_pkg;
+  int call_count;
+
+  function int next_value();
+    call_count = call_count + 1;
+    return call_count;
+  endfunction
+endpackage
+
+module class_hir_report_exception_top;
+  parameter int HIR_STEP = 1;
+
+  class HIRFailureReceiver;
+    int packed_changes;
+
+    function string fail_after_mutation();
+      int local_report_value;
+      // Reading the enclosing unit parameter keeps this call on runtime HIR.
+      $info("class HIR info");
+      $warning("class HIR warning");
+      $error("class HIR error");
+      $error(class_report_value_pkg::next_value());
+      local_report_value = 7;
+      $info("class HIR local value %0d", local_report_value);
+      packed_changes = packed_changes + HIR_STEP;
+      $fatal(1, "expected HIR function failure %0d", packed_changes);
+      return "unreachable";
+    endfunction
+  endclass
+
+  HIRFailureReceiver receiver;
+  string result_text;
+
+  initial begin
+    #10;
+  end
+
+  initial begin
+    receiver = new;
+    result_text = receiver.fail_after_mutation();
+    $finish;
+  end
+endmodule
+)sv";
+    }
+
+    const auto make_sv_config =
+        [&](std::string project_name, std::string top_name,
+            const std::filesystem::path& source_path,
+            std::string cache_name) {
+            auto config = base_config();
+            config.project.name = std::move(project_name);
+            config.project.top = std::move(top_name);
+            config.build.cache_path = directory / std::move(cache_name);
+            config.source_sets.clear();
+            fsim::project::SourceSet sources;
+            sources.language = fsim::project::Language::system_verilog;
+            sources.standard = "2023";
+            sources.library = "work";
+            sources.compilation_unit = "file";
+            sources.files = { source_path };
+            config.source_sets.push_back(std::move(sources));
+            return config;
+        };
+
+    // This module-local class reads its enclosing parameter, so the lowerer
+    // keeps the string-return call on runtime class HIR. Its packed property
+    // write is published while the original HIR $fatal unwinds; a throwing
+    // observer must not replace that active exception.
+    for (const auto engine : {
+             fsim::app::SimulationEngine::interpreter,
+             fsim::app::SimulationEngine::compiled }) {
+        const auto engine_name = engine
+                == fsim::app::SimulationEngine::interpreter
+            ? std::string { "interpreter" }
+            : std::string { "compiled" };
+        auto hir_failure_config = make_sv_config(
+            "hir-class-report-exception-" + engine_name,
+            "sv:work.class_hir_report_exception_top", report_source,
+            "hir-class-report-exception-" + engine_name + "-cache");
+        fsim::diagnostic::Engine hir_failure_diagnostics;
+        auto hir_failure_built = fsim::app::build_project(
+            hir_failure_config, hir_failure_diagnostics);
+        if (!hir_failure_built) {
+            for (const auto& diagnostic : hir_failure_diagnostics.diagnostics()) {
+                std::cerr << diagnostic.code << ": "
+                          << diagnostic.message << '\n';
+            }
+        }
+        assert(hir_failure_built && !hir_failure_diagnostics.has_error());
+        fsim::app::Simulation hir_failure_simulation(
+            std::move(*hir_failure_built),
+            hir_failure_config.run.max_deltas, engine);
+        std::size_t hir_failure_events { };
+        using HirReport = std::tuple<
+            fsim::runtime::simir::ProcessId,
+            std::string,
+            fsim::runtime::simir::AssertionSeverity,
+            fsim::runtime::simir::SourceLocation,
+            fsim::runtime::SimulationTick,
+            std::uint64_t>;
+        std::vector<HirReport> hir_reports;
+        hir_failure_simulation.set_report_hook(
+            [&](const fsim::runtime::simir::ProcessId process,
+                const std::string_view message,
+                const fsim::runtime::simir::AssertionSeverity severity,
+                const fsim::runtime::simir::SourceLocation& source,
+                const fsim::runtime::SimulationTick callback_time,
+                const std::uint64_t callback_delta) {
+                hir_reports.emplace_back(
+                    process, std::string { message }, severity, source,
+                    callback_time, callback_delta);
+            });
+        hir_failure_simulation.set_class_property_change_hook(
+            [&](const auto handle, const std::string_view property,
+                const auto& value, const auto, const auto) {
+                if (!property.ends_with(
+                        "::HIRFailureReceiver::packed_changes")) {
+                    return;
+                }
+                assert(handle != 0U);
+                assert(value.low_word().bval == 0U);
+                assert(value.low_word().aval == 1U);
+                ++hir_failure_events;
+                throw std::runtime_error {
+                    "HIR-unwind property observer failure"
+                };
+            });
+        bool hir_failure_observed { };
+        bool observer_failure_escaped { };
+        try {
+            (void)hir_failure_simulation.run();
+        } catch (const std::invalid_argument& error) {
+            hir_failure_observed = std::string_view { error.what() }
+                == "class method executed $fatal";
+        } catch (const std::runtime_error& error) {
+            observer_failure_escaped = std::string_view { error.what() }
+                == "HIR-unwind property observer failure";
+        }
+        assert(hir_failure_observed);
+        assert(!observer_failure_escaped);
+        assert(hir_reports.size() == 6U);
+        const auto expected_report_time = hir_failure_simulation.now();
+        const auto expected_report_delta = hir_failure_simulation.delta();
+        assert(expected_report_time == 0U);
+        const auto hir_report_process = std::get<0>(hir_reports.front());
+        assert(hir_report_process != 0U);
+        assert(hir_report_process
+            != std::numeric_limits<fsim::runtime::simir::ProcessId>::max());
+        const auto hir_report_time = std::get<4>(hir_reports.front());
+        const auto hir_report_delta = std::get<5>(hir_reports.front());
+        assert(hir_report_time == expected_report_time);
+        assert(hir_report_delta == expected_report_delta);
+        assert((std::vector<std::string> {
+                    std::get<1>(hir_reports[0]),
+                    std::get<1>(hir_reports[1]),
+                    std::get<1>(hir_reports[2]),
+                    std::get<1>(hir_reports[3]),
+                    std::get<1>(hir_reports[4]),
+                    std::get<1>(hir_reports[5]) }
+            == std::vector<std::string> {
+                "class HIR info",
+                "class HIR warning",
+                "class HIR error",
+                "1",
+                "class HIR local value 7",
+                "expected HIR function failure 1" }));
+        assert((std::vector<fsim::runtime::simir::AssertionSeverity> {
+                    std::get<2>(hir_reports[0]),
+                    std::get<2>(hir_reports[1]),
+                    std::get<2>(hir_reports[2]),
+                    std::get<2>(hir_reports[3]),
+                    std::get<2>(hir_reports[4]),
+                    std::get<2>(hir_reports[5]) }
+            == std::vector<fsim::runtime::simir::AssertionSeverity> {
+                fsim::runtime::simir::AssertionSeverity::note,
+                fsim::runtime::simir::AssertionSeverity::warning,
+                fsim::runtime::simir::AssertionSeverity::error,
+                fsim::runtime::simir::AssertionSeverity::error,
+                fsim::runtime::simir::AssertionSeverity::note,
+                fsim::runtime::simir::AssertionSeverity::failure }));
+        for (const auto& report : hir_reports) {
+            assert(std::get<0>(report) == hir_report_process);
+            const auto& emitted_report_source = std::get<3>(report);
+            assert(emitted_report_source.line > 0U);
+            assert(emitted_report_source.column > 0U);
+            assert(emitted_report_source.path.str().find(
+                       "class_hir_report_exception.sv")
+                != std::string::npos);
+            assert(std::get<4>(report) == hir_report_time);
+            assert(std::get<5>(report) == hir_report_delta);
+        }
+        assert(hir_failure_events == 1U);
+    }
+}
+
 void ApplicationTestFixture::test_hir_first_class_visibility()
 {
     std::cerr << "application classes: HIR-first visibility\n";
@@ -73,6 +506,14 @@ void ApplicationTestFixture::test_hir_first_class_visibility()
         directory / "hir_class_visibility_right.sv";
     const auto top_source =
         directory / "hir_class_visibility_top.sv";
+    const auto notification_source =
+        directory / "hir_nested_notification_top.sv";
+    const auto condition_source =
+        directory / "hir_class_if_four_state_condition.sv";
+    const auto string_dispatch_source =
+        directory / "hir_string_dispatch_notification.sv";
+    const auto startup_notification_source =
+        directory / "package_static_startup_notification.sv";
     {
         std::ofstream output(package_source);
         output << R"(
@@ -159,6 +600,320 @@ endmodule
 )";
     }
 
+    {
+        std::ofstream output(notification_source);
+        output << R"(
+class NestedNotificationReceiver;
+  int marker;
+  static int nested_total;
+
+  function void mutate();
+    marker = marker + 1;
+    nested_total = nested_total + 1;
+  endfunction
+endclass
+
+class NestedNotificationCaller;
+  NestedNotificationReceiver peer;
+
+  function void outer();
+    peer.mutate();
+  endfunction
+
+  function void fail_after_mutation();
+    peer.mutate();
+    $fatal(1, "expected nested method failure");
+  endfunction
+endclass
+
+class FailingNestedNotificationConstructor;
+  int transient_marker;
+
+  function new(NestedNotificationReceiver receiver);
+    receiver.mutate();
+    transient_marker = 1;
+    $fatal(1, "expected nested constructor failure");
+  endfunction
+endclass
+
+module nested_notification_top;
+  NestedNotificationReceiver peer;
+  NestedNotificationCaller caller;
+
+  initial begin
+    peer = new;
+    caller = new;
+    caller.peer = peer;
+    caller.outer();
+    #1 $finish;
+  end
+endmodule
+
+module nested_method_failure_top;
+  NestedNotificationReceiver peer;
+  NestedNotificationCaller caller;
+
+  initial begin
+    peer = new;
+    caller = new;
+    caller.peer = peer;
+    caller.fail_after_mutation();
+    $fatal(1, "expected the method failure to escape");
+  end
+endmodule
+
+module nested_constructor_failure_top;
+  NestedNotificationReceiver peer;
+  FailingNestedNotificationConstructor failing;
+
+  initial begin
+    peer = new;
+    failing = new(peer);
+    $fatal(1, "expected the constructor failure to escape");
+  end
+endmodule
+)";
+    }
+
+    {
+        std::ofstream output(condition_source);
+        output << R"sv(
+package class_if_four_state_startup_probe;
+class ClassIfFourStateProbe;
+  function new();
+    integer counter;
+    integer observed;
+    logic [1:0] mixed_value;
+    logic [127:0] wide_value;
+
+    counter = 'x;
+    observed = 0;
+    if (counter != 1) begin
+      observed = 1;
+    end else begin
+      observed = 2;
+    end
+    if (observed != 2)
+      $fatal(1, "X-valued comparison condition did not choose else");
+
+    if (1'bx)
+      observed = 3;
+    else
+      observed = 4;
+    if (observed != 4)
+      $fatal(1, "X-valued scalar condition did not choose else");
+
+    if (1'bz)
+      observed = 5;
+    else
+      observed = 6;
+    if (observed != 6)
+      $fatal(1, "Z-valued scalar condition did not choose else");
+
+    mixed_value = 2'b1x;
+    if (mixed_value)
+      observed = 7;
+    else
+      observed = 8;
+    if (observed != 7)
+      $fatal(1, "mixed condition with a known one did not choose then");
+
+    if (1'b0)
+      observed = 9;
+    else
+      observed = 10;
+    if (observed != 10)
+      $fatal(1, "known zero condition did not choose else");
+
+    wide_value = 128'h80000000000000000000000000000000;
+    if (wide_value)
+      observed = 11;
+    else
+      observed = 12;
+    if (observed != 11)
+      $fatal(1, "known one above bit 63 did not choose then");
+  endfunction
+endclass
+ClassIfFourStateProbe startup_instance = new();
+endpackage
+
+module class_if_four_state_condition_top;
+  initial begin
+    if (class_if_four_state_startup_probe::startup_instance == null)
+      $fatal(1, "package startup instance is null");
+    $finish;
+  end
+endmodule
+)sv";
+    }
+
+    {
+        std::ofstream output(string_dispatch_source);
+        output << R"sv(
+package class_report_value_pkg;
+  int call_count;
+
+  function int next_value();
+    call_count = call_count + 1;
+    return call_count;
+  endfunction
+endpackage
+
+class StringDispatchBase;
+  string text;
+  int packed_changes;
+endclass
+
+class StringDispatchReceiver extends StringDispatchBase;
+  function new();
+    text = "receiver";
+  endfunction
+
+  function string append_ref(ref string sink);
+    text = {text, "-instance"};
+    packed_changes = packed_changes + 1;
+    sink = text;
+    return text;
+  endfunction
+
+  function string fail_after_mutation();
+    packed_changes = packed_changes + 1;
+    $fatal(1, "expected HIR function failure");
+    return text;
+  endfunction
+endclass
+
+class StringDispatchStatic;
+  static int call_count;
+
+  static function string append_static_ref(ref string sink);
+    call_count = call_count + 1;
+    sink = {sink, "-static"};
+    return sink;
+  endfunction
+endclass
+
+class StringDispatchCaller extends StringDispatchBase;
+  StringDispatchReceiver peer;
+  string result_text;
+
+  function new(input StringDispatchReceiver target);
+    text = "caller";
+    peer = target;
+    result_text = "seed";
+    if (peer.append_ref(result_text) != "receiver-instance")
+      $fatal(1, "string-call instance receiver was not preserved");
+    if (result_text != "receiver-instance" || text != "caller"
+        || packed_changes != 0)
+      $fatal(1, "string-call ref or receiver state was misbound");
+    if (StringDispatchStatic::append_static_ref(result_text)
+        != "receiver-instance-static")
+      $fatal(1, "string-call static result channel was misbound");
+    if (result_text != "receiver-instance-static")
+      $fatal(1, "string-call static ref actual was not live");
+  endfunction
+endclass
+
+module string_dispatch_notification_top;
+  StringDispatchReceiver receiver;
+  StringDispatchCaller caller;
+
+  initial begin
+    receiver = new;
+    caller = new(receiver);
+    $finish;
+  end
+endmodule
+)sv";
+    }
+    {
+        std::ofstream output(startup_notification_source);
+        output << R"sv(
+package package_static_notification_pkg;
+  int package_count = 0;
+  class StartupItem;
+    int marker;
+    static int total;
+
+    function new();
+      marker = 1;
+      total = total + 1;
+      package_count = package_count + 1;
+    endfunction
+  endclass
+
+  class StartupOwner;
+    static int startup_calls;
+    static StartupItem item = new;
+
+    static function int run_startup();
+      startup_calls = startup_calls + 1;
+      return 7;
+    endfunction
+
+    static function int item_marker();
+      return item.marker;
+    endfunction
+  endclass
+
+  int startup_call_result = StartupOwner::run_startup();
+  StartupItem package_item = new;
+endpackage
+
+module package_static_notification_top;
+  int observed_startup_call;
+  int observed_package_count;
+  int observed_package_item_marker;
+  int observed_static_item_marker;
+  int observed_startup_calls;
+  initial begin
+    observed_startup_call
+        = package_static_notification_pkg::startup_call_result;
+    observed_package_count = package_static_notification_pkg::package_count;
+    observed_package_item_marker
+        = package_static_notification_pkg::package_item.marker;
+    observed_static_item_marker
+        = package_static_notification_pkg::StartupOwner::item_marker();
+    observed_startup_calls
+        = package_static_notification_pkg::StartupOwner::startup_calls;
+    $finish;
+  end
+endmodule
+
+module string_dispatch_hir_failure_top;
+  parameter int HIR_STEP = 1;
+
+  class HIRFailureReceiver;
+    int packed_changes;
+
+    function string fail_after_mutation();
+      // Reading the enclosing unit parameter keeps this call on runtime HIR.
+      $info("class HIR info");
+      $warning("class HIR warning");
+      $error("class HIR error");
+      $error(class_report_value_pkg::next_value());
+      packed_changes = packed_changes + HIR_STEP;
+      $fatal(1, "expected HIR function failure %0d", packed_changes);
+      return "unreachable";
+    endfunction
+  endclass
+
+  HIRFailureReceiver receiver;
+  string result_text;
+
+  initial begin
+    #10;
+  end
+
+  initial begin
+    receiver = new;
+    result_text = receiver.fail_after_mutation();
+    $finish;
+  end
+endmodule
+)sv";
+    }
+
     auto config = base_config();
     config.project.name = "hir-first-class-visibility";
     config.project.top = "sv:work.class_visibility_top";
@@ -175,6 +930,7 @@ endmodule
         left_source,
         right_source,
         top_source,
+        notification_source,
     };
     config.source_sets.push_back(std::move(sources));
 
@@ -241,6 +997,430 @@ endmodule
     // SimIR; none needs the frontend adapter.
     const auto execution = simulation.class_execution_statistics();
     assert(execution.frontend_adapter_fallbacks == 0U);
+
+    // Package constructors deferred to the common startup action queue still
+    // establish time-zero state. Hooks installed after Simulation construction
+    // must not see those initialization writes; ordinary method-call coverage
+    // below continues to verify that runtime class changes remain observable.
+    for (const auto engine : {
+             fsim::app::SimulationEngine::interpreter,
+             fsim::app::SimulationEngine::compiled }) {
+        auto startup_config = config;
+        const auto engine_name = engine
+                == fsim::app::SimulationEngine::interpreter
+            ? std::string { "interpreter" }
+            : std::string { "compiled" };
+        startup_config.project.name
+            = "package-static-notification-" + engine_name;
+        startup_config.project.top
+            = "sv:work.package_static_notification_top";
+        startup_config.build.cache_path = directory
+            / ("package-static-notification-" + engine_name + "-cache");
+        startup_config.source_sets.clear();
+        fsim::project::SourceSet startup_sources;
+        startup_sources.language = fsim::project::Language::system_verilog;
+        startup_sources.standard = "2023";
+        startup_sources.library = "work";
+        startup_sources.compilation_unit = "file";
+        startup_sources.files = { startup_notification_source };
+        startup_config.source_sets.push_back(std::move(startup_sources));
+        fsim::diagnostic::Engine startup_diagnostics;
+        auto startup_built
+            = fsim::app::build_project(startup_config, startup_diagnostics);
+        if (!startup_built) {
+            for (const auto& diagnostic : startup_diagnostics.diagnostics()) {
+                std::cerr << diagnostic.code << ": "
+                          << diagnostic.message << '\n';
+            }
+        }
+        assert(startup_built && !startup_diagnostics.has_error());
+        fsim::app::Simulation startup_simulation(
+            std::move(*startup_built), startup_config.run.max_deltas, engine);
+        auto& startup_vpi = startup_simulation.systemverilog_vpi_objects();
+        const auto startup_vpi_root
+            = startup_vpi.find("package_static_notification_top");
+        const auto startup_vpi_package
+            = startup_vpi.find("package_static_notification_pkg");
+        const auto startup_vpi_package_count = startup_vpi.find(
+            "package_static_notification_pkg.package_count");
+        assert(startup_vpi_root && startup_vpi_package
+            && startup_vpi_package_count);
+        assert(startup_vpi_root.value->kind
+                == fsim::runtime::SystemVerilogVpiObjectKind::Root
+            && startup_vpi_root.value->parent == 0U);
+        assert(startup_vpi_package.value->kind
+                == fsim::runtime::SystemVerilogVpiObjectKind::Package
+            && startup_vpi_package.value->parent == 0U
+            && startup_vpi_package.value->handle
+                != startup_vpi_root.value->handle);
+        assert(startup_vpi_package_count.value->kind
+                == fsim::runtime::SystemVerilogVpiObjectKind::Variable
+            && startup_vpi_package_count.value->parent
+                == startup_vpi_package.value->handle);
+        const auto package_iterator = startup_vpi.iterate_objects(
+            fsim::runtime::SystemVerilogVpiObjectKind::Package);
+        assert(package_iterator);
+        const auto first_package = startup_vpi.scan(package_iterator.value);
+        assert(first_package
+            && first_package.value == startup_vpi_package.value->handle);
+        assert(startup_vpi.scan(package_iterator.value).error
+            == fsim::runtime::SystemVerilogVpiIteratorError::End);
+        assert(startup_vpi.release_iterator(package_iterator.value)
+            == fsim::runtime::SystemVerilogVpiIteratorError::None);
+        std::size_t instance_events { };
+        std::size_t static_events { };
+        std::size_t vpi_package_count_value_events { };
+        const auto vpi_package_count_value_observer
+            = startup_vpi.add_value_observer(
+                [&](const auto object, const auto&) {
+                    if (object == startup_vpi_package_count.value->handle) {
+                        ++vpi_package_count_value_events;
+                    }
+                });
+        assert(vpi_package_count_value_observer);
+        startup_simulation.set_class_property_change_hook(
+            [&](const auto, const std::string_view, const auto&,
+                const auto, const auto) { ++instance_events; });
+        startup_simulation.set_class_static_property_change_hook(
+            [&](const std::string_view, const std::string_view,
+                const auto&, const auto, const auto) { ++static_events; });
+        startup_simulation.start();
+        const auto live_package_count_signal = startup_simulation.find_signal(
+            "package_static_notification_pkg.package_count");
+        assert(live_package_count_signal);
+        const auto live_package_count = startup_simulation.read_signal_snapshot(
+            *live_package_count_signal);
+        assert(live_package_count.width() == 32U
+            && live_package_count.low_word().aval == 2U
+            && live_package_count.low_word().bval == 0U);
+        const auto vpi_package_count_read = startup_vpi.read_value(
+            startup_vpi_package_count.value->handle,
+            fsim::runtime::SystemVerilogVpiValueFormat::Integer);
+        assert(vpi_package_count_read
+            && vpi_package_count_read.integer == 2U);
+        assert(vpi_package_count_value_events == 0U);
+        assert(startup_vpi.remove_value_observer(
+            *vpi_package_count_value_observer));
+        assert(instance_events == 0U);
+        assert(static_events == 0U);
+        const auto startup_result = startup_simulation.run();
+        assert(startup_result.status == fsim::runtime::RunStatus::stopped);
+        assert(instance_events == 0U);
+        assert(static_events == 0U);
+        const auto observed_startup_call
+            = startup_simulation.find_signal(
+                "package_static_notification_top.observed_startup_call");
+        assert(observed_startup_call);
+        assert(startup_simulation.read_signal(*observed_startup_call)
+                   .low_word().aval
+            == 7U);
+        const auto observed_package_count = startup_simulation.find_signal(
+            "package_static_notification_top.observed_package_count");
+        const auto observed_package_item_marker = startup_simulation.find_signal(
+            "package_static_notification_top.observed_package_item_marker");
+        const auto observed_static_item_marker = startup_simulation.find_signal(
+            "package_static_notification_top.observed_static_item_marker");
+        const auto observed_startup_calls = startup_simulation.find_signal(
+            "package_static_notification_top.observed_startup_calls");
+        assert(observed_package_count && observed_package_item_marker
+            && observed_static_item_marker && observed_startup_calls);
+        assert(startup_simulation.read_signal(*observed_package_count)
+                   .low_word().aval
+            == 2U);
+        assert(startup_simulation.read_signal(*observed_package_item_marker)
+                   .low_word().aval
+            == 1U);
+        assert(startup_simulation.read_signal(*observed_static_item_marker)
+                   .low_word().aval
+            == 1U);
+        assert(startup_simulation.read_signal(*observed_startup_calls)
+                   .low_word().aval
+            == 1U);
+
+        auto direct_run_config = startup_config;
+        direct_run_config.project.name
+            = "package-static-notification-direct-run-" + engine_name;
+        direct_run_config.build.cache_path = directory
+            / ("package-static-notification-direct-run-" + engine_name
+                + "-cache");
+        fsim::diagnostic::Engine direct_run_diagnostics;
+        auto direct_run_built = fsim::app::build_project(
+            direct_run_config, direct_run_diagnostics);
+        if (!direct_run_built) {
+            for (const auto& diagnostic :
+                 direct_run_diagnostics.diagnostics()) {
+                std::cerr << diagnostic.code << ": "
+                          << diagnostic.message << '\n';
+            }
+        }
+        assert(direct_run_built
+            && !direct_run_diagnostics.has_error());
+        fsim::app::Simulation direct_run_simulation(
+            std::move(*direct_run_built),
+            direct_run_config.run.max_deltas, engine);
+        auto& direct_run_vpi
+            = direct_run_simulation.systemverilog_vpi_objects();
+        const auto direct_run_package_count = direct_run_vpi.find(
+            "package_static_notification_pkg.package_count");
+        assert(direct_run_package_count);
+        std::size_t direct_run_vpi_value_events { };
+        const auto direct_run_vpi_observer = direct_run_vpi.add_value_observer(
+            [&](const auto object, const auto&) {
+                if (object == direct_run_package_count.value->handle) {
+                    ++direct_run_vpi_value_events;
+                }
+            });
+        assert(direct_run_vpi_observer);
+        std::size_t direct_run_instance_events { };
+        std::size_t direct_run_static_events { };
+        direct_run_simulation.set_class_property_change_hook(
+            [&](const auto, const std::string_view, const auto&,
+                const auto, const auto) { ++direct_run_instance_events; });
+        direct_run_simulation.set_class_static_property_change_hook(
+            [&](const std::string_view, const std::string_view,
+                const auto&, const auto, const auto) {
+                ++direct_run_static_events;
+            });
+        const auto direct_run_result = direct_run_simulation.run();
+        assert(direct_run_result.status == fsim::runtime::RunStatus::stopped);
+        const auto direct_run_live_signal = direct_run_simulation.find_signal(
+            "package_static_notification_pkg.package_count");
+        assert(direct_run_live_signal);
+        const auto direct_run_live_value
+            = direct_run_simulation.read_signal_snapshot(
+                *direct_run_live_signal);
+        assert(direct_run_live_value.width() == 32U
+            && direct_run_live_value.low_word().aval == 2U
+            && direct_run_live_value.low_word().bval == 0U);
+        const auto direct_run_vpi_read = direct_run_vpi.read_value(
+            direct_run_package_count.value->handle,
+            fsim::runtime::SystemVerilogVpiValueFormat::Integer);
+        assert(direct_run_vpi_read && direct_run_vpi_read.integer == 2U);
+        assert(direct_run_vpi_value_events == 0U);
+        assert(direct_run_instance_events == 0U);
+        assert(direct_run_static_events == 0U);
+        assert(direct_run_vpi.remove_value_observer(
+            *direct_run_vpi_observer));
+    }
+
+    // A nested call on a different receiver must still produce one packed
+    // property event and one static property event at the outer dispatch
+    // boundary. This exercises the configured HIR callback and interpreter
+    // method hook through the same design under both supported engines.
+    for (const auto engine : {
+             fsim::app::SimulationEngine::interpreter,
+             fsim::app::SimulationEngine::compiled }) {
+        auto notification_config = config;
+        const auto engine_name = engine
+                == fsim::app::SimulationEngine::interpreter
+            ? std::string { "interpreter" }
+            : std::string { "compiled" };
+        notification_config.project.name
+            = "hir-nested-notification-" + engine_name;
+        notification_config.project.top = "sv:work.nested_notification_top";
+        notification_config.build.cache_path = directory
+            / ("hir-nested-notification-" + engine_name + "-cache");
+        fsim::diagnostic::Engine notification_diagnostics;
+        auto notification_built = fsim::app::build_project(
+            notification_config, notification_diagnostics);
+        if (!notification_built) {
+            for (const auto& diagnostic :
+                 notification_diagnostics.diagnostics()) {
+                std::cerr << diagnostic.code << ": "
+                          << diagnostic.message << '\n';
+            }
+        }
+        assert(notification_built
+            && !notification_diagnostics.has_error());
+        fsim::app::Simulation notification_simulation(
+            std::move(*notification_built),
+            notification_config.run.max_deltas, engine);
+        std::size_t receiver_events { };
+        std::size_t static_events { };
+        std::vector<std::string> static_event_descriptions;
+        fsim::runtime::SystemVerilogClassHandle changed_receiver { };
+        std::string changed_property;
+        notification_simulation.set_class_property_change_hook(
+            [&](const auto handle, const std::string_view property,
+                const auto& value, const auto, const auto) {
+                if (!property.ends_with(
+                        "::NestedNotificationReceiver::marker")) {
+                    return;
+                }
+                assert(value.low_word().bval == 0U);
+                assert(value.low_word().aval == 1U);
+                ++receiver_events;
+                changed_receiver = handle;
+                changed_property = property;
+            });
+        notification_simulation.set_class_static_property_change_hook(
+            [&](const std::string_view specialization,
+                const std::string_view property,
+                const auto& value, const auto, const auto) {
+                std::ostringstream description;
+                description << "specialization='" << specialization
+                            << "' property='" << property << "' aval="
+                            << value.low_word().aval << " bval="
+                            << value.low_word().bval;
+                static_event_descriptions.push_back(description.str());
+                if (!specialization.ends_with(
+                        "::NestedNotificationReceiver<>")
+                    || !property.ends_with("nested_total")) {
+                    return;
+                }
+                assert(value.low_word().bval == 0U);
+                assert(value.low_word().aval == 1U);
+                ++static_events;
+            });
+        const auto notification_result = notification_simulation.run();
+        assert(notification_result.status
+            == fsim::runtime::RunStatus::stopped);
+        if (static_events != 1U) {
+            std::cerr << "nested notification diagnostic engine="
+                      << engine_name << " receiver_events="
+                      << receiver_events << " receiver_handle="
+                      << changed_receiver << " receiver_property='"
+                      << changed_property << "' target_static_events="
+                      << static_events << " all_static_events="
+                      << static_event_descriptions.size() << '\n';
+            for (const auto& description : static_event_descriptions) {
+                std::cerr << "  static hook " << description << '\n';
+            }
+        }
+        assert(receiver_events == 1U);
+        assert(static_events == 1U);
+        assert(changed_receiver != 0U);
+        assert(notification_simulation.read_class_property(
+                   changed_receiver, changed_property).packed.low_word().aval
+            == 1U);
+        const auto& changed_object = notification_simulation.class_heap()
+                                         .object(changed_receiver);
+        assert(changed_object.specialization_identity
+                   .ends_with("::NestedNotificationReceiver<>"));
+    }
+
+    // Class-HIR procedural conditions use four-state truth: X/Z select
+    // else, a known one bit selects then, and all bits must be considered.
+    for (const auto engine : {
+             fsim::app::SimulationEngine::interpreter,
+             fsim::app::SimulationEngine::compiled }) {
+        const auto engine_name = engine
+                == fsim::app::SimulationEngine::interpreter
+            ? std::string { "interpreter" }
+            : std::string { "compiled" };
+        auto condition_config = config;
+        condition_config.source_sets.front().files.push_back(
+            condition_source);
+        condition_config.project.name
+            = "hir-class-if-four-state-condition-" + engine_name;
+        condition_config.project.top
+            = "sv:work.class_if_four_state_condition_top";
+        condition_config.build.cache_path = directory
+            / ("hir-class-if-four-state-condition-" + engine_name + "-cache");
+        fsim::diagnostic::Engine condition_diagnostics;
+        auto condition_built = fsim::app::build_project(
+            condition_config, condition_diagnostics);
+        if (!condition_built) {
+            for (const auto& diagnostic : condition_diagnostics.diagnostics()) {
+                std::cerr << diagnostic.code << ": "
+                          << diagnostic.message << '\n';
+            }
+        }
+        assert(condition_built && !condition_diagnostics.has_error());
+        fsim::app::Simulation condition_simulation(
+            std::move(*condition_built), condition_config.run.max_deltas,
+            engine);
+        const auto condition_result = condition_simulation.run();
+        assert(condition_result.status == fsim::runtime::RunStatus::stopped);
+    }
+
+    test_class_hir_failure_routes();
+
+    // String-return calls made from class HIR must use the configured
+    // dispatchers. The instance target deliberately differs from the caller,
+    // while both inherit the same base property identity so a wrong handle
+    // yields an observable but plausible mutation. The static call also
+    // exercises the hidden string result slot alongside a live ref actual.
+    for (const auto engine : {
+             fsim::app::SimulationEngine::interpreter,
+             fsim::app::SimulationEngine::compiled }) {
+        const auto engine_name = engine
+                == fsim::app::SimulationEngine::interpreter
+            ? std::string { "interpreter" }
+            : std::string { "compiled" };
+        auto string_dispatch_config = config;
+        string_dispatch_config.project.name
+            = "hir-string-dispatch-" + engine_name;
+        string_dispatch_config.project.top
+            = "sv:work.string_dispatch_notification_top";
+        string_dispatch_config.build.cache_path = directory
+            / ("hir-string-dispatch-" + engine_name + "-cache");
+        string_dispatch_config.source_sets.front().files.push_back(
+            string_dispatch_source);
+        fsim::diagnostic::Engine string_dispatch_diagnostics;
+        auto string_dispatch_built = fsim::app::build_project(
+            string_dispatch_config, string_dispatch_diagnostics);
+        if (!string_dispatch_built) {
+            for (const auto& diagnostic :
+                 string_dispatch_diagnostics.diagnostics()) {
+                std::cerr << diagnostic.code << ": "
+                          << diagnostic.message << '\n';
+            }
+        }
+        assert(string_dispatch_built
+            && !string_dispatch_diagnostics.has_error());
+
+        fsim::app::Simulation string_dispatch_simulation(
+            std::move(*string_dispatch_built),
+            string_dispatch_config.run.max_deltas, engine);
+        std::size_t receiver_events { };
+        std::size_t static_events { };
+        fsim::runtime::SystemVerilogClassHandle changed_receiver { };
+        std::string changed_property;
+        string_dispatch_simulation.set_class_property_change_hook(
+            [&](const auto handle, const std::string_view property,
+                const auto& value, const auto, const auto) {
+                if (!property.ends_with(
+                        "::StringDispatchBase::packed_changes")) {
+                    return;
+                }
+                assert(value.low_word().bval == 0U);
+                assert(value.low_word().aval == 1U);
+                ++receiver_events;
+                changed_receiver = handle;
+                changed_property = property;
+            });
+        string_dispatch_simulation.set_class_static_property_change_hook(
+            [&](const std::string_view specialization,
+                const std::string_view property, const auto& value,
+                const auto, const auto) {
+                if (!specialization.ends_with("::StringDispatchStatic<>")
+                    || !property.ends_with("call_count")) {
+                    return;
+                }
+                assert(value.low_word().bval == 0U);
+                assert(value.low_word().aval == 1U);
+                ++static_events;
+            });
+        const auto string_dispatch_result =
+            string_dispatch_simulation.run();
+        assert(string_dispatch_result.status
+            == fsim::runtime::RunStatus::stopped);
+        assert(receiver_events == 1U);
+        assert(static_events == 1U);
+        assert(changed_receiver != 0U);
+        const auto& changed_object = string_dispatch_simulation.class_heap()
+                                         .object(changed_receiver);
+        assert(changed_object.specialization_identity
+            .ends_with("::StringDispatchReceiver<>"));
+        assert(string_dispatch_simulation.read_class_property(
+                                             changed_receiver, changed_property)
+                   .packed.low_word()
+                   .aval
+            == 1U);
+    }
+
+    test_class_hir_report_exceptions();
 }
 
 void ApplicationTestFixture::test_class_simulation_integration()

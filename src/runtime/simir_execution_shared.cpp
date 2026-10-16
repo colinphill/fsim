@@ -133,7 +133,19 @@ namespace fsim::runtime::simir {
     const auto* read = operation_get_if<ReadSignal>(&operation);
     const auto* report = operation_get_if<Report>(&operation);
     const auto* disable_fork = operation_get_if<DisableFork>(&operation);
+    const auto* signal_event = operation_get_if<SignalEvent>(&operation);
+    const auto* signal_last_event
+        = operation_get_if<SignalLastEvent>(&operation);
+    const auto* signal_active = operation_get_if<SignalActive>(&operation);
+    const auto* signal_last_active
+        = operation_get_if<SignalLastActive>(&operation);
+    const auto* signal_driving = operation_get_if<SignalDriving>(&operation);
     return (read && read->kind != SignalReadKind::current)
+        || (signal_event && signal_event->selection)
+        || (signal_last_event && signal_last_event->selection)
+        || (signal_active && signal_active->selection)
+        || (signal_last_active && signal_last_active->selection)
+        || (signal_driving && signal_driving->selection)
         || operation_holds<SignalLastValue>(operation)
         || operation_holds<SignalDrivingValue>(operation)
         || operation_holds<FormatDisplay>(operation)

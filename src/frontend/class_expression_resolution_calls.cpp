@@ -506,7 +506,58 @@ void Resolver::retain_task_profile(
         return result;
       }
     }
-    auto receiver_type = resolve_expression(expression.operands.front(), scope);
+    auto& receiver_expression = expression.operands.front();
+    auto receiver_type = resolve_expression(receiver_expression, scope);
+    // A function-returned class handle is a valid method-call receiver. The
+    // ordinary class resolver does not otherwise need to resolve compilation-
+    // unit functions, so recover the narrow no-argument design-unit profile
+    // here before class method selection. Keep the call expression intact: HIR
+    // lowering must evaluate it once as the receiver.
+    if (!receiver_type && scope.class_owner == nullptr
+        && receiver_expression.kind == ExpressionKind::Call
+        && receiver_expression.operands.empty()
+        && receiver_expression.text.find("::") == std::string::npos) {
+      const DesignUnit* owner{};
+      bool ambiguous_owner{};
+      for (const auto& unit : design_.units) {
+        if (unit.language != Language::SystemVerilog2017
+            || effective_library(unit.library) + "::" + unit.name
+                != scope.lexical_identity) {
+          continue;
+        }
+        if (owner != nullptr) {
+          ambiguous_owner = true;
+          break;
+        }
+        owner = &unit;
+      }
+      if (owner != nullptr && !ambiguous_owner) {
+        const FunctionDeclaration* callable{};
+        bool ambiguous_callable{};
+        for (const auto& function : owner->functions) {
+          if (function.name != receiver_expression.text || !function.defined
+              || !function.arguments.empty()) {
+            continue;
+          }
+          if (callable != nullptr) {
+            ambiguous_callable = true;
+            break;
+          }
+          callable = &function;
+        }
+        if (callable != nullptr && !ambiguous_callable) {
+          auto result = resolve_alias_type(
+              callable->return_type, scope.lexical_identity);
+          if (const auto identity = class_identity(result);
+              identity && !result.systemverilog_container
+              && find_class(*identity) != nullptr) {
+            retain_result_type(receiver_expression, result);
+            receiver_expression.nominal_type = *identity;
+            receiver_type = std::move(result);
+          }
+        }
+      }
+    }
     constexpr std::string_view container_property_prefix{
         "@sv-container-property:"};
     constexpr std::string_view static_container_property_prefix{
@@ -1593,6 +1644,11 @@ void Resolver::resolve_statement(
   }
   for (auto& sensitivity : statement.sensitivities) {
     resolve_expression(sensitivity.expression, scope);
+  }
+  if (statement.kind == StatementKind::Report) {
+    for (auto& argument : statement.task_arguments) {
+      resolve_expression(argument, scope);
+    }
   }
   if (statement.kind == StatementKind::TaskCall) {
     resolve_task_call(statement, scope);

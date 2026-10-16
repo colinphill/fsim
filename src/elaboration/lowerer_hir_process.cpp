@@ -810,11 +810,248 @@ bool Lowerer::initialize_hir_declarations(
         }
         return result;
     };
+    const auto capture_scalar_subtype_range = [&](
+        const semantic::CompiledDeclarationView& declaration) {
+        if (declaration.vhdl == nullptr
+            || declaration.vhdl->form
+                != semantic::vhdl::DeclarationForm::subtype
+            || !declaration.vhdl->subtype) {
+            return true;
+        }
+        const auto scalar_range = std::ranges::find_if(
+            declaration.vhdl->subtype->constraints,
+            [](const semantic::vhdl::RangeConstraint& range) {
+                return range.kind == semantic::vhdl::RangeKind::integer
+                    || range.kind == semantic::vhdl::RangeKind::discrete;
+            });
+        if (scalar_range
+                == declaration.vhdl->subtype->constraints.end()
+            || (scalar_range->left && scalar_range->right)) {
+            return true;
+        }
+        const auto typed_range_scope = declaration.vhdl->scope.valid()
+            ? declaration.vhdl->scope
+            : hir_process_scope_;
+        const auto saved_process_scope = hir_process_scope_;
+        hir_process_scope_ = typed_range_scope;
+        const auto effective_subtype = hir_effective_vhdl_subtype(
+            *declaration.vhdl->subtype);
+        hir_process_scope_ = saved_process_scope;
+
+        const bool real_subtype
+            = hir_vhdl_subtype_is_real(*declaration.vhdl->subtype)
+            || (effective_subtype
+                && hir_vhdl_subtype_is_real(*effective_subtype));
+        const bool integer_subtype = effective_subtype
+            && effective_subtype->domain
+                == semantic::vhdl::ValueDomain::integer
+            && !real_subtype;
+        const bool typed_noninteger_subtype = real_subtype
+            || (effective_subtype
+                && effective_subtype->domain
+                    != semantic::vhdl::ValueDomain::unknown
+                && !integer_subtype);
+        if (typed_noninteger_subtype) {
+            // This capture table is consumed by INTEGER defaults and the
+            // callable INTEGER range checker. For other scalar domains,
+            // retain the typed subtype range and prove that its bounds are
+            // static with the corresponding VHDL evaluator instead of
+            // coercing values into INTEGER registers. Unknown/dynamic bounds
+            // remain fail-closed below.
+            const semantic::vhdl::RangeConstraint* typed_range
+                = &*scalar_range;
+            if (effective_subtype && scalar_range->source.valid()) {
+                const auto materialized = std::ranges::find(
+                    effective_subtype->constraints,
+                    scalar_range->source,
+                    &semantic::vhdl::RangeConstraint::source);
+                if (materialized != effective_subtype->constraints.end()) {
+                    typed_range = &*materialized;
+                }
+            }
+            const auto bound_is_static = [&](
+                const std::optional<std::int64_t> folded,
+                const std::optional<semantic::ExpressionId> expression) {
+                if (folded) {
+                    return true;
+                }
+                if (!expression) {
+                    return false;
+                }
+                auto expression_scope = typed_range_scope;
+                const auto record
+                    = specialized_hir_unit_->find_expression(*expression);
+                if (record && record->vhdl != nullptr
+                    && record->vhdl->scope.valid()) {
+                    expression_scope = record->vhdl->scope;
+                }
+                if (real_subtype) {
+                    if (hir_vhdl_constant_real(*expression)) {
+                        return true;
+                    }
+                    const auto attribute = hir_vhdl_attribute_profile(
+                        *expression, expression_scope);
+                    return attribute && attribute->constant
+                        && attribute->width == 64U
+                        && attribute->domain
+                            == frontend::ValueDomain::Bit2;
+                }
+                const auto saved_scope = hir_process_scope_;
+                hir_process_scope_ = expression_scope;
+                const bool constant
+                    = hir_constant_integer(*expression).has_value();
+                const bool character_literal = record
+                    && record->vhdl != nullptr
+                    && (record->vhdl->kind
+                            == semantic::vhdl::ExpressionKind::logic_literal
+                        || (record->vhdl->kind
+                                == semantic::vhdl::ExpressionKind::name
+                            && hir_vhdl_character_literal_code(
+                                *expression, 8U)));
+                const bool character_static = !constant
+                    && effective_subtype
+                    && hir_vhdl_predefined_character_subtype(
+                        *effective_subtype, typed_range_scope)
+                    && character_literal;
+                hir_process_scope_ = saved_scope;
+                return constant || character_static;
+            };
+            const bool bounds_are_static
+                = bound_is_static(
+                      typed_range->left,
+                      typed_range->left_expression)
+                && bound_is_static(
+                      typed_range->right,
+                      typed_range->right_expression);
+            const auto descending = typed_range->direction_from_bounds
+                ? hir_vhdl_range_direction(*typed_range, typed_range_scope)
+                : std::optional<bool> { typed_range->descending };
+            if (bounds_are_static && descending) {
+                // No captured register is needed here: consumers continue to
+                // read the original, nominally typed subtype constraints.
+                // Direction was resolved from its recorded source, never
+                // inferred from endpoint order.
+                return true;
+            }
+            const auto span = hir_source_span(
+                scalar_range->source.valid()
+                    ? scalar_range->source
+                    : declaration.vhdl->source);
+            report("FSIM-ELAB-HIR-001",
+                "cannot evaluate both dynamic scalar bounds when VHDL "
+                "subtype '" + declaration.vhdl->name
+                    + "' is elaborated",
+                span);
+            return false;
+        }
+        if (!scalar_range->source.valid()) {
+            const auto span = hir_source_span(declaration.vhdl->source);
+            report("FSIM-ELAB-HIR-001",
+                "cannot capture a dynamic scalar range for VHDL subtype '"
+                    + declaration.vhdl->name
+                    + "' because its source range has no identity",
+                span);
+            return false;
+        }
+        const auto already_captured = std::ranges::any_of(
+            hir_vhdl_captured_scalar_ranges_,
+            [&](const HirVhdlCapturedScalarRange& captured) {
+                return captured.source == scalar_range->source;
+            });
+        if (already_captured) {
+            return true;
+        }
+
+        const auto range_span = hir_source_span(scalar_range->source);
+        const auto range_scope = declaration.vhdl->scope;
+        const auto descending = scalar_range->direction_from_bounds
+            ? hir_vhdl_range_direction(*scalar_range, range_scope)
+            : std::optional<bool> { scalar_range->descending };
+        if (!descending) {
+            report("FSIM-ELAB-HIR-001",
+                "cannot capture the direction of dynamic scalar range for "
+                "VHDL subtype '" + declaration.vhdl->name + "'",
+                range_span);
+            return false;
+        }
+        const auto lower_bound = [&](
+            const std::optional<std::int64_t> folded,
+            const std::optional<semantic::ExpressionId> expression)
+            -> std::optional<RegisterId> {
+            if (folded) {
+                const auto result = allocate_register(
+                    64U, frontend::ValueDomain::Integer);
+                process_.operations.emplace_back(LoadConstant {
+                    result, integer_value(*folded, 64U) });
+                return result;
+            }
+            if (!expression) {
+                return std::nullopt;
+            }
+            auto expression_scope = range_scope;
+            if (const auto record
+                = specialized_hir_unit_->find_expression(*expression);
+                record && record->vhdl != nullptr
+                && record->vhdl->scope.valid()) {
+                expression_scope = record->vhdl->scope;
+            }
+            const auto width = hir_expression_width(
+                *expression, expression_scope);
+            if (!width || *width == 0U || *width > 64U) {
+                return std::nullopt;
+            }
+            const auto saved_scope = hir_process_scope_;
+            hir_process_scope_ = expression_scope;
+            const auto result = lower_hir_expression(*expression, *width);
+            hir_process_scope_ = saved_scope;
+            if (!result
+                || register_domain(*result)
+                    != frontend::ValueDomain::Integer) {
+                return std::nullopt;
+            }
+            // Named scalar bounds are fixed when their subtype declaration
+            // elaborates; retain a value snapshot if the expression aliases
+            // a mutable local register.
+            const auto snapshot = allocate_register(
+                register_width(*result), register_domain(*result));
+            process_.operations.emplace_back(CopyRegister {
+                snapshot, *result });
+            return snapshot;
+        };
+        const auto left = lower_bound(
+            scalar_range->left, scalar_range->left_expression);
+        const auto right = lower_bound(
+            scalar_range->right, scalar_range->right_expression);
+        if (!left || !right) {
+            report("FSIM-ELAB-HIR-001",
+                "cannot evaluate both dynamic scalar bounds when VHDL "
+                "subtype '" + declaration.vhdl->name
+                    + "' is elaborated",
+                range_span);
+            return false;
+        }
+        const HirVhdlCapturedScalarRange captured {
+            scalar_range->source,
+            *left,
+            *right,
+            *descending,
+        };
+        hir_vhdl_captured_scalar_ranges_.push_back(captured);
+        if (active_hir_callable_
+            && *active_hir_callable_ < hir_callable_frames_.size()) {
+            hir_callable_frames_[*active_hir_callable_]
+                .body_vhdl_scalar_ranges.push_back(captured);
+        }
+        return true;
+    };
     std::unordered_set<std::string> declared_here;
     for (const auto declaration_id : declarations) {
         const auto declaration = specialized_hir_unit_->find_declaration(
             declaration_id);
         if (!declaration) {
+            return false;
+        }
+        if (!capture_scalar_subtype_range(*declaration)) {
             return false;
         }
         const auto vhdl_loop_parameter = [&] {
@@ -1484,6 +1721,8 @@ bool Lowerer::initialize_hir_declarations(
         std::vector<std::string> enumeration_literals;
         std::optional<std::int64_t> vhdl_enumeration_default;
         std::optional<semantic::vhdl::SubtypeIndication>
+            vhdl_effective_subtype;
+        std::optional<semantic::vhdl::SubtypeIndication>
             vhdl_initializer_subtype;
         bool vhdl_file { };
         if (declaration->systemverilog != nullptr) {
@@ -1505,6 +1744,7 @@ bool Lowerer::initialize_hir_declarations(
                 type_name = input.subtype->type_mark.spelling;
                 const auto effective = hir_effective_vhdl_subtype(
                     *input.subtype);
+                vhdl_effective_subtype = effective;
                 if (input.initializer) {
                     vhdl_initializer_subtype = effective;
                 }
@@ -1580,12 +1820,59 @@ bool Lowerer::initialize_hir_declarations(
             hir_local_registers_.emplace(
                 declaration_id.value(), destination);
         }
+        const auto vhdl_captured_scalar_default = [&]()
+            -> std::optional<RegisterId> {
+            if (declaration->vhdl == nullptr
+                || declaration->vhdl->form
+                    != semantic::vhdl::DeclarationForm::variable
+                || !declaration->vhdl->subtype || initializer
+                || binding->domain != frontend::ValueDomain::Integer) {
+                return std::nullopt;
+            }
+            if (!vhdl_effective_subtype
+                || vhdl_effective_subtype->domain
+                    != semantic::vhdl::ValueDomain::integer) {
+                return std::nullopt;
+            }
+            for (const auto& constraint :
+                vhdl_effective_subtype->constraints) {
+                if ((constraint.kind
+                        != semantic::vhdl::RangeKind::integer
+                    && constraint.kind
+                        != semantic::vhdl::RangeKind::discrete)
+                    || !constraint.source.valid()) {
+                    continue;
+                }
+                const auto captured = std::ranges::find(
+                    hir_vhdl_captured_scalar_ranges_.rbegin(),
+                    hir_vhdl_captured_scalar_ranges_.rend(),
+                    constraint.source,
+                    &HirVhdlCapturedScalarRange::source);
+                if (captured
+                    != hir_vhdl_captured_scalar_ranges_.rend()) {
+                    return captured->left;
+                }
+            }
+            return std::nullopt;
+        }();
         const auto vhdl_composite_default = declaration->vhdl != nullptr
                 && declaration->vhdl->subtype && !initializer && !vhdl_file
             ? hir_vhdl_default_value(*declaration->vhdl->subtype,
                   binding->width)
             : std::nullopt;
         if (!retained_static && binding->width != 0U
+            && vhdl_captured_scalar_default) {
+            auto initial = *vhdl_captured_scalar_default;
+            if (register_domain(initial)
+                    != frontend::ValueDomain::Integer) {
+                return false;
+            }
+            if (register_width(initial) != binding->width) {
+                initial = resize_register(initial, binding->width, true);
+            }
+            process_.operations.emplace_back(CopyRegister {
+                destination, initial });
+        } else if (!retained_static && binding->width != 0U
             && vhdl_composite_default) {
             process_.operations.emplace_back(LoadConstant {
                 destination, *vhdl_composite_default });
@@ -2655,6 +2942,66 @@ std::optional<Process> Lowerer::lower_hir_input_actual(
     return lower_hir_process_body(description, language, hierarchy);
 }
 
+std::optional<Process> Lowerer::lower_hir_package_initializer(
+    const semantic::DeclarationId declaration_id,
+    const SignalId destination,
+    const frontend::Language language,
+    const std::string_view hierarchy)
+{
+    [[maybe_unused]] const HirEffectiveVhdlSubtypeCacheScope cache_scope {
+        *this
+    };
+    if (specialized_hir_unit_ == nullptr
+        || language != frontend::Language::SystemVerilog2017
+        || destination >= design_.signal_info_.size()) {
+        return std::nullopt;
+    }
+    const auto declaration
+        = specialized_hir_unit_->find_declaration(declaration_id);
+    if (!declaration || declaration->systemverilog == nullptr
+        || declaration->systemverilog->form
+            != semantic::sv::DeclarationForm::variable
+        || !declaration->systemverilog->initializer
+        || !declaration->systemverilog->type
+        || !declaration->systemverilog->scope.valid()) {
+        return std::nullopt;
+    }
+    const auto initializer = *declaration->systemverilog->initializer;
+    const auto expression
+        = specialized_hir_unit_->find_expression(initializer);
+    const auto binding = hir_runtime_binding(
+        declaration_id, declaration->systemverilog->scope, true);
+    if (!expression || expression->systemverilog == nullptr
+        || !binding || binding->kind != HirRuntimeBindingKind::signal
+        || binding->signal != destination) {
+        return std::nullopt;
+    }
+
+    HirProcessDescription description;
+    description.source = expression->systemverilog->source;
+    description.scope = declaration->systemverilog->scope;
+    description.name = "$package_static_initializer_"
+        + std::to_string(declaration_id.value());
+    description.input_actual = initializer;
+    description.input_actual_destination = destination;
+    description.input_actual_assignment_context = true;
+    auto assignment_type = declaration->systemverilog->type;
+    if (assignment_type && !assignment_type->target.target.valid()) {
+        const auto resolved = semantic::CompiledDesignResolver {
+            *specialized_hir_unit_, hir_generic_binding_frames_
+        }.effective_systemverilog_type(
+            *assignment_type, declaration->systemverilog->scope);
+        if (resolved && resolved->target.target.valid()) {
+            assignment_type = *resolved;
+        }
+    }
+    description.input_actual_assignment_type = std::move(assignment_type);
+    description.kind = frontend::ProcessKind::Initial;
+    description.initial = true;
+    description.require_wildcard_dependency = false;
+    return lower_hir_process_body(description, language, hierarchy);
+}
+
 std::optional<Lowerer::HirVhdlResolverProgram>
 Lowerer::lower_hir_vhdl_resolver_process(const SignalId signal,
     const semantic::DeclarationId function, const std::size_t driver_count,
@@ -3137,6 +3484,7 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
     hir_local_container_registers_.clear();
     hir_local_container_types_.clear();
     hir_callable_frames_.clear();
+    hir_vhdl_captured_scalar_ranges_.clear();
     hir_callable_indices_.clear();
     hir_interface_callable_indices_.clear();
     pending_hir_callables_.clear();
@@ -3316,6 +3664,12 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
         || description.procedural_assignment_value.has_value();
     if (description.input_actual.has_value()
             != description.input_actual_destination.has_value()
+        || (description.input_actual_assignment_context
+            && (!description.input_actual
+                || !description.input_actual_assignment_type
+                || description.actual_slice
+                || description.input_actual_vhdl_context
+                || language != frontend::Language::SystemVerilog2017))
         || description.output_actual_source.has_value()
             != description.output_actual.has_value()
         || (input_adapter && output_adapter)
@@ -3460,13 +3814,35 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             process_.operations.emplace_back(Extract {
                 *value, *whole, offset, width });
         }
-        // A port connection extends a narrower actual by the actual's own
-        // signedness, as a continuous assignment does (IEEE 1800-2017
-        // 23.3.3.7 and 10.7).
-        bool extend_signed = signal.is_signed;
-        // A real actual of an integral port, or an integral actual of a
-        // real port, converts as an assignment does (23.3.3.7, 6.12.2).
-        if (!value && actual_expression
+        bool extend_signed = description.input_actual_assignment_context
+            ? hir_expression_signed(actual)
+            : signal.is_signed;
+        if (description.input_actual_assignment_context && !value) {
+            const auto packed_pattern
+                = hir_systemverilog_packed_pattern_operand(
+                    actual, *description.input_actual_assignment_type);
+            if (packed_pattern && *packed_pattern != actual
+                && systemverilog_standard_
+                    != frontend::StandardRevision::SystemVerilog2023) {
+                report(
+                    "FSIM-ELAB-SVCAST-005",
+                    "assignment-pattern static-cast contextual typing "
+                    "requires the exact SystemVerilog-2023 profile",
+                    hir_source_span(actual_expression->systemverilog->source));
+                process_ = { };
+                return std::nullopt;
+            }
+            if (packed_pattern) {
+                value = lower_hir_systemverilog_packed_pattern(
+                    *packed_pattern,
+                    *description.input_actual_assignment_type,
+                    signal.width);
+            }
+        }
+        // Port scalar connections convert real actuals as assignments do
+        // (IEEE 1800-2017 23.3.3.7 and 6.12.2).
+        if (!description.input_actual_assignment_context && !value
+            && actual_expression
             && actual_expression->systemverilog != nullptr
             && frontend::is_real_scalar_kind(signal.systemverilog_scalar)
                 != frontend::is_real_scalar_kind(
@@ -3481,7 +3857,11 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             return text == "'0" || text == "'1" || text == "'x"
                 || text == "'X" || text == "'z" || text == "'Z";
         };
-        if (!value && actual_expression
+        // A port connection extends a narrower actual by the actual's own
+        // signedness, as a continuous assignment does (IEEE 1800-2017
+        // 23.3.3.7 and 10.7).
+        if (!description.input_actual_assignment_context && !value
+            && actual_expression
             && actual_expression->systemverilog != nullptr
             && !fill_literal(actual_expression->systemverilog->text)) {
             const auto natural = hir_expression_width(
@@ -3492,7 +3872,10 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
             }
         }
         if (!value) {
-            value = lower_hir_expression(actual, signal.width);
+            value = description.input_actual_assignment_context
+                ? lower_hir_scalar_converted_value(
+                      actual, signal.width, signal.systemverilog_scalar)
+                : lower_hir_expression(actual, signal.width);
         }
         if (!value) {
             process_ = { };
@@ -3521,14 +3904,21 @@ std::optional<Process> Lowerer::lower_hir_process_body_once(
                     signal.integer_range->right),
             });
         }
-        process_.operations.emplace_back(WriteUpdate {
-            destination,
-            *value,
-            process_.scheduling_domain
-                == ProcessSchedulingDomain::systemverilog
-                ? SignalUpdateDomain::systemverilog_active
-                : SignalUpdateDomain::generic,
-        });
+        if (description.input_actual_assignment_context) {
+            // Package declaration initializers are ordered startup actions:
+            // publish the completed assignment into the startup baseline.
+            process_.operations.emplace_back(WriteBlocking {
+                destination, *value });
+        } else {
+            process_.operations.emplace_back(WriteUpdate {
+                destination,
+                *value,
+                process_.scheduling_domain
+                    == ProcessSchedulingDomain::systemverilog
+                    ? SignalUpdateDomain::systemverilog_active
+                    : SignalUpdateDomain::generic,
+            });
+        }
         record_readonly_signal_write(destination);
     } else if (description.output_actual) {
         const auto source = *description.output_actual_source;

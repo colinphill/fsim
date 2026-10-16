@@ -586,6 +586,100 @@ end architecture;
         && has_diagnostic(
             rejected_nominal, "FSIM-ELAB-VHACCESS-020"));
 
+    const auto scalar_nominal_mismatch = fsim::frontend::parse_text(
+        "invalid_access_standard_scalar_mismatch.vhd",
+        R"(
+entity Invalid_Access_Standard_Scalar_Mismatch is
+end entity;
+architecture rtl of invalid_access_standard_scalar_mismatch is
+  type User_Integer is range 0 to 15;
+  type User_Pointer is access User_Integer;
+begin
+  fail : process
+    variable Pointer : User_Pointer;
+  begin
+    Pointer := new integer'(7);
+    wait;
+  end process;
+end architecture;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(scalar_nominal_mismatch.ok());
+    const auto rejected_scalar_nominal = compile_and_elaborate(
+        scalar_nominal_mismatch.design,
+        "vhdl:work.invalid_access_standard_scalar_mismatch(rtl)");
+    assert(
+        !rejected_scalar_nominal.ok()
+        && has_diagnostic(
+            rejected_scalar_nominal, "FSIM-ELAB-VHACCESS-010"));
+
+    const auto package_access_positive = fsim::frontend::parse_text(
+        "package_owned_standard_access.vhd",
+        R"(
+package Shared_Standard_Access is
+  type Integer_Pointer is access integer;
+end package Shared_Standard_Access;
+
+library work;
+use work.Shared_Standard_Access.all;
+entity Package_Access_Allocator is
+end entity Package_Access_Allocator;
+
+library work;
+use work.Shared_Standard_Access.all;
+architecture rtl of Package_Access_Allocator is
+begin
+  allocate : process
+    variable Pointer : Integer_Pointer;
+  begin
+    Pointer := new integer'(7);
+    wait;
+  end process;
+end architecture rtl;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(package_access_positive.ok());
+    const auto accepted_package_access = compile_and_elaborate(
+        package_access_positive.design,
+        "vhdl:work.package_access_allocator(rtl)");
+    assert(accepted_package_access.ok());
+
+    const auto package_access_caller_shadow = fsim::frontend::parse_text(
+        "package_access_caller_integer_shadow.vhd",
+        R"(
+package Shared_Standard_Access is
+  type Integer_Pointer is access integer;
+end package Shared_Standard_Access;
+
+library work;
+use work.Shared_Standard_Access.all;
+entity Package_Access_Caller_Shadow is
+end entity Package_Access_Caller_Shadow;
+
+library work;
+use work.Shared_Standard_Access.all;
+architecture rtl of Package_Access_Caller_Shadow is
+  type integer is (caller_only_value);
+begin
+  allocate : process
+    variable Pointer : Integer_Pointer;
+  begin
+    Pointer := new integer'(caller_only_value);
+    wait;
+  end process;
+end architecture rtl;
+)",
+        fsim::frontend::Language::Vhdl2008);
+    assert(package_access_caller_shadow.ok());
+    const auto rejected_package_access_shadow = compile_and_elaborate(
+        package_access_caller_shadow.design,
+        "vhdl:work.package_access_caller_shadow(rtl)");
+    assert(
+        !rejected_package_access_shadow.ok()
+        && has_diagnostic(
+            rejected_package_access_shadow,
+            "FSIM-ELAB-VHACCESS-010"));
+
     const auto escaping = fsim::frontend::parse_text(
         "invalid_access_escape.vhd",
         R"(

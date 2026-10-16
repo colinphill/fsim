@@ -721,6 +721,39 @@ struct VerilogSpecifyPathInfo {
     frontend::SourceSpan source;
 };
 
+/// One package-owned class-handle allocation scheduled with package static
+/// initialization. `unit`, `declaration`, and `initializer` are exact linked
+/// HIR identities; `signal` is the design-global package variable slot.
+struct SystemVerilogPackageClassInitializerInfo {
+    semantic::UnitId unit;
+    semantic::DeclarationId declaration;
+    runtime::simir::SignalId signal { };
+    semantic::ExpressionId initializer;
+    std::uint64_t startup_order { };
+    std::vector<runtime::simir::SignalId> writable_signal_ids;
+    std::vector<runtime::simir::StringObjectId> writable_string_object_ids;
+    std::vector<runtime::simir::ContainerObjectId>
+        writable_container_object_ids;
+};
+
+/// One package-owned static class-property allocation scheduled with package
+/// static initialization. The property DeclarationId and concrete class
+/// specialization identity preserve the exact class-static store slot.
+struct SystemVerilogPackageClassStaticInitializerInfo {
+    semantic::UnitId unit;
+    std::string class_identity;
+    std::string specialization_identity;
+    semantic::DeclarationId property_declaration;
+    std::string property_name;
+    std::string canonical_identity;
+    semantic::ExpressionId initializer;
+    std::uint64_t startup_order { };
+    std::vector<runtime::simir::SignalId> writable_signal_ids;
+    std::vector<runtime::simir::StringObjectId> writable_string_object_ids;
+    std::vector<runtime::simir::ContainerObjectId>
+        writable_container_object_ids;
+};
+
 struct ElaboratedDesignState {
     std::string top;
     std::vector<std::string> roots;
@@ -754,6 +787,10 @@ struct ElaboratedDesignState {
     std::optional<CodeCoverageInventory> code_coverage_inventory;
     std::optional<runtime::simir::SignalDriverInventory>
         signal_driver_inventory;
+    std::vector<SystemVerilogPackageClassInitializerInfo>
+        systemverilog_package_class_initializers { };
+    std::vector<SystemVerilogPackageClassStaticInitializerInfo>
+        systemverilog_package_class_static_initializers { };
 };
 
 /// One pure acyclic continuous-assignment cone selected for A2 fusion. The
@@ -865,6 +902,10 @@ public:
     systemc_processes() const noexcept;
     [[nodiscard]] const std::vector<SystemCNamedObjectInfo>&
     systemc_objects() const noexcept;
+    [[nodiscard]] std::span<const SystemVerilogPackageClassInitializerInfo>
+    systemverilog_package_class_initializers() const noexcept;
+    [[nodiscard]] std::span<const SystemVerilogPackageClassStaticInitializerInfo>
+    systemverilog_package_class_static_initializers() const noexcept;
     [[nodiscard]] const std::optional<CodeCoverageInventory>&
     code_coverage_inventory() const noexcept;
     [[nodiscard]] const std::optional<runtime::simir::SignalDriverInventory>&
@@ -1000,6 +1041,10 @@ private:
     std::vector<SystemCInstanceInfo> systemc_instances_;
     std::vector<SystemCProcessInfo> systemc_processes_;
     std::vector<SystemCNamedObjectInfo> systemc_objects_;
+    std::vector<SystemVerilogPackageClassInitializerInfo>
+        systemverilog_package_class_initializers_;
+    std::vector<SystemVerilogPackageClassStaticInitializerInfo>
+        systemverilog_package_class_static_initializers_;
     std::optional<CodeCoverageInventory> code_coverage_inventory_;
     std::optional<runtime::simir::SignalDriverInventory>
         signal_driver_inventory_;

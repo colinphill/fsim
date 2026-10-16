@@ -1,11 +1,65 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "elaborator_test_support.hpp"
 
+#include "fsim/support/environment.hpp"
 #include "fsim/semantic/compiled_design_linker.hpp"
 #include "fsim/semantic/compiled_design_specialization.hpp"
 
+#include <cstdlib>
+#include <iostream>
+#include <optional>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+
 namespace fsim::tests::elaboration {
 namespace {
+
+int set_hir_lower_trace_environment(const char* value)
+{
+#if defined(_WIN32)
+    return ::_putenv_s(
+        "FSIM_HIR_LOWER_TRACE_FAILURES", value == nullptr ? "" : value);
+#else
+    return value == nullptr
+        ? ::unsetenv("FSIM_HIR_LOWER_TRACE_FAILURES")
+        : ::setenv("FSIM_HIR_LOWER_TRACE_FAILURES", value, 1);
+#endif
+}
+
+class HirLowerFailureTraceCapture final {
+public:
+    explicit HirLowerFailureTraceCapture(std::ostringstream& output)
+    : previous_environment_ {
+          fsim::support::environment_variable("FSIM_HIR_LOWER_TRACE_FAILURES")
+      }
+    {
+        if (set_hir_lower_trace_environment("1") != 0) {
+            throw std::runtime_error {
+                "failed to enable HIR assignment rejection trace"
+            };
+        }
+        previous_stream_ = std::cerr.rdbuf(output.rdbuf());
+    }
+
+    HirLowerFailureTraceCapture(const HirLowerFailureTraceCapture&) = delete;
+    HirLowerFailureTraceCapture& operator=(
+        const HirLowerFailureTraceCapture&) = delete;
+
+    ~HirLowerFailureTraceCapture()
+    {
+        std::cerr.rdbuf(previous_stream_);
+        const auto restored = set_hir_lower_trace_environment(
+            previous_environment_ ? previous_environment_->c_str() : nullptr);
+        (void)restored;
+        assert(restored == 0);
+    }
+
+private:
+    std::optional<std::string> previous_environment_;
+    std::streambuf* previous_stream_ { };
+};
 
 semantic::SourceSpanId add_source_span(
     semantic::Model& model,
@@ -53,7 +107,8 @@ struct SystemVerilogHirFixture {
 
 SystemVerilogHirFixture systemverilog_hir_fixture(
     const bool supported,
-    const bool residual = false)
+    const bool residual = false,
+    const bool nested_process_scope = false)
 {
     const auto parsed = frontend::parse_text(
         "hir_direct.sv",
@@ -87,16 +142,28 @@ SystemVerilogHirFixture systemverilog_hir_fixture(
         { },
         unit_source,
         origin);
-    const auto scope = model.units()[unit.value()].scope;
+    const auto unit_scope = model.units()[unit.value()].scope;
+    auto process_scope = unit_scope;
+    auto process_origin = origin;
+    auto process_name = process_adapter.name;
+    if (nested_process_scope) {
+        process_name = process_adapter.name.empty()
+            ? std::string { "<process>" }
+            : process_adapter.name;
+        process_origin = model.add_origin(
+            semantic::OriginKind::parsed, process_source, origin, process_name);
+        process_scope = model.add_scope(
+            unit, unit_scope, process_name, process_source, process_origin);
+    }
     const auto parameter = model.add_declaration(
-        scope,
+        unit_scope,
         semantic::DeclarationKind::constant,
         "P",
         unit_source,
         origin);
     semantic::sv::Declaration parameter_declaration;
     parameter_declaration.id = parameter;
-    parameter_declaration.scope = scope;
+    parameter_declaration.scope = unit_scope;
     parameter_declaration.form = semantic::sv::DeclarationForm::parameter;
     parameter_declaration.name = "P";
     parameter_declaration.source = unit_source;
@@ -108,7 +175,7 @@ SystemVerilogHirFixture systemverilog_hir_fixture(
     systemverilog.mutable_declarations().push_back(
         std::move(parameter_declaration));
     const auto q = model.add_declaration(
-        scope,
+        unit_scope,
         semantic::DeclarationKind::signal,
         "q",
         unit_source,
@@ -116,7 +183,7 @@ SystemVerilogHirFixture systemverilog_hir_fixture(
 
     semantic::sv::Declaration q_declaration;
     q_declaration.id = q;
-    q_declaration.scope = scope;
+    q_declaration.scope = unit_scope;
     q_declaration.form = semantic::sv::DeclarationForm::port;
     q_declaration.name = "q";
     q_declaration.source = unit_source;
@@ -130,14 +197,14 @@ SystemVerilogHirFixture systemverilog_hir_fixture(
     systemverilog.mutable_declarations().push_back(q_declaration);
 
     const auto target = model.add_expression_identity(
-        scope, statement_source, origin);
+        process_scope, statement_source, process_origin);
     semantic::sv::Expression target_expression;
     target_expression.id = target;
-    target_expression.scope = scope;
+    target_expression.scope = process_scope;
     target_expression.kind = semantic::sv::ExpressionKind::name;
     target_expression.text = "q";
     target_expression.source = statement_source;
-    target_expression.origin = origin;
+    target_expression.origin = process_origin;
     target_expression.referenced_name.emplace();
     target_expression.referenced_name->spelling = "q";
     target_expression.referenced_name->source = statement_source;
@@ -145,29 +212,29 @@ SystemVerilogHirFixture systemverilog_hir_fixture(
     systemverilog.mutable_expressions().push_back(target_expression);
 
     const auto literal = model.add_expression_identity(
-        scope, statement_source, origin);
+        process_scope, statement_source, process_origin);
     semantic::sv::Expression literal_expression;
     literal_expression.id = literal;
-    literal_expression.scope = scope;
+    literal_expression.scope = process_scope;
     literal_expression.kind = semantic::sv::ExpressionKind::integer_literal;
     literal_expression.text = "1'b1";
     literal_expression.source = statement_source;
-    literal_expression.origin = origin;
+    literal_expression.origin = process_origin;
     if (residual) {
         literal_expression.dependencies.parameters.push_back(parameter);
     }
     systemverilog.mutable_expressions().push_back(literal_expression);
 
     const auto statement = model.add_statement_identity(
-        scope, statement_source, origin);
+        process_scope, statement_source, process_origin);
     semantic::sv::Statement statement_record;
     statement_record.id = statement;
-    statement_record.scope = scope;
+    statement_record.scope = process_scope;
     statement_record.kind = supported
         ? semantic::sv::StatementKind::assignment
         : semantic::sv::StatementKind::wait_order;
     statement_record.source = statement_source;
-    statement_record.origin = origin;
+    statement_record.origin = process_origin;
     if (supported) {
         statement_record.target = target;
         statement_record.value = literal;
@@ -175,20 +242,20 @@ SystemVerilogHirFixture systemverilog_hir_fixture(
     systemverilog.mutable_statements().push_back(statement_record);
 
     const auto process = model.add_process_identity(
-        scope, process_adapter.name, process_source, origin);
+        process_scope, process_name, process_source, process_origin);
     semantic::sv::Process process_record;
     process_record.id = process;
-    process_record.scope = scope;
+    process_record.scope = process_scope;
     process_record.kind = semantic::sv::ProcessKind::initial;
-    process_record.name = process_adapter.name;
+    process_record.name = process_name;
     process_record.source = process_source;
-    process_record.origin = origin;
+    process_record.origin = process_origin;
     process_record.statements.push_back(statement);
     systemverilog.mutable_processes().push_back(process_record);
 
     semantic::sv::Unit unit_record;
     unit_record.id = unit;
-    unit_record.scope = scope;
+    unit_record.scope = unit_scope;
     unit_record.kind = semantic::sv::UnitKind::module;
     unit_record.library = "work";
     unit_record.name = "hir_direct";
@@ -753,7 +820,19 @@ void run_systemverilog_formatted_string_hir_test()
 
 void run_systemverilog_system_function_assignment_test()
 {
-    auto fixture = systemverilog_hir_fixture(true);
+    const auto parsed_local = frontend::parse_text(
+        "hir_direct_local.sv",
+        "module hir_direct #(parameter bit P = 1'b1)"
+        "(output logic q); initial begin logic [2:0] randomized; "
+        "q = 1'b1; end endmodule",
+        frontend::Language::SystemVerilog2017);
+    assert(parsed_local.ok() && parsed_local.design.units.size() == 1U);
+    const auto& parsed_process
+        = parsed_local.design.units.front().processes.front();
+    assert(parsed_process.variables.size() == 1U);
+    assert(parsed_process.variables.front().name == "randomized");
+
+    auto fixture = systemverilog_hir_fixture(true, false, true);
     const auto string = add_systemverilog_expression(
         fixture,
         semantic::sv::ExpressionKind::string_literal,
@@ -783,6 +862,23 @@ void run_systemverilog_system_function_assignment_test()
     auto& process
         = fixture.compiled.systemverilog_hir.mutable_processes().front();
     const auto scope = process.scope;
+    const auto unit_scope
+        = fixture.compiled.systemverilog_hir.units().front().scope;
+    const auto& scopes = fixture.compiled.semantics.scopes();
+    assert(scope != unit_scope);
+    assert(scopes[scope.value()].parent
+        && *scopes[scope.value()].parent == unit_scope);
+    const auto unit_port = std::ranges::find_if(
+        fixture.compiled.systemverilog_hir.declarations(),
+        [](const semantic::sv::Declaration& declaration) {
+            return declaration.name == "q"
+                && declaration.form == semantic::sv::DeclarationForm::port;
+        });
+    assert(unit_port
+        != fixture.compiled.systemverilog_hir.declarations().end());
+    assert(unit_port->scope == unit_scope);
+    assert(std::ranges::find(process.declarations, unit_port->id)
+        == process.declarations.end());
     const auto source = process.source;
     const auto origin = process.origin;
     const auto randomized = fixture.compiled.semantics.add_declaration(
@@ -917,33 +1013,58 @@ void run_systemverilog_system_function_assignment_test()
 
 void run_systemverilog_generate_identity_assignment_test()
 {
-    auto fixture = systemverilog_hir_fixture(true);
+    auto fixture = systemverilog_hir_fixture(true, false, true);
     auto& hir = fixture.compiled.systemverilog_hir;
     auto& unit = hir.mutable_units().front();
     auto& process = hir.mutable_processes().front();
     auto& assignment = hir.mutable_statements().front();
-    const auto scope = unit.scope;
+    const auto generate_scope = unit.scope;
+    const auto scope = process.scope;
     const auto source = assignment.source;
-    const auto origin = assignment.origin;
+    const auto process_origin = assignment.origin;
+    const auto generate_origin = unit.origin;
+    const auto& scopes = fixture.compiled.semantics.scopes();
+    assert(process.scope != unit.scope);
+    assert(scopes[process.scope.value()].parent
+        && *scopes[process.scope.value()].parent == unit.scope);
+    const auto q_port = std::ranges::find_if(
+        hir.declarations(), [](const semantic::sv::Declaration& item) {
+            return item.name == "q"
+                && item.form == semantic::sv::DeclarationForm::port;
+        });
+    assert(q_port != hir.declarations().end());
+    assert(q_port->scope == unit.scope);
+    assert(std::ranges::find(process.declarations, q_port->id)
+        == process.declarations.end());
 
-    const auto lane = add_systemverilog_expression(
-        fixture, semantic::sv::ExpressionKind::name, "lane");
-    const auto zero = add_systemverilog_expression(
-        fixture, semantic::sv::ExpressionKind::integer_literal, "0");
-    const auto one = add_systemverilog_expression(
-        fixture, semantic::sv::ExpressionKind::integer_literal, "1");
-    const auto two = add_systemverilog_expression(
-        fixture, semantic::sv::ExpressionKind::integer_literal, "2");
-    const auto condition = add_systemverilog_expression(
-        fixture,
-        semantic::sv::ExpressionKind::binary,
-        "<",
-        { lane, two });
-    const auto iteration = add_systemverilog_expression(
-        fixture,
-        semantic::sv::ExpressionKind::binary,
-        "+",
-        { lane, one });
+    const auto add_generate_expression = [&](
+        const semantic::sv::ExpressionKind kind,
+        const std::string_view text,
+        std::vector<semantic::ExpressionId> operands = { }) {
+        semantic::sv::Expression expression;
+        expression.id = fixture.compiled.semantics.add_expression_identity(
+            generate_scope, source, generate_origin);
+        expression.scope = generate_scope;
+        expression.kind = kind;
+        expression.text = text;
+        expression.operands = std::move(operands);
+        expression.source = source;
+        expression.origin = generate_origin;
+        hir.mutable_expressions().push_back(std::move(expression));
+        return hir.expressions().back().id;
+    };
+    const auto lane = add_generate_expression(
+        semantic::sv::ExpressionKind::name, "lane");
+    const auto zero = add_generate_expression(
+        semantic::sv::ExpressionKind::integer_literal, "0");
+    const auto one = add_generate_expression(
+        semantic::sv::ExpressionKind::integer_literal, "1");
+    const auto two = add_generate_expression(
+        semantic::sv::ExpressionKind::integer_literal, "2");
+    const auto condition = add_generate_expression(
+        semantic::sv::ExpressionKind::binary, "<", { lane, two });
+    const auto iteration = add_generate_expression(
+        semantic::sv::ExpressionKind::binary, "+", { lane, one });
     assignment.value = lane;
 
     // Each generated iteration is a distinct process. Keep the identity test
@@ -954,14 +1075,14 @@ void run_systemverilog_generate_identity_assignment_test()
         semantic::DeclarationKind::variable,
         "iteration_value",
         source,
-        origin);
+        process_origin);
     semantic::sv::Declaration iteration_value_record;
     iteration_value_record.id = iteration_value;
     iteration_value_record.scope = scope;
     iteration_value_record.form = semantic::sv::DeclarationForm::variable;
     iteration_value_record.name = "iteration_value";
     iteration_value_record.source = source;
-    iteration_value_record.origin = origin;
+    iteration_value_record.origin = process_origin;
     iteration_value_record.type.emplace();
     iteration_value_record.type->target.source = source;
     iteration_value_record.type->target.spelling = "int";
@@ -979,23 +1100,23 @@ void run_systemverilog_generate_identity_assignment_test()
     target->referenced_name->selected = iteration_value;
 
     const auto declaration = fixture.compiled.semantics.add_declaration(
-        scope,
+        generate_scope,
         semantic::DeclarationKind::generate,
         "lanes",
         source,
-        origin);
+        generate_origin);
     semantic::sv::Declaration declaration_record;
     declaration_record.id = declaration;
-    declaration_record.scope = scope;
+    declaration_record.scope = generate_scope;
     declaration_record.form = semantic::sv::DeclarationForm::generated;
     declaration_record.name = "lanes";
     declaration_record.source = source;
-    declaration_record.origin = origin;
+    declaration_record.origin = generate_origin;
     hir.mutable_declarations().push_back(std::move(declaration_record));
 
     semantic::sv::GenerateRegion generate;
     generate.declaration = declaration;
-    generate.scope = scope;
+    generate.scope = generate_scope;
     generate.kind = semantic::sv::GenerateKind::iterative;
     generate.label = "lanes";
     generate.iterator = "lane";
@@ -1004,7 +1125,7 @@ void run_systemverilog_generate_identity_assignment_test()
     generate.iteration = iteration;
     generate.processes.push_back(process.id);
     generate.source = source;
-    generate.origin = origin;
+    generate.origin = generate_origin;
     unit.processes.clear();
     unit.generates.push_back(std::move(generate));
     assert(fixture.compiled.valid());
@@ -1573,12 +1694,29 @@ void run_conditional_shape_reachability_test()
 
 void run_dynamic_packed_selection_test()
 {
-    auto fixture = systemverilog_hir_fixture(true);
+    auto fixture = systemverilog_hir_fixture(true, false, true);
     const auto process = fixture.compiled.find_process(fixture.process);
     assert(process && process->systemverilog != nullptr);
     const auto scope = process->systemverilog->scope;
     const auto source = process->systemverilog->source;
     const auto origin = process->systemverilog->origin;
+    const auto unit_scope
+        = fixture.compiled.systemverilog_hir.units().front().scope;
+    const auto& scopes = fixture.compiled.semantics.scopes();
+    assert(scope != unit_scope);
+    assert(scopes[scope.value()].parent
+        && *scopes[scope.value()].parent == unit_scope);
+    const auto q_port = std::ranges::find_if(
+        fixture.compiled.systemverilog_hir.declarations(),
+        [](const semantic::sv::Declaration& item) {
+            return item.name == "q"
+                && item.form == semantic::sv::DeclarationForm::port;
+        });
+    assert(q_port
+        != fixture.compiled.systemverilog_hir.declarations().end());
+    assert(q_port->scope == unit_scope);
+    assert(std::ranges::find(process->systemverilog->declarations, q_port->id)
+        == process->systemverilog->declarations.end());
     const auto initial_statement = fixture.compiled.find_statement(
         process->systemverilog->statements.front());
     assert(initial_statement && initial_statement->systemverilog != nullptr);
@@ -1842,10 +1980,16 @@ void run_statically_bounded_loop_test()
 
 void run_local_nonblocking_boundary_test()
 {
-    auto fixture = systemverilog_hir_fixture(true);
+    auto fixture = systemverilog_hir_fixture(true, false, true);
     const auto process = fixture.compiled.find_process(fixture.process);
     assert(process && process->systemverilog != nullptr);
     const auto& process_record = *process->systemverilog;
+    const auto unit_scope
+        = fixture.compiled.systemverilog_hir.units().front().scope;
+    const auto& scopes = fixture.compiled.semantics.scopes();
+    assert(process_record.scope != unit_scope);
+    assert(scopes[process_record.scope.value()].parent
+        && *scopes[process_record.scope.value()].parent == unit_scope);
     const auto local = fixture.compiled.semantics.add_declaration(
         process_record.scope,
         semantic::DeclarationKind::variable,
@@ -1864,6 +2008,7 @@ void run_local_nonblocking_boundary_test()
     local_declaration.type->target.spelling = "logic";
     local_declaration.type->executable_width = 1U;
     local_declaration.type->four_state = true;
+    assert(local_declaration.scope == process_record.scope);
     fixture.compiled.systemverilog_hir.mutable_declarations().push_back(
         std::move(local_declaration));
     fixture.compiled.systemverilog_hir.mutable_processes().front()
@@ -1891,7 +2036,68 @@ void run_local_nonblocking_boundary_test()
     statement.target = target;
     statement.assignment_kind
         = semantic::sv::AssignmentKind::nonblocking;
-    require_systemverilog_hir_rejection(std::move(fixture));
+    assert(fixture.compiled.valid());
+    std::ostringstream lowerer_trace;
+    const auto rejected = [&] {
+        HirLowerFailureTraceCapture trace_capture { lowerer_trace };
+        return elaborate_compiled(
+            fixture.compiled, "sv:work.hir_direct", "hir_direct");
+    }();
+    if (std::getenv("FSIM_HIR_LOCAL_FIXTURE_DIAG") != nullptr) {
+        std::cerr << "FSIM_HIR_LOCAL_REJECTION_RESULT diagnostic_count="
+                  << rejected.diagnostics.size() << '\n';
+        for (const auto& diagnostic : rejected.diagnostics) {
+            std::cerr << "FSIM_HIR_LOCAL_REJECTION_DIAGNOSTIC code="
+                      << diagnostic.code << " message="
+                      << diagnostic.message << " source="
+                      << diagnostic.span.source_name.str() << ':'
+                      << diagnostic.span.begin.line << ':'
+                      << diagnostic.span.begin.column << '\n';
+        }
+        std::cerr << "FSIM_HIR_LOCAL_REJECTION_TRACE_BEGIN\n"
+                  << lowerer_trace.str()
+                  << "FSIM_HIR_LOCAL_REJECTION_TRACE_END\n";
+    }
+    assert(rejected.diagnostics.size() == 2U);
+    const auto statement_failure = std::ranges::find_if(
+        rejected.diagnostics,
+        [](const fsim::elaboration::Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-ELAB-HIR-001"
+                && diagnostic.message
+                    == "compiled SystemVerilog HIR statement 0 kind 0 at "
+                       "source line 1 could not be lowered"
+                && diagnostic.span.source_name.str() == "hir_direct.sv"
+                && diagnostic.span.begin.line == 1U
+                && diagnostic.span.begin.column == 70U;
+        });
+    const auto process_failure = std::ranges::find_if(
+        rejected.diagnostics,
+        [](const fsim::elaboration::Diagnostic& diagnostic) {
+            return diagnostic.code == "FSIM-ELAB-HIR-001"
+                && diagnostic.message
+                    == "compiled process could not be lowered from HIR"
+                && diagnostic.span.source_name.str() == "hir_direct.sv"
+                && diagnostic.span.begin.line == 1U
+                && diagnostic.span.begin.column == 62U;
+        });
+    assert(statement_failure != rejected.diagnostics.end());
+    assert(process_failure != rejected.diagnostics.end());
+    assert(std::ranges::none_of(
+        rejected.diagnostics,
+        [](const fsim::elaboration::Diagnostic& diagnostic) {
+            return diagnostic.message.find(
+                       "failed during local declaration initialization")
+                != std::string::npos;
+        }));
+    const auto trace = lowerer_trace.str();
+    const auto intended_rejection = trace.find(
+        "[fsim-hir-lower] "
+        "local-nonblocking-assignment-rejected\n");
+    assert(intended_rejection != std::string::npos);
+    assert(trace.find(
+               "[fsim-hir-lower] assignment-rejected line=",
+               intended_rejection)
+        != std::string::npos);
 }
 
 void run_systemverilog_equality_test()
@@ -2674,6 +2880,12 @@ end architecture;
             != dynamic_compiled.vhdl_hir.mutable_declarations().end());
         assert(found->subtype);
         found->subtype->type_mark.spelling = "bit_vector";
+        // This direct-HIR fixture bypasses the application environment
+        // stamping and projection phase, so retain the compiler-owned
+        // identity that projection assigns after resolving visible
+        // STD.STANDARD.BIT_VECTOR.
+        found->subtype->builtin_type
+            = semantic::vhdl::BuiltinTypeIdentity::std_standard_bit_vector;
         semantic::vhdl::RangeConstraint range;
         range.left = 0;
         range.right = 0;
@@ -2820,6 +3032,9 @@ endmodule
     const auto child = frontend::parse_text(
         "mixed_constant_child.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity mixed_constant_child is
   port (data : in std_logic_vector(3 downto 0));
 end entity;
@@ -2855,6 +3070,9 @@ end architecture;
     const auto output_child = frontend::parse_text(
         "mixed_constant_output.vhd",
         R"(
+library ieee;
+use ieee.std_logic_1164.all;
+
 entity mixed_constant_output is
   port (data : out std_logic);
 end entity;

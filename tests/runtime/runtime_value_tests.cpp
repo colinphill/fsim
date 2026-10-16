@@ -4622,12 +4622,21 @@ void test_simir_wildcard_equality() {
       interpreter.run().status == RunStatus::completed,
       "wildcard equality process completes");
   const std::array expected{
-      "1", "1", "X", "X", "0", "X", "1", "0", "X"};
+      "1", "1", "X", "X", "0", "0", "1", "0", "0"};
   for (std::size_t index = 0; index < expected.size(); ++index) {
-    require(
-        interpreter.signal_value(results[index]).to_msb_string()
-            == expected[index],
-        "one-sided wildcard equality truth table");
+    const auto actual =
+        interpreter.signal_value(results[index]).to_msb_string();
+    if (actual != expected[index]) {
+      std::ostringstream message;
+      const auto* const operation =
+          comparisons[index].operation == BinaryOperator::wildcard_equal
+          ? "==?"
+          : "==";
+      message << "equality case " << index << " (" << comparisons[index].lhs
+              << ' ' << operation << ' ' << comparisons[index].rhs
+              << ") expected " << expected[index] << ", got " << actual;
+      throw std::runtime_error{message.str()};
+    }
   }
 }
 
